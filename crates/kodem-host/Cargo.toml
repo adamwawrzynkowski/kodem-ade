@@ -1,0 +1,13 @@
+[package]
+name = "kodem-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kodem-core = { path = "../kodem-core" }
+anyhow.workspace = true
+serde_json.workspace = true
+portable-pty = "0.9"
+vt100 = "0.16"
+libc = "0.2"

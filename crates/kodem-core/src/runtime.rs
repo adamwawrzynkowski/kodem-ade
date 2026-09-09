@@ -1,0 +1,227 @@
+//! Codex 0.153.4 app-server JSONL adapter. Wire fields checked against its generated schema.
+use crate::model::*;
+use anyhow::{Context, Result, bail, ensure};
+use serde_json::{Value, json};
+use std::{
+    collections::HashMap,
+    io::{BufRead, BufReader, Read, Write},
+    path::{Path, PathBuf},
+    process::{Child, ChildStdin, Command, Stdio},
+    sync::mpsc::{self, Receiver},
+    time::{Duration, Instant},
+};
+pub const CODEX_VERSION: &str = "0.153.4";
+pub struct Codex {
+    child: Child,
+    stdin: ChildStdin,
+    incoming: Receiver<Result<Value, String>>,
+    next_id: u64,
+    replies: HashMap<u64, Value>,
+}
+/// Finds the configured or installed CLI without relying on Finder's minimal PATH.
+pub fn executable() -> Result<PathBuf> {
+    if let Some(p) = std::env::var_os("KODEM_CODEX_PATH") {
+        let p = PathBuf::from(p);
+        ensure!(p.is_file(), "KODEM_CODEX_PATH is not a file");
+        return Ok(p);
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME is unavailable")?;
+    let mut candidates = vec![
+        home.join(format!(
+            ".local/share/kodem/runtimes/{CODEX_VERSION}/bin/codex"
+        )),
+        home.join(".local/bin/codex"),
+        PathBuf::from("/opt/homebrew/bin/codex"),
+        PathBuf::from("/usr/local/bin/codex"),
+    ];
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).map(|p| p.join("codex")));
+    }
+    candidates
+        .into_iter()
+        .find(|p| p.is_file())
+        .context("Codex is not installed. Run Build Debug.command or Build Release.command.")
+}
+/// Reports the installed version without exposing credentials or starting a provider turn.
+pub fn version() -> Result<String> {
+    let out = Command::new(executable()?).arg("--version").output()?;
+    ensure!(out.status.success(), "Codex version query failed");
+    Ok(String::from_utf8(out.stdout)?.trim().to_owned())
+}
+impl Codex {
+    /// Starts and initializes one owned app-server process.
+    pub fn start(cwd: &Path, mut event: impl FnMut(Value)) -> Result<Self> {
+        let executable = executable()?.canonicalize()?;
+        let package = executable
+            .parent()
+            .and_then(Path::parent)
+            .context("Invalid Codex package path")?;
+        for relative in [
+            "bin/codex-code-mode-host",
+            "codex-path/rg",
+            "codex-resources/zsh/bin/zsh",
+            "codex-package.json",
+        ] {
+            ensure!(
+                package.join(relative).is_file(),
+                "Codex package is incomplete: missing {relative}. Run Build Debug.command or Build Release.command to repair it."
+            );
+        }
+        let version = version()?;
+        ensure!(
+            version.split_whitespace().last() == Some(CODEX_VERSION),
+            "This build supports Codex {CODEX_VERSION}; found {version}. Run the build command to install the matching runtime."
+        );
+        let mut child = Command::new(executable)
+            .current_dir(cwd)
+            .args(["app-server", "--stdio"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let stdin = child.stdin.take().context("Missing Codex input")?;
+        let stdout = child.stdout.take().context("Missing Codex output")?;
+        let stderr = child.stderr.take().context("Missing Codex stderr")?;
+        // Drain stderr without logging arbitrary secrets from provider diagnostics.
+        std::thread::spawn(move || {
+            let _ = std::io::copy(&mut BufReader::new(stderr), &mut std::io::sink());
+        });
+        let (tx, rx) = mpsc::sync_channel(256);
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                let mut bytes = Vec::new();
+                let result = reader
+                    .by_ref()
+                    .take(8 * 1024 * 1024 + 1)
+                    .read_until(b'\n', &mut bytes);
+                match result {
+                    Ok(0) => {
+                        let _ = tx.send(Err("Codex transport closed".into()));
+                        break;
+                    }
+                    Ok(_) if bytes.len() > 8 * 1024 * 1024 => {
+                        let _ = tx.send(Err("Codex event exceeded 8 MiB".into()));
+                        break;
+                    }
+                    Ok(_) => {
+                        if tx
+                            .send(
+                                serde_json::from_slice(&bytes)
+                                    .map_err(|e| format!("Invalid Codex JSON: {e}")),
+                            )
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(e.to_string()));
+                        break;
+                    }
+                }
+            }
+        });
+        let mut this = Self {
+            child,
+            stdin,
+            incoming: rx,
+            next_id: 1,
+            replies: HashMap::new(),
+        };
+        this.call("initialize",json!({"clientInfo":{"name":"kodem_ade","title":"Kodem ADE","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}),&mut event)?;
+        this.write(&json!({"method":"initialized"}))?;
+        Ok(this)
+    }
+    fn write(&mut self, value: &Value) -> Result<()> {
+        serde_json::to_writer(&mut self.stdin, value)?;
+        self.stdin.write_all(b"\n")?;
+        self.stdin.flush()?;
+        Ok(())
+    }
+    /// Performs one version-checked protocol request, processing notifications while waiting.
+    pub fn call(
+        &mut self,
+        method: &str,
+        params: Value,
+        event: &mut impl FnMut(Value),
+    ) -> Result<Value> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write(&json!({"id":id,"method":method,"params":params}))?;
+        let deadline = Instant::now() + Duration::from_secs(90);
+        loop {
+            if let Some(reply) = self.replies.remove(&id) {
+                if let Some(error) = reply.get("error") {
+                    return Err(anyhow::Error::new(Rejected(format!(
+                        "Codex {method}: {error}"
+                    ))));
+                }
+                return reply
+                    .get("result")
+                    .cloned()
+                    .context("Codex response has no result");
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "Codex {method} acknowledgement timed out; delivery may be unknown"
+            );
+            self.poll(Duration::from_millis(100), event)?;
+        }
+    }
+    /// Processes a bounded transport update and surfaces approvals without granting them.
+    pub fn poll(&mut self, timeout: Duration, event: &mut impl FnMut(Value)) -> Result<()> {
+        match self.incoming.recv_timeout(timeout) {
+            Ok(Ok(value)) => {
+                if let Some(method) = value.get("method").and_then(Value::as_str) {
+                    if value.get("id").is_some() {
+                        if method == "currentTime/read" {
+                            self.write(
+                                &json!({"id":value["id"],"result":{"currentTimeAt":now()/1000}}),
+                            )?;
+                        } else if matches!(
+                            method,
+                            "item/commandExecution/requestApproval"
+                                | "item/fileChange/requestApproval"
+                                | "item/tool/requestUserInput"
+                        ) {
+                            event(value);
+                        } else {
+                            self.write(&json!({"id":value["id"],"error":{"code":-32601,"message":format!("Kodem does not support {method}")}}))?;
+                        }
+                    } else {
+                        event(value)
+                    }
+                } else if let Some(id) = value.get("id").and_then(Value::as_u64) {
+                    self.replies.insert(id, value);
+                }
+            }
+            Ok(Err(e)) => bail!(e),
+            Err(mpsc::RecvTimeoutError::Disconnected) => bail!("Codex transport disconnected"),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        Ok(())
+    }
+    /// Sends the user's explicit answer using the provider's original request ID.
+    pub fn answer(&mut self, id: Value, response: Value) -> Result<()> {
+        self.write(&json!({"id":id,"result":response}))
+    }
+}
+impl Drop for Codex {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// A provider rejection proves the request was not accepted, unlike a lost response.
+#[derive(Debug)]
+pub struct Rejected(pub String);
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for Rejected {}
