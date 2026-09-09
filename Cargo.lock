@@ -2989,6 +2989,7 @@ dependencies = [
  "gpui-ce",
  "gpui_ce_platform",
  "kodem-core",
+ "objc2-app-kit 0.3.2",
  "pulldown-cmark",
  "serde_json",
  "syntect",

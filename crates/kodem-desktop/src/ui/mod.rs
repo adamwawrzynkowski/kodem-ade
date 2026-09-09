@@ -1,8 +1,10 @@
 //! Native workspace state and actions. All blocking work goes through the host bridge.
+mod activity;
 mod browser;
 mod chat;
 mod chrome;
 mod menus;
+mod motion;
 mod panels;
 mod review;
 mod settings;
@@ -50,6 +52,7 @@ enum Panel {
     Models,
     TaskMenu,
     Sort,
+    Comparison,
 }
 #[derive(Clone)]
 struct Selection {
@@ -112,6 +115,7 @@ pub struct Shell {
 impl Shell {
     /// Creates the workspace and begins asynchronous host synchronization.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.set_reduce_motion(motion::system_reduce_motion());
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let (tx, rx) = bridge::start();
@@ -262,6 +266,7 @@ impl Shell {
         };
         match response {
             Response::Workspace(workspace) => {
+                cx.set_reduce_motion(motion::system_reduce_motion());
                 if self.workspace.is_none() {
                     self.settings = workspace.settings.clone();
                     self.theme = Theme::new(self.settings.light);
@@ -557,9 +562,15 @@ impl Shell {
             .styles(|s| s.disabled(|s| s.opacity(0.4)))
             .focus(move |s| s.border_color(theme.accent))
     }
-    fn button(&self, id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
+    fn button(
+        &self,
+        id: impl Into<ElementId>,
+        glyph: &'static str,
+        label: impl Into<SharedString>,
+    ) -> Button {
         let theme = self.theme;
         self.control(id)
+            .child(icon(glyph))
             .child(label.into())
             .hover(move |s| s.bg(theme.selected))
             .active(move |s| s.bg(theme.inset))
@@ -599,9 +610,15 @@ impl Shell {
                 .into()
             })
     }
-    fn primary(&self, id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
+    fn primary(
+        &self,
+        id: impl Into<ElementId>,
+        glyph: &'static str,
+        label: impl Into<SharedString>,
+    ) -> Button {
         let theme = self.theme;
         self.control(id)
+            .child(icon(glyph))
             .child(label.into())
             .bg(theme.accent)
             .text_color(theme.inset)

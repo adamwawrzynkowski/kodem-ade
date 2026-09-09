@@ -42,16 +42,44 @@ impl Shell {
                             .child(view.task.title.clone()),
                     )
                     .child(div().flex_1())
-                    .child(
+                    .child(if state.active() {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .text_size(px(10.))
+                            .child(motion::active_icon(
+                                "task-state-icon",
+                                if state == &RunState::Waiting {
+                                    "shield"
+                                } else {
+                                    "loader"
+                                },
+                                state_color,
+                                state != &RunState::Waiting,
+                            ))
+                            .child(motion::gleam("task-state-label", state.label(), t))
+                            .into_any_element()
+                    } else {
                         div()
                             .flex()
                             .items_center()
                             .gap_1()
                             .text_size(px(10.))
                             .text_color(state_color)
-                            .child(div().size(px(4.)).rounded_full().bg(state_color))
-                            .child(state.label()),
-                    )
+                            .child(
+                                icon(match state {
+                                    RunState::Completed => "check",
+                                    RunState::Idle => "chat",
+                                    RunState::Interrupted => "stop",
+                                    RunState::DeliveryUnknown => "shield",
+                                    _ => "circle-x",
+                                })
+                                .size(px(12.)),
+                            )
+                            .child(state.label())
+                            .into_any_element()
+                    })
                     .child(
                         self.icon_button("task-menu", "ellipsis", "Task actions")
                             .on_click(cx.listener(|s, _, _, cx| {
@@ -78,7 +106,7 @@ impl Shell {
                             "Delivery needs confirmation before another message can be sent.",
                         ))
                         .child(
-                            self.button("reconcile", "Check history")
+                            self.button("reconcile", "refresh", "Check history")
                                 .on_click(cx.listener(move |s, _, _, _| {
                                     s.send(core::Request::Reconcile {
                                         task_id: id.clone(),
@@ -117,13 +145,12 @@ impl Shell {
                         .text_size(px(12.))
                         .child(icon("shield").text_color(t.accent))
                         .child(div().flex_1().child("Codex is waiting for your input"))
-                        .child(
-                            self.primary("open-requests", "Respond")
-                                .on_click(cx.listener(|s, _, _, cx| {
-                                    s.panel = Panel::Questions;
-                                    cx.notify();
-                                })),
-                        ),
+                        .child(self.primary("open-requests", "shield", "Respond").on_click(
+                            cx.listener(|s, _, _, cx| {
+                                s.panel = Panel::Questions;
+                                cx.notify();
+                            }),
+                        )),
                 );
             }
             if let Some(before) = view.before {
@@ -173,6 +200,7 @@ impl Shell {
                             )
                         }),
                 )
+                .child(self.activity_strip(cx))
                 .child(self.composer(false, cx));
         } else {
             panel = panel.child(
@@ -372,7 +400,7 @@ impl Shell {
                     })),
             )
             .child(
-                self.ghost("composer-skills", "code", "Skills")
+                self.icon_button("composer-skills", "code", "Skills, instructions and MCP")
                     .on_click(cx.listener(|s, _, _, cx| {
                         s.panel = Panel::Resources;
                         s.send(core::Request::Resources {
@@ -402,7 +430,7 @@ impl Shell {
             });
         if empty {
             toolbar = toolbar.child(
-                self.primary("create-from-composer", "Create task")
+                self.primary("create-from-composer", "plus", "Create task")
                     .h(px(30.))
                     .disabled(project.is_none())
                     .on_click(cx.listener(move |s, _, _, cx| {
@@ -498,6 +526,19 @@ impl Shell {
             .take(group_count)
             .all(|m| m.complete);
         let group_id = messages[group_start].id.clone();
+        let group_active = self.view.as_ref().is_some_and(|v| {
+            v.task.state == RunState::Running
+                && v.activities.iter().any(|a| {
+                    messages
+                        .iter()
+                        .skip(group_start)
+                        .take(group_count)
+                        .any(|m| m.id == a.id)
+                })
+        });
+        let message_active = self.view.as_ref().is_some_and(|v| {
+            v.task.state == RunState::Running && v.activities.iter().any(|a| a.id == message.id)
+        });
         let expanded = self.folded.contains(&group_id);
         let id = group_id;
         let text = message.text.clone();
@@ -540,8 +581,33 @@ impl Shell {
                             .text_size(px(12.))
                             .hover(move |d| d.text_color(t.text))
                             .child(icon("chevron-right").size(px(12.)))
-                            .child(icon("square-terminal").size(px(14.)))
-                            .child(div().flex_1().min_w_0().text_ellipsis().child(title))
+                            .child(if group_active {
+                                motion::active_icon(
+                                    (
+                                        ElementId::from("tool-progress"),
+                                        SharedString::from(id.clone()),
+                                    ),
+                                    "loader",
+                                    t.accent,
+                                    true,
+                                )
+                            } else {
+                                icon("square-terminal").size(px(14.)).into_any_element()
+                            })
+                            .child(div().flex_1().min_w_0().text_ellipsis().child(
+                                if group_active {
+                                    motion::gleam(
+                                        (
+                                            ElementId::from("tool-label"),
+                                            SharedString::from(id.clone()),
+                                        ),
+                                        title,
+                                        t,
+                                    )
+                                } else {
+                                    div().child(title).into_any_element()
+                                },
+                            ))
                             .child(if group_complete {
                                 icon("check").size(px(12.)).text_color(t.subtle)
                             } else {
@@ -591,9 +657,35 @@ impl Shell {
                     .mb_1()
                     .text_size(px(11.))
                     .font_weight(FontWeight::MEDIUM)
-                    .child(icon(glyph).size(px(15.)).text_color(color))
-                    .child(name)
-                    .when(!message.complete, |d| {
+                    .child(if message_active {
+                        motion::active_icon(
+                            (
+                                ElementId::from("message-icon"),
+                                SharedString::from(message.id.clone()),
+                            ),
+                            glyph,
+                            color,
+                            false,
+                        )
+                    } else {
+                        icon(glyph)
+                            .size(px(15.))
+                            .text_color(color)
+                            .into_any_element()
+                    })
+                    .child(if message_active {
+                        motion::gleam(
+                            (
+                                ElementId::from("message-label"),
+                                SharedString::from(message.id.clone()),
+                            ),
+                            name,
+                            t,
+                        )
+                    } else {
+                        div().child(name).into_any_element()
+                    })
+                    .when(message_active, |d| {
                         d.child(
                             div()
                                 .text_size(px(10.))
@@ -719,7 +811,7 @@ impl Shell {
                         self.icon_button(
                             (
                                 ElementId::from("copy-message"),
-                                SharedString::from(message.id),
+                                SharedString::from(message.id.clone()),
                             ),
                             "copy",
                             "Copy message",
@@ -730,12 +822,24 @@ impl Shell {
                             cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
                         }),
                     )
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(t.subtle)
-                            .child(if message.complete { "" } else { "Streaming" }),
-                    ),
+                    .child(div().text_size(px(10.)).text_color(t.subtle).child(
+                        if message_active {
+                            motion::gleam(
+                                (
+                                    ElementId::from("streaming"),
+                                    SharedString::from(message.id.clone()),
+                                ),
+                                if message.kind == MessageKind::Assistant {
+                                    "Writing…"
+                                } else {
+                                    "In progress…"
+                                },
+                                t,
+                            )
+                        } else {
+                            div().into_any_element()
+                        },
+                    )),
             );
         }
         div()

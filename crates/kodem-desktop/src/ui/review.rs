@@ -1,4 +1,11 @@
 use super::*;
+
+pub(super) const COMPARISONS: [(Comparison, &str, &str); 4] = [
+    (Comparison::WorkingTree, "All changes", "file"),
+    (Comparison::Staged, "Staged", "check"),
+    (Comparison::Unstaged, "Unstaged", "edit"),
+    (Comparison::Baseline, "Since task", "branch"),
+];
 impl Shell {
     /// Builds the file browser, snapshot diff and contextual feedback editor.
     pub(super) fn review(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -15,6 +22,10 @@ impl Shell {
             self.settings.review_width.min(self.window_width * 0.55)
         };
         let count = self.diff.as_ref().map_or(0, |d| d.files.len());
+        let (_, label, glyph) = COMPARISONS
+            .iter()
+            .find(|(comparison, _, _)| *comparison == self.comparison)
+            .unwrap();
         let mut panel = div()
             .w(px(width))
             .h_full()
@@ -34,12 +45,21 @@ impl Shell {
                     .bg(t.canvas)
                     .border_b_1()
                     .border_color(t.border)
-                    .child(icon("code").text_color(t.muted))
                     .child(
-                        div()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_size(px(13.))
-                            .child("Changes"),
+                        self.ghost("comparison-menu", glyph, *label)
+                            .h(px(26.))
+                            .text_size(px(12.))
+                            .text_color(t.text)
+                            .accessibility_label("Choose changes comparison")
+                            .child(icon("chevron-down").size(px(11.)))
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.panel = if s.panel == Panel::Comparison {
+                                    Panel::None
+                                } else {
+                                    Panel::Comparison
+                                };
+                                cx.notify();
+                            })),
                     )
                     .child(
                         div()
@@ -53,10 +73,14 @@ impl Shell {
                             .on_click(cx.listener(|s, _, _, _| s.refresh_diff())),
                     )
                     .child(
-                        self.ghost(
+                        self.icon_button(
                             "diff-mode",
                             "panel-right",
-                            if self.split { "Split" } else { "Unified" },
+                            if self.split {
+                                "Use unified diff"
+                            } else {
+                                "Use split diff"
+                            },
                         )
                         .text_size(px(11.))
                         .on_click(cx.listener(|s, _, _, cx| {
@@ -72,49 +96,6 @@ impl Shell {
                             })),
                     ),
             );
-        let mut tabs = div()
-            .h(px(34.))
-            .flex_shrink_0()
-            .px_2()
-            .flex()
-            .items_center()
-            .gap_1()
-            .bg(t.canvas)
-            .border_b_1()
-            .border_color(t.border);
-        for (i, (comparison, label)) in [
-            (Comparison::WorkingTree, "All changes"),
-            (Comparison::Staged, "Staged"),
-            (Comparison::Unstaged, "Unstaged"),
-            (Comparison::Baseline, "Since task"),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            tabs = tabs.child(
-                self.control(("comparison", i))
-                    .px_2()
-                    .text_size(px(11.))
-                    .text_color(if self.comparison == comparison {
-                        t.text
-                    } else {
-                        t.muted
-                    })
-                    .when(self.comparison == comparison, |b| b.bg(t.selected))
-                    .hover(move |b| b.bg(t.raised))
-                    .child(label)
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        s.comparison = comparison.clone();
-                        s.selection = None;
-                        s.panel = Panel::None;
-                        s.diff = None;
-                        s.reviewing_file = false;
-                        s.refresh_diff();
-                        cx.notify();
-                    })),
-            );
-        }
-        panel = panel.child(tabs);
         if self.new_diff.is_some() {
             panel = panel.child(
                 div()
@@ -139,8 +120,9 @@ impl Shell {
         }
         if let Some(snapshot) = self.diff.clone() {
             if snapshot.files.is_empty() {
-                return panel
-                    .child(
+                return motion::reveal(
+                    "review-enter",
+                    panel.child(
                         div()
                             .flex_1()
                             .flex()
@@ -156,8 +138,8 @@ impl Shell {
                                     .text_color(t.muted)
                                     .child("This comparison is up to date."),
                             ),
-                    )
-                    .into_any_element();
+                    ),
+                );
             }
             let mut files = div()
                 .id("changed-files")
@@ -273,23 +255,25 @@ impl Shell {
                     .flat_map(|f| &f.lines)
                     .filter(|l| l.kind == LineKind::Removed)
                     .count();
-                return panel
-                    .child(
-                        div()
-                            .h(px(32.))
-                            .px_3()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_size(px(10.))
-                            .text_color(t.subtle)
-                            .child(format!("{} files", snapshot.files.len()))
-                            .child(div().flex_1())
-                            .child(div().text_color(t.added).child(format!("+{added}")))
-                            .child(div().text_color(t.removed).child(format!("−{removed}"))),
-                    )
-                    .child(files)
-                    .into_any_element();
+                return motion::reveal(
+                    "review-enter",
+                    panel
+                        .child(
+                            div()
+                                .h(px(32.))
+                                .px_3()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .text_size(px(10.))
+                                .text_color(t.subtle)
+                                .child(format!("{} files", snapshot.files.len()))
+                                .child(div().flex_1())
+                                .child(div().text_color(t.added).child(format!("+{added}")))
+                                .child(div().text_color(t.removed).child(format!("−{removed}"))),
+                        )
+                        .child(files),
+                );
             }
             if let Some(file) = snapshot.files.get(self.file) {
                 let task_id = snapshot.task_id.clone();
@@ -327,7 +311,7 @@ impl Shell {
                                 .child(file.label.clone()),
                         )
                         .child(
-                            self.ghost("stage-file", "plus", "Stage file")
+                            self.icon_button("stage-file", "plus", "Stage this file")
                                 .text_size(px(11.))
                                 .disabled(self.comparison == Comparison::Staged)
                                 .on_click(cx.listener(move |s, _, _, _| {
@@ -502,7 +486,7 @@ impl Shell {
                                             .child("Queued with your next message"),
                                     )
                                     .child(
-                                        self.primary("save-feedback", "Queue feedback")
+                                        self.primary("save-feedback", "chat", "Queue feedback")
                                             .disabled(self.aux.read(cx).text().trim().is_empty())
                                             .on_click(cx.listener(move |s, _, _, cx| {
                                                 s.send(core::Request::AddFeedback {
@@ -560,7 +544,7 @@ impl Shell {
                     .child("Reading repository changes…"),
             );
         }
-        panel.into_any_element()
+        motion::reveal("review-enter", panel)
     }
     fn diff_row(
         &mut self,

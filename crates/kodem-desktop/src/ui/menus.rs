@@ -17,6 +17,47 @@ impl Shell {
             .gap_1()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         match self.panel {
+            Panel::Comparison => {
+                let review_width = if self.window_width <= 1100. {
+                    self.window_width
+                        - if self.settings.collapsed {
+                            54.
+                        } else {
+                            self.settings.sidebar_width
+                        }
+                        - 2.
+                } else {
+                    self.settings.review_width.min(self.window_width * 0.55)
+                };
+                menu = menu
+                    .top(px(72.))
+                    .right(px((review_width - 224.).max(8.)))
+                    .w(px(212.));
+                for (i, (comparison, label, glyph)) in review::COMPARISONS.into_iter().enumerate() {
+                    let selected = self.comparison == comparison;
+                    menu = menu.child(
+                        self.ghost(("comparison-option", i), glyph, label)
+                            .w_full()
+                            .h(px(28.))
+                            .justify_start()
+                            .when(selected, |b| b.bg(t.selected).text_color(t.text))
+                            .child(div().flex_1())
+                            .when(selected, |b| b.child(icon("check").size(px(12.))))
+                            .on_click(cx.listener(move |s, _, _, cx| {
+                                s.panel = Panel::None;
+                                if s.comparison != comparison {
+                                    s.comparison = comparison.clone();
+                                    s.selection = None;
+                                    s.diff = None;
+                                    s.new_diff = None;
+                                    s.reviewing_file = false;
+                                    s.refresh_diff();
+                                }
+                                cx.notify();
+                            })),
+                    );
+                }
+            }
             Panel::Sort => {
                 menu = menu
                     .top(px(177.))
@@ -289,7 +330,11 @@ impl Shell {
                     cx.notify();
                 }),
             )
-            .child(menu)
+            .child(menu.with_animation(
+                ("menu-enter", self.panel.clone() as usize),
+                Animation::new(Duration::from_millis(130)),
+                |d, p| d.opacity(p),
+            ))
             .into_any_element()
     }
 }

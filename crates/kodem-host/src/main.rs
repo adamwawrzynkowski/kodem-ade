@@ -17,6 +17,7 @@ struct Host {
     runtime: RuntimeInfo,
     sessions: HashMap<String, mpsc::Sender<provider::Control>>,
     requests: HashMap<String, Vec<InputRequest>>,
+    activities: HashMap<String, Vec<Activity>>,
     terminals: HashMap<String, terminal::Terminal>,
     checks: std::collections::HashSet<String>,
     shutdown: bool,
@@ -60,6 +61,7 @@ fn run() -> Result<()> {
         runtime: info,
         sessions: HashMap::new(),
         requests: HashMap::new(),
+        activities: HashMap::new(),
         terminals: HashMap::new(),
         checks: Default::default(),
         shutdown: false,
@@ -118,6 +120,7 @@ fn fs2_lock(file: &fs::File) -> Result<()> {
 fn task_view(h: &Host, id: &str, before: Option<u64>) -> Result<TaskView> {
     let (messages, before) = h.store.messages(id, before)?;
     Ok(TaskView {
+        activities: h.activities.get(id).cloned().unwrap_or_default(),
         task: h.store.task(id)?,
         messages,
         before,

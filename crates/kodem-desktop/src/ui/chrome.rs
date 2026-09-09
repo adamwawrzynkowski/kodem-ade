@@ -124,7 +124,7 @@ impl Shell {
                 )
                 .child(div().w(px(1.)).h(px(16.)).mx_2().bg(t.border))
                 .child(
-                    self.ghost("header-review", "panel-right", "Changes")
+                    self.icon_button("header-review", "panel-right", "Toggle changes · ⌘D")
                         .disabled(!enabled)
                         .when(self.show_review && enabled, |b| {
                             b.bg(t.selected).text_color(t.text)
@@ -168,6 +168,9 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|s, _: &ToggleReview, _, cx| {
                 s.show_review = !s.show_review;
+                if !s.show_review && s.panel == Panel::Comparison {
+                    s.panel = Panel::None;
+                }
                 cx.notify();
             }))
             .on_action(cx.listener(|s, _: &ShowSettings, _, cx| {
@@ -276,7 +279,10 @@ impl Render for Shell {
                 .child(self.review(cx));
         }
         root = root.child(body);
-        if matches!(self.panel, Panel::Models | Panel::TaskMenu | Panel::Sort) {
+        if matches!(
+            self.panel,
+            Panel::Models | Panel::TaskMenu | Panel::Sort | Panel::Comparison
+        ) {
             root = root.child(self.menu(cx));
         } else if self.panel != Panel::None
             && !(self.panel == Panel::Feedback && self.selection.is_some())

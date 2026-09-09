@@ -103,8 +103,36 @@ pub struct InputRequest {
     pub method: String,
     pub params: serde_json::Value,
 }
+/// Provider-reported work currently in progress, separate from the saved transcript.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Activity {
+    pub id: String,
+    pub kind: ActivityKind,
+    pub detail: String,
+    pub started: u64,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub enum ActivityKind {
+    ReadingFiles,
+    SearchingFiles,
+    Delegating,
+    Reviewing,
+    ViewingImage,
+    GeneratingImage,
+    WaitingTimer,
+    Reasoning,
+    Responding,
+    Command,
+    EditingFiles,
+    Searching,
+    Tool,
+    Planning,
+    Compacting,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TaskView {
+    #[serde(default)]
+    pub activities: Vec<Activity>,
     pub task: Task,
     pub messages: Vec<Message>,
     pub before: Option<u64>,

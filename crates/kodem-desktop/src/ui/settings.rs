@@ -141,13 +141,15 @@ impl Shell {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(self.button("font-minus", "−").on_click(cx.listener(
-                                    |s, _, _, cx| {
-                                        s.settings.font_size = (s.settings.font_size - 1.).max(12.);
-                                        s.save_settings();
-                                        cx.notify();
-                                    },
-                                )))
+                                .child(
+                                    self.icon_button("font-minus", "minus", "Decrease text size")
+                                        .on_click(cx.listener(|s, _, _, cx| {
+                                            s.settings.font_size =
+                                                (s.settings.font_size - 1.).max(12.);
+                                            s.save_settings();
+                                            cx.notify();
+                                        })),
+                                )
                                 .child(
                                     div()
                                         .w(px(42.))
@@ -155,22 +157,25 @@ impl Shell {
                                         .text_size(px(12.))
                                         .child(format!("{} px", self.settings.font_size)),
                                 )
-                                .child(self.button("font-plus", "+").on_click(cx.listener(
-                                    |s, _, _, cx| {
-                                        s.settings.font_size = (s.settings.font_size + 1.).min(22.);
-                                        s.save_settings();
-                                        cx.notify();
-                                    },
-                                )))
+                                .child(
+                                    self.icon_button("font-plus", "plus", "Increase text size")
+                                        .on_click(cx.listener(|s, _, _, cx| {
+                                            s.settings.font_size =
+                                                (s.settings.font_size + 1.).min(22.);
+                                            s.save_settings();
+                                            cx.notify();
+                                        })),
+                                )
                                 .into_any_element(),
                         ),
                     )
                     .child(
                         self.setting_row(
                             "Task density",
-                            "Show branch details below task names.",
+                            "Adjust the spacing between task rows.",
                             self.button(
                                 "density",
+                                "settings-2",
                                 if self.settings.comfortable {
                                     "Comfortable"
                                 } else {
@@ -202,28 +207,42 @@ impl Shell {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(self.button("sidebar-narrow", "−").on_click(cx.listener(
-                                    |s, _, _, cx| {
-                                        s.settings.sidebar_width =
-                                            (s.settings.sidebar_width - 20.).max(220.);
-                                        s.save_settings();
-                                        cx.notify();
-                                    },
-                                )))
+                                .child(
+                                    self.icon_button(
+                                        "sidebar-narrow",
+                                        "chevron-left",
+                                        "Narrow sidebar",
+                                    )
+                                    .on_click(cx.listener(
+                                        |s, _, _, cx| {
+                                            s.settings.sidebar_width =
+                                                (s.settings.sidebar_width - 20.).max(220.);
+                                            s.save_settings();
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
                                 .child(
                                     div().text_size(px(12.)).child(format!(
                                         "{} px",
                                         self.settings.sidebar_width as u32
                                     )),
                                 )
-                                .child(self.button("sidebar-widen", "+").on_click(cx.listener(
-                                    |s, _, _, cx| {
-                                        s.settings.sidebar_width =
-                                            (s.settings.sidebar_width + 20.).min(420.);
-                                        s.save_settings();
-                                        cx.notify();
-                                    },
-                                )))
+                                .child(
+                                    self.icon_button(
+                                        "sidebar-widen",
+                                        "chevron-right",
+                                        "Widen sidebar",
+                                    )
+                                    .on_click(cx.listener(
+                                        |s, _, _, cx| {
+                                            s.settings.sidebar_width =
+                                                (s.settings.sidebar_width + 20.).min(420.);
+                                            s.save_settings();
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
                                 .into_any_element(),
                         ),
                     )

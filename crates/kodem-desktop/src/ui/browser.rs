@@ -87,14 +87,20 @@ impl Shell {
                                 .child(path),
                         )
                         .child(
-                            self.ghost("reference-file", "paperclip", "Reference")
-                                .on_click(cx.listener(move |s, _, _, cx| {
+                            self.icon_button(
+                                "reference-file",
+                                "paperclip",
+                                "Reference this file in the prompt",
+                            )
+                            .on_click(cx.listener(
+                                move |s, _, _, cx| {
                                     let mut text = s.input.read(cx).text();
                                     text.push_str(&format!("\n@{reference}"));
                                     s.input.update(cx, |i, cx| i.set_text(text, cx));
                                     s.panel = Panel::None;
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         ),
                 )
                 .child(

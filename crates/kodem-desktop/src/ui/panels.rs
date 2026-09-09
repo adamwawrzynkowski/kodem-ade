@@ -13,7 +13,7 @@ impl Shell {
             Panel::Feedback => "Review feedback",
             Panel::Rename => "Rename task",
             Panel::Questions => "Codex needs your input",
-            Panel::None | Panel::Models | Panel::TaskMenu | Panel::Sort => "",
+            Panel::None | Panel::Models | Panel::TaskMenu | Panel::Sort | Panel::Comparison => "",
         };
         let mut content = div()
             .id("panel-body")
@@ -152,7 +152,7 @@ impl Shell {
                 }
                 content = content.child(
                     div().mt_2().flex().justify_end().child(
-                        self.primary("create-task", "Create task")
+                        self.primary("create-task", "plus", "Create task")
                             .disabled(projects.is_empty())
                             .on_click(cx.listener(|s, _, _, _| {
                                 if let Some(project_id) = &s.selected_project {
@@ -275,7 +275,7 @@ impl Shell {
                 content = content.p_0().gap_0().child(self.file_browser(cx));
             }
             Panel::Check => {
-                content=content.child("Runs in this task's checkout. The transcript records the command, revision and exit status.").child(div().p_2().min_h(px(48.)).bg(theme.inset).border_1().border_color(theme.border).rounded(px(7.)).child(self.aux.clone())).child(self.primary("run-check","Run check").on_click(cx.listener(|s,_,_,cx|{if let Some(task_id)=&s.selected{s.send(core::Request::RunCheck{task_id:task_id.clone(),command:s.aux.read(cx).text()});s.panel=Panel::None;cx.notify();}})));
+                content=content.child("Runs in this task's checkout. The transcript records the command, revision and exit status.").child(div().p_2().min_h(px(48.)).bg(theme.inset).border_1().border_color(theme.border).rounded(px(7.)).child(self.aux.clone())).child(self.primary("run-check","check-square","Run check").on_click(cx.listener(|s,_,_,cx|{if let Some(task_id)=&s.selected{s.send(core::Request::RunCheck{task_id:task_id.clone(),command:s.aux.read(cx).text()});s.panel=Panel::None;cx.notify();}})));
             }
             Panel::Rename => {
                 content = content
@@ -289,18 +289,19 @@ impl Shell {
                             .rounded(px(7.))
                             .child(self.aux.clone()),
                     )
-                    .child(self.primary("rename", "Save title").on_click(cx.listener(
-                        |s, _, _, cx| {
-                            if let Some(task_id) = &s.selected {
-                                s.send(core::Request::EditTask {
-                                    task_id: task_id.clone(),
-                                    edit: TaskEdit::Rename(s.aux.read(cx).text()),
-                                });
-                                s.panel = Panel::None;
-                                cx.notify();
-                            }
-                        },
-                    )));
+                    .child(
+                        self.primary("rename", "check", "Save title")
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                if let Some(task_id) = &s.selected {
+                                    s.send(core::Request::EditTask {
+                                        task_id: task_id.clone(),
+                                        edit: TaskEdit::Rename(s.aux.read(cx).text()),
+                                    });
+                                    s.panel = Panel::None;
+                                    cx.notify();
+                                }
+                            })),
+                    );
             }
             Panel::Feedback => {
                 if let (Some(selection), Some(diff)) = (self.selection.clone(), self.diff.clone()) {
@@ -326,19 +327,20 @@ impl Shell {
                                 .rounded(px(7.))
                                 .child(self.aux.clone()),
                         )
-                        .child(self.button("save-feedback", "Attach comment").on_click(
-                            cx.listener(move |s, _, _, cx| {
-                                s.send(core::Request::AddFeedback {
-                                    task_id: diff.task_id.clone(),
-                                    snapshot_id: diff.id.clone(),
-                                    file: s.file,
-                                    side: selection.side.clone(),
-                                    start: selection.start.min(selection.end),
-                                    end: selection.start.max(selection.end),
-                                    comment: s.aux.read(cx).text(),
-                                })
-                            }),
-                        ));
+                        .child(
+                            self.button("save-feedback", "chat", "Attach comment")
+                                .on_click(cx.listener(move |s, _, _, cx| {
+                                    s.send(core::Request::AddFeedback {
+                                        task_id: diff.task_id.clone(),
+                                        snapshot_id: diff.id.clone(),
+                                        file: s.file,
+                                        side: selection.side.clone(),
+                                        start: selection.start.min(selection.end),
+                                        end: selection.start.max(selection.end),
+                                        comment: s.aux.read(cx).text(),
+                                    })
+                                })),
+                        );
                 }
                 if let Some(view) = self.view.clone() {
                     for (i, f) in view.task.feedback.iter().enumerate() {
@@ -378,6 +380,7 @@ impl Shell {
                                             .child(
                                                 self.button(
                                                     ("open-snapshot", i),
+                                                    "file-text",
                                                     "Open captured revision",
                                                 )
                                                 .on_click(cx.listener(move |s, _, _, cx| {
@@ -390,13 +393,17 @@ impl Shell {
                                                 })),
                                             )
                                             .child(
-                                                self.button(("remove-feedback", i), "Remove")
-                                                    .on_click(cx.listener(move |s, _, _, _| {
-                                                        s.send(core::Request::RemoveFeedback {
-                                                            task_id: task_id.clone(),
-                                                            id: id.clone(),
-                                                        })
-                                                    })),
+                                                self.icon_button(
+                                                    ("remove-feedback", i),
+                                                    "close",
+                                                    "Remove feedback",
+                                                )
+                                                .on_click(cx.listener(move |s, _, _, _| {
+                                                    s.send(core::Request::RemoveFeedback {
+                                                        task_id: task_id.clone(),
+                                                        id: id.clone(),
+                                                    })
+                                                })),
                                             ),
                                     ),
                             );
@@ -431,6 +438,11 @@ impl Shell {
                                 row = row.child(
                                     self.button(
                                         ("decision", i * 10 + j),
+                                        if decision.starts_with("accept") {
+                                            "shield"
+                                        } else {
+                                            "close"
+                                        },
                                         match decision.as_str() {
                                             "accept" => "Allow once",
                                             "acceptForSession" => "Allow for session",
@@ -480,10 +492,8 @@ impl Shell {
                                             content.child(
                                                 self.button(
                                                     ("answer", i * 1000 + q * 100 + j),
-                                                    format!(
-                                                        "{} {label}",
-                                                        if chosen { "●" } else { "○" }
-                                                    ),
+                                                    if chosen { "check" } else { "chat" },
+                                                    label.clone(),
                                                 )
                                                 .on_click(cx.listener(move |_, _, _, cx| {
                                                     answer.update(cx, |input, cx| {
@@ -503,7 +513,7 @@ impl Shell {
                                 .filter_map(|q| q["id"].as_str().map(str::to_owned))
                                 .collect();
                             content = content.child(
-                                self.primary(("submit-answers", i), "Submit answers")
+                                self.primary(("submit-answers", i), "check", "Submit answers")
                                     .on_click(cx.listener(move |s, _, _, cx| {
                                         let mut answers = serde_json::Map::new();
                                         for key in &keys {
@@ -532,7 +542,7 @@ impl Shell {
                     }
                 }
             }
-            Panel::None | Panel::Models | Panel::TaskMenu | Panel::Sort => {}
+            Panel::None | Panel::Models | Panel::TaskMenu | Panel::Sort | Panel::Comparison => {}
         }
         div()
             .absolute()
@@ -584,7 +594,12 @@ impl Shell {
                                     })),
                             ),
                     )
-                    .child(content),
+                    .child(content)
+                    .with_animation(
+                        ("dialog-enter", self.panel.clone() as usize),
+                        Animation::new(Duration::from_millis(170)),
+                        |d, p| d.opacity(p).mt(px((1. - p) * 8.)),
+                    ),
             )
             .into_any_element()
     }
@@ -712,6 +727,11 @@ impl Shell {
                     ),
             )
             .child(content)
+            .with_animation(
+                "terminal-enter",
+                Animation::new(Duration::from_millis(150)),
+                |d, p| d.opacity(p),
+            )
             .into_any_element()
     }
 }

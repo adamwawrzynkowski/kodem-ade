@@ -304,7 +304,18 @@ impl Shell {
                                         .min_w_0()
                                         .text_size(px(12.))
                                         .text_ellipsis()
-                                        .child(title),
+                                        .child(if task.state.active() {
+                                            motion::gleam(
+                                                (
+                                                    ElementId::from("task-progress"),
+                                                    SharedString::from(task.id.clone()),
+                                                ),
+                                                title,
+                                                t,
+                                            )
+                                        } else {
+                                            div().text_ellipsis().child(title).into_any_element()
+                                        }),
                                 )
                                 .child(
                                     div()
@@ -394,7 +405,13 @@ impl Shell {
                             ),
                     ),
             );
-        panel.into_any_element()
+        panel
+            .with_animation(
+                "sidebar-enter",
+                Animation::new(Duration::from_millis(150)),
+                |d, p| d.opacity(p),
+            )
+            .into_any_element()
     }
 }
 fn rank(state: &RunState) -> u8 {

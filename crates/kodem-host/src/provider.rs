@@ -87,6 +87,7 @@ pub(super) fn submit(
     {
         return Ok(());
     }
+    h.activities.remove(&task_id);
     task.state = RunState::Starting;
     task.error = None;
     task.updated = now();
@@ -142,6 +143,7 @@ pub(super) fn submit(
             }
         }
         let mut h = host.lock().unwrap();
+        h.activities.remove(&task_id);
         h.sessions.remove(&task_id);
         h.requests.remove(&task_id);
     });
@@ -314,6 +316,7 @@ fn ingest(
         h.store.save_task(&task)?;
         return Ok(());
     }
+    update_activities(h.activities.entry(task_id.into()).or_default(), method, p);
     match method {
         "turn/started" => {
             task.active_turn = p["turn"]["id"].as_str().map(str::to_owned);
@@ -464,6 +467,114 @@ fn ingest(
     }
     Ok(())
 }
+// Track item identities, not inferred prose. Reasoning content is never copied into activity labels.
+fn update_activities(activities: &mut Vec<Activity>, method: &str, params: &Value) {
+    if matches!(method, "turn/started" | "turn/completed") {
+        activities.clear();
+        return;
+    }
+    if !matches!(method, "item/started" | "item/completed") {
+        return;
+    }
+    let item = &params["item"];
+    let Some(id) = item["id"].as_str() else {
+        return;
+    };
+    let key = format!("{}:{id}", params["turnId"].as_str().unwrap_or("unknown"));
+    if method == "item/completed" {
+        activities.retain(|a| a.id != key);
+        return;
+    }
+    if activities.iter().any(|a| a.id == key) {
+        return;
+    }
+    let (kind, detail) = match item["type"].as_str().unwrap_or_default() {
+        "userMessage" | "functionCallOutput" | "subAgentActivity" | "exitedReviewMode" => return,
+        "reasoning" => (ActivityKind::Reasoning, String::new()),
+        "agentMessage" => (ActivityKind::Responding, String::new()),
+        "commandExecution" => (
+            command_activity(&item["commandActions"]),
+            item["command"].as_str().unwrap_or_default().into(),
+        ),
+        "fileChange" => (
+            ActivityKind::EditingFiles,
+            item["changes"]
+                .as_array()
+                .map(|files| format!("{} files", files.len()))
+                .unwrap_or_default(),
+        ),
+        "webSearch" => (
+            ActivityKind::Searching,
+            item["query"].as_str().unwrap_or_default().into(),
+        ),
+        "collabAgentToolCall" => (
+            ActivityKind::Delegating,
+            item["tool"].as_str().unwrap_or_default().into(),
+        ),
+        "enteredReviewMode" => (ActivityKind::Reviewing, String::new()),
+        "imageView" => (
+            ActivityKind::ViewingImage,
+            item["path"].as_str().unwrap_or_default().into(),
+        ),
+        "imageGeneration" => (ActivityKind::GeneratingImage, String::new()),
+        "sleep" => (
+            ActivityKind::WaitingTimer,
+            item["durationMs"]
+                .as_u64()
+                .map(|ms| format!("{} seconds", ms / 1000))
+                .unwrap_or_default(),
+        ),
+        "dynamicToolCall" => (
+            ActivityKind::Tool,
+            item["tool"].as_str().unwrap_or_default().into(),
+        ),
+        "plan" => (ActivityKind::Planning, String::new()),
+        "contextCompaction" => (ActivityKind::Compacting, String::new()),
+        "mcpToolCall" => (
+            ActivityKind::Tool,
+            format!(
+                "{} / {}",
+                item["server"].as_str().unwrap_or("MCP"),
+                item["tool"].as_str().unwrap_or("tool")
+            ),
+        ),
+        _ => (ActivityKind::Tool, String::new()),
+    };
+    let detail = detail
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(100)
+        .collect();
+    activities.push(Activity {
+        id: key,
+        kind,
+        detail,
+        started: now(),
+    });
+}
+
+// Use the provider's parsed command actions rather than guessing from command text.
+fn command_activity(actions: &Value) -> ActivityKind {
+    let Some(actions) = actions.as_array().filter(|a| !a.is_empty()) else {
+        return ActivityKind::Command;
+    };
+    if actions
+        .iter()
+        .all(|a| matches!(a["type"].as_str(), Some("read" | "listFiles")))
+    {
+        ActivityKind::ReadingFiles
+    } else if actions
+        .iter()
+        .all(|a| matches!(a["type"].as_str(), Some("read" | "listFiles" | "search")))
+    {
+        ActivityKind::SearchingFiles
+    } else {
+        ActivityKind::Command
+    }
+}
+
 fn append_bounded(target: &mut String, text: &str) {
     const LIMIT: usize = 1024 * 1024;
     if target.len() >= LIMIT {
