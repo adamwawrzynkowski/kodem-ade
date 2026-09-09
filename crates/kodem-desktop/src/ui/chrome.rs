@@ -19,6 +19,7 @@ impl Shell {
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "Workspace".into());
         let mut header = div()
+            .relative()
             .h(px(38.))
             .flex_shrink_0()
             .flex()
@@ -27,6 +28,7 @@ impl Shell {
             .bg(t.sidebar)
             .border_b_1()
             .border_color(t.border)
+            .child(motion::window_texture(self.settings.light))
             .child(
                 div()
                     .w(px(sidebar_width))
@@ -40,8 +42,9 @@ impl Shell {
                     .when(!self.settings.collapsed, |d| {
                         d.child(
                             div()
-                                .text_size(px(11.))
-                                .font_weight(FontWeight::NORMAL)
+                                .font_family("Manrope ExtraBold")
+                                .text_size(px(16.))
+                                .font_weight(FontWeight::EXTRA_BOLD)
                                 .child("Kodem"),
                         )
                         .child(div().flex_1())
@@ -119,6 +122,7 @@ impl Shell {
                         .when(self.show_terminal, |b| b.bg(t.selected).text_color(t.text))
                         .on_click(cx.listener(|s, _, _, cx| {
                             s.show_terminal = !s.show_terminal;
+                            s.save_settings();
                             cx.notify();
                         })),
                 )
@@ -131,6 +135,7 @@ impl Shell {
                         })
                         .on_click(cx.listener(|s, _, _, cx| {
                             s.show_review = !s.show_review;
+                            s.save_settings();
                             cx.notify();
                         })),
                 ),
@@ -152,7 +157,7 @@ impl Render for Shell {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .font_family(".SystemUIFont")
+            .font_family("IBM Plex Sans")
             .text_size(px(self.settings.font_size - 1.))
             .line_height(relative(1.5))
             .font_weight(FontWeight::NORMAL)
@@ -169,6 +174,7 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|s, _: &ToggleReview, _, cx| {
                 s.show_review = !s.show_review;
+                s.save_settings();
                 if !s.show_review && s.panel == Panel::Comparison {
                     s.panel = Panel::None;
                 }
@@ -284,7 +290,7 @@ impl Render for Shell {
         }
         root = root
             .child(body)
-            .child(motion::window_texture(self.settings.light));
+            .child(motion::cool_corner(self.settings.light));
         if matches!(
             self.panel,
             Panel::Models

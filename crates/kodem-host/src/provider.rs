@@ -156,15 +156,6 @@ pub(super) fn submit(
             task.error = None;
         }
         task.updated = now();
-        if task.title == "New task" {
-            task.title = text
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .unwrap_or("Attached context")
-                .chars()
-                .take(90)
-                .collect();
-        }
         h.store.accept_outgoing(&task, &message, &prompt)?;
     }
     ensure_owner(host, task_id);
@@ -249,7 +240,7 @@ fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result
     };
     let mut codex = Codex::start(&cwd, &mut event)?;
     let task = host.lock().unwrap().store.task(task_id)?;
-    let mut params = json!({"cwd":cwd,"approvalPolicy":task.access.approval_policy(),"sandbox":task.access.sandbox()});
+    let mut params = json!({"cwd":cwd,"approvalPolicy":task.access.approval_policy(),"approvalsReviewer":task.access.approvals_reviewer(),"sandbox":task.access.sandbox()});
     if let Some(model) = &task.model {
         params["model"] = json!(model);
     }
@@ -272,6 +263,7 @@ fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result
         task.provider_thread = Some(thread.clone());
         h.store.save_task(&task)?;
     }
+    crate::titles::start(host.clone(), task_id)?;
     let mut branch_refresh = Instant::now();
     loop {
         if branch_refresh.elapsed() >= Duration::from_secs(5) {
@@ -422,6 +414,7 @@ fn dispatch_next(
     } else {
         let task = host.lock().unwrap().store.task(task_id)?;
         params["approvalPolicy"] = json!(task.access.approval_policy());
+        params["approvalsReviewer"] = json!(task.access.approvals_reviewer());
         params["sandboxPolicy"] = task.access.turn_policy(&task.cwd);
         if let Some(model) = task.model {
             params["model"] = json!(model);
@@ -718,7 +711,7 @@ fn ingest(
                 items.insert(key, message);
             }
         }
-        "error" => {
+        "error" if p["willRetry"].as_bool() != Some(true) => {
             let text = p["error"]["message"]
                 .as_str()
                 .unwrap_or("Codex reported an error");
@@ -743,6 +736,31 @@ fn update_activities(activities: &mut Vec<Activity>, method: &str, params: &Valu
     if matches!(method, "turn/started" | "turn/completed") {
         activities.clear();
         return;
+    }
+    if method == "error" {
+        let previous = activities
+            .iter()
+            .find(|a| a.kind == ActivityKind::Reconnecting)
+            .map(|a| a.started);
+        activities.retain(|a| a.kind != ActivityKind::Reconnecting);
+        if params["willRetry"].as_bool() == Some(true) {
+            activities.push(Activity {
+                id: format!("retry:{}", params["turnId"].as_str().unwrap_or("unknown")),
+                kind: ActivityKind::Reconnecting,
+                detail: params["error"]["message"]
+                    .as_str()
+                    .unwrap_or("Retrying connection")
+                    .chars()
+                    .take(240)
+                    .collect(),
+                started: previous.unwrap_or_else(now),
+            });
+        }
+        return;
+    }
+    // A resumed stream clears the retry indicator even if the existing item only emits deltas.
+    if method.starts_with("item/") {
+        activities.retain(|a| a.kind != ActivityKind::Reconnecting);
     }
     if !matches!(method, "item/started" | "item/completed") {
         return;

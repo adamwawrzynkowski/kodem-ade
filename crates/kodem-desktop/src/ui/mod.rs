@@ -112,6 +112,8 @@ pub struct Shell {
     dragging_sidebar: bool,
     dragging_review: bool,
     window_width: f32,
+    window_placement: WindowBounds,
+    window_save_task: Option<gpui::Task<()>>,
     show_archived: bool,
     poll_pending: bool,
     draft_dirty: bool,
@@ -146,6 +148,33 @@ impl Shell {
         let aux = cx.new(|cx| TextInput::new("Type here…", cx));
         let search = cx.new(|cx| TextInput::new("Search tasks…", cx));
         let subscriptions = vec![
+            cx.observe_window_bounds(window, |s, window, cx| {
+                let placement = window.window_bounds();
+                if s.window_placement != placement {
+                    s.window_placement = placement;
+                    s.window_save_task = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(350))
+                            .await;
+                        let _ = this.update(cx, |s, _| s.save_window_placement());
+                    }));
+                }
+            }),
+            cx.on_release(|s, _| s.save_window_placement()),
+            cx.on_app_quit(|s, cx| {
+                s.save_window_placement();
+                if s.workspace.is_some() {
+                    s.save_settings();
+                }
+                let (done, receiver) = std::sync::mpsc::channel();
+                let _ = s.tx.send(bridge::Command::Flush(done));
+                let drain = cx.background_executor().spawn(async move {
+                    let _ = receiver.recv_timeout(Duration::from_secs(2));
+                });
+                async move {
+                    drain.await;
+                }
+            }),
             cx.on_focus_lost(window, |s, window, cx| window.focus(&s.focus, cx)),
             cx.subscribe(&input, |s, _, _: &SubmitInput, cx| s.submit_current(cx)),
             cx.observe(&input, |s, input, cx| {
@@ -253,7 +282,9 @@ impl Shell {
             file_text: None,
             dragging_sidebar: false,
             dragging_review: false,
-            window_width: 1440.,
+            window_width: f32::from(window.viewport_size().width),
+            window_placement: window.window_bounds(),
+            window_save_task: None,
             show_archived: false,
             poll_pending: false,
             draft_dirty: false,
@@ -343,6 +374,9 @@ impl Shell {
                 cx.set_reduce_motion(motion::system_reduce_motion());
                 if self.workspace.is_none() {
                     self.settings = workspace.settings.clone();
+                    self.show_review = self.settings.show_review;
+                    self.show_terminal = self.settings.show_terminal;
+                    self.split = self.settings.split_diff;
                     self.theme = Theme::new(self.settings.light);
                     let selected = self
                         .settings
@@ -355,6 +389,14 @@ impl Shell {
                     } else {
                         self.status = "Open a repository to start coding".into();
                     }
+                    if self
+                        .workspace
+                        .as_ref()
+                        .is_some_and(|w| w.runtime.models.is_empty())
+                    {
+                        self.send(core::Request::ConnectRuntime);
+                    }
+                    cx.notify();
                     return;
                 }
                 self.workspace = Some(workspace);
@@ -571,6 +613,16 @@ impl Shell {
                     }
                 }
                 core::Request::StageFile { .. } => self.refresh_diff(),
+                core::Request::EditTask {
+                    task_id,
+                    edit: TaskEdit::Model { .. } | TaskEdit::Access(_),
+                } => {
+                    self.send(core::Request::Task {
+                        task_id,
+                        before: None,
+                    });
+                    self.send(core::Request::Hello);
+                }
                 core::Request::EditTask { .. }
                 | core::Request::SaveSettings(_)
                 | core::Request::TerminalInput { .. }
@@ -618,9 +670,6 @@ impl Shell {
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         self.draft_dirty = false;
         self.selected = Some(id.clone());
-        if self.window_width <= 1100. {
-            self.show_review = false;
-        }
         self.view = None;
         self.diff = None;
         self.historical_diff = false;
@@ -649,8 +698,17 @@ impl Shell {
             });
         }
     }
+    fn save_window_placement(&self) {
+        if let Err(error) = crate::window_state::save(self.window_placement) {
+            eprintln!("Could not save window placement: {error}");
+        }
+    }
     fn save_settings(&self) {
-        self.send(core::Request::SaveSettings(self.settings.clone()));
+        let mut settings = self.settings.clone();
+        settings.show_review = self.show_review;
+        settings.show_terminal = self.show_terminal;
+        settings.split_diff = self.split;
+        self.send(core::Request::SaveSettings(settings));
     }
     fn open_project(&mut self, _: &OpenProject, _: &mut Window, cx: &mut Context<Self>) {
         let chosen = cx.prompt_for_paths(PathPromptOptions {
@@ -815,6 +873,7 @@ struct Hint {
 impl Render for Hint {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
+            .font_family("IBM Plex Sans")
             .max_w(px(360.))
             .px_2()
             .py_1()

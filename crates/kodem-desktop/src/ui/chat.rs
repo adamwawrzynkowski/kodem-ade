@@ -5,13 +5,16 @@ impl Shell {
     pub(super) fn chat(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let mut panel = div()
+            .relative()
             .flex_1()
             .min_w_0()
             .h_full()
             .flex()
             .flex_col()
             .overflow_hidden()
-            .bg(t.canvas);
+            .bg(t.canvas)
+            .child(motion::window_texture(self.settings.light))
+            .child(motion::chat_dither(self.settings.light, cx.reduce_motion()));
         if let Some(view) = self.view.clone() {
             let state = &view.task.state;
             let state_color = match state {
@@ -20,74 +23,65 @@ impl Shell {
                 RunState::Waiting | RunState::Running | RunState::Starting => t.accent,
                 _ => t.muted,
             };
-            panel = panel.child(
-                div()
-                    .h(px(34.))
-                    .flex_shrink_0()
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .max_w(px(300.))
-                            .px_2()
-                            .py_1()
-                            .rounded(px(5.))
-                            .bg(t.raised)
-                            .min_w_0()
-                            .text_ellipsis()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::NORMAL)
-                            .child(view.task.title.clone()),
-                    )
-                    .child(div().flex_1())
-                    .child(if state.active() {
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .text_size(px(10.))
-                            .child(motion::active_icon(
-                                "task-state-icon",
-                                if state == &RunState::Waiting {
-                                    "shield"
-                                } else {
-                                    "loader"
-                                },
-                                state_color,
-                                state != &RunState::Waiting,
-                            ))
-                            .child(motion::gleam("task-state-label", state.label(), t))
-                            .into_any_element()
-                    } else {
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .text_size(px(10.))
-                            .text_color(state_color)
-                            .child(
-                                icon(match state {
-                                    RunState::Completed => "check",
-                                    RunState::Idle => "chat",
-                                    RunState::Interrupted => "stop",
-                                    RunState::DeliveryUnknown => "shield",
-                                    _ => "circle-x",
-                                })
-                                .size(px(12.)),
-                            )
-                            .child(state.label())
-                            .into_any_element()
-                    })
-                    .child(
-                        self.icon_button("task-menu", "ellipsis", "Task actions")
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                s.panel = Panel::TaskMenu;
-                                cx.notify();
-                            })),
-                    ),
-            );
+            let center_diff =
+                self.reviewing_file && self.settings.diff_placement == DiffPlacement::Conversation;
+            if !center_diff {
+                panel = panel.child(
+                    div()
+                        .h(px(28.))
+                        .flex_shrink_0()
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().flex_1())
+                        .child(if state.active() {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .text_size(px(10.))
+                                .child(motion::active_icon(
+                                    "task-state-icon",
+                                    if state == &RunState::Waiting {
+                                        "shield"
+                                    } else {
+                                        "loader"
+                                    },
+                                    state_color,
+                                    state != &RunState::Waiting,
+                                ))
+                                .child(motion::gleam("task-state-label", state.label(), t))
+                                .into_any_element()
+                        } else {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .text_size(px(10.))
+                                .text_color(state_color)
+                                .child(
+                                    icon(match state {
+                                        RunState::Completed => "check",
+                                        RunState::Idle => "chat",
+                                        RunState::Interrupted => "stop",
+                                        RunState::DeliveryUnknown => "shield",
+                                        _ => "circle-x",
+                                    })
+                                    .size(px(12.)),
+                                )
+                                .child(state.label())
+                                .into_any_element()
+                        })
+                        .child(
+                            self.icon_button("task-menu", "ellipsis", "Task actions")
+                                .on_click(cx.listener(|s, _, _, cx| {
+                                    s.panel = Panel::TaskMenu;
+                                    cx.notify();
+                                })),
+                        ),
+                );
+            }
             if state == &RunState::DeliveryUnknown {
                 let id = view.task.id.clone();
                 panel = panel.child(
@@ -164,8 +158,6 @@ impl Shell {
                     let delta = e.delta.pixel_delta(px(20.));
                     s.nudge_composer((f32::from(delta.y) * 0.015).clamp(-0.45, 0.45), cx);
                 }));
-            let center_diff =
-                self.reviewing_file && self.settings.diff_placement == DiffPlacement::Conversation;
             if center_diff {
                 timeline = timeline
                     .child(self.review(cx, true))
@@ -191,63 +183,68 @@ impl Shell {
                 } else {
                     let entity = cx.entity();
                     timeline = timeline.child(
-                        list(self.chat_scroll.clone(), move |index, window, cx| {
-                            entity.update(cx, |s, cx| s.message(index, window, cx))
-                        })
-                        .flex_1()
-                        .min_h_0()
-                        .pb(px(self.composer_height)),
+                        div()
+                            .w_full()
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .justify_center()
+                            .child(
+                                list(self.chat_scroll.clone(), move |index, window, cx| {
+                                    entity.update(cx, |s, cx| s.message(index, window, cx))
+                                })
+                                .w_full()
+                                .max_w(px(940.))
+                                .min_w_0()
+                                .h_full()
+                                .pb(px(self.composer_height)),
+                            ),
                     );
                 }
             }
             let bounds_entity = cx.entity();
-            let floating = div()
-                .absolute()
-                .bottom_0()
-                .w_full()
-                .child(motion::composer_backdrop(t))
-                .child(
-                    div()
-                        .relative()
-                        .w_full()
-                        .child(
-                            div()
-                                .px_5()
-                                .h(px(if self.follow { 4. } else { 24. }))
-                                .flex_shrink_0()
-                                .flex()
-                                .items_center()
-                                .justify_end()
-                                .when(!self.follow, |d| {
-                                    d.child(
-                                        self.ghost("jump-latest", "arrow-down", "Jump to latest")
-                                            .on_click(cx.listener(|s, _, _, cx| {
-                                                s.follow = true;
-                                                s.chat_scroll.scroll_to_end();
-                                                cx.notify();
-                                            })),
-                                    )
-                                }),
-                        )
-                        .child(self.activity_strip(cx))
-                        .child(self.composer(false, cx))
-                        .child(
-                            canvas(
-                                move |bounds, _, cx| {
-                                    bounds_entity.update(cx, |s, cx| {
-                                        let height = f32::from(bounds.size.height).ceil();
-                                        if (s.composer_height - height).abs() > 0.5 {
-                                            s.composer_height = height;
+            let floating = div().absolute().bottom_0().w_full().child(
+                div()
+                    .relative()
+                    .w_full()
+                    .child(
+                        div()
+                            .px_5()
+                            .h(px(if self.follow { 4. } else { 24. }))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .when(!self.follow, |d| {
+                                d.child(
+                                    self.ghost("jump-latest", "arrow-down", "Jump to latest")
+                                        .on_click(cx.listener(|s, _, _, cx| {
+                                            s.follow = true;
+                                            s.chat_scroll.scroll_to_end();
                                             cx.notify();
-                                        }
-                                    });
-                                },
-                                |_, _, _, _| {},
-                            )
-                            .absolute()
-                            .size_full(),
-                        ),
-                );
+                                        })),
+                                )
+                            }),
+                    )
+                    .child(self.activity_strip(cx))
+                    .child(self.composer(false, cx))
+                    .child(
+                        canvas(
+                            move |bounds, _, cx| {
+                                bounds_entity.update(cx, |s, cx| {
+                                    let height = f32::from(bounds.size.height).ceil();
+                                    if (s.composer_height - height).abs() > 0.5 {
+                                        s.composer_height = height;
+                                        cx.notify();
+                                    }
+                                });
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    ),
+            );
             panel = panel.child(timeline.child(floating));
         } else {
             panel = panel.child(
@@ -423,9 +420,9 @@ impl Shell {
             .rounded(px(16.))
             .border_1()
             .border_color(t.border)
-            .bg(t.raised.opacity(0.94))
             .shadow(t.elevation())
-            .overflow_hidden();
+            .overflow_hidden()
+            .child(motion::composer_backdrop(t));
         if empty {
             let label = project
                 .as_ref()
@@ -480,7 +477,7 @@ impl Shell {
                 .min_h(px(if empty { 86. } else { 58. }))
                 .max_h(px(180.))
                 .overflow_y_scroll()
-                .text_size(px(self.settings.font_size - 2.))
+                .text_size(px(self.settings.font_size - 1.))
                 .text_color(t.text)
                 .child(self.input.clone()),
         );
@@ -540,10 +537,10 @@ impl Shell {
                     .child(
                         self.ghost(
                             "composer-access",
-                            if view.task.access == AccessMode::FullAccess {
-                                "lock-open"
-                            } else {
-                                "shield"
+                            match view.task.access {
+                                AccessMode::FullAccess => "lock-open",
+                                AccessMode::AutoReview => "bot",
+                                _ => "shield",
                             },
                             view.task.access.label(),
                         )
@@ -705,12 +702,7 @@ impl Shell {
         let expanded = self.folded.contains(&group_id);
         let id = group_id;
         let text = message.text.clone();
-        let mut outer = div()
-            .w_full()
-            .max_w(px(940.))
-            .mx_auto()
-            .px_6()
-            .py(px(if tool { 2. } else { 8. }));
+        let mut outer = div().w_full().px_5().py(px(if tool { 2. } else { 8. }));
         if tool && !expanded && index != group_start {
             return div().into_any_element();
         }

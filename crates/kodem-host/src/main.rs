@@ -2,6 +2,7 @@
 mod attachments;
 mod provider;
 mod terminal;
+mod titles;
 use anyhow::{Context, Result, ensure};
 use kodem_core::{git, ipc, runtime, storage::Store, *};
 use serde_json::Value;
@@ -195,10 +196,12 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             };
             let baseline = git::head(&cwd);
             let branch = git::branch(&cwd);
+            let defaults = host.lock().unwrap().store.settings()?.agent_defaults;
             let task = Task {
                 id,
                 project_id,
                 title: "New task".into(),
+                title_pending: true,
                 cwd,
                 owns_worktree: worktree,
                 baseline,
@@ -207,9 +210,9 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 active_turn: None,
                 state: RunState::Idle,
                 draft: String::new(),
-                model: None,
-                effort: None,
-                access: AccessMode::default(),
+                model: defaults.model,
+                effort: defaults.effort,
+                access: defaults.access,
                 review: None,
                 context_usage: None,
                 pinned: false,
@@ -231,17 +234,21 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         Request::EditTask { task_id, edit } => {
             let h = host.lock().unwrap();
             let mut t = h.store.task(&task_id)?;
+            let preferences_changed = matches!(&edit, TaskEdit::Model { .. } | TaskEdit::Access(_));
+            let mut defaults = h.store.settings()?.agent_defaults;
             match edit {
                 TaskEdit::Access(access) => {
                     ensure!(!t.state.active(), "Change access after this turn finishes");
                     t.access = access;
+                    defaults.access = access;
                 }
                 TaskEdit::Rename(title) => {
                     ensure!(
                         !title.trim().is_empty() && title.len() < 512,
                         "Use a title between 1 and 511 bytes"
                     );
-                    t.title = title
+                    t.title = title;
+                    t.title_pending = false;
                 }
                 TaskEdit::Pin(pin) => t.pinned = pin,
                 TaskEdit::Archive(archive) => t.archived = archive,
@@ -252,10 +259,16 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 TaskEdit::Model { model, effort } => {
                     ensure!(!t.state.active(), "Change model after this turn finishes");
                     t.model = model;
-                    t.effort = effort
+                    t.effort = effort;
+                    defaults.model = t.model.clone();
+                    defaults.effort = t.effort.clone();
                 }
             }
-            h.store.save_task(&t)?;
+            if preferences_changed {
+                h.store.save_task_preferences(&t, defaults)?;
+            } else {
+                h.store.save_task(&t)?;
+            }
             Ok(Response::Ok)
         }
         Request::SaveSettings(settings) => {

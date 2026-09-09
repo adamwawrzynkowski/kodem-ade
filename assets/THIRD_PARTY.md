@@ -10,6 +10,6 @@ The native build resolves its dependency versions through `Cargo.lock`. Cargo pa
 | Native text input | `gpui-pre` 0.3.4's GPUI input example, adapted to GPUI-CE 0.2.2. Kodem adds multiline layout, wrapping, read-only selection, syntax colors and task draft integration. | [GPUI license](licenses/GPUI-APACHE.txt), Apache-2.0 |
 | IBM Plex Sans Regular, Medium and SemiBold | [IBM Plex upstream](https://github.com/IBM/plex/tree/master/packages/plex-sans/fonts/complete/ttf); static font files | [SIL Open Font License](licenses/ibmplexsans-OFL.txt) |
 | JetBrains Mono variable font | Google Fonts, `ofl/jetbrainsmono/JetBrainsMono[wght].ttf` | [SIL Open Font License](licenses/jetbrainsmono-OFL.txt) |
-| Manrope variable font | Google Fonts, `ofl/manrope/Manrope[wght].ttf` | [SIL Open Font License](licenses/manrope-OFL.txt) |
+| Manrope ExtraBold | Static weight-800 instance of Google Fonts `ofl/manrope/Manrope[wght].ttf`, generated with fonttools 4.59.2 and named Manrope ExtraBold | [SIL Open Font License](licenses/manrope-OFL.txt) |
 
-The fonts are renamed locally for stable include paths. Font data is unchanged. The original complete GPUI Kit library is not linked: its GPUI-pre type graph is incompatible with this application's GPUI-CE renderer.
+The fonts are renamed locally for stable include paths. IBM Plex Sans and JetBrains Mono font data is unchanged. Manrope is instantiated as a static ExtraBold font so the native renderer uses its intended weight. The original complete GPUI Kit library is not linked: its GPUI-pre type graph is incompatible with this application's GPUI-CE renderer.

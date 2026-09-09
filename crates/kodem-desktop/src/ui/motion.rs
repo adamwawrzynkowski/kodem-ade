@@ -92,37 +92,91 @@ pub(super) fn system_reduce_motion() -> bool {
     }
 }
 
-/// Paints a soft blur ramp above the floating composer without adding pointer hitboxes.
+/// Adds visible, slowly drifting grain behind chat content, static under Reduce Motion.
+pub(super) fn chat_dither(light: bool, reduce_motion: bool) -> AnyElement {
+    let layer = div().absolute().inset_0();
+    if reduce_motion {
+        return layer.child(dither_frame(light, 0.)).into_any_element();
+    }
+    layer
+        .with_animation(
+            "chat-background-dither",
+            Animation::new(Duration::from_secs(240))
+                .with_easing(|phase| phase)
+                .repeat(),
+            move |layer, phase| layer.child(dither_frame(light, phase)),
+        )
+        .into_any_element()
+}
+
+fn dither_frame(light: bool, phase: f32) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, cx| {
+            let tile = 256.;
+            let width = f32::from(bounds.size.width);
+            let height = f32::from(bounds.size.height);
+            // SVG bounds are pixel-snapped. Translate the cached sprite in the GPU
+            // after snapping, retaining fractional device pixels between frames.
+            let translation =
+                point(px(-phase * tile), px(-phase * tile)).scale(window.scale_factor());
+            let transform = TransformationMatrix::unit().translate(translation);
+            let tint = if light { rgb(0x000000) } else { rgb(0xffffff) };
+            let color = rgb_to_hsla(tint).opacity(if light { 0.08 } else { 0.14 });
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                // Only placement changes. Every tile reuses the same cached SVG raster.
+                for y in 0..(height / tile).ceil() as usize + 2 {
+                    for x in 0..(width / tile).ceil() as usize + 2 {
+                        let origin = point(
+                            bounds.left() + px(x as f32 * tile),
+                            bounds.top() + px(y as f32 * tile),
+                        );
+                        let _ = window.paint_svg(
+                            Bounds::new(origin, size(px(tile), px(tile))),
+                            "chat-dither".into(),
+                            None,
+                            transform,
+                            color,
+                            cx,
+                        );
+                    }
+                }
+            });
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
+/// Paints glass only inside the rounded prompt surface, beneath its input and toolbar.
 pub(super) fn composer_backdrop(theme: Theme) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            let ramp = px(36.).min(bounds.size.height);
-            for i in 0..6 {
-                let fraction = (i + 1) as f32 / 6.;
-                let band = Bounds::new(
-                    point(bounds.left(), bounds.top() + ramp * (i as f32 / 6.)),
-                    size(bounds.size.width, ramp / 6.),
+            let bands = 4;
+            let height = bounds.size.height / bands as f32;
+            for band in 0..bands {
+                let region = Bounds::new(
+                    point(bounds.left(), bounds.top() + height * band as f32),
+                    size(bounds.size.width, height),
                 );
+                let corners = Corners {
+                    top_left: if band == 0 { px(16.) } else { px(0.) },
+                    top_right: if band == 0 { px(16.) } else { px(0.) },
+                    bottom_left: if band == bands - 1 { px(16.) } else { px(0.) },
+                    bottom_right: if band == bands - 1 { px(16.) } else { px(0.) },
+                };
                 window.paint_backdrop_filter(
-                    band,
-                    Corners::default(),
-                    &[Filter::Blur(px(8. * fraction * fraction))],
+                    region,
+                    corners,
+                    &[Filter::Blur(px(6. + band as f32 * 2.))],
                 );
-                window.paint_quad(fill(band, theme.canvas.opacity(0.48 * fraction * fraction)));
             }
-            let body = Bounds::new(
-                point(bounds.left(), bounds.top() + ramp),
-                size(bounds.size.width, (bounds.size.height - ramp).max(px(0.))),
-            );
-            window.paint_backdrop_filter(body, Corners::default(), &[Filter::Blur(px(8.))]);
-            window.paint_quad(fill(body, theme.canvas.opacity(0.48)));
+            window.paint_quad(fill(bounds, theme.raised.opacity(0.76)).corner_radii(px(16.)));
         },
     )
     .absolute()
-    .top(px(-36.))
-    .bottom_0()
-    .w_full()
+    .inset_0()
 }
 
 #[derive(Default)]
@@ -172,21 +226,32 @@ impl Shell {
     }
 }
 
-/// Paints cached dithered corner lighting without hitboxes, layout space or animation work.
+/// Paints warm corner lighting behind a container's content, clipped to that container.
 pub(super) fn window_texture(light: bool) -> impl IntoElement {
+    corner_texture(light, true)
+}
+
+/// Keeps the gray corner lighting visible above file-list and diff backgrounds.
+pub(super) fn cool_corner(light: bool) -> impl IntoElement {
+    corner_texture(light, false)
+}
+
+fn corner_texture(light: bool, warm: bool) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, cx| {
-            let edge = px(440.).min(bounds.size.width).min(bounds.size.height);
-            let corners = [
-                ("corner-warm", bounds.origin, rgb(0xd98137)),
+            let viewport = window.viewport_size();
+            let edge = px(440.).min(viewport.width).min(viewport.height);
+            let (asset, origin, color) = if warm {
+                ("corner-warm", point(px(0.), px(0.)), rgb(0xd98137))
+            } else {
                 (
                     "corner-cool",
-                    point(bounds.right() - edge, bounds.bottom() - edge),
+                    point(viewport.width - edge, viewport.height - edge),
                     rgb(0x9da4ae),
-                ),
-            ];
-            for (asset, origin, color) in corners {
+                )
+            };
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
                 let _ = window.paint_svg(
                     Bounds::new(origin, size(edge, edge)),
                     asset.into(),
@@ -195,7 +260,7 @@ pub(super) fn window_texture(light: bool) -> impl IntoElement {
                     rgb_to_hsla(color).opacity(if light { 0.18 } else { 0.48 }),
                     cx,
                 );
-            }
+            });
         },
     )
     .absolute()

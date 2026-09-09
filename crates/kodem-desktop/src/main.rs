@@ -6,6 +6,7 @@ mod markdown;
 mod syntax;
 mod theme;
 mod ui;
+mod window_state;
 use gpui::{prelude::*, *};
 use std::borrow::Cow;
 fn main() {
@@ -23,15 +24,17 @@ fn main() {
                     "../../../assets/fonts/IBMPlexSans-SemiBold.ttf"
                 )),
                 Cow::Borrowed(include_bytes!("../../../assets/fonts/JetBrainsMono.ttf")),
-                Cow::Borrowed(include_bytes!("../../../assets/fonts/Manrope.ttf")),
+                Cow::Borrowed(include_bytes!(
+                    "../../../assets/fonts/Manrope-ExtraBold.ttf"
+                )),
             ]) {
                 eprintln!("Could not load bundled fonts: {error}");
             }
             ui::init(cx);
-            let bounds = Bounds::centered(None, size(px(1512.), px(982.)), cx);
+            let bounds = window_state::load(cx);
             let opened = cx.open_window(
                 WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_bounds: Some(bounds),
                     titlebar: Some(TitlebarOptions {
                         title: None,
                         appears_transparent: true,

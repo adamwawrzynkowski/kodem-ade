@@ -122,30 +122,26 @@ fn meter(
                 .aria_max_numeric_value(100.)
         })
         .child(
-            div()
-                .relative()
-                .size(px(13.))
-                .rounded_full()
-                .overflow_hidden()
-                .border_1()
-                .border_color(color.opacity(if value.is_some() { 0.7 } else { 0.4 }))
-                .bg(color.opacity(0.1))
-                .when_some(value, |d, v| {
-                    d.child(
-                        div()
-                            .absolute()
-                            .bottom_0()
-                            .w_full()
-                            .h(relative(v.clamp(0., 1.)))
-                            .bg(color),
-                    )
-                })
-                .when(ring, |d| {
-                    d.child(div().absolute().inset(px(3.)).rounded_full().bg(t.canvas))
-                })
-                .when(value.is_none(), |d| {
-                    d.child(div().absolute().inset(px(4.)).rounded_full().bg(t.subtle))
-                }),
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let center = bounds.center();
+                    let radius = px(5.3);
+                    if let Some(path) = radial_path(center, radius, 1., ring) {
+                        window.paint_path(path, color.opacity(0.18));
+                    }
+                    if let Some(progress) = value {
+                        if let Some(path) = radial_path(center, radius, progress, ring) {
+                            window.paint_path(path, color);
+                        }
+                    } else {
+                        let dot =
+                            Bounds::new(center - point(px(0.8), px(0.8)), size(px(1.6), px(1.6)));
+                        window.paint_quad(fill(dot, color.opacity(0.5)).corner_radii(px(0.8)));
+                    }
+                },
+            )
+            .size(px(14.)),
         )
         .tooltip(move |_, cx| {
             cx.new(|_| Hint {
@@ -163,4 +159,43 @@ fn age(reported: u64) -> String {
     } else {
         format!("{}m", seconds / 60)
     }
+}
+
+// Clockwise from twelve o'clock. Two half arcs also make a full circle well-defined.
+fn radial_path(
+    center: Point<Pixels>,
+    radius: Pixels,
+    progress: f32,
+    ring: bool,
+) -> Option<gpui::Path<Pixels>> {
+    let progress = progress.clamp(0., 1.);
+    if progress <= 0. {
+        return None;
+    }
+    let mut path = if ring {
+        PathBuilder::stroke(px(1.8))
+    } else {
+        PathBuilder::fill()
+    };
+    let start = point(center.x, center.y - radius);
+    if ring {
+        path.move_to(start);
+    } else {
+        path.move_to(center);
+        path.line_to(start);
+    }
+    let pieces = (progress * 2.).ceil() as usize;
+    for part in 1..=pieces {
+        let angle = -std::f32::consts::FRAC_PI_2
+            + std::f32::consts::TAU * progress * part as f32 / pieces as f32;
+        let end = point(
+            center.x + radius * angle.cos(),
+            center.y + radius * angle.sin(),
+        );
+        path.arc_to(point(radius, radius), px(0.), false, true, end);
+    }
+    if !ring || progress == 1. {
+        path.close();
+    }
+    path.build().ok()
 }

@@ -1,4 +1,4 @@
-//! Model capabilities, reasoning and permissions in one compact popover.
+//! Separate, compact choices for model capabilities, reasoning and permissions.
 use super::*;
 impl Shell {
     /// Builds only the model, reasoning or access controls requested by its trigger.
@@ -9,36 +9,7 @@ impl Shell {
             .as_ref()
             .map(|w| w.runtime.clone())
             .unwrap_or_default();
-        let mut content = div().flex().flex_col().flex_shrink_0().gap_2().child(
-            div()
-                .flex()
-                .items_center()
-                .px_2()
-                .text_size(px(11.))
-                .text_color(t.muted)
-                .child(
-                    icon(match self.panel {
-                        Panel::Reasoning => "settings-2",
-                        Panel::Access => "shield",
-                        _ => "openai",
-                    })
-                    .size(px(14.)),
-                )
-                .child(div().ml_2().child(match self.panel {
-                    Panel::Reasoning => "Reasoning effort",
-                    Panel::Access => "Access",
-                    _ => "Model",
-                }))
-                .child(div().flex_1())
-                .when(self.panel == Panel::Models, |d| {
-                    d.child(
-                        self.icon_button("refresh-models", "refresh", "Refresh available models")
-                            .on_click(
-                                cx.listener(|s, _, _, _| s.send(core::Request::ConnectRuntime)),
-                            ),
-                    )
-                }),
-        );
+        let mut content = div().flex().flex_col().flex_shrink_0().gap_1();
         let Some(view) = self.view.clone() else {
             return content
                 .child(
@@ -146,15 +117,7 @@ impl Shell {
                 }
                 let slider = &self.effort_slider.as_ref().unwrap().1;
                 slider.update(cx, |s, cx| s.configure(selected, t, disabled, cx));
-                content = content.child(
-                    div()
-                        .p_3()
-                        .rounded(px(10.))
-                        .bg(t.inset)
-                        .border_1()
-                        .border_color(t.border)
-                        .child(slider.clone()),
-                );
+                content = content.child(div().px_2().py_1().child(slider.clone()));
             } else {
                 content = content.child(
                     div()
@@ -169,6 +132,7 @@ impl Shell {
             for (i, access) in [
                 AccessMode::ReadOnly,
                 AccessMode::Workspace,
+                AccessMode::AutoReview,
                 AccessMode::FullAccess,
             ]
             .into_iter()
@@ -179,34 +143,44 @@ impl Shell {
                 let description = match access {
                     AccessMode::ReadOnly => "Inspect files without editing or network access",
                     AccessMode::Workspace => "Edit the checkout; ask for broader permissions",
+                    AccessMode::AutoReview => {
+                        "AI reviews permission requests and can deny unsafe actions"
+                    }
                     AccessMode::FullAccess => "Unrestricted files and network; no approval prompts",
                 };
                 content = content.child(
                     self.ghost(
                         ("access-option", i),
-                        if access == AccessMode::FullAccess {
-                            "lock-open"
-                        } else {
-                            "shield"
+                        match access {
+                            AccessMode::FullAccess => "lock-open",
+                            AccessMode::AutoReview => "bot",
+                            _ => "shield",
                         },
                         "",
                     )
                     .w_full()
-                    .h(px(43.))
+                    .h(px(50.))
                     .justify_start()
                     .disabled(disabled)
                     .when(chosen, |b| b.bg(t.selected).text_color(t.text))
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
                             .flex()
                             .flex_col()
                             .items_start()
-                            .gap_1()
-                            .child(div().text_size(px(12.)).child(access.label()))
+                            .gap_0()
                             .child(
                                 div()
-                                    .text_size(px(9.))
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(access.label()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .line_height(relative(1.25))
                                     .text_color(t.muted)
                                     .child(description),
                             ),
@@ -228,16 +202,25 @@ impl Shell {
                 div()
                     .px_2()
                     .py_1()
-                    .text_size(px(10.))
+                    .text_size(px(11.))
                     .text_color(t.muted)
                     .child("These controls unlock when the current turn finishes."),
+            );
+        }
+        if self.panel == Panel::Models {
+            content = content.child(
+                self.ghost("refresh-models", "refresh", "Refresh models")
+                    .w_full()
+                    .justify_start()
+                    .text_size(px(11.))
+                    .on_click(cx.listener(|s, _, _, _| s.send(core::Request::ConnectRuntime))),
             );
         }
         if self.panel == Panel::Models && runtime.models.is_empty() {
             content = content.child(
                 div()
                     .px_2()
-                    .text_size(px(10.))
+                    .text_size(px(11.))
                     .text_color(t.subtle)
                     .child("Refresh to load your runtime's model catalog."),
             );

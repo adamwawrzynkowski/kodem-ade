@@ -44,10 +44,10 @@ impl Theme {
         } else {
             Self {
                 canvas: rgb_to_hsla(rgb(0x0b0d0c)),
-                sidebar: rgb_to_hsla(rgb(0x121513)),
-                raised: rgb_to_hsla(rgb(0x202421)),
+                sidebar: rgb_to_hsla(rgb(0x101211)),
+                raised: rgb_to_hsla(rgb(0x1b1e1c)),
                 inset: rgb_to_hsla(rgb(0x0c0e0d)),
-                border: rgb_to_hsla(rgb(0x2a302c)),
+                border: rgb_to_hsla(rgb(0x202320)),
                 text: rgb_to_hsla(rgb(0xc7cbc7)),
                 muted: rgb_to_hsla(rgb(0x939a93)),
                 subtle: rgb_to_hsla(rgb(0x6e776f)),

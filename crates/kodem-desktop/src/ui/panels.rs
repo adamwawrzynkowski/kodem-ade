@@ -628,6 +628,7 @@ impl Shell {
                         self.icon_button("close-terminal", "close", "Hide terminal")
                             .on_click(cx.listener(|s, _, _, cx| {
                                 s.show_terminal = false;
+                                s.save_settings();
                                 cx.notify();
                             })),
                     ),

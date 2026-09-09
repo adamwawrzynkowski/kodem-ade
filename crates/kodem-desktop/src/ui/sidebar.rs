@@ -5,6 +5,7 @@ impl Shell {
         let t = self.theme;
         if self.settings.collapsed {
             return div()
+                .relative()
                 .w(px(54.))
                 .flex_shrink_0()
                 .h_full()
@@ -14,6 +15,7 @@ impl Shell {
                 .items_center()
                 .py_3()
                 .gap_2()
+                .child(motion::window_texture(self.settings.light))
                 .child(
                     self.icon_button("rail-new", "edit", "New task · ⌘N")
                         .on_click(cx.listener(|s, _, w, cx| s.new_task(&NewTask, w, cx))),
@@ -43,6 +45,7 @@ impl Shell {
             .map_or_else(|| "All projects".to_owned(), |p| p.name.clone());
         let mut panel = div()
             .id("sidebar")
+            .relative()
             .w(px(self.settings.sidebar_width))
             .flex_shrink_0()
             .h_full()
@@ -51,6 +54,7 @@ impl Shell {
             .flex_col()
             .overflow_hidden()
             .text_size(px(12.))
+            .child(motion::window_texture(self.settings.light))
             .on_hover(cx.listener(|s, hovered, _, cx| {
                 s.sidebar_hovered = *hovered;
                 cx.notify();
@@ -218,7 +222,7 @@ impl Shell {
                     )
                     .w_full()
                     .justify_start()
-                    .mt_3()
+                    .mt_2()
                     .mb_1()
                     .text_size(px(11.))
                     .child(div().flex_1())
@@ -303,12 +307,21 @@ impl Shell {
     ) -> AnyElement {
         let t = self.theme;
         let selected = self.selected.as_deref() == Some(&task.id);
+        let surface = if selected { t.selected } else { t.raised };
+        let title_color = if selected {
+            t.text
+        } else {
+            t.text.opacity(0.94)
+        };
+        let metadata = t.muted;
+        let mut hover_surface = surface;
+        hover_surface.lightness = (surface.lightness + 0.016).min(1.);
         let id = task.id.clone();
         let status_color = match task.state {
-            RunState::Starting | RunState::Running => rgb_to_hsla(rgb(0x38bdf8)),
+            RunState::Starting | RunState::Running => t.accent,
             RunState::Waiting => t.accent,
             RunState::Failed | RunState::DeliveryUnknown => t.removed,
-            RunState::Completed => t.added,
+            RunState::Completed => t.muted,
             _ => t.muted,
         };
         let status = if task.state.active() {
@@ -325,11 +338,12 @@ impl Shell {
             task.state.label().into()
         };
         let mut meta = div()
+            .h(px(20.))
             .flex()
             .items_center()
             .gap_2()
-            .text_size(px(10.))
-            .text_color(t.subtle)
+            .text_size(px(11.))
+            .text_color(metadata)
             .child(icon("branch").size(px(11.)))
             .child(
                 div()
@@ -371,6 +385,7 @@ impl Shell {
                     cx.stop_propagation();
                     s.select_task(task_id.clone(), cx);
                     s.show_review = true;
+                    s.save_settings();
                     if let Some(id) = &snapshot {
                         s.send(core::Request::LoadSnapshot { id: id.clone() });
                     }
@@ -419,32 +434,40 @@ impl Shell {
         div()
             .id((ElementId::from("task"), SharedString::from(id.clone())))
             .w_full()
-            .mb_1()
-            .p_3()
-            .rounded(px(10.))
+            .mb(px(6.))
+            .px(px(10.))
+            .py(px(5.))
+            .line_height(relative(1.25))
+            .rounded(px(9.))
+            .bg(surface)
             .border_1()
-            .border_color(if selected {
-                t.border
-            } else {
-                t.sidebar.opacity(0.)
-            })
+            .border_color(t.muted.opacity(0.12))
+            .shadow(vec![
+                BoxShadow {
+                    inset: true,
+                    color: t.text.opacity(0.035),
+                    offset: point(px(0.), px(1.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(0.),
+                },
+                BoxShadow {
+                    inset: false,
+                    color: t.shadow,
+                    offset: point(px(0.), px(2.)),
+                    blur_radius: px(2.),
+                    spread_radius: px(-1.),
+                },
+            ])
             .cursor_pointer()
-            .when(selected, |d| d.bg(t.selected).shadow(t.elevation()))
-            .hover(move |d| {
-                d.bg(if selected {
-                    t.selected
-                } else {
-                    t.raised.opacity(0.65)
-                })
-            })
+            .hover(move |d| d.bg(hover_surface))
             .child(
                 div()
+                    .h(px(20.))
                     .flex()
                     .items_center()
                     .gap_2()
-                    .mb_2()
                     .text_size(px(11.))
-                    .text_color(t.muted)
+                    .text_color(metadata)
                     .child(project_icon(project))
                     .child(
                         div()
@@ -486,19 +509,22 @@ impl Shell {
                             .into_any_element()
                     } else {
                         div()
-                            .text_size(px(10.))
+                            .text_size(px(11.))
                             .text_color(status_color)
                             .child(format!("{} · {}", status, ago(task.updated)))
                             .into_any_element()
                     }),
             )
             .child(
-                div()
-                    .text_size(px(13.))
-                    .text_color(t.text)
-                    .mb_2()
-                    .text_ellipsis()
-                    .child(task.title.clone()),
+                div().h(px(25.)).flex().items_center().child(
+                    div()
+                        .min_w_0()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(title_color)
+                        .text_ellipsis()
+                        .child(task.title.clone()),
+                ),
             )
             .child(meta)
             .on_click(cx.listener(move |s, _, _, cx| s.select_task(id.clone(), cx)))
@@ -534,7 +560,7 @@ pub(super) fn project_icon(project: &Project) -> AnyElement {
         ][hash as usize % 8]
     };
     let tint = [
-        0x5bb8ef, 0xb995f5, 0x85c86a, 0xe4aa69, 0x63c8bb, 0xe685a4, 0x97a4ed, 0xd6c669,
+        0xb5a28c, 0xa7a0af, 0x9ca58f, 0xc49c75, 0x91aaa3, 0xb3999e, 0x9ba4b5, 0xb0aa8f,
     ][(hash >> 8) as usize % 8];
     div()
         .size(px(18.))

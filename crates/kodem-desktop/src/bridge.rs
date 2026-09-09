@@ -2,6 +2,7 @@
 use kodem_core::{Request, Response, ipc};
 use std::sync::mpsc;
 pub enum Command {
+    Flush(mpsc::Sender<()>),
     Request(Request),
     Poll(Option<String>, bool),
 }
@@ -22,6 +23,10 @@ fn start_at(
     std::thread::spawn(move || {
         while let Ok(command) = commands.recv() {
             let requests = match command {
+                Command::Flush(done) => {
+                    let _ = done.send(());
+                    continue;
+                }
                 Command::Request(r) => vec![r],
                 Command::Poll(task, terminal) => {
                     let mut r = vec![Request::Hello];

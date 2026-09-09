@@ -75,8 +75,7 @@ impl Shell {
             .py_1()
             .px_1()
             .overflow_y_scroll()
-            .restrict_scroll_to_axis()
-            .bg(t.canvas);
+            .restrict_scroll_to_axis();
         for (row_index, row) in rows.into_iter().enumerate() {
             let mut entry = div()
                 .id(("change-tree-row", row_index))

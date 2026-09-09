@@ -61,6 +61,7 @@ pub enum AccessMode {
     ReadOnly,
     #[default]
     Workspace,
+    AutoReview,
     FullAccess,
 }
 impl AccessMode {
@@ -69,6 +70,7 @@ impl AccessMode {
         match self {
             Self::ReadOnly => "Read only",
             Self::Workspace => "Workspace",
+            Self::AutoReview => "AI auto-approve",
             Self::FullAccess => "Full access",
         }
     }
@@ -76,22 +78,29 @@ impl AccessMode {
     pub fn sandbox(self) -> &'static str {
         match self {
             Self::ReadOnly => "read-only",
-            Self::Workspace => "workspace-write",
+            Self::Workspace | Self::AutoReview => "workspace-write",
             Self::FullAccess => "danger-full-access",
         }
     }
     /// Returns the approval policy paired with the selected sandbox.
     pub fn approval_policy(self) -> &'static str {
         match self {
-            Self::Workspace => "on-request",
+            Self::Workspace | Self::AutoReview => "on-request",
             Self::ReadOnly | Self::FullAccess => "never",
+        }
+    }
+    /// Routes permission escalation to the user or Codex's risk-based AI reviewer.
+    pub fn approvals_reviewer(self) -> &'static str {
+        match self {
+            Self::AutoReview => "auto_review",
+            _ => "user",
         }
     }
     /// Returns the explicit per-turn policy, including restricted network defaults.
     pub fn turn_policy(self, cwd: &std::path::Path) -> serde_json::Value {
         match self {
             Self::ReadOnly => serde_json::json!({"type":"readOnly","networkAccess":false}),
-            Self::Workspace => {
+            Self::Workspace | Self::AutoReview => {
                 serde_json::json!({"type":"workspaceWrite","networkAccess":false,"writableRoots":[cwd]})
             }
             Self::FullAccess => serde_json::json!({"type":"dangerFullAccess"}),
@@ -141,6 +150,8 @@ pub struct Task {
     pub id: String,
     pub project_id: String,
     pub title: String,
+    #[serde(default)]
+    pub title_pending: bool,
     pub cwd: PathBuf,
     pub owns_worktree: bool,
     pub baseline: Option<String>,
@@ -206,6 +217,7 @@ pub struct Activity {
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ActivityKind {
+    Reconnecting,
     ReadingFiles,
     SearchingFiles,
     Delegating,
@@ -249,7 +261,15 @@ pub struct RuntimeInfo {
     pub models: Vec<Model>,
     pub error: Option<String>,
 }
+/// Last explicitly chosen agent options, inherited by newly created tasks.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentPreferences {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub access: AccessMode,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub sidebar_width: f32,
     pub review_width: f32,
@@ -263,6 +283,10 @@ pub struct Settings {
     pub diff_placement: DiffPlacement,
     #[serde(default)]
     pub send_mode: SendMode,
+    pub agent_defaults: AgentPreferences,
+    pub show_review: bool,
+    pub show_terminal: bool,
+    pub split_diff: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -277,6 +301,10 @@ impl Default for Settings {
             selected_task: None,
             diff_placement: DiffPlacement::default(),
             send_mode: SendMode::default(),
+            agent_defaults: AgentPreferences::default(),
+            show_review: true,
+            show_terminal: false,
+            split_diff: false,
         }
     }
 }

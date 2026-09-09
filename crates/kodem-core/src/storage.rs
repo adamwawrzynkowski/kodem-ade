@@ -130,6 +130,22 @@ impl Store {
     }
     /// Persists bounded pane sizes and typography choices.
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
+        let mut settings = s.clone();
+        // Agent defaults are host-owned; an older layout snapshot must not overwrite them.
+        settings.agent_defaults = self.settings()?.agent_defaults;
+        self.write_settings(&settings)
+    }
+    /// Atomically saves an accepted task preference change and the defaults for new tasks.
+    pub fn save_task_preferences(&self, task: &Task, defaults: AgentPreferences) -> Result<()> {
+        let mut settings = self.settings()?;
+        settings.agent_defaults = defaults;
+        let transaction = self.db.unchecked_transaction()?;
+        self.save_task(task)?;
+        self.write_settings(&settings)?;
+        transaction.commit()?;
+        Ok(())
+    }
+    fn write_settings(&self, s: &Settings) -> Result<()> {
         ensure!(
             s.sidebar_width.is_finite() && s.review_width.is_finite() && s.font_size.is_finite(),
             "Invalid layout value"

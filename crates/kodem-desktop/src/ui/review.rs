@@ -29,6 +29,7 @@ impl Shell {
             .find(|(comparison, _, _)| *comparison == self.comparison)
             .unwrap();
         let mut panel = div()
+            .relative()
             .id(if center {
                 "center-review"
             } else {
@@ -39,6 +40,7 @@ impl Shell {
             .flex()
             .flex_col()
             .bg(t.inset)
+            .child(motion::window_texture(self.settings.light))
             .overflow_hidden()
             .when(!center, |panel| {
                 panel.child(
@@ -166,8 +168,6 @@ impl Shell {
                 );
             }
             if let Some(file) = snapshot.files.get(self.file) {
-                let task_id = snapshot.task_id.clone();
-                let snapshot_id = snapshot.id.clone();
                 let file_index = self.file;
                 panel = panel.child(
                     div()
@@ -180,25 +180,6 @@ impl Shell {
                         .bg(t.sidebar)
                         .border_b_1()
                         .border_color(t.border)
-                        .child(
-                            self.icon_button(
-                                "back-to-files",
-                                "chevron-left",
-                                if center {
-                                    "Back to conversation"
-                                } else {
-                                    "Back to changed files"
-                                },
-                            )
-                            .on_click(cx.listener(
-                                |s, _, window, cx| {
-                                    window.focus(&s.input.read(cx).focus_handle(cx), cx);
-                                    s.reviewing_file = false;
-                                    s.diff_view = None;
-                                    cx.notify();
-                                },
-                            )),
-                        )
                         .child(
                             div()
                                 .flex_1()
@@ -215,24 +196,13 @@ impl Shell {
                             )
                             .on_click(cx.listener(|s, _, _, cx| {
                                 s.split = !s.split;
+                                s.save_settings();
                                 cx.notify();
                             })),
                         )
                         .child(
                             self.icon_button("refresh-diff", "refresh", "Refresh changes")
                                 .on_click(cx.listener(|s, _, _, _| s.refresh_diff())),
-                        )
-                        .child(
-                            self.icon_button("stage-file", "plus", "Stage this file")
-                                .text_size(px(11.))
-                                .disabled(self.comparison == Comparison::Staged)
-                                .on_click(cx.listener(move |s, _, _, _| {
-                                    s.send(core::Request::StageFile {
-                                        task_id: task_id.clone(),
-                                        snapshot_id: snapshot_id.clone(),
-                                        file: file_index,
-                                    })
-                                })),
                         )
                         .child(
                             self.icon_button("close-diff", "close", "Close diff")

@@ -192,3 +192,62 @@ Temporary isolated checks passed completion snapshot persistence, repeated compl
 The supplied app PNG is preserved byte-for-byte. Both bundle configurations generate all standard macOS icon sizes and include AppIcon.icns. Cached SVG masks supply static dithered orange top-left and gray bottom-right window lighting without pointer hitboxes or a particle animation loop.
 
 Final workspace Clippy with warnings denied, formatting, shell syntax and git diff --check passed. Both command entry points built ARM64 bundles with the supplied icon. Iconset verification found all ten standard representations. Release `20260909T224645Z-372257c-dirty` is installed at `/Applications/Kodem.app`; installed executables, plist, icon and build metadata match the release package, and strict signature verification passed. Debug `20260909T224542Z-372257c-dirty` is at `target/debug/Kodem Debug.app`. The previous release is preserved at `/Applications/Kodem.previous.20260910-004646-81702.app`. Running processes were not stopped or launched. The existing `block 0.1.6` dependency still emits Cargo's future-incompatibility notice; both builds succeeded. No commit or push was made.
+
+
+## Picker, typography and density corrections
+
+Access now includes AI auto-approve using the pinned runtime's native `approvalsReviewer: auto_review`. The option preserves the workspace sandbox and on-request policy. Other modes explicitly reset the reviewer to user on thread start/resume and every new turn. Protocol 5 prevents an older host from accepting this new access enum. The locally generated 0.153.4 schema confirms the field and reviewer values; no authenticated approval turn was run.
+
+The reasoning slider paints its track, fill, markers and circular thumb from one coordinate system shared with pointer input. The fill extends under the thumb and reaches the final endpoint. Model, effort and access menus omit redundant headings. Usage indicators now draw clockwise sectors and arcs rather than bottom-filled rectangles. Temporary numerical checks passed all slider stops at five widths, quarter/half/three-quarter circular geometry, and AI reviewer/sandbox mappings. Temporary test sources were removed.
+
+Task cards have tighter spacing, subdued project glyph colors, darker surfaces, gradient shading and stronger selected edges. The earlier sidebar, raised and border colors are restored. IBM Plex Sans replaces the system UI font, picker/sidebar captions are more readable, the prompt text is slightly larger, and Kodem uses 16px bold Manrope. Code stays in JetBrains Mono.
+
+Progressive native blur now lives inside the rounded prompt field with its input and toolbar. The surrounding floating container and context tray have no backdrop filter. The duplicate task-title chip, diff back button and diff staging button are removed; close, refresh and split controls remain. No application was launched, controlled or visually tested.
+
+Final Clippy with warnings denied, formatting, shell syntax and git diff --check passed. Debug build `20260909T230219Z-5e3d101-dirty` is in `target/debug/Kodem Debug.app`. Release `20260909T230335Z-5e3d101-dirty` is installed at `/Applications/Kodem.app`; desktop, host, plist, icon and build metadata match the release package, and strict signature verification passed. The previous bundle is retained at `/Applications/Kodem.previous.20260910-010336-988.app`. No visual or live AI approval test was run. No commit or push was made.
+
+
+## Darker task surfaces, startup transport and generated titles
+
+The wordmark now embeds a static Manrope ExtraBold weight-800 instance. The original variable font defaulted to weight 200 in the native renderer despite the requested bold style. Dark task cards use opaque charcoal gradients, inset shading and shadows; selection uses a slightly brighter surface without an accent border. Warm dithering paints behind sidebar content. Gray bottom-right dithering paints above the workspace background and file/diff surfaces, before menus, so populated Changes views cannot cover it.
+
+Scoped local provider logs showed initial WebSocket HTTP 503 failures followed by a successful HTTP fallback. The pinned runtime rejects overriding its reserved built-in OpenAI provider, so Kodem registers a process-local HTTP provider alias and uses it for OpenAI thread start/resume. Custom provider choices and explicit OpenAI base URLs remain respected. No global Codex configuration or credentials were modified. Retryable error notifications update one live reconnect activity; terminal errors still persist as transcript errors. Protocol 6 includes the new activity variant.
+
+New tasks keep their placeholder while a separate ephemeral, restricted model request generates a short title from the first request and attachment/context labels. The request has a JSON output schema, disables shell, code-mode, app, plugin, MCP and delegation tools, and cannot delay or replay the main conversation turn. A persisted pending flag prevents generated results from replacing a manual rename. Existing task titles are preserved.
+
+A temporary isolated host check passed repeated retry updates, absence of persisted retry errors, clearing on resumed stream events, and preservation of terminal errors. An authenticated nonvisual title request through the actual new runtime adapter returned “Fix Reconnect Notices and Darken Task Cards” successfully. Temporary verification sources and executable examples were removed. This does not constitute app visual or pointer-interaction testing.
+
+Final workspace Clippy with warnings denied, formatting and git diff --check passed. Debug build `20260909T232120Z-5e3d101-dirty` is at `target/debug/Kodem Debug.app`. A concurrent release command held the build lock when this session attempted release; that command then completed successfully and installed release `20260909T232208Z-5e3d101-dirty` at `/Applications/Kodem.app`. Installed desktop, host, plist, icon, build metadata and third-party notices match the release package byte-for-byte. Strict signature verification passed. The previous release is retained at `/Applications/Kodem.previous.20260910-012209-17102.app`. No app was launched, controlled or visually tested. No commit or push was made.
+
+
+## Thread cards and drifting chat texture
+
+Thread cards use a single opaque surface from the app's existing dark/light palette, rounded corners, a restrained shared edge and a shallow contact shadow. The project, title and metadata share that surface. Internal colored bands and full-card gradients are removed. Titles use medium weight and selection changes the surface tone without an accent outline. Existing task selection, saved-diff actions, live statuses and provider tooltips are preserved.
+
+A deterministic 256px SVG dither tile covers the chat background at low opacity. The native animation moves the repeated tile by one full period over four minutes, so the repeat has no jump. The cached raster is reused across tiles; the texture has no pointer handlers and paints before conversation content. Reduce Motion renders a static tile layer. Cards and message surfaces remain opaque over the background.
+
+Workspace Clippy with warnings denied and source formatting passed. No app visual testing, control or screenshot capture was performed. Computer History status remained unavailable with error -1743; the supplied screenshots and current source were used.
+
+Final debug `20260909T232756Z-5e3d101-dirty` and release `20260909T232841Z-5e3d101-dirty` builds passed. The release is installed at `/Applications/Kodem.app`; installed desktop/host executables, plist, icon and build metadata match the release package. Strict signature verification, formatting and git diff --check passed. The SVG asset parses successfully. The previous release is preserved at `/Applications/Kodem.previous.20260910-012842-24501.app`. Visual appearance and live animation were not tested, per the user's restriction. No commit or push was made.
+
+
+## Chat texture visibility
+
+Increased chat dither opacity from 4% to 14% in dark mode and from 3% to 8% in light mode. The tile, coverage, four-minute motion loop and Reduce Motion behavior are unchanged. Verification is limited to source checks and compilation; no app visual testing was performed.
+
+Debug `20260909T232941Z-5e3d101-dirty` and release `20260909T233024Z-5e3d101-dirty` compiled and passed package signature checks. Installed release executables and build metadata match the package. The build detected an older loaded app/host and reported that reopening is required. The previous bundle remains at `/Applications/Kodem.previous.20260910-013024-26448.app`. Formatting and git diff --check passed. No app control, visual tests, commit or push.
+
+
+## Session restoration, smooth motion and release replacement
+
+Chat dithering now moves through the GPU sprite transformation instead of moving pixel-snapped SVG bounds. A temporary numerical check reproduced repeated positions in 57 of 59 frame transitions at Retina scale with the previous path. The replacement retains fractional device-pixel movement at both 1x and 2x, without changing the tile, opacity, loop duration or Reduce Motion behavior.
+
+Window placement is saved atomically by the desktop and restored before the host connects, including the normal restore rectangle for maximized/fullscreen windows. Saved placement is recovered onto a connected display. Sidebar/review widths, panel visibility and split-diff choice are restored; selecting a task no longer silently changes the saved review-panel visibility on narrow windows. Quit drains queued settings requests. Accepted model/effort/access changes persist task choices and defaults for new threads together, and stale desktop settings cannot overwrite those defaults. Model discovery begins at workspace startup, and accepted picker changes immediately reload the task rather than waiting for the next poll.
+
+The virtual transcript list now owns one centered 940px column, with the same horizontal padding as the composer. Git capture already honors repository, nested, local and configured global ignore rules; tracked files remain visible as in Git itself. A temporary repository verified exclusions, negation and tracked ignored files in working-tree, unstaged and task-baseline comparisons. No files were untracked or deleted from the user's repository.
+
+Release installation keeps a hidden rollback bundle only until the replacement passes verification, then removes it. Successful installs also remove legacy generated timestamp/PID backups after checking the exact filename shape and Kodem bundle identifier. Unrelated applications and symlinks are excluded. A running app is not stopped; reopening is still required to load a newly installed binary.
+
+Temporary nonvisual checks passed database reopen, task/default preferences, stale layout saves, independent access defaults, older settings defaults, all three saved window modes, malformed placement handling, GPU fractional translation, and Git ignore behavior. Temporary verification sources and fixture directories were removed. App visual testing remains prohibited; appearance and pointer interactions have not been tested.
+
+Final workspace Clippy with warnings denied, formatting, shell syntax and git diff --check passed. Debug build `20260909T235227Z-5e3d101-dirty` and release `20260909T235311Z-5e3d101-dirty` compiled and passed package verification. The release is installed at `/Applications/Kodem.app`; desktop, host, plist, icon and build metadata match the release package byte-for-byte, and strict signature verification passed. No generated legacy backups, rollback copies or staging copies remain in Applications. No app was launched, controlled or visually tested. No commit or push was made.

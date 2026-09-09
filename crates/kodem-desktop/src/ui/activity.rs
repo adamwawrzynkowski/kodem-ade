@@ -2,6 +2,7 @@ use super::*;
 
 fn presentation(kind: ActivityKind) -> (&'static str, &'static str, bool) {
     match kind {
+        ActivityKind::Reconnecting => ("Reconnecting…", "refresh", true),
         ActivityKind::ReadingFiles => ("Reading files…", "file-text", false),
         ActivityKind::SearchingFiles => ("Searching files…", "search", false),
         ActivityKind::Delegating => ("Coordinating agents…", "bot", false),

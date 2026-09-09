@@ -110,8 +110,7 @@ impl EffortSlider {
         let Some(bounds) = self.bounds else {
             return;
         };
-        let width = (f32::from(bounds.size.width) - 28.).max(1.);
-        self.target = ((f32::from(x - bounds.left()) - 14.) / width).clamp(0., 1.)
+        self.target = slider_progress(f32::from(bounds.size.width), f32::from(x - bounds.left()))
             * self.options.len().saturating_sub(1) as f32;
         self.selected = self.target.round() as usize;
         self.animate(cx);
@@ -131,6 +130,7 @@ impl Render for EffortSlider {
         let t = self.theme;
         let count = self.options.len().saturating_sub(1).max(1) as f32;
         let progress = (self.visual / count).clamp(0., 1.);
+        let stop_count = self.options.len();
         let entity = cx.entity();
         let blue: Hsla = rgb_to_hsla(rgb(0x328be8));
         div()
@@ -170,11 +170,11 @@ impl Render for EffortSlider {
                     .items_center()
                     .text_size(px(11.))
                     .text_color(t.muted)
-                    .child(icon("settings-2").size(px(13.)))
-                    .child(div().ml_2().child("Reasoning effort"))
-                    .child(div().flex_1())
+                    .justify_center()
                     .child(
                         div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::MEDIUM)
                             .text_color(t.text)
                             .child(self.options.get(self.selected).cloned().unwrap_or_default()),
                     ),
@@ -183,12 +183,8 @@ impl Render for EffortSlider {
                 div()
                     .id("effort-track")
                     .relative()
-                    .h(px(32.))
+                    .h(px(30.))
                     .w_full()
-                    .rounded(px(16.))
-                    .bg(t.selected)
-                    .border_1()
-                    .border_color(t.border)
                     .cursor_pointer()
                     .on_mouse_down(
                         MouseButton::Left,
@@ -230,59 +226,67 @@ impl Render for EffortSlider {
                             move |bounds, _, cx| {
                                 entity.update(cx, |s, _| s.bounds = Some(bounds));
                             },
-                            |_, _, _, _| {},
+                            move |bounds, _, window, _| {
+                                let center = bounds.left()
+                                    + px(slider_center(f32::from(bounds.size.width), progress));
+                                let track = Bounds::new(
+                                    point(bounds.left(), bounds.center().y - px(14.)),
+                                    size(bounds.size.width, px(28.)),
+                                );
+                                window.paint_quad(fill(track, t.selected).corner_radii(px(14.)));
+                                // Fill extends under the thumb. Both use the same center, including at endpoints.
+                                let filled = Bounds::new(
+                                    track.origin,
+                                    size(center - track.left() + px(14.), track.size.height),
+                                );
+                                window.paint_quad(fill(filled, blue).corner_radii(px(14.)));
+                                for i in 0..stop_count {
+                                    let x = bounds.left()
+                                        + px(slider_center(
+                                            f32::from(bounds.size.width),
+                                            i as f32 / count,
+                                        ));
+                                    let dot = Bounds::new(
+                                        point(x - px(1.5), bounds.center().y - px(1.5)),
+                                        size(px(3.), px(3.)),
+                                    );
+                                    window.paint_quad(
+                                        fill(dot, t.text.opacity(0.45)).corner_radii(px(1.5)),
+                                    );
+                                }
+                                let shadow = Bounds::new(
+                                    point(center - px(13.), bounds.center().y - px(11.)),
+                                    size(px(26.), px(26.)),
+                                );
+                                window.paint_quad(fill(shadow, t.shadow).corner_radii(px(13.)));
+                                let thumb = Bounds::new(
+                                    point(center - px(12.), bounds.center().y - px(12.)),
+                                    size(px(24.), px(24.)),
+                                );
+                                window.paint_quad(fill(thumb, rgb(0xffffff)).corner_radii(px(12.)));
+                            },
                         )
-                        .absolute()
                         .size_full(),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .mx(px(14.))
-                            .child(
-                                div()
-                                    .absolute()
-                                    .left(px(-14.))
-                                    .top_0()
-                                    .bottom_0()
-                                    .w(relative(progress))
-                                    .min_w(px(28.))
-                                    .rounded(px(16.))
-                                    .bg(blue),
-                            )
-                            .children((0..self.options.len()).map(|i| {
-                                div()
-                                    .absolute()
-                                    .left(relative(i as f32 / count))
-                                    .top(px(13.))
-                                    .ml(px(-2.))
-                                    .size(px(4.))
-                                    .rounded_full()
-                                    .bg(t.text.opacity(0.4))
-                            }))
-                            .child(
-                                div()
-                                    .absolute()
-                                    .left(relative(progress))
-                                    .top(px(2.))
-                                    .ml(px(-14.))
-                                    .w(px(28.))
-                                    .h(px(26.))
-                                    .rounded_full()
-                                    .bg(rgb(0xffffff))
-                                    .shadow(t.elevation()),
-                            ),
                     ),
             )
             .child(
                 div()
                     .flex()
                     .justify_between()
-                    .text_size(px(9.))
+                    .text_size(px(11.))
                     .text_color(t.subtle)
                     .child(self.options.first().cloned().unwrap_or_default())
                     .child(self.options.last().cloned().unwrap_or_default()),
             )
     }
+}
+
+// Shared pointer and paint geometry keeps the thumb, fill and stop positions aligned.
+fn slider_center(width: f32, progress: f32) -> f32 {
+    let inset = 14_f32.min(width * 0.5);
+    inset + (width - 2. * inset).max(0.) * progress.clamp(0., 1.)
+}
+fn slider_progress(width: f32, x: f32) -> f32 {
+    let inset = 14_f32.min(width * 0.5);
+    ((x - inset) / (width - 2. * inset).max(1.)).clamp(0., 1.)
 }
