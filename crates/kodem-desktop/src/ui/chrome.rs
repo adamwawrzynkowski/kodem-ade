@@ -144,6 +144,7 @@ impl Render for Shell {
         let t = self.theme;
         let mut root = div()
             .id("workspace")
+            .relative()
             .track_focus(&self.focus)
             .key_context("Workspace")
             .tab_group()
@@ -281,10 +282,18 @@ impl Render for Shell {
                 )
                 .child(self.review(cx, false));
         }
-        root = root.child(body);
+        root = root
+            .child(body)
+            .child(motion::window_texture(self.settings.light));
         if matches!(
             self.panel,
-            Panel::Models | Panel::TaskMenu | Panel::Sort | Panel::Comparison
+            Panel::Models
+                | Panel::Reasoning
+                | Panel::Access
+                | Panel::Projects
+                | Panel::TaskMenu
+                | Panel::Sort
+                | Panel::Comparison
         ) {
             root = root.child(self.menu(cx));
         } else if self.panel != Panel::None {

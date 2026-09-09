@@ -12,7 +12,14 @@ impl Shell {
             Panel::Check => "Run a project check",
             Panel::Rename => "Rename task",
             Panel::Questions => "Codex needs your input",
-            Panel::None | Panel::Models | Panel::TaskMenu | Panel::Sort | Panel::Comparison => "",
+            Panel::None
+            | Panel::Models
+            | Panel::Reasoning
+            | Panel::Access
+            | Panel::Projects
+            | Panel::TaskMenu
+            | Panel::Sort
+            | Panel::Comparison => "",
         };
         let mut content = div()
             .id("panel-body")
@@ -434,7 +441,14 @@ impl Shell {
                     }
                 }
             }
-            Panel::None | Panel::Models | Panel::TaskMenu | Panel::Sort | Panel::Comparison => {}
+            Panel::None
+            | Panel::Models
+            | Panel::Reasoning
+            | Panel::Access
+            | Panel::Projects
+            | Panel::TaskMenu
+            | Panel::Sort
+            | Panel::Comparison => {}
         }
         div()
             .absolute()

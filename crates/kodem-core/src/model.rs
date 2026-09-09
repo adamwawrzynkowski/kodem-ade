@@ -55,6 +55,87 @@ impl RunState {
         }
     }
 }
+/// Execution permissions selected explicitly for this task.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AccessMode {
+    ReadOnly,
+    #[default]
+    Workspace,
+    FullAccess,
+}
+impl AccessMode {
+    /// Returns the compact label shown beside the model and effort controls.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "Read only",
+            Self::Workspace => "Workspace",
+            Self::FullAccess => "Full access",
+        }
+    }
+    /// Returns the pinned provider's thread sandbox mode.
+    pub fn sandbox(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::Workspace => "workspace-write",
+            Self::FullAccess => "danger-full-access",
+        }
+    }
+    /// Returns the approval policy paired with the selected sandbox.
+    pub fn approval_policy(self) -> &'static str {
+        match self {
+            Self::Workspace => "on-request",
+            Self::ReadOnly | Self::FullAccess => "never",
+        }
+    }
+    /// Returns the explicit per-turn policy, including restricted network defaults.
+    pub fn turn_policy(self, cwd: &std::path::Path) -> serde_json::Value {
+        match self {
+            Self::ReadOnly => serde_json::json!({"type":"readOnly","networkAccess":false}),
+            Self::Workspace => {
+                serde_json::json!({"type":"workspaceWrite","networkAccess":false,"writableRoots":[cwd]})
+            }
+            Self::FullAccess => serde_json::json!({"type":"dangerFullAccess"}),
+        }
+    }
+}
+/// Diff captured when the provider finished a turn, never refreshed from sidebar polling.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskReview {
+    pub snapshot_id: Option<String>,
+    pub added: usize,
+    pub removed: usize,
+    pub omitted_files: usize,
+    pub captured: u64,
+    pub error: Option<String>,
+}
+/// Last provider-reported context occupancy, separate from cumulative billed tokens.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ContextUsage {
+    pub used: u64,
+    pub window: Option<u64>,
+    pub reported: u64,
+}
+/// A provider account's measured usage window. Reset timestamps are Unix seconds.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageWindow {
+    pub used_percent: i32,
+    pub window_duration_mins: Option<u64>,
+    pub resets_at: Option<u64>,
+}
+/// Provider-reported account limits; missing windows are unavailable, not zero usage.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageLimits {
+    pub limit_id: Option<String>,
+    pub plan_type: Option<String>,
+    pub primary: Option<UsageWindow>,
+    pub secondary: Option<UsageWindow>,
+    pub rate_limit_reached_type: Option<String>,
+    pub spend_control_reached: Option<bool>,
+    #[serde(default)]
+    pub reported: u64,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
@@ -70,6 +151,12 @@ pub struct Task {
     pub draft: String,
     pub model: Option<String>,
     pub effort: Option<String>,
+    #[serde(default)]
+    pub access: AccessMode,
+    #[serde(default)]
+    pub review: Option<TaskReview>,
+    #[serde(default)]
+    pub context_usage: Option<ContextUsage>,
     pub pinned: bool,
     pub archived: bool,
     pub created: u64,
@@ -157,6 +244,8 @@ pub struct Model {
 pub struct RuntimeInfo {
     pub version: Option<String>,
     pub authenticated: Option<bool>,
+    #[serde(default)]
+    pub usage: Option<UsageLimits>,
     pub models: Vec<Model>,
     pub error: Option<String>,
 }
@@ -350,6 +439,7 @@ pub struct TerminalView {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TaskEdit {
+    Access(AccessMode),
     Rename(String),
     Pin(bool),
     Archive(bool),

@@ -4,6 +4,7 @@ impl Shell {
     pub(super) fn menu(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let mut menu = div()
+            .id("context-menu")
             .absolute()
             .w(px(284.))
             .p_2()
@@ -17,6 +18,63 @@ impl Shell {
             .gap_1()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         match self.panel {
+            Panel::Projects => {
+                menu = menu
+                    .left(px(12.))
+                    .top(px(if self.search_visible { 158. } else { 112. }))
+                    .w(px((self.settings.sidebar_width - 24.).max(220.)));
+                menu = menu.child(
+                    self.ghost("all-projects", "folder-open", "All projects")
+                        .w_full()
+                        .justify_start()
+                        .when(self.sidebar_project.is_none(), |b| {
+                            b.bg(t.selected).text_color(t.text)
+                        })
+                        .on_click(cx.listener(|s, _, _, cx| {
+                            s.sidebar_project = None;
+                            s.panel = Panel::None;
+                            cx.notify();
+                        })),
+                );
+                if let Some(workspace) = self.workspace.clone() {
+                    let mut projects = div()
+                        .id("project-choices")
+                        .max_h(px(360.))
+                        .overflow_y_scroll();
+                    for project in workspace.projects {
+                        let selected = self.sidebar_project.as_ref() == Some(&project.id);
+                        let glyph = sidebar::project_icon(&project);
+                        let id = project.id.clone();
+                        projects = projects.child(
+                            self.control((
+                                ElementId::from("project-choice"),
+                                SharedString::from(id.clone()),
+                            ))
+                            .border_0()
+                            .shadow(Vec::new())
+                            .bg(hsla(0., 0., 0., 0.))
+                            .text_color(t.muted)
+                            .hover(move |b| b.bg(t.selected))
+                            .w_full()
+                            .h(px(32.))
+                            .justify_start()
+                            .when(selected, |b| b.bg(t.selected).text_color(t.text))
+                            .child(glyph)
+                            .child(div().flex_1().min_w_0().text_ellipsis().child(project.name))
+                            .on_click(cx.listener(
+                                move |s, _, _, cx| {
+                                    s.sidebar_project = Some(id.clone());
+                                    s.selected_project = Some(id.clone());
+                                    s.panel = Panel::None;
+                                    cx.notify();
+                                },
+                            )),
+                        );
+                    }
+                    menu = menu.child(projects);
+                }
+            }
+
             Panel::Comparison => {
                 let review_width = if self.window_width <= 1100. {
                     self.window_width
@@ -186,137 +244,20 @@ impl Shell {
                     );
                 }
             }
-            Panel::Models => {
+            Panel::Models | Panel::Reasoning | Panel::Access => {
                 let right =
                     if self.selected.is_some() && self.show_review && self.window_width > 1100. {
-                        self.settings.review_width + 42.
+                        self.settings.review_width.min(self.window_width * 0.55) + 24.
                     } else {
-                        36.
+                        24.
                     };
-                menu = menu.bottom(px(106.)).right(px(right)).child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_size(px(11.))
-                        .text_color(t.muted)
-                        .child(icon("bot").size(px(14.)))
-                        .child("MODEL & REASONING")
-                        .child(div().flex_1())
-                        .child(
-                            self.icon_button(
-                                "refresh-models",
-                                "refresh",
-                                "Refresh available models",
-                            )
-                            .on_click(
-                                cx.listener(|s, _, _, _| s.send(core::Request::ConnectRuntime)),
-                            ),
-                        ),
-                );
-                let runtime = self
-                    .workspace
-                    .as_ref()
-                    .map(|w| w.runtime.clone())
-                    .unwrap_or_default();
-                if let Some(view) = self.view.clone() {
-                    let id = view.task.id.clone();
-                    menu = menu.child(
-                        self.ghost("default-model", "bot", "Codex default")
-                            .w_full()
-                            .justify_start()
-                            .on_click(cx.listener(move |s, _, _, cx| {
-                                s.send(core::Request::EditTask {
-                                    task_id: id.clone(),
-                                    edit: TaskEdit::Model {
-                                        model: None,
-                                        effort: None,
-                                    },
-                                });
-                                s.panel = Panel::None;
-                                cx.notify();
-                            })),
-                    );
-                    let mut models = div().id("model-list").max_h(px(300.)).overflow_y_scroll();
-                    for (i, model) in runtime.models.iter().enumerate() {
-                        let chosen = view.task.model.as_deref() == Some(&model.id);
-                        let id = view.task.id.clone();
-                        let model_id = model.id.clone();
-                        let effort = model.default_effort.clone();
-                        models = models.child(
-                            self.ghost(
-                                ("model-option", i),
-                                if chosen { "check" } else { "bot" },
-                                model.name.clone(),
-                            )
-                            .w_full()
-                            .justify_start()
-                            .when(chosen, |b| b.bg(t.selected).text_color(t.text))
-                            .on_click(cx.listener(
-                                move |s, _, _, cx| {
-                                    s.send(core::Request::EditTask {
-                                        task_id: id.clone(),
-                                        edit: TaskEdit::Model {
-                                            model: Some(model_id.clone()),
-                                            effort: Some(effort.clone()),
-                                        },
-                                    });
-                                    cx.notify();
-                                },
-                            )),
-                        );
-                        if chosen {
-                            for (j, effort) in model.efforts.iter().enumerate() {
-                                let id = view.task.id.clone();
-                                let model_id = model.id.clone();
-                                let effort = effort.clone();
-                                let chosen = view.task.effort.as_ref() == Some(&effort);
-                                models = models.child(
-                                    self.ghost(
-                                        ("reasoning-option", i * 20 + j),
-                                        if chosen { "check" } else { "chevron-right" },
-                                        effort.clone(),
-                                    )
-                                    .ml_4()
-                                    .w_full()
-                                    .justify_start()
-                                    .text_size(px(11.))
-                                    .when(chosen, |b| b.text_color(t.accent))
-                                    .on_click(cx.listener(
-                                        move |s, _, _, cx| {
-                                            s.send(core::Request::EditTask {
-                                                task_id: id.clone(),
-                                                edit: TaskEdit::Model {
-                                                    model: Some(model_id.clone()),
-                                                    effort: Some(effort.clone()),
-                                                },
-                                            });
-                                            s.panel = Panel::None;
-                                            cx.notify();
-                                        },
-                                    )),
-                                );
-                            }
-                        }
-                    }
-                    menu = menu.child(models);
-                } else {
-                    menu = menu.child(
-                        div()
-                            .p_2()
-                            .text_size(px(12.))
-                            .text_color(t.muted)
-                            .child("Create a task to choose its model and reasoning effort."),
-                    );
-                }
-                if runtime.models.is_empty() {
-                    menu =
-                        menu.child(div().p_2().text_size(px(11.)).text_color(t.subtle).child(
-                            "No model catalog loaded. Refresh to query your Codex runtime.",
-                        ));
-                }
+                menu = menu
+                    .bottom(px(94.))
+                    .right(px(right))
+                    .w(px(348.))
+                    .max_h(relative(0.8))
+                    .overflow_y_scroll()
+                    .child(self.model_options(cx));
             }
             _ => {}
         }

@@ -6,9 +6,13 @@ The composer rejected messages during active work, diff text selection stopped a
 
 ## Usage
 
-Selecting a changed file opens its diff above the composer. Settings can move the diff to the right panel. Dragging code selects text across rows; dragging line numbers selects captured context and opens a comment editor below the range. Adding that comment creates a removable context block in the composer.
+Selecting a changed file opens its diff above the composer. Settings can move the diff to the right panel. Dragging code selects text across rows; dragging line numbers selects captured context and opens a comment editor below the range. Adding that comment creates a removable context header in the scrollable composer tray. The header shows the file and captured range; the full excerpt and comment stay in the model payload. Changes navigation groups files in foldable folders.
 
 Dropping files imports stable attachment copies. Enter sends the current composition; Shift+Enter inserts a newline. While work is active, the selected Queue or Steer preference controls delivery. Queued messages appear above the composer and can be cancelled. Interrupted or failed work pauses the queue until explicitly resumed.
+
+The composer floats over the transcript with measured bottom padding, a progressive native backdrop blur and a bounded spring response to scrolling, clicking and typing. The center diff reserves the measured composer height so its final rows remain reachable. Reduce Motion disables spring animation.
+
+The model menu lists only runtime-advertised models. The separate reasoning menu contains its fluid slider with pointer and keyboard input. The access menu contains only permission choices. Access is persisted per task and defaults to Workspace for older tasks. Read only, Workspace and Full access map to explicit sandbox and approval policies at thread creation/resume and every new turn. Settings are locked during an active turn. Queued turns use the task's settings at dispatch; steering continues with the active turn's settings. Protocol 4 includes saved task review and provider usage metadata. Idle older hosts upgrade through guarded shutdown; active work delays replacement. Connection polling recovers from failed handshakes without replaying rejected operations.
 
 ## Shape
 

@@ -492,6 +492,8 @@ impl DiffView {
             .flex()
             .items_center()
             .h(px(24.))
+            // Virtual rows are layout roots: auto width uses the input's 400px intrinsic fallback.
+            .when(column == 0, |d| d.w_full())
             .flex_1()
             .min_w_0()
             .font_family("JetBrains Mono")
@@ -546,6 +548,7 @@ impl DiffView {
         }
         if self.split {
             div()
+                .w_full()
                 .flex()
                 .h(px(24.))
                 .child(self.cell(row, 1, cx))
@@ -647,6 +650,8 @@ impl Render for DiffView {
         };
         div()
             .id("diff-document")
+            .w_full()
+            .min_w_0()
             .key_context("DiffDocument")
             .track_focus(&self.focus)
             .relative()
@@ -691,6 +696,7 @@ impl Render for DiffView {
                     .id("diff-horizontal")
                     .size_full()
                     .overflow_x_scroll()
+                    .restrict_scroll_to_axis()
                     .track_scroll(&self.horizontal)
                     .child(
                         list(self.list.clone(), move |row, _, cx| {

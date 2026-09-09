@@ -22,6 +22,8 @@ struct Host {
     terminals: HashMap<String, terminal::Terminal>,
     checks: std::collections::HashSet<String>,
     shutdown: bool,
+    usage_refresh: Option<Instant>,
+    usage_refreshing: bool,
 }
 type Shared = Arc<Mutex<Host>>;
 fn main() {
@@ -66,6 +68,8 @@ fn run() -> Result<()> {
         terminals: HashMap::new(),
         checks: Default::default(),
         shutdown: false,
+        usage_refresh: None,
+        usage_refreshing: false,
     }));
     let mut activity = Instant::now();
     loop {
@@ -130,9 +134,25 @@ fn task_view(h: &Host, id: &str, before: Option<u64>) -> Result<TaskView> {
     })
 }
 fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Response> {
+    ensure!(
+        !host.lock().unwrap().shutdown,
+        "Host is restarting. Retry after reconnecting."
+    );
     match request {
         Request::Hello => {
-            let h = host.lock().unwrap();
+            let mut h = host.lock().unwrap();
+            if !h.usage_refreshing
+                && h.usage_refresh
+                    .is_none_or(|last| last.elapsed() >= Duration::from_secs(120))
+            {
+                h.usage_refresh = Some(Instant::now());
+                h.usage_refreshing = true;
+                let usage_host = host.clone();
+                std::thread::spawn(move || {
+                    let _ = provider::refresh_usage(&usage_host);
+                    usage_host.lock().unwrap().usage_refreshing = false;
+                });
+            }
             Ok(Response::Workspace(Workspace {
                 protocol: ipc::PROTOCOL,
                 projects: h.store.projects()?,
@@ -189,6 +209,9 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 draft: String::new(),
                 model: None,
                 effort: None,
+                access: AccessMode::default(),
+                review: None,
+                context_usage: None,
                 pinned: false,
                 archived: false,
                 created: now(),
@@ -209,6 +232,10 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             let h = host.lock().unwrap();
             let mut t = h.store.task(&task_id)?;
             match edit {
+                TaskEdit::Access(access) => {
+                    ensure!(!t.state.active(), "Change access after this turn finishes");
+                    t.access = access;
+                }
                 TaskEdit::Rename(title) => {
                     ensure!(
                         !title.trim().is_empty() && title.len() < 512,
@@ -431,6 +458,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         }
         Request::Terminal { task_id } => {
             let mut h = host.lock().unwrap();
+            ensure!(!h.shutdown, "Host is restarting. Retry after reconnecting.");
             if !h.terminals.contains_key(&task_id) {
                 let cwd = h.store.task(&task_id)?.cwd;
                 h.terminals

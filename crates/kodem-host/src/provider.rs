@@ -7,7 +7,7 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{Arc, Mutex, mpsc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub(super) enum Control {
@@ -87,6 +87,7 @@ pub(super) fn submit(
     );
     {
         let h = host.lock().unwrap();
+        ensure!(!h.shutdown, "Host is restarting. Retry after reconnecting.");
         if h.store
             .matches_submission(&task_id, &id, &text, &feedback_ids, &attachment_ids, mode)?
         {
@@ -248,7 +249,7 @@ fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result
     };
     let mut codex = Codex::start(&cwd, &mut event)?;
     let task = host.lock().unwrap().store.task(task_id)?;
-    let mut params = json!({"cwd":cwd,"approvalPolicy":"on-request","sandbox":"workspace-write"});
+    let mut params = json!({"cwd":cwd,"approvalPolicy":task.access.approval_policy(),"sandbox":task.access.sandbox()});
     if let Some(model) = &task.model {
         params["model"] = json!(model);
     }
@@ -271,7 +272,20 @@ fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result
         task.provider_thread = Some(thread.clone());
         h.store.save_task(&task)?;
     }
+    let mut branch_refresh = Instant::now();
     loop {
+        if branch_refresh.elapsed() >= Duration::from_secs(5) {
+            branch_refresh = Instant::now();
+            if host.lock().unwrap().store.task(task_id)?.state.active() {
+                let branch = kodem_core::git::branch(&cwd);
+                let h = host.lock().unwrap();
+                let mut task = h.store.task(task_id)?;
+                if task.branch != branch {
+                    task.branch = branch;
+                    h.store.save_task(&task)?;
+                }
+            }
+        }
         if let Some(error) = persistence_error.lock().unwrap().take() {
             anyhow::bail!(error);
         }
@@ -407,6 +421,8 @@ fn dispatch_next(
         "turn/steer"
     } else {
         let task = host.lock().unwrap().store.task(task_id)?;
+        params["approvalPolicy"] = json!(task.access.approval_policy());
+        params["sandboxPolicy"] = task.access.turn_policy(&task.cwd);
         if let Some(model) = task.model {
             params["model"] = json!(model);
         }
@@ -463,6 +479,30 @@ fn ingest(
 ) -> Result<()> {
     let method = value["method"].as_str().unwrap_or_default();
     let p = &value["params"];
+    // Capture before publishing completion so another queued turn cannot change this checkout first.
+    let observed_branch = if matches!(method, "turn/started" | "turn/completed") {
+        let task = host.lock().unwrap().store.task(task_id)?;
+        task.state
+            .active()
+            .then(|| kodem_core::git::branch(&task.cwd))
+    } else {
+        None
+    };
+    let completed_review = if method == "turn/completed" {
+        let task = host.lock().unwrap().store.task(task_id)?;
+        task.state.active().then(|| {
+            kodem_core::git::capture(
+                &task,
+                if task.baseline.is_some() {
+                    Comparison::Baseline
+                } else {
+                    Comparison::WorkingTree
+                },
+            )
+        })
+    } else {
+        None
+    };
     let mut h = host.lock().unwrap();
     let mut task = h.store.task(task_id)?;
     if value.get("id").is_some() {
@@ -479,8 +519,33 @@ fn ingest(
         h.store.save_task(&task)?;
         return Ok(());
     }
+    if let Some(branch) = observed_branch {
+        task.branch = branch;
+    }
     update_activities(h.activities.entry(task_id.into()).or_default(), method, p);
     match method {
+        "thread/tokenUsage/updated" => {
+            if task
+                .provider_thread
+                .as_deref()
+                .is_some_and(|id| p["threadId"].as_str() != Some(id))
+            {
+                return Ok(());
+            }
+            if let Some(used) = p["tokenUsage"]["last"]["totalTokens"].as_u64() {
+                task.context_usage = Some(ContextUsage {
+                    used,
+                    window: p["tokenUsage"]["modelContextWindow"]
+                        .as_u64()
+                        .filter(|v| *v > 0),
+                    reported: now(),
+                });
+                h.store.save_task(&task)?;
+            }
+        }
+        "account/rateLimits/updated" => {
+            merge_usage(&mut h.runtime.usage, &p["rateLimits"]);
+        }
         "turn/started" => {
             task.active_turn = p["turn"]["id"].as_str().map(str::to_owned);
             task.state = RunState::Running;
@@ -488,6 +553,43 @@ fn ingest(
             h.store.save_task(&task)?;
         }
         "turn/completed" => {
+            if let Some(review) = completed_review {
+                task.review = Some(match review {
+                    Ok(mut snapshot) => {
+                        let stored = h.store.save_snapshot(&mut snapshot);
+                        TaskReview {
+                            snapshot_id: stored.as_ref().ok().map(|_| snapshot.id.clone()),
+                            added: snapshot
+                                .files
+                                .iter()
+                                .flat_map(|f| &f.lines)
+                                .filter(|l| l.kind == LineKind::Added)
+                                .count(),
+                            removed: snapshot
+                                .files
+                                .iter()
+                                .flat_map(|f| &f.lines)
+                                .filter(|l| l.kind == LineKind::Removed)
+                                .count(),
+                            omitted_files: snapshot
+                                .files
+                                .iter()
+                                .filter(|f| f.notice.is_some())
+                                .count(),
+                            captured: snapshot.captured,
+                            error: stored.err().map(|e| e.to_string()),
+                        }
+                    }
+                    Err(error) => TaskReview {
+                        snapshot_id: None,
+                        added: 0,
+                        removed: 0,
+                        omitted_files: 0,
+                        captured: now(),
+                        error: Some(error.to_string()),
+                    },
+                });
+            }
             task.active_turn = None;
             task.state = match p["turn"]["status"].as_str() {
                 Some("completed") => RunState::Completed,
@@ -840,6 +942,7 @@ pub(super) fn discover(host: Shared, cwd: Option<PathBuf>) -> Result<()> {
             !account["account"].is_null() || account["requiresOpenaiAuth"] == false,
         ),
         models,
+        usage: h.runtime.usage.clone(),
         error: None,
     };
     Ok(())
@@ -1039,4 +1142,45 @@ pub(super) fn reconcile(host: &Shared, task_id: &str) -> Result<()> {
     }
     h.store.save_task(&current)?;
     Ok(())
+}
+
+/// Refreshes account limits without starting a model turn or changing authentication.
+pub(super) fn refresh_usage(host: &Shared) -> Result<()> {
+    let mut catalog = Catalog::open(host, &std::env::current_dir()?)?;
+    let response = catalog.call("account/rateLimits/read", json!({}))?;
+    let value = response["rateLimitsByLimitId"]
+        .get("codex")
+        .unwrap_or(&response["rateLimits"]);
+    let mut usage: UsageLimits = serde_json::from_value(value.clone())?;
+    usage.reported = now();
+    host.lock().unwrap().runtime.usage = Some(usage);
+    Ok(())
+}
+// Rolling notifications are sparse: omitted windows and nullable account metadata retain their last observation.
+fn merge_usage(current: &mut Option<UsageLimits>, value: &Value) {
+    let Ok(mut incoming) = serde_json::from_value::<UsageLimits>(value.clone()) else {
+        return;
+    };
+    incoming.reported = now();
+    if let Some(old) = current {
+        if old.limit_id.is_some()
+            && incoming.limit_id.is_some()
+            && old.limit_id != incoming.limit_id
+        {
+            return;
+        }
+        if incoming.primary.is_none() {
+            incoming.primary = old.primary.clone();
+        }
+        if incoming.secondary.is_none() {
+            incoming.secondary = old.secondary.clone();
+        }
+        if incoming.plan_type.is_none() {
+            incoming.plan_type = old.plan_type.clone();
+        }
+        if incoming.limit_id.is_none() {
+            incoming.limit_id = old.limit_id.clone();
+        }
+    }
+    *current = Some(incoming);
 }

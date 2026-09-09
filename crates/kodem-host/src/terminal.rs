@@ -121,6 +121,7 @@ pub(super) fn run_check(host: Shared, task_id: String, command: String) -> Resul
     );
     let cwd = {
         let mut h = host.lock().unwrap();
+        ensure!(!h.shutdown, "Host is restarting. Retry after reconnecting.");
         ensure!(
             !h.checks.contains(&task_id),
             "A check is already running for this task"

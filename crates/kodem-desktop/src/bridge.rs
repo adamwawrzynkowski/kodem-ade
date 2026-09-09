@@ -7,26 +7,19 @@ pub enum Command {
 }
 pub struct Reply {
     pub request: Request,
+    pub connected: bool,
     pub result: Result<Response, String>,
 }
 /// Creates one ordered background transport owner for this window.
 pub fn start() -> (mpsc::Sender<Command>, mpsc::Receiver<Reply>) {
+    start_at(ipc::data_dir().map_err(|e| format!("{e:#}")))
+}
+fn start_at(
+    root: Result<std::path::PathBuf, String>,
+) -> (mpsc::Sender<Command>, mpsc::Receiver<Reply>) {
     let (tx, commands) = mpsc::channel();
     let (replies, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let root = match ipc::data_dir().and_then(|root| {
-            ipc::connect_or_start(&root)?;
-            Ok(root)
-        }) {
-            Ok(root) => root,
-            Err(e) => {
-                let _ = replies.send(Reply {
-                    request: Request::Hello,
-                    result: Err(format!("{e:#}")),
-                });
-                return;
-            }
-        };
         while let Ok(command) = commands.recv() {
             let requests = match command {
                 Command::Request(r) => vec![r],
@@ -44,10 +37,43 @@ pub fn start() -> (mpsc::Sender<Command>, mpsc::Receiver<Reply>) {
                     r
                 }
             };
+            // Keep this worker alive after a failed handshake. Polls and the explicit
+            // refresh action reconnect; rejected mutations are reported, never replayed.
+            let connection = root.as_ref().map_err(Clone::clone).and_then(|root| {
+                ipc::connect_or_start(root).map_err(|e| format!("{e:#}"))?;
+                Ok(root)
+            });
+            let root = match connection {
+                Ok(root) => root,
+                Err(error) => {
+                    if replies
+                        .send(Reply {
+                            request: requests.into_iter().next().unwrap(),
+                            connected: false,
+                            result: Err(error),
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+            };
             for request in requests {
-                let result = ipc::request(&root, &request).map_err(|e| format!("{e:#}"));
-                if replies.send(Reply { request, result }).is_err() {
+                let result = ipc::request(root, &request).map_err(|e| format!("{e:#}"));
+                let connected = result.is_ok() || !matches!(request, Request::Hello);
+                if replies
+                    .send(Reply {
+                        request,
+                        connected,
+                        result,
+                    })
+                    .is_err()
+                {
                     return;
+                }
+                if !connected {
+                    break;
                 }
             }
         }

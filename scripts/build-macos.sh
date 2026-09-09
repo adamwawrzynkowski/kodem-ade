@@ -57,6 +57,17 @@ cp "$executables/kodem-host" "$bundle/Contents/MacOS/kodem-host"
 chmod 755 "$bundle/Contents/MacOS/kodem" "$bundle/Contents/MacOS/kodem-host"
 cp assets/licenses/* "$bundle/Contents/Resources/licenses/"
 cp assets/THIRD_PARTY.md "$bundle/Contents/Resources/THIRD_PARTY.md"
+icon_source="$KODEM_ROOT/assets/app/AppIcon_1024x1024.png"
+[[ -f "$icon_source" ]] || { echo "Missing app icon: $icon_source" >&2; exit 1; }
+iconset="$work_dir/AppIcon.iconset"
+mkdir -p "$iconset"
+for points in 16 32 128 256 512; do
+    /usr/bin/sips -z "$points" "$points" "$icon_source" --out "$iconset/icon_${points}x${points}.png" >/dev/null
+    pixels=$((points * 2))
+    /usr/bin/sips -z "$pixels" "$pixels" "$icon_source" --out "$iconset/icon_${points}x${points}@2x.png" >/dev/null
+done
+/usr/bin/iconutil -c icns "$iconset" -o "$bundle/Contents/Resources/AppIcon.icns"
+
 cat > "$bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -65,6 +76,7 @@ cat > "$bundle/Contents/Info.plist" <<PLIST
 <key>CFBundleDisplayName</key><string>$app_name</string>
 <key>CFBundleIdentifier</key><string>$bundle_id</string>
 <key>CFBundleExecutable</key><string>kodem</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>$build_date</string>
@@ -124,6 +136,7 @@ if [[ "$configuration" == release ]]; then
     if ! /usr/bin/codesign --verify --deep --strict "$destination" \
         || ! /usr/bin/cmp -s "$output/Contents/MacOS/kodem" "$destination/Contents/MacOS/kodem" \
         || ! /usr/bin/cmp -s "$output/Contents/MacOS/kodem-host" "$destination/Contents/MacOS/kodem-host" \
+        || ! /usr/bin/cmp -s "$output/Contents/Resources/AppIcon.icns" "$destination/Contents/Resources/AppIcon.icns" \
         || ! /usr/bin/cmp -s "$output/Contents/Info.plist" "$destination/Contents/Info.plist"; then
         install_file mv "$destination" "$install_stage"
         if [[ -e "$backup" ]]; then install_file mv "$backup" "$destination"; fi
@@ -135,7 +148,7 @@ if [[ "$configuration" == release ]]; then
     echo "Verified build: $build_id"
     if pgrep -f '^/Applications/Kodem(\.app|\.previous\.[^/]+\.app)/Contents/MacOS/(kodem|kodem-host)( |$)' >/dev/null; then
         echo "RESTART REQUIRED: the app or host is still running its loaded build."
-        echo "Finish active work, use Settings > Codex > Stop idle host and quit, then open /Applications/Kodem.app."
+        echo "Finish active work, quit the old app, then open /Applications/Kodem.app. An idle older host upgrades automatically."
         echo "The new build is already installed. You do not need to build again."
     fi
     if [[ -e "$backup" ]]; then echo "Previous version: $backup"; fi

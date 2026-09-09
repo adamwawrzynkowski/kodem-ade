@@ -130,6 +130,7 @@ impl Shell {
             .p_2()
             .rounded(px(8.))
             .bg(t.sidebar)
+            .shadow(t.elevation())
             .border_1()
             .border_color(t.border)
             .min_w_0()
@@ -194,7 +195,7 @@ impl Shell {
         card.into_any_element()
     }
 
-    /// Renders captured code and its comment as one context block in drafts and messages.
+    /// Shows only the path and captured range while retaining the full context in the payload.
     pub(super) fn context_card(
         &mut self,
         feedback: &Feedback,
@@ -226,7 +227,7 @@ impl Shell {
             .items_center()
             .gap_2()
             .px_3()
-            .py_2()
+            .h(px(34.))
             .text_size(px(11.))
             .child(icon("code").size(px(13.)).text_color(t.accent))
             .child(
@@ -236,7 +237,7 @@ impl Shell {
                     .text_ellipsis()
                     .child(feedback.label.clone()),
             )
-            .child(div().text_color(t.muted).child(range));
+            .child(div().flex_shrink_0().text_color(t.muted).child(range));
         if let Some(task_id) = task_id {
             let task_id = task_id.to_owned();
             let id = feedback.id.clone();
@@ -262,41 +263,18 @@ impl Shell {
                 })),
             );
         }
-        let excerpt = self.readonly(
-            format!("context:{}", feedback.id),
-            feedback.excerpt.clone(),
-            cx,
-        );
-        let comment = self.readonly(
-            format!("comment:{}", feedback.id),
-            feedback.comment.clone(),
-            cx,
-        );
         div()
             .w_full()
             .min_w_0()
-            .rounded(px(8.))
+            .h(px(36.))
+            .flex_shrink_0()
+            .rounded(px(9.))
             .border_1()
             .border_color(t.border)
             .bg(t.sidebar)
+            .shadow(t.elevation())
             .overflow_hidden()
             .child(title)
-            .child(
-                div()
-                    .id((
-                        ElementId::from("context-excerpt"),
-                        SharedString::from(feedback.id.clone()),
-                    ))
-                    .max_h(px(96.))
-                    .overflow_y_scroll()
-                    .px_3()
-                    .py_2()
-                    .font_family("JetBrains Mono")
-                    .text_size(px(11.))
-                    .bg(t.inset)
-                    .child(excerpt),
-            )
-            .child(div().px_3().py_2().text_size(px(12.)).child(comment))
             .into_any_element()
     }
 

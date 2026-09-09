@@ -1,7 +1,7 @@
 use super::*;
 use crate::markdown::{self, Block};
 impl Shell {
-    /// Builds the task conversation and docked composer in the new workspace layout.
+    /// Builds the conversation with a measured floating composer and a clear review viewport.
     pub(super) fn chat(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let mut panel = div()
@@ -153,14 +153,27 @@ impl Shell {
                         )),
                 );
             }
+            let mut timeline = div()
+                .id("conversation-stage")
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .on_scroll_wheel(cx.listener(|s, e: &ScrollWheelEvent, _, cx| {
+                    let delta = e.delta.pixel_delta(px(20.));
+                    s.nudge_composer((f32::from(delta.y) * 0.015).clamp(-0.45, 0.45), cx);
+                }));
             let center_diff =
                 self.reviewing_file && self.settings.diff_placement == DiffPlacement::Conversation;
             if center_diff {
-                panel = panel.child(self.review(cx, true));
+                timeline = timeline
+                    .child(self.review(cx, true))
+                    .child(div().h(px(self.composer_height)).flex_shrink_0());
             } else {
                 if let Some(before) = view.before {
                     let id = view.task.id.clone();
-                    panel = panel.child(
+                    timeline = timeline.child(
                         div().px_5().pb_2().child(
                             self.ghost("older", "arrow-up", "Earlier messages")
                                 .on_click(cx.listener(move |s, _, _, _| {
@@ -173,41 +186,69 @@ impl Shell {
                     );
                 }
                 if view.messages.is_empty() {
-                    panel=panel.child(div().flex_1().px_8().pt_8().child(div().max_w(px(600.)).text_size(px(13.)).text_color(t.muted)
+                    timeline=timeline.child(div().flex_1().px_8().pt_8().child(div().max_w(px(600.)).text_size(px(13.)).text_color(t.muted)
                     .child("Describe the change below. Your conversation and its code review stay together in this task.")));
                 } else {
                     let entity = cx.entity();
-                    panel = panel.child(
+                    timeline = timeline.child(
                         list(self.chat_scroll.clone(), move |index, window, cx| {
                             entity.update(cx, |s, cx| s.message(index, window, cx))
                         })
                         .flex_1()
-                        .min_h_0(),
+                        .min_h_0()
+                        .pb(px(self.composer_height)),
                     );
                 }
             }
-            panel = panel
+            let bounds_entity = cx.entity();
+            let floating = div()
+                .absolute()
+                .bottom_0()
+                .w_full()
+                .child(motion::composer_backdrop(t))
                 .child(
                     div()
-                        .px_5()
-                        .h(px(if self.follow { 4. } else { 24. }))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_end()
-                        .when(!self.follow, |d| {
-                            d.child(
-                                self.ghost("jump-latest", "arrow-down", "Jump to latest")
-                                    .on_click(cx.listener(|s, _, _, cx| {
-                                        s.follow = true;
-                                        s.chat_scroll.scroll_to_end();
-                                        cx.notify();
-                                    })),
+                        .relative()
+                        .w_full()
+                        .child(
+                            div()
+                                .px_5()
+                                .h(px(if self.follow { 4. } else { 24. }))
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_end()
+                                .when(!self.follow, |d| {
+                                    d.child(
+                                        self.ghost("jump-latest", "arrow-down", "Jump to latest")
+                                            .on_click(cx.listener(|s, _, _, cx| {
+                                                s.follow = true;
+                                                s.chat_scroll.scroll_to_end();
+                                                cx.notify();
+                                            })),
+                                    )
+                                }),
+                        )
+                        .child(self.activity_strip(cx))
+                        .child(self.composer(false, cx))
+                        .child(
+                            canvas(
+                                move |bounds, _, cx| {
+                                    bounds_entity.update(cx, |s, cx| {
+                                        let height = f32::from(bounds.size.height).ceil();
+                                        if (s.composer_height - height).abs() > 0.5 {
+                                            s.composer_height = height;
+                                            cx.notify();
+                                        }
+                                    });
+                                },
+                                |_, _, _, _| {},
                             )
-                        }),
-                )
-                .child(self.activity_strip(cx))
-                .child(self.composer(false, cx));
+                            .absolute()
+                            .size_full(),
+                        ),
+                );
+            panel = panel.child(timeline.child(floating));
         } else {
             panel = panel.child(
                 div()
@@ -274,7 +315,13 @@ impl Shell {
             .cloned();
         let model = view
             .as_ref()
-            .and_then(|v| v.task.model.clone())
+            .and_then(|v| v.task.model.as_ref())
+            .map(|id| {
+                self.workspace
+                    .as_ref()
+                    .and_then(|w| w.runtime.models.iter().find(|m| &m.id == id))
+                    .map_or_else(|| id.clone(), |m| m.name.clone())
+            })
             .unwrap_or_else(|| "Codex default".into());
         let effort = view.as_ref().and_then(|v| v.task.effort.clone());
         let mut wrapper = div()
@@ -286,7 +333,8 @@ impl Shell {
         wrapper = wrapper.child(self.outgoing_tray(cx));
         let mut attachments = div()
             .id("composer-context")
-            .max_h(px(240.))
+            .max_h(px(120.))
+            .restrict_scroll_to_axis()
             .overflow_y_scroll()
             .flex()
             .flex_col()
@@ -297,7 +345,7 @@ impl Shell {
                 attachments =
                     attachments.child(self.context_card(feedback, Some(&view.task.id), cx));
             }
-            let mut files = div().flex().flex_wrap().gap_2();
+            let mut files = div().flex().flex_wrap().flex_shrink_0().gap_2();
             for attachment in &view.task.attachments {
                 files = files.child(self.attachment_card(attachment, Some(&view.task.id), cx));
             }
@@ -360,6 +408,12 @@ impl Shell {
         wrapper = wrapper.child(attachments);
         let mut editor = div()
             .id("composer-drop-target")
+            .relative()
+            .top(px(self.composer_spring.offset))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|s, _, _, cx| s.nudge_composer(0.65, cx)),
+            )
             .drag_over::<ExternalPaths>(move |style, _, _, _| {
                 style.border_color(t.accent).bg(t.accent_bg)
             })
@@ -369,7 +423,8 @@ impl Shell {
             .rounded(px(16.))
             .border_1()
             .border_color(t.border)
-            .bg(t.raised)
+            .bg(t.raised.opacity(0.94))
+            .shadow(t.elevation())
             .overflow_hidden();
         if empty {
             let label = project
@@ -430,6 +485,7 @@ impl Shell {
                 .child(self.input.clone()),
         );
         let mut toolbar = div()
+            .flex_wrap()
             .px_3()
             .pb_2()
             .flex()
@@ -449,9 +505,11 @@ impl Shell {
                         cx.notify();
                     })),
             )
+            .child(self.usage_meters())
             .child(div().flex_1())
             .child(
-                self.ghost("composer-model", "bot", model)
+                self.ghost("composer-model", "bot", "")
+                    .child(div().max_w(px(150.)).min_w_0().text_ellipsis().child(model))
                     .text_size(px(11.))
                     .child(icon("chevron-down").size(px(11.)))
                     .on_click(cx.listener(|s, _, _, cx| {
@@ -466,7 +524,36 @@ impl Shell {
                     })),
             )
             .when_some(effort, |d, e| {
-                d.child(div().text_size(px(11.)).text_color(t.muted).px_1().child(e))
+                d.child(div().w(px(1.)).h(px(14.)).mx_1().bg(t.border))
+                    .child(
+                        self.ghost("composer-effort", "settings-2", e)
+                            .text_size(px(11.))
+                            .child(icon("chevron-down").size(px(10.)))
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.panel = Panel::Reasoning;
+                                cx.notify();
+                            })),
+                    )
+            })
+            .when_some(view.as_ref(), |d, view| {
+                d.child(div().w(px(1.)).h(px(14.)).mx_1().bg(t.border))
+                    .child(
+                        self.ghost(
+                            "composer-access",
+                            if view.task.access == AccessMode::FullAccess {
+                                "lock-open"
+                            } else {
+                                "shield"
+                            },
+                            view.task.access.label(),
+                        )
+                        .text_size(px(11.))
+                        .child(icon("chevron-down").size(px(10.)))
+                        .on_click(cx.listener(|s, _, _, cx| {
+                            s.panel = Panel::Access;
+                            cx.notify();
+                        })),
+                    )
             });
         if empty {
             toolbar = toolbar.child(
@@ -721,6 +808,7 @@ impl Shell {
                 )))
                 .max_w(relative(0.86))
                 .bg(t.raised)
+                .shadow(t.elevation())
                 .rounded(px(9.))
                 .px_3()
                 .py_2();

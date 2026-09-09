@@ -91,3 +91,113 @@ pub(super) fn system_reduce_motion() -> bool {
         false
     }
 }
+
+/// Paints a soft blur ramp above the floating composer without adding pointer hitboxes.
+pub(super) fn composer_backdrop(theme: Theme) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let ramp = px(36.).min(bounds.size.height);
+            for i in 0..6 {
+                let fraction = (i + 1) as f32 / 6.;
+                let band = Bounds::new(
+                    point(bounds.left(), bounds.top() + ramp * (i as f32 / 6.)),
+                    size(bounds.size.width, ramp / 6.),
+                );
+                window.paint_backdrop_filter(
+                    band,
+                    Corners::default(),
+                    &[Filter::Blur(px(8. * fraction * fraction))],
+                );
+                window.paint_quad(fill(band, theme.canvas.opacity(0.48 * fraction * fraction)));
+            }
+            let body = Bounds::new(
+                point(bounds.left(), bounds.top() + ramp),
+                size(bounds.size.width, (bounds.size.height - ramp).max(px(0.))),
+            );
+            window.paint_backdrop_filter(body, Corners::default(), &[Filter::Blur(px(8.))]);
+            window.paint_quad(fill(body, theme.canvas.opacity(0.48)));
+        },
+    )
+    .absolute()
+    .top(px(-36.))
+    .bottom_0()
+    .w_full()
+}
+
+#[derive(Default)]
+pub(super) struct ComposerSpring {
+    pub offset: f32,
+    velocity: f32,
+    running: bool,
+}
+impl Shell {
+    /// Adds a bounded spring impulse and stops rendering animation frames once it settles.
+    pub(super) fn nudge_composer(&mut self, impulse: f32, cx: &mut Context<Self>) {
+        if cx.reduce_motion() {
+            return;
+        }
+        self.composer_spring.velocity = (self.composer_spring.velocity + impulse).clamp(-0.8, 0.8);
+        if self.composer_spring.running {
+            return;
+        }
+        self.composer_spring.running = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+                let keep = this
+                    .update(cx, |s, cx| {
+                        let spring = &mut s.composer_spring;
+                        spring.velocity = (spring.velocity - spring.offset * 0.16) * 0.72;
+                        spring.offset = (spring.offset + spring.velocity).clamp(-2., 2.);
+                        let keep = !cx.reduce_motion()
+                            && (spring.offset.abs() > 0.01 || spring.velocity.abs() > 0.01);
+                        if !keep {
+                            spring.offset = 0.;
+                            spring.velocity = 0.;
+                            spring.running = false;
+                        }
+                        cx.notify();
+                        keep
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+}
+
+/// Paints cached dithered corner lighting without hitboxes, layout space or animation work.
+pub(super) fn window_texture(light: bool) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, cx| {
+            let edge = px(440.).min(bounds.size.width).min(bounds.size.height);
+            let corners = [
+                ("corner-warm", bounds.origin, rgb(0xd98137)),
+                (
+                    "corner-cool",
+                    point(bounds.right() - edge, bounds.bottom() - edge),
+                    rgb(0x9da4ae),
+                ),
+            ];
+            for (asset, origin, color) in corners {
+                let _ = window.paint_svg(
+                    Bounds::new(origin, size(edge, edge)),
+                    asset.into(),
+                    None,
+                    Default::default(),
+                    rgb_to_hsla(color).opacity(if light { 0.18 } else { 0.48 }),
+                    cx,
+                );
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+}

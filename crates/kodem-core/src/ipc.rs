@@ -12,7 +12,7 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 4;
 pub const MAX_PACKET: u64 = 32 * 1024 * 1024;
 /// Resolves the user's data directory, with an explicit override for isolated installations.
 pub fn data_dir() -> Result<PathBuf> {
@@ -77,17 +77,41 @@ pub fn request(root: &Path, request: &Request) -> Result<Response> {
     }
     Ok(reply)
 }
-/// Starts the packaged host if needed and verifies its protocol before use.
+/// Connects to the packaged protocol, upgrading an idle older host without retrying mutations.
 pub fn connect_or_start(root: &Path) -> Result<()> {
+    connect_with_host(root, &env::current_exe()?.with_file_name("kodem-host"))
+}
+fn connect_with_host(root: &Path, host: &Path) -> Result<()> {
     prepare(root)?;
     if let Ok(Response::Workspace(ws)) = request(root, &Request::Hello) {
+        if ws.protocol == PROTOCOL {
+            return Ok(());
+        }
         ensure!(
-            ws.protocol == PROTOCOL,
-            "Host version mismatch; finish active tasks and quit the old app and host before reopening"
+            ws.protocol < PROTOCOL,
+            "A newer Kodem host is running. Open the latest installed app."
         );
-        return Ok(());
+        ensure!(
+            host.is_file(),
+            "Missing packaged kodem-host executable. Rebuild the app bundle."
+        );
+        // The host makes the final idle decision under its state lock. Never kill it.
+        match request(root, &Request::Shutdown) {
+            Ok(Response::Ok) => {}
+            Ok(_) => anyhow::bail!("The older host did not accept the upgrade. Kodem will retry."),
+            Err(error) => anyhow::bail!(
+                "Waiting to upgrade the local host: {error:#}. Kodem will retry automatically."
+            ),
+        }
+        let until = Instant::now() + Duration::from_secs(10);
+        while UnixStream::connect(socket(root)).is_ok() {
+            ensure!(
+                Instant::now() < until,
+                "Waiting for the older host to exit. Kodem will retry automatically."
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
-    let host = env::current_exe()?.with_file_name("kodem-host");
     ensure!(
         host.is_file(),
         "Missing packaged kodem-host executable. Rebuild the app bundle."
@@ -97,18 +121,33 @@ pub fn connect_or_start(root: &Path) -> Result<()> {
         .create(true)
         .open(root.join("host.log"))?;
     use std::os::unix::process::CommandExt;
-    Command::new(host)
-        .env("KODEM_DATA_DIR", root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log.try_clone()?))
-        .stderr(Stdio::from(log))
-        .process_group(0)
-        .spawn()?;
+    let mut child = None;
     let until = Instant::now() + Duration::from_secs(10);
     while Instant::now() < until {
         if let Ok(Response::Workspace(ws)) = request(root, &Request::Hello) {
-            ensure!(ws.protocol == PROTOCOL, "Host protocol mismatch");
+            ensure!(
+                ws.protocol == PROTOCOL,
+                "Another Kodem version started its host. Open the latest installed app."
+            );
             return Ok(());
+        }
+        // Concurrent windows can race for the host lock. A losing starter exits cleanly;
+        // retry only that startup, never a user's operation.
+        if child
+            .as_mut()
+            .is_none_or(|child: &mut std::process::Child| {
+                child.try_wait().is_ok_and(|status| status.is_some())
+            })
+        {
+            child = Some(
+                Command::new(host)
+                    .env("KODEM_DATA_DIR", root)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::from(log.try_clone()?))
+                    .stderr(Stdio::from(log.try_clone()?))
+                    .process_group(0)
+                    .spawn()?,
+            );
         }
         std::thread::sleep(Duration::from_millis(100));
     }

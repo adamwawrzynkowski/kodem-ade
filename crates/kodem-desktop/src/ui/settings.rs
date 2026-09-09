@@ -340,7 +340,11 @@ impl Shell {
                     .child(
                         self.setting_row(
                             "Runtime",
-                            &runtime.version.unwrap_or_else(|| "Not installed".into()),
+                            &if self.host_connected {
+                                runtime.version.unwrap_or_else(|| "Runtime unavailable".into())
+                            } else {
+                                "Waiting for the local host…".into()
+                            },
                             self.ghost("connect-codex", "refresh", "Refresh connection")
                                 .on_click(
                                     cx.listener(|s, _, _, _| s.send(core::Request::ConnectRuntime)),
@@ -365,6 +369,7 @@ impl Shell {
                             .child(match runtime.authenticated {
                                 Some(true) => "Signed in",
                                 Some(false) => "Sign in with codex login in Terminal",
+                                None if !self.host_connected => "Account details unavailable while reconnecting",
                                 None => "Connect to check your account",
                             }),
                     )

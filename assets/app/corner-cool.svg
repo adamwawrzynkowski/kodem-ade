@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><g transform="rotate(180 200 200)"><defs>
+<radialGradient id="fade" cx="0" cy="0" r="1" gradientUnits="objectBoundingBox"><stop stop-color="white"/><stop offset="0.28" stop-color="white" stop-opacity="0.62"/><stop offset="0.7" stop-color="white" stop-opacity="0.12"/><stop offset="1" stop-color="white" stop-opacity="0"/></radialGradient>
+<pattern id="grain" width="8" height="8" patternUnits="userSpaceOnUse"><path fill="white" opacity="0.55" d="M0 0h1.4v1.4H0z M4 4h1.4v1.4H4z"/><path fill="white" opacity="0.3" d="M4 0h1v1H4z M0 4h1v1H0z M2 6h.8v.8H2z M6 2h.8v.8H6z"/></pattern>
+<mask id="falloff"><rect width="400" height="400" fill="url(#fade)"/></mask>
+</defs>
+<g mask="url(#falloff)"><rect width="400" height="400" fill="white" opacity="0.2"/><rect width="400" height="400" fill="url(#grain)"/></g></g></svg>

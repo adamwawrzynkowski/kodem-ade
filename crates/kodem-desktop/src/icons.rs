@@ -5,6 +5,24 @@ pub struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
         Ok(match path {
+            "corner-warm" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/app/corner-warm.svg"
+            ))),
+            "corner-cool" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/app/corner-cool.svg"
+            ))),
+            "cube" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/icons/cube.svg"
+            ))),
+            "book" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/icons/book.svg"
+            ))),
+            "openai" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/icons/openai.svg"
+            ))),
+            "lock-open" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/icons/lock-open.svg"
+            ))),
             "archive" => Some(Cow::Borrowed(include_bytes!(
                 "../../../assets/icons/archive.svg"
             ))),

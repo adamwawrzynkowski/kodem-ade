@@ -1,16 +1,20 @@
 //! Native workspace state and actions. All blocking work goes through the host bridge.
 mod activity;
 mod browser;
+mod change_tree;
 mod chat;
 mod chrome;
 mod composition;
 mod diff_view;
+mod effort_slider;
 mod menus;
+mod model_picker;
 mod motion;
 mod panels;
 mod review;
 mod settings;
 mod sidebar;
+mod usage;
 use crate::icons::icon;
 use crate::{
     bridge,
@@ -54,6 +58,9 @@ enum Panel {
     Rename,
     Questions,
     Models,
+    Reasoning,
+    Access,
+    Projects,
     TaskMenu,
     Sort,
     Comparison,
@@ -79,6 +86,7 @@ pub struct Shell {
     panel: Panel,
     error: Option<String>,
     status: String,
+    host_connected: bool,
     new_worktree: bool,
     selected_project: Option<String>,
     show_review: bool,
@@ -89,12 +97,14 @@ pub struct Shell {
     new_diff: Option<DiffSnapshot>,
     file: usize,
     reviewing_file: bool,
+    historical_diff: bool,
     search_visible: bool,
     comparison: Comparison,
     split: bool,
     chat_scroll: ListState,
     follow: bool,
     folded: HashSet<String>,
+    collapsed_changes: HashSet<String>,
     text_views: HashMap<String, Entity<TextInput>>,
     resources: Vec<core::Resource>,
     files: Vec<Vec<u8>>,
@@ -114,11 +124,15 @@ pub struct Shell {
     diff_view: Option<Entity<diff_view::DiffView>>,
     sidebar_hovered: bool,
     task_order: HashMap<String, usize>,
-    collapsed_projects: HashSet<String>,
+    sidebar_project: Option<String>,
+    settled_collapsed: bool,
     empty_draft: String,
     start_after_create: bool,
     auto_submit_task: Option<String>,
+    composer_height: f32,
+    composer_spring: motion::ComposerSpring,
     settings_section: usize,
+    effort_slider: Option<(String, Entity<effort_slider::EffortSlider>, Subscription)>,
 }
 impl Shell {
     /// Creates the workspace and begins asynchronous host synchronization.
@@ -140,6 +154,7 @@ impl Shell {
                     s.draft_revision += 1;
                     s.observed_draft = text;
                     s.draft_dirty = true;
+                    s.nudge_composer(-0.35, cx);
                 }
                 cx.notify();
             }),
@@ -213,6 +228,7 @@ impl Shell {
             panel: Panel::None,
             error: None,
             status: "Connecting to local host…".into(),
+            host_connected: false,
             new_worktree: true,
             selected_project: None,
             show_review: true,
@@ -223,12 +239,14 @@ impl Shell {
             new_diff: None,
             file: 0,
             reviewing_file: false,
+            historical_diff: false,
             search_visible: false,
             comparison: Comparison::WorkingTree,
             split: false,
             chat_scroll: ListState::new(0, ListAlignment::Bottom, px(600.)),
             follow: true,
             folded: HashSet::new(),
+            collapsed_changes: HashSet::new(),
             text_views: HashMap::new(),
             resources: Vec::new(),
             files: Vec::new(),
@@ -248,11 +266,15 @@ impl Shell {
             diff_view: None,
             sidebar_hovered: false,
             task_order: HashMap::new(),
-            collapsed_projects: HashSet::new(),
+            sidebar_project: None,
+            settled_collapsed: false,
             empty_draft: String::new(),
             start_after_create: false,
             auto_submit_task: None,
+            composer_height: 170.,
+            composer_spring: motion::ComposerSpring::default(),
             settings_section: 0,
+            effort_slider: None,
         };
         shell.send(core::Request::Hello);
         shell
@@ -261,6 +283,13 @@ impl Shell {
         let _ = self.tx.send(bridge::Command::Request(request));
     }
     fn apply(&mut self, reply: bridge::Reply, cx: &mut Context<Self>) {
+        if reply.connected && !self.host_connected {
+            self.error = None;
+        }
+        self.host_connected = reply.connected;
+        if !reply.connected {
+            self.status = "Local host unavailable; reconnecting…".into();
+        }
         if let core::Request::ImportAttachments { task_id, .. } = &reply.request
             && let Some(count) = self.importing_tasks.get_mut(task_id)
         {
@@ -453,6 +482,8 @@ impl Shell {
                             self.file = 0;
                         }
                     }
+                    self.historical_diff =
+                        matches!(reply.request, core::Request::LoadSnapshot { .. });
                     self.diff = Some(diff);
                     self.text_views.retain(|k, _| !k.starts_with("diff:"));
                 }
@@ -592,6 +623,7 @@ impl Shell {
         }
         self.view = None;
         self.diff = None;
+        self.historical_diff = false;
         self.diff_view = None;
         self.new_diff = None;
         self.text_views.clear();
@@ -683,6 +715,7 @@ impl Shell {
             .gap(px(6.))
             .rounded(px(6.))
             .bg(theme.raised)
+            .shadow(theme.elevation())
             .border_1()
             .border_color(theme.border)
             .text_color(theme.text)
@@ -717,6 +750,7 @@ impl Shell {
             .child(icon(name))
             .when(!label.is_empty(), |b| b.child(label))
             .border_0()
+            .shadow(Vec::new())
             .bg(hsla(0., 0., 0., 0.))
             .text_color(theme.muted)
             .hover(move |s| s.bg(theme.raised).text_color(theme.text))
@@ -781,6 +815,7 @@ struct Hint {
 impl Render for Hint {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
+            .max_w(px(360.))
             .px_2()
             .py_1()
             .text_size(px(12.))

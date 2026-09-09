@@ -53,20 +53,28 @@ impl Shell {
                         .border_b_1()
                         .border_color(t.border)
                         .child(
-                            self.ghost("comparison-menu", glyph, *label)
-                                .h(px(26.))
-                                .text_size(px(12.))
-                                .text_color(t.text)
-                                .accessibility_label("Choose changes comparison")
-                                .child(icon("chevron-down").size(px(11.)))
-                                .on_click(cx.listener(|s, _, _, cx| {
-                                    s.panel = if s.panel == Panel::Comparison {
-                                        Panel::None
-                                    } else {
-                                        Panel::Comparison
-                                    };
-                                    cx.notify();
-                                })),
+                            self.ghost(
+                                "comparison-menu",
+                                glyph,
+                                if self.historical_diff {
+                                    "Saved task diff"
+                                } else {
+                                    *label
+                                },
+                            )
+                            .h(px(26.))
+                            .text_size(px(12.))
+                            .text_color(t.text)
+                            .accessibility_label("Choose changes comparison")
+                            .child(icon("chevron-down").size(px(11.)))
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.panel = if s.panel == Panel::Comparison {
+                                    Panel::None
+                                } else {
+                                    Panel::Comparison
+                                };
+                                cx.notify();
+                            })),
                         )
                         .child(
                             div()
@@ -74,34 +82,7 @@ impl Shell {
                                 .text_color(t.subtle)
                                 .child(count.to_string()),
                         )
-                        .child(div().flex_1())
-                        .child(
-                            self.icon_button("refresh-diff", "refresh", "Refresh changes")
-                                .on_click(cx.listener(|s, _, _, _| s.refresh_diff())),
-                        )
-                        .child(
-                            self.icon_button(
-                                "diff-mode",
-                                "panel-right",
-                                if self.split {
-                                    "Use unified diff"
-                                } else {
-                                    "Use split diff"
-                                },
-                            )
-                            .text_size(px(11.))
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                s.split = !s.split;
-                                cx.notify();
-                            })),
-                        )
-                        .child(
-                            self.icon_button("close-review", "close", "Hide changes · ⌘D")
-                                .on_click(cx.listener(|s, _, _, cx| {
-                                    s.show_review = false;
-                                    cx.notify();
-                                })),
-                        ),
+                        .child(div().flex_1()),
                 )
             });
         if self.new_diff.is_some() {
@@ -148,102 +129,7 @@ impl Shell {
                     ),
                 );
             }
-            let mut files = div()
-                .id("changed-files")
-                .flex_1()
-                .min_h_0()
-                .py_1()
-                .overflow_y_scroll()
-                .bg(t.canvas)
-                .border_b_1()
-                .border_color(t.border);
-            for (i, file) in snapshot.files.iter().enumerate() {
-                let (directory, name) = file.label.rsplit_once('/').unwrap_or(("", &file.label));
-                let added = file
-                    .lines
-                    .iter()
-                    .filter(|l| l.kind == LineKind::Added)
-                    .count();
-                let removed = file
-                    .lines
-                    .iter()
-                    .filter(|l| l.kind == LineKind::Removed)
-                    .count();
-                files = files.child(
-                    div()
-                        .id(("diff-file", i))
-                        .h(px(30.))
-                        .px_3()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .cursor_pointer()
-                        .when(self.reviewing_file && self.file == i, |d| d.bg(t.selected))
-                        .hover(move |d| d.bg(t.raised))
-                        .child(
-                            div()
-                                .w(px(18.))
-                                .h(px(20.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(4.))
-                                .text_size(px(10.))
-                                .bg(if file.status.contains('A') || file.status.contains('?') {
-                                    t.added_bg
-                                } else {
-                                    t.accent_bg
-                                })
-                                .text_color(
-                                    if file.status.contains('A') || file.status.contains('?') {
-                                        t.added
-                                    } else {
-                                        t.accent
-                                    },
-                                )
-                                .child(if file.status.contains('?') {
-                                    "A".to_owned()
-                                } else {
-                                    file.status.trim().to_owned()
-                                }),
-                        )
-                        .child(icon("file").size(px(13.)).text_color(t.muted))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .max_w(relative(0.72))
-                                .text_ellipsis()
-                                .text_size(px(12.))
-                                .child(name.to_owned()),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_ellipsis()
-                                .text_size(px(11.))
-                                .text_color(t.subtle)
-                                .child(directory.to_owned()),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(t.added)
-                                .child(format!("+{added}")),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(t.removed)
-                                .child(format!("−{removed}")),
-                        )
-                        .on_click(cx.listener(move |s, _, _, cx| {
-                            s.file = i;
-                            s.reviewing_file = true;
-                            cx.notify();
-                        })),
-                );
-            }
+            let files = self.changes_tree(&snapshot, cx);
             if !self.reviewing_file
                 || (!center && self.settings.diff_placement == DiffPlacement::Conversation)
             {
@@ -321,31 +207,21 @@ impl Shell {
                                 .text_size(px(12.))
                                 .child(file.label.clone()),
                         )
-                        .when(center, |d| {
-                            d.child(
-                                self.icon_button(
-                                    "center-diff-mode",
-                                    "panel-right",
-                                    "Toggle unified or split diff",
-                                )
-                                .on_click(cx.listener(
-                                    |s, _, _, cx| {
-                                        s.split = !s.split;
-                                        cx.notify();
-                                    },
-                                )),
+                        .child(
+                            self.icon_button(
+                                "diff-mode",
+                                "panel-right",
+                                "Toggle unified or split diff",
                             )
-                        })
-                        .when(center, |d| {
-                            d.child(
-                                self.icon_button(
-                                    "center-refresh-diff",
-                                    "refresh",
-                                    "Refresh changes",
-                                )
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.split = !s.split;
+                                cx.notify();
+                            })),
+                        )
+                        .child(
+                            self.icon_button("refresh-diff", "refresh", "Refresh changes")
                                 .on_click(cx.listener(|s, _, _, _| s.refresh_diff())),
-                            )
-                        })
+                        )
                         .child(
                             self.icon_button("stage-file", "plus", "Stage this file")
                                 .text_size(px(11.))
@@ -356,6 +232,15 @@ impl Shell {
                                         snapshot_id: snapshot_id.clone(),
                                         file: file_index,
                                     })
+                                })),
+                        )
+                        .child(
+                            self.icon_button("close-diff", "close", "Close diff")
+                                .on_click(cx.listener(|s, _, window, cx| {
+                                    s.reviewing_file = false;
+                                    s.diff_view = None;
+                                    window.focus(&s.input.read(cx).focus_handle(cx), cx);
+                                    cx.notify();
                                 })),
                         ),
                 );
