@@ -3,6 +3,8 @@ mod activity;
 mod browser;
 mod chat;
 mod chrome;
+mod composition;
+mod diff_view;
 mod menus;
 mod motion;
 mod panels;
@@ -12,7 +14,10 @@ mod sidebar;
 use crate::icons::icon;
 use crate::{
     bridge,
-    components::{Button, text_input::TextInput},
+    components::{
+        Button,
+        text_input::{SubmitInput, TextInput},
+    },
     theme::Theme,
 };
 use gpui::{prelude::*, *};
@@ -46,7 +51,6 @@ enum Panel {
     Resources,
     Files,
     Check,
-    Feedback,
     Rename,
     Questions,
     Models,
@@ -54,12 +58,11 @@ enum Panel {
     Sort,
     Comparison,
 }
-#[derive(Clone)]
-struct Selection {
-    side: Side,
-    start: u32,
-    end: u32,
-    dragging: bool,
+struct PendingSubmission {
+    task_id: String,
+    id: String,
+    text: String,
+    revision: u64,
 }
 pub struct Shell {
     tx: mpsc::Sender<bridge::Command>,
@@ -88,9 +91,7 @@ pub struct Shell {
     reviewing_file: bool,
     search_visible: bool,
     comparison: Comparison,
-    selection: Option<Selection>,
     split: bool,
-    diff_scroll: UniformListScrollHandle,
     chat_scroll: ListState,
     follow: bool,
     folded: HashSet<String>,
@@ -105,11 +106,18 @@ pub struct Shell {
     poll_pending: bool,
     draft_dirty: bool,
     question_inputs: HashMap<String, Entity<TextInput>>,
-    submitted_draft: Option<(String, String)>,
+    submitted_draft: Option<PendingSubmission>,
+    draft_revision: u64,
+    observed_draft: String,
+    importing_tasks: HashMap<String, usize>,
+    pending_paths: Vec<std::path::PathBuf>,
+    diff_view: Option<Entity<diff_view::DiffView>>,
     sidebar_hovered: bool,
     task_order: HashMap<String, usize>,
     collapsed_projects: HashSet<String>,
     empty_draft: String,
+    start_after_create: bool,
+    auto_submit_task: Option<String>,
     settings_section: usize,
 }
 impl Shell {
@@ -119,13 +127,20 @@ impl Shell {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let (tx, rx) = bridge::start();
-        let input = cx.new(|cx| TextInput::new("Describe what you want to build or change…", cx));
+        let input =
+            cx.new(|cx| TextInput::composer("Describe what you want to build or change…", cx));
         let aux = cx.new(|cx| TextInput::new("Type here…", cx));
         let search = cx.new(|cx| TextInput::new("Search tasks…", cx));
         let subscriptions = vec![
             cx.on_focus_lost(window, |s, window, cx| window.focus(&s.focus, cx)),
-            cx.observe(&input, |s, _, cx| {
-                s.draft_dirty = true;
+            cx.subscribe(&input, |s, _, _: &SubmitInput, cx| s.submit_current(cx)),
+            cx.observe(&input, |s, input, cx| {
+                let text = input.read(cx).text();
+                if text != s.observed_draft {
+                    s.draft_revision += 1;
+                    s.observed_draft = text;
+                    s.draft_dirty = true;
+                }
                 cx.notify();
             }),
             cx.observe(&search, |_, _, cx| cx.notify()),
@@ -210,9 +225,7 @@ impl Shell {
             reviewing_file: false,
             search_visible: false,
             comparison: Comparison::WorkingTree,
-            selection: None,
             split: false,
-            diff_scroll: UniformListScrollHandle::new(),
             chat_scroll: ListState::new(0, ListAlignment::Bottom, px(600.)),
             follow: true,
             folded: HashSet::new(),
@@ -228,10 +241,17 @@ impl Shell {
             draft_dirty: false,
             question_inputs: HashMap::new(),
             submitted_draft: None,
+            draft_revision: 0,
+            observed_draft: String::new(),
+            importing_tasks: HashMap::new(),
+            pending_paths: Vec::new(),
+            diff_view: None,
             sidebar_hovered: false,
             task_order: HashMap::new(),
             collapsed_projects: HashSet::new(),
             empty_draft: String::new(),
+            start_after_create: false,
+            auto_submit_task: None,
             settings_section: 0,
         };
         shell.send(core::Request::Hello);
@@ -241,6 +261,11 @@ impl Shell {
         let _ = self.tx.send(bridge::Command::Request(request));
     }
     fn apply(&mut self, reply: bridge::Reply, cx: &mut Context<Self>) {
+        if let core::Request::ImportAttachments { task_id, .. } = &reply.request
+            && let Some(count) = self.importing_tasks.get_mut(task_id)
+        {
+            *count = count.saturating_sub(1);
+        }
         let response_task = match &reply.request {
             core::Request::Task { task_id, .. }
             | core::Request::ReadFile { task_id, .. }
@@ -256,8 +281,28 @@ impl Shell {
         let response = match reply.result {
             Ok(r) => r,
             Err(e) => {
-                if matches!(reply.request, core::Request::Submit { .. }) {
+                if let core::Request::Submit {
+                    task_id,
+                    submission_id,
+                    ..
+                } = &reply.request
+                    && self
+                        .submitted_draft
+                        .as_ref()
+                        .is_some_and(|p| &p.task_id == task_id && &p.id == submission_id)
+                {
                     self.submitted_draft = None;
+                }
+                if matches!(reply.request, core::Request::AddFeedbackRows { .. })
+                    && let Some(viewer) = &self.diff_view
+                {
+                    viewer.update(cx, |v, cx| v.context_failed(cx));
+                }
+                if matches!(reply.request, core::Request::CreateTask { .. }) {
+                    self.start_after_create = false;
+                }
+                if matches!(reply.request, core::Request::ImportAttachments { .. }) {
+                    self.auto_submit_task = None;
                 }
                 self.error = Some(e);
                 cx.notify();
@@ -300,6 +345,14 @@ impl Shell {
                         edit: TaskEdit::Draft(draft),
                     });
                 }
+                if !self.pending_paths.is_empty() {
+                    let paths = std::mem::take(&mut self.pending_paths);
+                    self.import_paths(task.id.clone(), paths);
+                }
+                if self.start_after_create {
+                    self.auto_submit_task = Some(task.id.clone());
+                    self.start_after_create = false;
+                }
                 self.select_task(task.id, cx);
                 self.panel = Panel::None;
                 self.send(core::Request::Hello);
@@ -308,30 +361,20 @@ impl Shell {
                 if self.selected.as_deref() != Some(&view.task.id) {
                     return;
                 }
-                if let Some((id, text)) = &self.submitted_draft
-                    && id == &view.task.id
-                    && view.task.draft.is_empty()
-                    && !matches!(
-                        view.task.state,
-                        RunState::Idle
-                            | RunState::Starting
-                            | RunState::DeliveryUnknown
-                            | RunState::Failed
-                    )
-                {
-                    if self.input.read(cx).text() == *text {
-                        self.input.update(cx, |i, cx| i.set_text(String::new(), cx));
-                    }
-                    self.submitted_draft = None;
-                }
-                if matches!(
-                    view.task.state,
-                    RunState::Failed | RunState::DeliveryUnknown
-                ) {
-                    self.submitted_draft = None;
+                if matches!(reply.request, core::Request::RestoreOutgoing { .. }) {
+                    let current = self.input.read(cx).text();
+                    let restored = if current.is_empty() || current == view.task.draft {
+                        view.task.draft.clone()
+                    } else {
+                        format!("{}\n\n{}", view.task.draft, current)
+                    };
+                    self.input.update(cx, |i, cx| i.set_text(restored, cx));
+                    self.draft_dirty = true;
                 }
                 let initial = self.view.as_ref().is_none_or(|v| v.task.id != view.task.id);
                 if initial {
+                    self.observed_draft = view.task.draft.clone();
+                    self.draft_revision += 1;
                     self.input
                         .update(cx, |input, cx| input.set_text(view.task.draft.clone(), cx));
                     self.draft_dirty = false;
@@ -370,12 +413,27 @@ impl Shell {
                     }
                 }
                 self.view = Some(view);
+                if self.auto_submit_task.as_ref() == self.selected.as_ref()
+                    && self.auto_submit_task.is_some()
+                    && self
+                        .selected
+                        .as_ref()
+                        .is_none_or(|id| self.importing_tasks.get(id).copied().unwrap_or(0) == 0)
+                {
+                    self.auto_submit_task = None;
+                    self.submit_current(cx);
+                }
             }
             Response::Diff(diff) => {
                 if self.selected.as_deref() != Some(&diff.task_id) {
                     return;
                 }
-                if self.selection.is_some() && self.diff.as_ref().is_some_and(|d| d.id != diff.id) {
+                if self
+                    .diff_view
+                    .as_ref()
+                    .is_some_and(|viewer| viewer.read(cx).has_selection())
+                    && self.diff.as_ref().is_some_and(|d| d.id != diff.id)
+                {
                     self.new_diff = Some(diff);
                 } else {
                     let selected_label = self
@@ -399,6 +457,62 @@ impl Shell {
                     self.text_views.retain(|k, _| !k.starts_with("diff:"));
                 }
             }
+            Response::Accepted {
+                task_id,
+                submission_id,
+            } => {
+                if self
+                    .submitted_draft
+                    .as_ref()
+                    .is_some_and(|p| p.task_id == task_id && p.id == submission_id)
+                {
+                    let pending = self.submitted_draft.take().unwrap();
+                    if self.selected.as_ref() == Some(&task_id)
+                        && self.draft_revision == pending.revision
+                        && self.input.read(cx).text() == pending.text
+                    {
+                        self.input.update(cx, |i, cx| i.set_text(String::new(), cx));
+                    }
+                    // Acceptance owns the submitted content. Persist whatever remains in the composer.
+                    self.draft_dirty = true;
+                }
+                if let core::Request::Submit {
+                    feedback_ids,
+                    attachment_ids,
+                    ..
+                } = &reply.request
+                    && let Some(view) = &mut self.view
+                    && view.task.id == task_id
+                {
+                    view.task
+                        .attachments
+                        .retain(|a| !attachment_ids.contains(&a.id));
+                    view.task.feedback.retain(|f| !feedback_ids.contains(&f.id));
+                }
+                self.status = "Message accepted".into();
+                self.send(core::Request::Task {
+                    task_id,
+                    before: None,
+                });
+            }
+            Response::Attachments {
+                task_id,
+                attachments,
+            } => {
+                if let Some(view) = &mut self.view
+                    && view.task.id == task_id
+                {
+                    for attachment in attachments {
+                        if !view.task.attachments.iter().any(|a| a.id == attachment.id) {
+                            view.task.attachments.push(attachment);
+                        }
+                    }
+                }
+                self.send(core::Request::Task {
+                    task_id,
+                    before: None,
+                });
+            }
             Response::Resources(resources) => self.resources = resources,
             Response::Files(files) => self.files = files,
             Response::Text(text) => {
@@ -411,9 +525,19 @@ impl Shell {
                 core::Request::Submit { .. } => {
                     self.status = "Prompt recorded; awaiting provider acknowledgement".into();
                 }
-                core::Request::AddFeedback { .. } => {
-                    self.selection = None;
+                core::Request::AddFeedback { task_id, .. }
+                | core::Request::AddFeedbackRows { task_id, .. }
+                    if self.selected.as_ref() == Some(&task_id) =>
+                {
                     self.panel = Panel::None;
+                    self.reviewing_file = false;
+                    self.diff_view = None;
+                    if let Some(task_id) = &self.selected {
+                        self.send(core::Request::Task {
+                            task_id: task_id.clone(),
+                            before: None,
+                        });
+                    }
                 }
                 core::Request::StageFile { .. } => self.refresh_diff(),
                 core::Request::EditTask { .. }
@@ -423,14 +547,35 @@ impl Shell {
                 core::Request::Shutdown => cx.quit(),
                 _ => self.send(core::Request::Hello),
             },
-            Response::Error(e) => self.error = Some(e),
+            Response::Error(e) => {
+                if let core::Request::Submit {
+                    task_id,
+                    submission_id,
+                    ..
+                } = &reply.request
+                    && self
+                        .submitted_draft
+                        .as_ref()
+                        .is_some_and(|p| &p.task_id == task_id && &p.id == submission_id)
+                {
+                    self.submitted_draft = None;
+                }
+                if matches!(reply.request, core::Request::AddFeedbackRows { .. })
+                    && let Some(viewer) = &self.diff_view
+                {
+                    viewer.update(cx, |v, cx| v.context_failed(cx));
+                }
+                self.error = Some(e);
+            }
         }
         cx.notify();
     }
     fn select_task(&mut self, id: String, cx: &mut Context<Self>) {
         if let Some(task_id) = &self.selected
             && self.view.is_some()
-            && self.submitted_draft.is_none()
+            && self.submitted_draft.as_ref().is_none_or(|p| {
+                p.revision != self.draft_revision || p.text != self.input.read(cx).text()
+            })
         {
             self.send(core::Request::EditTask {
                 task_id: task_id.clone(),
@@ -447,8 +592,8 @@ impl Shell {
         }
         self.view = None;
         self.diff = None;
+        self.diff_view = None;
         self.new_diff = None;
-        self.selection = None;
         self.text_views.clear();
         self.question_inputs.clear();
         self.file = 0;
@@ -497,28 +642,14 @@ impl Shell {
         cx.notify();
     }
     fn submit(&mut self, _: &SendPrompt, _: &mut Window, cx: &mut Context<Self>) {
-        if self.panel != Panel::None || self.input.read(cx).text().trim().is_empty() {
-            return;
-        }
-        if let Some(view) = &self.view {
-            if view.task.state.active() {
-                self.error =
-                    Some("Wait for this turn to finish, or stop it before sending.".into());
-                return;
-            }
-            if self.submitted_draft.is_some() {
-                return;
-            }
-            self.submitted_draft = Some((view.task.id.clone(), self.input.read(cx).text()));
-            self.send(core::Request::Submit {
-                task_id: view.task.id.clone(),
-                submission_id: new_id(),
-                text: self.input.read(cx).text(),
-                feedback_ids: view.task.feedback.iter().map(|f| f.id.clone()).collect(),
-            });
-        }
+        self.submit_current(cx);
     }
     fn cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panel == Panel::None
+            && let Some(viewer) = &self.diff_view
+        {
+            viewer.update(cx, |v, cx| v.clear_selection(cx));
+        }
         if self.panel == Panel::None && self.search_visible {
             self.search_visible = false;
             self.search
@@ -526,7 +657,6 @@ impl Shell {
             window.focus(&self.focus, cx);
         }
         self.panel = Panel::None;
-        self.selection = None;
         self.dragging_sidebar = false;
         self.dragging_review = false;
         cx.notify();
@@ -669,7 +799,6 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-o", OpenProject, None),
         KeyBinding::new("cmd-n", NewTask, None),
-        KeyBinding::new("cmd-enter", SendPrompt, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
         KeyBinding::new("cmd-d", ToggleReview, None),
         KeyBinding::new("cmd-,", ShowSettings, None),

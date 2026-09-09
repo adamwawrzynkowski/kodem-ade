@@ -6,20 +6,12 @@ use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    sync::{Arc, Mutex, mpsc},
     time::Duration,
 };
 
 pub(super) enum Control {
-    Submit {
-        id: String,
-        text: String,
-        feedback: Vec<String>,
-    },
+    Wake,
     Interrupt,
     Answer {
         id: Value,
@@ -32,113 +24,205 @@ pub(super) enum Control {
     },
 }
 
-/// Records outgoing intent before assigning it to the task's sole provider worker.
+fn prompt_for(message: &OutgoingMessage) -> Result<String> {
+    let mut prompt = message.text.clone();
+    for attachment in &message.attachments {
+        if attachment.kind == AttachmentKind::File {
+            prompt.push_str(&format!(
+                "\n\nAttached file: {}\nImmutable local copy: {}",
+                serde_json::to_string(&attachment.name)?,
+                serde_json::to_string(&attachment.path)?
+            ));
+        }
+    }
+    if !message.feedback.is_empty() {
+        prompt.push_str("\n\nReview context refers to captured content. Check current files before applying it:\n");
+        for feedback in &message.feedback {
+            let coordinates = if feedback.first_row.is_some() {
+                format!(
+                    "Displayed diff rows {:?}–{:?}; old source {:?}, new source {:?}",
+                    feedback.first_row, feedback.last_row, feedback.old_range, feedback.new_range
+                )
+            } else {
+                format!(
+                    "Source {:?} lines {}–{}",
+                    feedback.side, feedback.start, feedback.end
+                )
+            };
+            prompt.push_str(&format!(
+                "\nFile: {}\nSnapshot: {}\n{}\nComment: {}\nCaptured excerpt:\n{}\n",
+                serde_json::to_string(&feedback.label)?,
+                feedback.snapshot_id,
+                coordinates,
+                feedback.comment,
+                feedback.excerpt
+            ));
+        }
+    }
+    ensure!(
+        prompt.len() <= 2 * 1024 * 1024,
+        "Prompt and context exceed 2 MiB; send a smaller batch"
+    );
+    Ok(prompt)
+}
+
+/// Durably accepts a new input without making the window an execution owner.
 pub(super) fn submit(
     host: Shared,
     task_id: String,
     id: String,
     text: String,
-    feedback: Vec<String>,
+    feedback_ids: Vec<String>,
+    attachment_ids: Vec<String>,
+    mode: SendMode,
 ) -> Result<()> {
     ensure!(text.len() <= 1024 * 1024, "Prompt exceeds 1 MiB");
     ensure!(
-        !text.trim().is_empty() || !feedback.is_empty(),
-        "Write a prompt or attach feedback"
-    );
-    let mut h = host.lock().unwrap();
-    let mut task = h.store.task(&task_id)?;
-    ensure!(
-        !task.state.active(),
-        "This task is running. Wait for completion or stop it before sending another turn."
+        !text.trim().is_empty() || !feedback_ids.is_empty() || !attachment_ids.is_empty(),
+        "Write a prompt or attach context"
     );
     ensure!(
-        task.state != RunState::DeliveryUnknown,
-        "Delivery is unknown. Inspect the provider history before making a new task; this submission will not be replayed."
+        !id.is_empty() && id.len() <= 128,
+        "Invalid submission identity"
     );
-    ensure!(
-        !h.store
-            .tasks()?
+    {
+        let h = host.lock().unwrap();
+        if h.store
+            .matches_submission(&task_id, &id, &text, &feedback_ids, &attachment_ids, mode)?
+        {
+            return Ok(());
+        }
+        let mut task = h.store.task(&task_id)?;
+        ensure!(
+            task.state != RunState::DeliveryUnknown,
+            "Delivery is unknown. Reconcile before sending another message."
+        );
+        ensure!(
+            h.store.outgoing(&task_id)?.len() < 64,
+            "Outbox is full; send or remove existing messages first"
+        );
+        ensure!(
+            !h.store
+                .tasks()?
+                .iter()
+                .any(|t| t.id != task.id && t.cwd == task.cwd && t.state.active()),
+            "Another task is writing to this checkout. Use a separate task worktree."
+        );
+        let expected_turn = if task.state.active() && mode == SendMode::Steer {
+            Some(task.active_turn.clone().context("The turn is still starting. Queue this message or wait until it begins before steering.")?)
+        } else {
+            None
+        };
+        let attachments = attachment_ids
             .iter()
-            .any(|t| t.id != task.id && t.cwd == task.cwd && t.state.active()),
-        "Another task is writing to this checkout. Use a separate task worktree."
-    );
-    let mut prompt = text.clone();
-    if !feedback.is_empty() {
-        let selected: Vec<_> = feedback
+            .map(|id| {
+                task.attachments
+                    .iter()
+                    .find(|a| &a.id == id)
+                    .cloned()
+                    .context("Attachment is no longer in this draft")
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let feedback = feedback_ids
             .iter()
             .map(|id| {
                 task.feedback
                     .iter()
                     .find(|f| &f.id == id)
-                    .context("Review comment is no longer queued")
+                    .cloned()
+                    .context("Context is no longer in this draft")
             })
-            .collect::<Result<_>>()?;
-        prompt.push_str("\n\nReview feedback refers to captured content. Check current files before applying it:\n");
-        prompt.push_str(&serde_json::to_string_pretty(&selected)?);
+            .collect::<Result<Vec<_>>>()?;
+        let message = OutgoingMessage {
+            id,
+            text: text.clone(),
+            attachments,
+            feedback,
+            created: now(),
+            state: DeliveryState::Queued,
+            error: None,
+            mode,
+            expected_turn,
+        };
+        let prompt = prompt_for(&message)?;
+        if task.draft == text {
+            task.draft.clear();
+        }
+        task.attachments.retain(|a| !attachment_ids.contains(&a.id));
+        task.feedback.retain(|f| !feedback_ids.contains(&f.id));
+        if !task.state.active() {
+            task.state = RunState::Idle;
+            task.error = None;
+        }
+        task.updated = now();
+        if task.title == "New task" {
+            task.title = text
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("Attached context")
+                .chars()
+                .take(90)
+                .collect();
+        }
+        h.store.accept_outgoing(&task, &message, &prompt)?;
     }
-    ensure!(
-        prompt.len() <= 2 * 1024 * 1024,
-        "Prompt and attached feedback exceed 2 MiB; send a smaller review batch"
-    );
-    task.draft = text.clone();
-    if !h
-        .store
-        .begin_submission(&id, &task_id, &prompt, &feedback)?
+    ensure_owner(host, task_id);
+    Ok(())
+}
+
+/// Explicitly resumes retained queued input after a failure or a host restart.
+pub(super) fn resume_queue(host: Shared, task_id: &str) -> Result<()> {
     {
-        return Ok(());
+        let h = host.lock().unwrap();
+        let mut task = h.store.task(task_id)?;
+        ensure!(!task.state.active(), "This task is already running");
+        ensure!(
+            task.state != RunState::DeliveryUnknown
+                && !h.store.has_uncertain_submission(task_id)?,
+            "Reconcile uncertain delivery before resuming the queue"
+        );
+        ensure!(
+            h.store
+                .outgoing(task_id)?
+                .iter()
+                .any(|m| m.state == DeliveryState::Queued && m.expected_turn.is_none()),
+            "No queued messages to resume"
+        );
+        task.state = RunState::Idle;
+        task.error = None;
+        h.store.save_task(&task)?;
     }
-    h.activities.remove(&task_id);
-    task.state = RunState::Starting;
-    task.error = None;
-    task.updated = now();
-    if task.title == "New task" {
-        task.title = text
-            .lines()
-            .next()
-            .unwrap_or("Review feedback")
-            .chars()
-            .take(90)
-            .collect();
-    }
-    h.store.save_task(&task)?;
-    h.store.message(&Message {
-        seq: 0,
-        id: format!("submission-{id}"),
-        task_id: task_id.clone(),
-        kind: MessageKind::User,
-        text: prompt.clone(),
-        complete: true,
-        created: now(),
-    })?;
-    let control = Control::Submit {
-        id,
-        text: prompt,
-        feedback,
-    };
+    ensure_owner(host, task_id.into());
+    Ok(())
+}
+
+fn ensure_owner(host: Shared, task_id: String) {
+    let mut h = host.lock().unwrap();
     if let Some(sender) = h.sessions.get(&task_id) {
-        sender.send(control)?;
-        return Ok(());
+        // A disconnected owner still owns cleanup. Let it persist failure before any restart.
+        let _ = sender.send(Control::Wake);
+        return;
     }
     let (tx, rx) = mpsc::channel();
-    tx.send(control)?;
     h.sessions.insert(task_id.clone(), tx);
     drop(h);
     std::thread::spawn(move || {
-        let delivery_attempted = Arc::new(AtomicBool::new(false));
-        if let Err(e) = run(host.clone(), &task_id, rx, delivery_attempted.clone()) {
+        if let Err(error) = run(host.clone(), &task_id, rx) {
             let h = host.lock().unwrap();
             if let Ok(mut task) = h.store.task(&task_id) {
-                if task.state.active() {
-                    let unknown = delivery_attempted.load(Ordering::SeqCst);
+                let unknown = task.active_turn.is_some()
+                    || h.store.has_uncertain_submission(&task_id).unwrap_or(true);
+                if unknown || task.state.active() || task.state == RunState::Idle {
                     task.state = if unknown {
                         RunState::DeliveryUnknown
                     } else {
                         RunState::Failed
                     };
                     let _ = h.store.settle_pending(&task_id, unknown);
-                    task.error = Some(format!("{e:#}. No prompt was automatically resent."));
                 }
-
+                task.error = Some(format!(
+                    "{error:#}. Queued messages are retained; no uncertain input was resent."
+                ));
                 let _ = h.store.save_task(&task);
             }
         }
@@ -147,37 +231,26 @@ pub(super) fn submit(
         h.sessions.remove(&task_id);
         h.requests.remove(&task_id);
     });
-    Ok(())
 }
-fn run(
-    host: Shared,
-    task_id: &str,
-    controls: mpsc::Receiver<Control>,
-    delivery_attempted: Arc<AtomicBool>,
-) -> Result<()> {
+
+fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result<()> {
     let cwd = host.lock().unwrap().store.task(task_id)?.cwd;
     let mut items: HashMap<String, Message> = HashMap::new();
     let event_host = host.clone();
     let event_task = task_id.to_owned();
-    let event_delivery = delivery_attempted.clone();
+    let persistence_error = Arc::new(Mutex::new(None));
+    let callback_error = persistence_error.clone();
     let mut event = move |value: Value| {
-        if value["method"] == "turn/completed" {
-            event_delivery.store(false, Ordering::SeqCst);
-        }
-
-        if let Err(e) = ingest(&event_host, &event_task, value, &mut items) {
-            let h = event_host.lock().unwrap();
-            if let Ok(mut task) = h.store.task(&event_task) {
-                task.error = Some(format!("Could not persist provider event: {e}"));
-                let _ = h.store.save_task(&task);
-            }
+        if let Err(error) = ingest(&event_host, &event_task, value, &mut items) {
+            *callback_error.lock().unwrap() =
+                Some(format!("Could not persist provider event: {error}"));
         }
     };
     let mut codex = Codex::start(&cwd, &mut event)?;
     let task = host.lock().unwrap().store.task(task_id)?;
     let mut params = json!({"cwd":cwd,"approvalPolicy":"on-request","sandbox":"workspace-write"});
     if let Some(model) = &task.model {
-        params["model"] = json!(model)
+        params["model"] = json!(model);
     }
     let method = if let Some(thread) = &task.provider_thread {
         params["threadId"] = json!(thread);
@@ -199,8 +272,12 @@ fn run(
         h.store.save_task(&task)?;
     }
     loop {
+        if let Some(error) = persistence_error.lock().unwrap().take() {
+            anyhow::bail!(error);
+        }
         while let Ok(control) = controls.try_recv() {
             match control {
+                Control::Wake => {}
                 Control::Query {
                     method,
                     params,
@@ -210,47 +287,6 @@ fn run(
                         .call(method, params, &mut event)
                         .map_err(|e| format!("{e:#}"));
                     let _ = reply.send(result);
-                }
-                Control::Submit { id, text, feedback } => {
-                    let task = host.lock().unwrap().store.task(task_id)?;
-                    let mut params = json!({"threadId":thread,"clientUserMessageId":id,"input":[{"type":"text","text":text}]});
-                    if let Some(model) = task.model {
-                        params["model"] = json!(model)
-                    }
-                    if let Some(effort) = task.effort {
-                        params["effort"] = json!(effort)
-                    }
-                    delivery_attempted.store(true, Ordering::SeqCst);
-                    match codex.call("turn/start", params, &mut event) {
-                        Ok(reply) => {
-                            let turn = reply["turn"]["id"]
-                                .as_str()
-                                .context("Codex omitted turn acknowledgement")?
-                                .to_owned();
-                            let h = host.lock().unwrap();
-                            h.store.confirm_submission(&id, &turn)?;
-                            let mut task = h.store.task(task_id)?;
-                            // Completion can arrive before the request response. Do not resurrect a finished turn.
-                            if task.state == RunState::Starting {
-                                task.state = RunState::Running;
-                                task.active_turn = Some(turn);
-                            }
-                            task.draft.clear();
-                            task.feedback.retain(|f| !feedback.contains(&f.id));
-                            h.store.save_task(&task)?;
-                        }
-                        Err(error) => {
-                            let rejected = error.is::<kodem_core::runtime::Rejected>();
-                            if rejected {
-                                delivery_attempted.store(false, Ordering::SeqCst);
-                            }
-                            host.lock()
-                                .unwrap()
-                                .store
-                                .delivery(&id, if rejected { "failed" } else { "unknown" })?;
-                            return Err(error);
-                        }
-                    }
                 }
                 Control::Interrupt => {
                     let task = host.lock().unwrap().store.task(task_id)?;
@@ -289,8 +325,135 @@ fn run(
                 }
             }
         }
+        if let Some(error) = persistence_error.lock().unwrap().take() {
+            anyhow::bail!(error);
+        }
+        dispatch_next(&host, task_id, &thread, &mut codex, &mut event)?;
         codex.poll(Duration::from_millis(40), &mut event)?;
     }
+}
+
+fn dispatch_next(
+    host: &Shared,
+    task_id: &str,
+    thread: &str,
+    codex: &mut Codex,
+    event: &mut impl FnMut(Value),
+) -> Result<()> {
+    let message = {
+        let mut h = host.lock().unwrap();
+        let mut task = h.store.task(task_id)?;
+        if h.store.has_uncertain_submission(task_id)? || task.state == RunState::DeliveryUnknown {
+            return Ok(());
+        }
+        let outgoing = h.store.outgoing(task_id)?;
+        for message in outgoing
+            .iter()
+            .filter(|m| m.state == DeliveryState::Queued && m.expected_turn.is_some())
+        {
+            if message.expected_turn != task.active_turn {
+                h.store.fail_outgoing(task_id, &message.id, false, "The selected turn finished before this steering message could be delivered. Restore it to send again.")?;
+            }
+        }
+        let message = if task.state.active() {
+            outgoing.into_iter().find(|m| {
+                m.state == DeliveryState::Queued
+                    && m.expected_turn.is_some()
+                    && m.expected_turn == task.active_turn
+            })
+        } else if matches!(task.state, RunState::Idle | RunState::Completed) {
+            outgoing
+                .into_iter()
+                .find(|m| m.state == DeliveryState::Queued && m.expected_turn.is_none())
+        } else {
+            None
+        };
+        let Some(message) = message else {
+            return Ok(());
+        };
+        if message.expected_turn.is_none() {
+            if h.store
+                .tasks()?
+                .iter()
+                .any(|other| other.id != task.id && other.cwd == task.cwd && other.state.active())
+            {
+                task.state = RunState::Interrupted;
+                task.error = Some("Queue paused because another task is using this checkout. Resume after it finishes.".into());
+                h.store.save_task(&task)?;
+                return Ok(());
+            }
+            h.activities.remove(task_id);
+            task.state = RunState::Starting;
+            task.active_turn = None;
+            task.error = None;
+            task.updated = now();
+        }
+        h.store.claim_outgoing(&task, &message)?;
+        message
+    };
+    let prompt = prompt_for(&message)?;
+    let mut input = Vec::new();
+    if !prompt.trim().is_empty() {
+        input.push(json!({"type":"text","text":prompt,"text_elements":[]}));
+    }
+    for attachment in &message.attachments {
+        if attachment.kind == AttachmentKind::Image {
+            input.push(json!({"type":"localImage","path":attachment.path}));
+        }
+    }
+    let mut params = json!({"threadId":thread,"clientUserMessageId":message.id,"input":input});
+    let method = if let Some(expected_turn) = &message.expected_turn {
+        params["expectedTurnId"] = json!(expected_turn);
+        "turn/steer"
+    } else {
+        let task = host.lock().unwrap().store.task(task_id)?;
+        if let Some(model) = task.model {
+            params["model"] = json!(model);
+        }
+        if let Some(effort) = task.effort {
+            params["effort"] = json!(effort);
+        }
+        "turn/start"
+    };
+    match codex.call(method, params, event) {
+        Ok(reply) => {
+            let turn = if message.expected_turn.is_some() {
+                reply["turnId"].as_str()
+            } else {
+                reply["turn"]["id"].as_str()
+            }
+            .context("Codex omitted delivery acknowledgement")?;
+            let h = host.lock().unwrap();
+            h.store.confirm_submission(&message.id, turn)?;
+            let mut task = h.store.task(task_id)?;
+            // Notifications may have completed the turn while call waited for its response.
+            if message.expected_turn.is_none() && task.state == RunState::Starting {
+                task.state = RunState::Running;
+                task.active_turn = Some(turn.into());
+                h.store.save_task(&task)?;
+            }
+        }
+        Err(error) => {
+            let rejected = error.is::<kodem_core::runtime::Rejected>();
+            let h = host.lock().unwrap();
+            h.store
+                .fail_outgoing(task_id, &message.id, !rejected, &format!("{error:#}"))?;
+            if !rejected || message.expected_turn.is_none() {
+                let mut task = h.store.task(task_id)?;
+                task.state = if rejected {
+                    RunState::Failed
+                } else {
+                    RunState::DeliveryUnknown
+                };
+                task.error = Some(format!("{error:#}"));
+                h.store.save_task(&task)?;
+            }
+            if !rejected {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
 }
 fn ingest(
     host: &Shared,
@@ -359,6 +522,8 @@ fn ingest(
                 seq: 0,
                 id: key,
                 task_id: task_id.into(),
+                attachments: Vec::new(),
+                feedback: Vec::new(),
                 kind: if method.contains("agentMessage") {
                     MessageKind::Assistant
                 } else {
@@ -437,6 +602,8 @@ fn ingest(
                 id: key.clone(),
                 task_id: task_id.into(),
                 kind: message_kind,
+                attachments: Vec::new(),
+                feedback: Vec::new(),
                 text: String::new(),
                 complete: method.ends_with("completed"),
                 created: now(),
@@ -458,6 +625,8 @@ fn ingest(
                 id: new_id(),
                 task_id: task_id.into(),
                 kind: MessageKind::Error,
+                attachments: Vec::new(),
+                feedback: Vec::new(),
                 text: text.into(),
                 complete: true,
                 created: now(),
@@ -854,13 +1023,20 @@ pub(super) fn reconcile(host: &Shared, task_id: &str) -> Result<()> {
         turn["id"].as_str().context("Missing turn identity")?,
     )?;
     let mut current = h.store.task(task_id)?;
-    if current.draft == submission.prompt {
+    if submission.outgoing.is_none() && current.draft == submission.prompt {
         current.draft.clear();
     }
     current
         .feedback
         .retain(|f| !submission.feedback.contains(&f.id));
     current.error = None;
+    if h.store.has_uncertain_submission(task_id)? {
+        current.state = RunState::DeliveryUnknown;
+        current.error = Some(
+            "Other outgoing input still has uncertain delivery. Reconcile again before resuming."
+                .into(),
+        );
+    }
     h.store.save_task(&current)?;
     Ok(())
 }

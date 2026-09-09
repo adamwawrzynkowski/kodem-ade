@@ -1,4 +1,5 @@
 //! On-demand local host. Window closure never drops provider or PTY ownership.
+mod attachments;
 mod provider;
 mod terminal;
 use anyhow::{Context, Result, ensure};
@@ -122,6 +123,7 @@ fn task_view(h: &Host, id: &str, before: Option<u64>) -> Result<TaskView> {
     Ok(TaskView {
         activities: h.activities.get(id).cloned().unwrap_or_default(),
         task: h.store.task(id)?,
+        outgoing: h.store.outgoing(id)?,
         messages,
         before,
         requests: h.requests.get(id).cloned().unwrap_or_default(),
@@ -192,6 +194,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 created: now(),
                 updated: now(),
                 feedback: Vec::new(),
+                attachments: Vec::new(),
                 error: None,
             };
             host.lock().unwrap().store.save_task(&task)?;
@@ -237,8 +240,72 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             submission_id,
             text,
             feedback_ids,
+            attachment_ids,
+            mode,
         } => {
-            provider::submit(host.clone(), task_id, submission_id, text, feedback_ids)?;
+            provider::submit(
+                host.clone(),
+                task_id.clone(),
+                submission_id.clone(),
+                text,
+                feedback_ids,
+                attachment_ids,
+                mode,
+            )?;
+            Ok(Response::Accepted {
+                task_id,
+                submission_id,
+            })
+        }
+        Request::ImportAttachments { task_id, paths } => {
+            host.lock().unwrap().store.task(&task_id)?;
+            let imported = attachments::import(root, paths)?;
+            let registration = (|| {
+                let h = host.lock().unwrap();
+                let mut task = h.store.task(&task_id)?;
+                ensure!(
+                    task.attachments.len() + imported.len() <= 32,
+                    "A prompt can contain up to 32 attachments"
+                );
+                ensure!(
+                    task.attachments
+                        .iter()
+                        .chain(&imported)
+                        .map(|a| a.bytes)
+                        .sum::<u64>()
+                        <= 128 * 1024 * 1024,
+                    "Prompt attachments exceed 128 MiB"
+                );
+                task.attachments.extend(imported.clone());
+                h.store.save_task(&task)
+            })();
+            if let Err(error) = registration {
+                attachments::discard(&imported);
+                return Err(error);
+            }
+            Ok(Response::Attachments {
+                task_id,
+                attachments: imported,
+            })
+        }
+        Request::RemoveAttachment { task_id, id } => {
+            let h = host.lock().unwrap();
+            let mut task = h.store.task(&task_id)?;
+            task.attachments.retain(|a| a.id != id);
+            h.store.save_task(&task)?;
+            Ok(Response::Ok)
+        }
+        Request::RestoreOutgoing { task_id, id } => {
+            let h = host.lock().unwrap();
+            h.store.restore_outgoing(&task_id, &id)?;
+            Ok(Response::Task(task_view(&h, &task_id, None)?))
+        }
+        Request::CancelQueued { task_id, id } => {
+            host.lock().unwrap().store.cancel_outgoing(&task_id, &id)?;
+            Ok(Response::Ok)
+        }
+        Request::ResumeQueue { task_id } => {
+            provider::resume_queue(host.clone(), &task_id)?;
             Ok(Response::Ok)
         }
         Request::Interrupt { task_id } => {
@@ -297,6 +364,38 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             let feedback = git::feedback(&snapshot, file, side, start, end, comment)?;
             let mut task = h.store.task(&task_id)?;
             task.feedback.push(feedback);
+            ensure!(
+                serde_json::to_vec(&task.feedback)?.len() <= 2 * 1024 * 1024,
+                "Draft context exceeds 2 MiB; send or remove existing context first"
+            );
+            h.store.save_task(&task)?;
+            Ok(Response::Ok)
+        }
+        Request::AddFeedbackRows {
+            task_id,
+            snapshot_id,
+            file,
+            first_row,
+            last_row,
+            comment,
+        } => {
+            let h = host.lock().unwrap();
+            let snapshot = h.store.snapshot(&snapshot_id)?;
+            ensure!(
+                snapshot.task_id == task_id,
+                "Snapshot belongs to another task"
+            );
+            let feedback = git::feedback_rows(&snapshot, file, first_row, last_row, comment)?;
+            let mut task = h.store.task(&task_id)?;
+            ensure!(
+                task.feedback.len() < 64,
+                "Send or remove existing context before adding more"
+            );
+            task.feedback.push(feedback);
+            ensure!(
+                serde_json::to_vec(&task.feedback)?.len() <= 2 * 1024 * 1024,
+                "Draft context exceeds 2 MiB; send or remove existing context first"
+            );
             h.store.save_task(&task)?;
             Ok(Response::Ok)
         }

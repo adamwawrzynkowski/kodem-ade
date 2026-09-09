@@ -43,7 +43,9 @@ impl Shell {
         if waiting || view.activities.is_empty() {
             let (label, glyph, spin) = if waiting {
                 ("Waiting for your input", "shield", false)
-            } else if view.task.state == RunState::Starting || self.submitted_draft.is_some() {
+            } else if self.submitted_draft.is_some() {
+                ("Recording message…", "loader", true)
+            } else if view.task.state == RunState::Starting {
                 ("Starting agent…", "loader", true)
             } else {
                 ("Agent working…", "loader", true)

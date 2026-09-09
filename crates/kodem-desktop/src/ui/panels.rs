@@ -10,7 +10,6 @@ impl Shell {
             Panel::Resources => "Skills, instructions & MCP",
             Panel::Files => "Files",
             Panel::Check => "Run a project check",
-            Panel::Feedback => "Review feedback",
             Panel::Rename => "Rename task",
             Panel::Questions => "Codex needs your input",
             Panel::None | Panel::Models | Panel::TaskMenu | Panel::Sort | Panel::Comparison => "",
@@ -302,113 +301,6 @@ impl Shell {
                                 }
                             })),
                     );
-            }
-            Panel::Feedback => {
-                if let (Some(selection), Some(diff)) = (self.selection.clone(), self.diff.clone()) {
-                    content = content
-                        .child(format!(
-                            "{} · {:?} {}–{} · snapshot {}",
-                            diff.files
-                                .get(self.file)
-                                .map(|f| f.label.as_str())
-                                .unwrap_or(""),
-                            selection.side,
-                            selection.start.min(selection.end),
-                            selection.start.max(selection.end),
-                            &diff.id[..12.min(diff.id.len())]
-                        ))
-                        .child(
-                            div()
-                                .p_2()
-                                .min_h(px(48.))
-                                .bg(theme.inset)
-                                .border_1()
-                                .border_color(theme.border)
-                                .rounded(px(7.))
-                                .child(self.aux.clone()),
-                        )
-                        .child(
-                            self.button("save-feedback", "chat", "Attach comment")
-                                .on_click(cx.listener(move |s, _, _, cx| {
-                                    s.send(core::Request::AddFeedback {
-                                        task_id: diff.task_id.clone(),
-                                        snapshot_id: diff.id.clone(),
-                                        file: s.file,
-                                        side: selection.side.clone(),
-                                        start: selection.start.min(selection.end),
-                                        end: selection.start.max(selection.end),
-                                        comment: s.aux.read(cx).text(),
-                                    })
-                                })),
-                        );
-                }
-                if let Some(view) = self.view.clone() {
-                    for (i, f) in view.task.feedback.iter().enumerate() {
-                        let task_id = view.task.id.clone();
-                        let id = f.id.clone();
-                        let snapshot_id = f.snapshot_id.clone();
-                        let stale = self
-                            .diff
-                            .as_ref()
-                            .and_then(|d| d.files.iter().find(|file| file.path == f.path))
-                            .is_some_and(|file| file.digest != f.digest);
-                        content =
-                            content.child(
-                                div()
-                                    .py_2()
-                                    .border_b_1()
-                                    .border_color(theme.border)
-                                    .child(format!(
-                                        "{} · {:?} {}–{}{}",
-                                        f.label,
-                                        f.side,
-                                        f.start,
-                                        f.end,
-                                        if stale { " · Content changed" } else { "" }
-                                    ))
-                                    .child(f.comment.clone())
-                                    .child(
-                                        div()
-                                            .font_family("JetBrains Mono")
-                                            .text_size(px(12.))
-                                            .child(f.excerpt.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .gap_2()
-                                            .child(
-                                                self.button(
-                                                    ("open-snapshot", i),
-                                                    "file-text",
-                                                    "Open captured revision",
-                                                )
-                                                .on_click(cx.listener(move |s, _, _, cx| {
-                                                    s.selection = None;
-                                                    s.send(core::Request::LoadSnapshot {
-                                                        id: snapshot_id.clone(),
-                                                    });
-                                                    s.panel = Panel::None;
-                                                    cx.notify();
-                                                })),
-                                            )
-                                            .child(
-                                                self.icon_button(
-                                                    ("remove-feedback", i),
-                                                    "close",
-                                                    "Remove feedback",
-                                                )
-                                                .on_click(cx.listener(move |s, _, _, _| {
-                                                    s.send(core::Request::RemoveFeedback {
-                                                        task_id: task_id.clone(),
-                                                        id: id.clone(),
-                                                    })
-                                                })),
-                                            ),
-                                    ),
-                            );
-                    }
-                }
             }
             Panel::Questions => {
                 if let Some(view) = self.view.clone() {

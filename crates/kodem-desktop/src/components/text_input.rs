@@ -28,10 +28,24 @@ actions!(
         Cut,
         Copy,
         Newline,
+        Submit,
         Up,
         Down,
     ]
 );
+
+/// Raised when a composer requests submission outside an IME composition.
+pub struct SubmitInput;
+
+/// Pointer and clipboard operations delegated by a row to its document owner.
+#[derive(Clone)]
+pub enum SelectionInput {
+    Begin { byte: usize, extend: bool },
+    Move { byte: usize },
+    End,
+    Copy,
+    SelectAll,
+}
 
 pub struct TextInput {
     focus_handle: FocusHandle,
@@ -45,6 +59,8 @@ pub struct TextInput {
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
     readonly: bool,
+    composer: bool,
+    delegated_selection: bool,
     wrap: bool,
     syntax: Option<(String, bool)>,
     colors: Vec<(Range<usize>, [u8; 3])>,
@@ -65,10 +81,40 @@ impl TextInput {
             last_bounds: None,
             is_selecting: false,
             readonly: false,
+            composer: false,
+            delegated_selection: false,
             wrap: true,
             syntax: None,
             colors: Vec::new(),
         }
+    }
+    /// Creates a prompt editor where Enter submits and Shift-Enter inserts a newline.
+    pub fn composer(placeholder: &str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(placeholder, cx);
+        input.composer = true;
+        input
+    }
+    /// Lets a document coordinate selection across separately rendered rows.
+    pub fn delegate_selection(&mut self) {
+        self.delegated_selection = true;
+    }
+    /// Applies a document-owned byte selection to this row.
+    pub fn set_selection(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        if self.selected_range != range {
+            self.selected_range = range;
+            cx.notify();
+        }
+    }
+    /// Maps a pointer to a UTF-8 boundary in this row.
+    pub fn byte_at(&self, position: Point<Pixels>) -> usize {
+        let position = if self.delegated_selection {
+            self.last_bounds.map_or(position, |bounds| {
+                point(position.x, bounds.top() + self.line_height / 2.)
+            })
+        } else {
+            position
+        };
+        self.index_for_mouse_position(position)
     }
     /// Returns the current draft.
     pub fn text(&self) -> String {
@@ -131,6 +177,11 @@ impl TextInput {
     fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
         self.vertical(1., cx);
     }
+    fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
+        if self.composer && self.marked_range.is_none() {
+            cx.emit(SubmitInput);
+        }
+    }
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
         self.replace_text_in_range(None, "\n", window, cx);
     }
@@ -159,6 +210,10 @@ impl TextInput {
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        if self.delegated_selection {
+            cx.emit(SelectionInput::SelectAll);
+            return;
+        }
         self.move_to(0, cx);
         self.select_to(self.content.len(), cx)
     }
@@ -198,9 +253,17 @@ impl TextInput {
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        window.focus(&self.focus_handle, cx);
+        if self.delegated_selection {
+            cx.emit(SelectionInput::Begin {
+                byte: self.index_for_mouse_position(event.position),
+                extend: event.modifiers.shift,
+            });
+            return;
+        }
         self.is_selecting = true;
 
         if event.modifiers.shift {
@@ -210,11 +273,20 @@ impl TextInput {
         }
     }
 
-    fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _: &mut Context<Self>) {
+    fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.delegated_selection {
+            cx.emit(SelectionInput::End);
+        }
         self.is_selecting = false;
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.delegated_selection && event.pressed_button == Some(MouseButton::Left) {
+            cx.emit(SelectionInput::Move {
+                byte: self.index_for_mouse_position(event.position),
+            });
+            return;
+        }
         if self.is_selecting {
             self.select_to(self.index_for_mouse_position(event.position), cx);
         }
@@ -236,6 +308,10 @@ impl TextInput {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if self.delegated_selection {
+            cx.emit(SelectionInput::Copy);
+            return;
+        }
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
@@ -243,6 +319,10 @@ impl TextInput {
         }
     }
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.delegated_selection {
+            cx.emit(SelectionInput::Copy);
+            return;
+        }
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
@@ -668,7 +748,11 @@ impl Render for TextInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
-            .key_context("TextInput")
+            .key_context(if self.composer {
+                "TextInput Composer"
+            } else {
+                "TextInput"
+            })
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
@@ -685,6 +769,7 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::newline))
+            .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::up))
             .on_action(cx.listener(Self::down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
@@ -703,6 +788,9 @@ impl Render for TextInput {
     }
 }
 
+impl gpui::EventEmitter<SubmitInput> for TextInput {}
+impl gpui::EventEmitter<SelectionInput> for TextInput {}
+
 impl Focusable for TextInput {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -719,12 +807,17 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-left", SelectLeft, Some("TextInput")),
         KeyBinding::new("shift-right", SelectRight, Some("TextInput")),
         KeyBinding::new("cmd-a", SelectAll, Some("TextInput")),
+        KeyBinding::new("cmd-a", SelectAll, Some("DiffDocument")),
+        KeyBinding::new("cmd-c", Copy, Some("DiffDocument")),
         KeyBinding::new("cmd-left", Home, Some("TextInput")),
         KeyBinding::new("cmd-right", End, Some("TextInput")),
         KeyBinding::new("cmd-v", Paste, Some("TextInput")),
         KeyBinding::new("cmd-c", Copy, Some("TextInput")),
         KeyBinding::new("cmd-x", Cut, Some("TextInput")),
         KeyBinding::new("enter", Newline, Some("TextInput")),
+        KeyBinding::new("shift-enter", Newline, Some("TextInput")),
+        KeyBinding::new("enter", Submit, Some("Composer")),
+        KeyBinding::new("cmd-enter", Submit, Some("Composer")),
         KeyBinding::new("up", Up, Some("TextInput")),
         KeyBinding::new("down", Down, Some("TextInput")),
     ]);

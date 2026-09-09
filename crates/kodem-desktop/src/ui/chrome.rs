@@ -208,9 +208,6 @@ impl Render for Shell {
                     }
                     s.dragging_sidebar = false;
                     s.dragging_review = false;
-                    if let Some(selection) = &mut s.selection {
-                        selection.dragging = false;
-                    }
                     cx.notify();
                 }),
             );
@@ -237,8 +234,11 @@ impl Render for Shell {
             );
         }
         let sidebar = self.sidebar(cx);
-        let narrow_review =
-            self.show_review && self.selected.is_some() && self.window_width <= 1100.;
+        let narrow_review = self.show_review
+            && self.selected.is_some()
+            && self.window_width <= 1100.
+            && !(self.reviewing_file
+                && self.settings.diff_placement == DiffPlacement::Conversation);
         let chat = self.chat(window, cx);
         let mut body = div()
             .flex()
@@ -260,7 +260,10 @@ impl Render for Shell {
                     ),
             )
             .when(!narrow_review, |d| d.child(chat));
-        if self.show_review && self.selected.is_some() {
+        if self.show_review
+            && self.selected.is_some()
+            && (self.window_width > 1100. || narrow_review)
+        {
             body = body
                 .child(
                     div()
@@ -276,7 +279,7 @@ impl Render for Shell {
                             cx.listener(|s, _, _, _| s.dragging_review = s.window_width > 1100.),
                         ),
                 )
-                .child(self.review(cx));
+                .child(self.review(cx, false));
         }
         root = root.child(body);
         if matches!(
@@ -284,9 +287,7 @@ impl Render for Shell {
             Panel::Models | Panel::TaskMenu | Panel::Sort | Panel::Comparison
         ) {
             root = root.child(self.menu(cx));
-        } else if self.panel != Panel::None
-            && !(self.panel == Panel::Feedback && self.selection.is_some())
-        {
+        } else if self.panel != Panel::None {
             root = root.child(self.panel(window, cx));
         }
         root

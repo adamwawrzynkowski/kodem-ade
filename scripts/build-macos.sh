@@ -14,26 +14,46 @@ fi
 echo "$$" > "$build_lock/pid"
 work_dir=$(mktemp -d -t kodem-build)
 install_stage=""
+destination=""
+backup=""
+install_pending=0
 install_with_sudo=0
 install_file() {
     if [[ "$install_with_sudo" == 1 ]]; then sudo "$@"; else "$@"; fi
 }
 cleanup() {
+    if [[ "$install_pending" == 1 && ! -e "$destination" && -d "$backup" ]]; then
+        install_file mv "$backup" "$destination" || echo "Restore the previous app from $backup" >&2
+    fi
     if [[ -n "$install_stage" && -d "$install_stage" ]]; then install_file rm -rf "$install_stage"; fi
     rm -rf "$work_dir" "$build_lock"
 }
 trap cleanup EXIT
 source "$KODEM_ROOT/scripts/dependencies.sh"
 kodem_dependencies
+echo "Compiling $configuration from $KODEM_ROOT"
 cargo fmt --all -- --check
-if [[ "$configuration" == release ]]; then cargo build --workspace --release --locked; else cargo build --workspace --locked; fi
+# Pin both the output root and target. Shell/global Cargo overrides must never
+# make packaging read an older executable from another output directory.
+build_target=aarch64-apple-darwin
+if [[ "$configuration" == release ]]; then
+    cargo build --workspace --release --locked --target "$build_target" --target-dir "$KODEM_ROOT/target"
+else
+    cargo build --workspace --locked --target "$build_target" --target-dir "$KODEM_ROOT/target"
+fi
+executables="$KODEM_ROOT/target/$build_target/$configuration"
+build_date=$(date -u +%Y.%m.%d)
+build_id=$(date -u +%Y%m%dT%H%M%SZ)
+build_revision=$(git rev-parse --short HEAD)
+if ! git diff --quiet HEAD -- . ':!*.DS_Store'; then build_revision="$build_revision-dirty"; fi
+build_id="$build_id-$build_revision"
 app_name=Kodem
 bundle_id=dev.kodem.ade
 if [[ "$configuration" == debug ]]; then app_name='Kodem Debug'; bundle_id=dev.kodem.ade.debug; fi
 bundle="$work_dir/$app_name.app"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources/licenses"
-cp "target/$configuration/kodem" "$bundle/Contents/MacOS/kodem"
-cp "target/$configuration/kodem-host" "$bundle/Contents/MacOS/kodem-host"
+cp "$executables/kodem" "$bundle/Contents/MacOS/kodem"
+cp "$executables/kodem-host" "$bundle/Contents/MacOS/kodem-host"
 chmod 755 "$bundle/Contents/MacOS/kodem" "$bundle/Contents/MacOS/kodem-host"
 cp assets/licenses/* "$bundle/Contents/Resources/licenses/"
 cp assets/THIRD_PARTY.md "$bundle/Contents/Resources/THIRD_PARTY.md"
@@ -47,13 +67,20 @@ cat > "$bundle/Contents/Info.plist" <<PLIST
 <key>CFBundleExecutable</key><string>kodem</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleVersion</key><string>$build_date</string>
+<key>KodemBuildID</key><string>$build_id</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
 </dict></plist>
 PLIST
 /usr/bin/plutil -lint "$bundle/Contents/Info.plist"
+cat > "$bundle/Contents/Resources/BuildInfo.txt" <<INFO
+Build: $build_id
+Configuration: $configuration
+Target: $build_target
+Source: $KODEM_ROOT
+INFO
 /usr/bin/codesign --force --sign - "$bundle/Contents/MacOS/kodem-host"
 /usr/bin/codesign --force --sign - "$bundle"
 /usr/bin/codesign --verify --deep --strict "$bundle"
@@ -66,32 +93,51 @@ if [[ -e "$output" ]]; then
     rm -rf "$output"
 fi
 /usr/bin/ditto "$bundle" "$output"
+/usr/bin/codesign --verify --deep --strict "$output"
+echo "BUILD SUCCEEDED: $output"
+echo "Build ID: $build_id"
 if [[ "$configuration" == release ]]; then
     destination=/Applications/Kodem.app
     if [[ -e "$destination" ]]; then
         existing_id=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$destination/Contents/Info.plist" 2>/dev/null || true)
         [[ "$existing_id" == dev.kodem.ade ]] || { echo "Refusing to replace an unrelated application at $destination" >&2; exit 1; }
-        if pgrep -f '^/Applications/Kodem.app/Contents/MacOS/(kodem|kodem-host)( |$)' >/dev/null; then
-            echo "Kodem or its background host is still running. Finish active tasks, use Stop idle host and quit, then rerun this command." >&2
-            exit 1
-        fi
     fi
     # Stage on the same filesystem, verify, then move the previous installation to a backup.
     stage_candidate="/Applications/.Kodem-install-$$.app"
     [[ ! -e "$stage_candidate" ]] || { echo "Installation staging path already exists: $stage_candidate" >&2; exit 1; }
     install_stage="$stage_candidate"
-    backup="/Applications/Kodem.previous.$(date +%Y%m%d-%H%M%S).app"
+    backup="/Applications/Kodem.previous.$(date +%Y%m%d-%H%M%S)-$$.app"
+    [[ ! -e "$backup" ]] || { echo "Backup path already exists: $backup" >&2; exit 1; }
     install_with_sudo=0
     if [[ ! -w /Applications ]]; then echo "Administrator access is needed to install in /Applications."; sudo -v; install_with_sudo=1; fi
     install_file /usr/bin/ditto "$output" "$install_stage"
     if ! /usr/bin/codesign --verify --deep --strict "$install_stage"; then install_file rm -rf "$install_stage"; exit 1; fi
+    install_pending=1
     if [[ -e "$destination" ]]; then install_file mv "$destination" "$backup"; fi
     if ! install_file mv "$install_stage" "$destination"; then
         if [[ -e "$backup" ]]; then install_file mv "$backup" "$destination"; fi
         install_file rm -rf "$install_stage"
         exit 1
     fi
-    echo "Installed: $destination"
+    # The old bundle is moved intact, including executables used by live processes.
+    # Installation does not terminate tasks or pretend a running process was refreshed.
+    if ! /usr/bin/codesign --verify --deep --strict "$destination" \
+        || ! /usr/bin/cmp -s "$output/Contents/MacOS/kodem" "$destination/Contents/MacOS/kodem" \
+        || ! /usr/bin/cmp -s "$output/Contents/MacOS/kodem-host" "$destination/Contents/MacOS/kodem-host" \
+        || ! /usr/bin/cmp -s "$output/Contents/Info.plist" "$destination/Contents/Info.plist"; then
+        install_file mv "$destination" "$install_stage"
+        if [[ -e "$backup" ]]; then install_file mv "$backup" "$destination"; fi
+        echo "Installation verification failed; the previous app was restored." >&2
+        exit 1
+    fi
+    install_pending=0
+    echo "INSTALL SUCCEEDED: $destination"
+    echo "Verified build: $build_id"
+    if pgrep -f '^/Applications/Kodem(\.app|\.previous\.[^/]+\.app)/Contents/MacOS/(kodem|kodem-host)( |$)' >/dev/null; then
+        echo "RESTART REQUIRED: the app or host is still running its loaded build."
+        echo "Finish active work, use Settings > Codex > Stop idle host and quit, then open /Applications/Kodem.app."
+        echo "The new build is already installed. You do not need to build again."
+    fi
     if [[ -e "$backup" ]]; then echo "Previous version: $backup"; fi
 fi
 echo "Built and verified: $output"

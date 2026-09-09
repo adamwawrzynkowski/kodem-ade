@@ -153,32 +153,38 @@ impl Shell {
                         )),
                 );
             }
-            if let Some(before) = view.before {
-                let id = view.task.id.clone();
-                panel = panel.child(
-                    div().px_5().pb_2().child(
-                        self.ghost("older", "arrow-up", "Earlier messages")
-                            .on_click(cx.listener(move |s, _, _, _| {
-                                s.send(core::Request::Task {
-                                    task_id: id.clone(),
-                                    before: Some(before),
-                                })
-                            })),
-                    ),
-                );
-            }
-            if view.messages.is_empty() {
-                panel=panel.child(div().flex_1().px_8().pt_8().child(div().max_w(px(600.)).text_size(px(13.)).text_color(t.muted)
-                    .child("Describe the change below. Your conversation and its code review stay together in this task.")));
+            let center_diff =
+                self.reviewing_file && self.settings.diff_placement == DiffPlacement::Conversation;
+            if center_diff {
+                panel = panel.child(self.review(cx, true));
             } else {
-                let entity = cx.entity();
-                panel = panel.child(
-                    list(self.chat_scroll.clone(), move |index, window, cx| {
-                        entity.update(cx, |s, cx| s.message(index, window, cx))
-                    })
-                    .flex_1()
-                    .min_h_0(),
-                );
+                if let Some(before) = view.before {
+                    let id = view.task.id.clone();
+                    panel = panel.child(
+                        div().px_5().pb_2().child(
+                            self.ghost("older", "arrow-up", "Earlier messages")
+                                .on_click(cx.listener(move |s, _, _, _| {
+                                    s.send(core::Request::Task {
+                                        task_id: id.clone(),
+                                        before: Some(before),
+                                    })
+                                })),
+                        ),
+                    );
+                }
+                if view.messages.is_empty() {
+                    panel=panel.child(div().flex_1().px_8().pt_8().child(div().max_w(px(600.)).text_size(px(13.)).text_color(t.muted)
+                    .child("Describe the change below. Your conversation and its code review stay together in this task.")));
+                } else {
+                    let entity = cx.entity();
+                    panel = panel.child(
+                        list(self.chat_scroll.clone(), move |index, window, cx| {
+                            entity.update(cx, |s, cx| s.message(index, window, cx))
+                        })
+                        .flex_1()
+                        .min_h_0(),
+                    );
+                }
             }
             panel = panel
                 .child(
@@ -277,46 +283,89 @@ impl Shell {
             .max_w(px(940.))
             .mx_auto()
             .when(!empty, |d| d.px_5().pb_2());
-        if let Some(view) = &view
-            && !view.task.feedback.is_empty()
-        {
-            wrapper = wrapper.child(
+        wrapper = wrapper.child(self.outgoing_tray(cx));
+        let mut attachments = div()
+            .id("composer-context")
+            .max_h(px(240.))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .mb_2();
+        if let Some(view) = &view {
+            for feedback in &view.task.feedback {
+                attachments =
+                    attachments.child(self.context_card(feedback, Some(&view.task.id), cx));
+            }
+            let mut files = div().flex().flex_wrap().gap_2();
+            for attachment in &view.task.attachments {
+                files = files.child(self.attachment_card(attachment, Some(&view.task.id), cx));
+            }
+            attachments = attachments.child(files);
+        } else {
+            for (index, path) in self.pending_paths.iter().enumerate() {
+                attachments = attachments.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .p_2()
+                        .bg(t.sidebar)
+                        .rounded(px(7.))
+                        .child(icon("paperclip").text_color(t.accent))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .text_size(px(11.))
+                                .child(
+                                    path.file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                        .into_owned(),
+                                ),
+                        )
+                        .child(
+                            self.icon_button(
+                                ("remove-pending-file", index),
+                                "close",
+                                "Remove attachment",
+                            )
+                            .on_click(cx.listener(
+                                move |s, _, _, cx| {
+                                    s.pending_paths.remove(index);
+                                    cx.notify();
+                                },
+                            )),
+                        ),
+                );
+            }
+        }
+        let importing = self
+            .selected
+            .as_ref()
+            .is_some_and(|id| self.importing_tasks.get(id).copied().unwrap_or(0) > 0);
+        if importing {
+            attachments = attachments.child(
                 div()
-                    .mb_2()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        self.ghost(
-                            "review-queue",
-                            "chat",
-                            format!(
-                                "{} review comment{}",
-                                view.task.feedback.len(),
-                                if view.task.feedback.len() == 1 {
-                                    ""
-                                } else {
-                                    "s"
-                                }
-                            ),
-                        )
-                        .text_color(t.accent)
-                        .bg(t.accent_bg)
-                        .on_click(cx.listener(|s, _, _, cx| {
-                            s.selection = None;
-                            s.panel = Panel::Feedback;
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(t.subtle)
-                            .child("Attached to this message"),
-                    ),
+                    .text_size(px(11.))
+                    .child(motion::active_icon("import-icon", "loader", t.accent, true))
+                    .child(motion::gleam("import-label", "Importing attachments…", t)),
             );
         }
+        wrapper = wrapper.child(attachments);
         let mut editor = div()
+            .id("composer-drop-target")
+            .drag_over::<ExternalPaths>(move |style, _, _, _| {
+                style.border_color(t.accent).bg(t.accent_bg)
+            })
+            .on_drop(cx.listener(|s, paths: &ExternalPaths, _, cx| {
+                s.attach_paths(paths.paths().to_vec(), cx)
+            }))
             .rounded(px(16.))
             .border_1()
             .border_color(t.border)
@@ -387,17 +436,8 @@ impl Shell {
             .items_center()
             .gap_1()
             .child(
-                self.icon_button("composer-files", "paperclip", "Attach a file reference")
-                    .disabled(empty)
-                    .on_click(cx.listener(|s, _, _, cx| {
-                        if let Some(task_id) = &s.selected {
-                            s.send(core::Request::Files {
-                                task_id: task_id.clone(),
-                            });
-                            s.panel = Panel::Files;
-                            cx.notify();
-                        }
-                    })),
+                self.icon_button("composer-files", "paperclip", "Attach files or images")
+                    .on_click(cx.listener(|s, _, _, cx| s.choose_attachments(cx))),
             )
             .child(
                 self.icon_button("composer-skills", "code", "Skills, instructions and MCP")
@@ -432,7 +472,7 @@ impl Shell {
             toolbar = toolbar.child(
                 self.primary("create-from-composer", "plus", "Create task")
                     .h(px(30.))
-                    .disabled(project.is_none())
+                    .disabled(project.is_none() || self.start_after_create)
                     .on_click(cx.listener(move |s, _, _, cx| {
                         if let Some(project) = &project {
                             s.empty_draft = s.input.read(cx).text();
@@ -459,14 +499,50 @@ impl Shell {
                         })
                     })),
             );
-        } else {
+        }
+        if !empty {
+            if active {
+                toolbar = toolbar.child(
+                    self.ghost(
+                        "active-send-mode",
+                        if self.settings.send_mode == SendMode::Queue {
+                            "arrow-down"
+                        } else {
+                            "arrow-right"
+                        },
+                        if self.settings.send_mode == SendMode::Queue {
+                            "Queue"
+                        } else {
+                            "Steer"
+                        },
+                    )
+                    .text_size(px(11.))
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.settings.send_mode = if s.settings.send_mode == SendMode::Queue {
+                            SendMode::Steer
+                        } else {
+                            SendMode::Queue
+                        };
+                        s.save_settings();
+                        cx.notify();
+                    })),
+                );
+            }
             toolbar = toolbar.child(
-                self.icon_button("send", "arrow-up", "Send message · ⌘Return")
+                self.icon_button("send", "arrow-up", "Send message · Enter")
                     .h(px(30.))
                     .w(px(32.))
                     .bg(t.accent)
                     .text_color(t.inset)
-                    .disabled(unknown || self.submitted_draft.is_some())
+                    .disabled(
+                        unknown
+                            || importing
+                            || self.submitted_draft.is_some()
+                            || (self.input.read(cx).text().trim().is_empty()
+                                && view.as_ref().is_none_or(|v| {
+                                    v.task.feedback.is_empty() && v.task.attachments.is_empty()
+                                })),
+                    )
                     .on_click(cx.listener(|s, _, w, cx| s.submit(&SendPrompt, w, cx))),
             );
         }
@@ -489,7 +565,7 @@ impl Shell {
                         "Current checkout"
                     })
                     .child(div().flex_1())
-                    .child("⌘Return to send"),
+                    .child("Enter to send · Shift+Enter for newline"),
             );
         }
         wrapper.into_any_element()
@@ -636,7 +712,13 @@ impl Shell {
                 * 0.55
                 + 24.;
             block = block
-                .w(px(line_width.max(52.)))
+                .w(px(line_width.max(
+                    if message.attachments.is_empty() && message.feedback.is_empty() {
+                        52.
+                    } else {
+                        380.
+                    },
+                )))
                 .max_w(relative(0.86))
                 .bg(t.raised)
                 .rounded(px(9.))
@@ -715,6 +797,16 @@ impl Shell {
                         )
                     }),
             );
+        }
+        if !message.attachments.is_empty() {
+            let mut files = div().flex().flex_wrap().gap_2().mb_2();
+            for attachment in &message.attachments {
+                files = files.child(self.attachment_card(attachment, None, cx));
+            }
+            block = block.child(files);
+        }
+        for feedback in &message.feedback {
+            block = block.child(self.context_card(feedback, None, cx));
         }
         for (n, part) in markdown::blocks(&message.text).into_iter().enumerate() {
             let (text, language, heading, quote) = match part {

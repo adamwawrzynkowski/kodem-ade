@@ -22,10 +22,10 @@ impl Store {
         db.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: u32 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
         ensure!(
-            version <= 2,
+            version <= 3,
             "This database was created by a newer Kodem version"
         );
-        if version > 0 && version < 2 {
+        if version > 0 && version < 3 {
             let backup = root.join(format!("workspace.schema-{version}.{}.sqlite", new_id()));
             db.execute(
                 "VACUUM main INTO ?1",
@@ -41,6 +41,11 @@ impl Store {
                 "ALTER TABLE submissions ADD COLUMN receipt TEXT; PRAGMA user_version=2;",
             )?;
         }
+        if version < 3 {
+            db.execute_batch(
+                "ALTER TABLE submissions ADD COLUMN payload TEXT; PRAGMA user_version=3;",
+            )?;
+        }
         db.execute_batch("COMMIT;")?;
         fs::set_permissions(
             root.join("workspace.sqlite"),
@@ -54,9 +59,7 @@ impl Store {
     /// Marks interrupted host-owned tasks without replaying external submissions.
     pub fn recover(&self) -> Result<()> {
         for mut task in self.tasks()? {
-            let pending = self
-                .latest_submission(&task.id)?
-                .is_some_and(|s| s.state == "pending" || s.state == "unknown");
+            let pending = self.has_uncertain_submission(&task.id)?;
             if task.state.active() || pending {
                 task.state = RunState::DeliveryUnknown;
                 task.error=Some("The host stopped before completion was confirmed. History is retained. No prompt was resent. Review the provider history before starting another turn.".into());
@@ -147,6 +150,10 @@ impl Store {
             m.text.len() <= 2 * 1024 * 1024,
             "Message exceeds the 2 MiB storage limit"
         );
+        ensure!(
+            serde_json::to_vec(m)?.len() <= 4 * 1024 * 1024,
+            "Message and attached context exceed 4 MiB"
+        );
         self.db.execute("INSERT INTO messages(id,task_id,json) VALUES(?1,?2,?3) ON CONFLICT(task_id,id) DO UPDATE SET json=excluded.json",params![m.id,m.task_id,serde_json::to_string(m)?])?;
         Ok(())
     }
@@ -165,13 +172,14 @@ impl Store {
         let mut bytes = 0usize;
         let mut byte_limit = false;
         while let Some(row) = rows.next()? {
-            let mut m: Message = serde_json::from_str(&row.get::<_, String>(1)?)?;
+            let json = row.get::<_, String>(1)?;
+            let mut m: Message = serde_json::from_str(&json)?;
             m.seq = u64::try_from(row.get::<_, i64>(0)?)?;
-            if !messages.is_empty() && bytes + m.text.len() > 4 * 1024 * 1024 {
+            if !messages.is_empty() && bytes + json.len() > 4 * 1024 * 1024 {
                 byte_limit = true;
                 break;
             }
-            bytes += m.text.len();
+            bytes += json.len();
             messages.push(m);
         }
         let more = messages.len() > 100 || byte_limit;
@@ -215,14 +223,15 @@ impl Store {
     }
     /// Returns the newest outgoing intent without replaying it.
     pub fn latest_submission(&self, task_id: &str) -> Result<Option<SubmissionRecord>> {
-        let row=self.db.query_row("SELECT id,prompt,state,receipt,feedback FROM submissions WHERE task_id=?1 ORDER BY rowid DESC LIMIT 1",[task_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,String>(4)?))).optional()?;
-        row.map(|(id, prompt, state, receipt, feedback)| {
+        let row=self.db.query_row("SELECT id,prompt,state,receipt,feedback,payload FROM submissions WHERE task_id=?1 AND state NOT IN ('queued','cancelled') ORDER BY CASE WHEN state IN ('pending','unknown') THEN 0 ELSE 1 END,rowid DESC LIMIT 1",[task_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<String>>(5)?))).optional()?;
+        row.map(|(id, prompt, state, receipt, feedback, payload)| {
             Ok(SubmissionRecord {
                 id,
                 prompt,
                 state,
                 receipt,
                 feedback: serde_json::from_str(&feedback)?,
+                outgoing: payload.map(|s| serde_json::from_str(&s)).transpose()?,
             })
         })
         .transpose()
@@ -233,6 +242,171 @@ impl Store {
             "UPDATE submissions SET state=?2 WHERE task_id=?1 AND state='pending'",
             params![task_id, if unknown { "unknown" } else { "failed" }],
         )?;
+        Ok(())
+    }
+    /// Finds an accepted identity before task-state checks and rejects cross-task reuse.
+    pub fn has_submission(&self, task_id: &str, id: &str) -> Result<bool> {
+        let owner: Option<String> = self
+            .db
+            .query_row("SELECT task_id FROM submissions WHERE id=?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        ensure!(
+            owner.as_deref().is_none_or(|owner| owner == task_id),
+            "Submission identity belongs to another task"
+        );
+        Ok(owner.is_some())
+    }
+    /// Deduplicates an exact input identity and rejects reuse for different content.
+    pub fn matches_submission(
+        &self,
+        task_id: &str,
+        id: &str,
+        text: &str,
+        feedback_ids: &[String],
+        attachment_ids: &[String],
+        mode: SendMode,
+    ) -> Result<bool> {
+        if !self.has_submission(task_id, id)? {
+            return Ok(false);
+        }
+        let payload: Option<String> =
+            self.db
+                .query_row("SELECT payload FROM submissions WHERE id=?1", [id], |r| {
+                    r.get(0)
+                })?;
+        let message: OutgoingMessage = serde_json::from_str(
+            &payload.context("Submission identity belongs to an older input")?,
+        )?;
+        ensure!(
+            message.text == text
+                && message.mode == mode
+                && message
+                    .feedback
+                    .iter()
+                    .map(|f| &f.id)
+                    .eq(feedback_ids.iter())
+                && message
+                    .attachments
+                    .iter()
+                    .map(|a| &a.id)
+                    .eq(attachment_ids.iter()),
+            "Submission identity was reused for different input"
+        );
+        Ok(true)
+    }
+    /// Reports uncertain deliveries even when later queued messages exist.
+    pub fn has_uncertain_submission(&self, task_id: &str) -> Result<bool> {
+        Ok(self.db.query_row("SELECT EXISTS(SELECT 1 FROM submissions WHERE task_id=?1 AND state IN ('pending','unknown'))", [task_id], |r| r.get(0))?)
+    }
+    /// Atomically records frozen input and consumes only its matching composer content.
+    pub fn accept_outgoing(
+        &self,
+        task: &Task,
+        message: &OutgoingMessage,
+        prompt: &str,
+    ) -> Result<()> {
+        let payload = serde_json::to_string(message)?;
+        let retained: i64 = self.db.query_row("SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM submissions WHERE task_id=?1 AND state IN ('queued','pending','failed','unknown')", [&task.id], |r| r.get(0))?;
+        ensure!(
+            retained + payload.len() as i64 <= 8 * 1024 * 1024,
+            "Outbox content exceeds 8 MiB; send or remove existing messages first"
+        );
+        let tx = self.db.unchecked_transaction()?;
+        let feedback: Vec<_> = message.feedback.iter().map(|f| &f.id).collect();
+        self.db.execute("INSERT INTO submissions(id,task_id,prompt,state,feedback,payload) VALUES(?1,?2,?3,'queued',?4,?5)", params![message.id,task.id,prompt,serde_json::to_string(&feedback)?,payload])?;
+        self.save_task(task)?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// Returns queued, in-flight and recoverable failed input in FIFO acceptance order.
+    pub fn outgoing(&self, task_id: &str) -> Result<Vec<OutgoingMessage>> {
+        let mut query = self.db.prepare("SELECT payload,state FROM submissions WHERE task_id=?1 AND payload IS NOT NULL AND state IN ('queued','pending','failed','unknown') ORDER BY rowid")?;
+        let mut rows = query.query([task_id])?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next()? {
+            let mut message: OutgoingMessage = serde_json::from_str(&row.get::<_, String>(0)?)?;
+            message.state = match row.get::<_, String>(1)?.as_str() {
+                "queued" => DeliveryState::Queued,
+                "pending" => DeliveryState::Pending,
+                "failed" => DeliveryState::Failed,
+                _ => DeliveryState::Unknown,
+            };
+            result.push(message);
+        }
+        Ok(result)
+    }
+    /// Claims one accepted message and records its transcript before external delivery.
+    pub fn claim_outgoing(&self, task: &Task, message: &OutgoingMessage) -> Result<()> {
+        let tx = self.db.unchecked_transaction()?;
+        ensure!(self.db.execute("UPDATE submissions SET state='pending' WHERE id=?1 AND task_id=?2 AND state='queued'", params![message.id,task.id])? == 1, "Message is no longer queued");
+        self.save_task(task)?;
+        self.message(&Message {
+            seq: 0,
+            id: format!("submission-{}", message.id),
+            task_id: task.id.clone(),
+            kind: MessageKind::User,
+            text: message.text.clone(),
+            attachments: message.attachments.clone(),
+            feedback: message.feedback.clone(),
+            complete: true,
+            created: now(),
+        })?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// Keeps a failed or uncertain input recoverable without altering the active provider turn.
+    pub fn fail_outgoing(&self, task_id: &str, id: &str, unknown: bool, error: &str) -> Result<()> {
+        let mut message = self
+            .outgoing(task_id)?
+            .into_iter()
+            .find(|m| m.id == id)
+            .context("Outgoing message not found")?;
+        message.error = Some(error.chars().take(16 * 1024).collect());
+        message.state = if unknown {
+            DeliveryState::Unknown
+        } else {
+            DeliveryState::Failed
+        };
+        self.db.execute(
+            "UPDATE submissions SET state=?2,payload=?3 WHERE id=?1",
+            params![
+                id,
+                if unknown { "unknown" } else { "failed" },
+                serde_json::to_string(&message)?
+            ],
+        )?;
+        Ok(())
+    }
+    /// Cancels only an undispatched message or dismisses a definitively rejected one.
+    pub fn cancel_outgoing(&self, task_id: &str, id: &str) -> Result<()> {
+        ensure!(self.db.execute("UPDATE submissions SET state='cancelled' WHERE id=?1 AND task_id=?2 AND state IN ('queued','failed')",params![id,task_id])? == 1, "Only queued or rejected messages can be dismissed");
+        Ok(())
+    }
+    /// Restores retained input to an empty composer and cancels its undispatched delivery atomically.
+    pub fn restore_outgoing(&self, task_id: &str, id: &str) -> Result<()> {
+        let mut task = self.task(task_id)?;
+        ensure!(
+            task.draft.trim().is_empty() && task.attachments.is_empty() && task.feedback.is_empty(),
+            "Clear the composer before restoring a message"
+        );
+        let message = self
+            .outgoing(task_id)?
+            .into_iter()
+            .find(|m| m.id == id)
+            .context("Outgoing message not found")?;
+        ensure!(
+            matches!(message.state, DeliveryState::Queued | DeliveryState::Failed),
+            "Only queued or rejected messages can be restored"
+        );
+        task.draft = message.text;
+        task.attachments = message.attachments;
+        task.feedback = message.feedback;
+        let tx = self.db.unchecked_transaction()?;
+        self.cancel_outgoing(task_id, id)?;
+        self.save_task(&task)?;
+        tx.commit()?;
         Ok(())
     }
     /// Stores captured content once, addressed by its SHA-256 identity.

@@ -12,7 +12,7 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 pub const MAX_PACKET: u64 = 32 * 1024 * 1024;
 /// Resolves the user's data directory, with an explicit override for isolated installations.
 pub fn data_dir() -> Result<PathBuf> {
@@ -83,7 +83,7 @@ pub fn connect_or_start(root: &Path) -> Result<()> {
     if let Ok(Response::Workspace(ws)) = request(root, &Request::Hello) {
         ensure!(
             ws.protocol == PROTOCOL,
-            "Host version mismatch; finish active tasks and quit the old host"
+            "Host version mismatch; finish active tasks and quit the old app and host before reopening"
         );
         return Ok(());
     }

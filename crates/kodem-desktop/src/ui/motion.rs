@@ -67,7 +67,10 @@ pub(super) fn active_icon(
 }
 
 /// Fades new panels into place without keeping invisible controls alive after dismissal.
-pub(super) fn reveal(id: impl Into<ElementId>, element: Div) -> AnyElement {
+pub(super) fn reveal<E: IntoElement + Styled + 'static>(
+    id: impl Into<ElementId>,
+    element: E,
+) -> AnyElement {
     element
         .with_animation(
             id,

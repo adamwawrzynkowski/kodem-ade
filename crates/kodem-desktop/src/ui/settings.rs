@@ -201,6 +201,39 @@ impl Shell {
                     )
                     .child(
                         self.setting_row(
+                            "Open file diffs in",
+                            "Choose where a file opens when you select a change.",
+                            self.button(
+                                "diff-placement",
+                                if self.settings.diff_placement == DiffPlacement::Conversation {
+                                    "chat"
+                                } else {
+                                    "panel-right"
+                                },
+                                if self.settings.diff_placement == DiffPlacement::Conversation {
+                                    "Conversation"
+                                } else {
+                                    "Right panel"
+                                },
+                            )
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.settings.diff_placement =
+                                    if s.settings.diff_placement == DiffPlacement::Conversation {
+                                        DiffPlacement::RightPanel
+                                    } else {
+                                        DiffPlacement::Conversation
+                                    };
+                                if s.reviewing_file {
+                                    s.show_review = true;
+                                }
+                                s.save_settings();
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                        ),
+                    )
+                    .child(
+                        self.setting_row(
                             "Sidebar width",
                             "You can also drag its right edge.",
                             div()
@@ -294,6 +327,16 @@ impl Shell {
                         "Codex",
                         "The local runtime powers your task conversations.",
                     ))
+                    .child(self.setting_row(
+                        "Messages during a turn",
+                        "Queue runs after completion. Steer adds instructions to the current turn.",
+                        self.button("default-send-mode", if self.settings.send_mode == SendMode::Queue { "arrow-down" } else { "arrow-right" },
+                            if self.settings.send_mode == SendMode::Queue { "Queue" } else { "Steer" })
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.settings.send_mode = if s.settings.send_mode == SendMode::Queue { SendMode::Steer } else { SendMode::Queue };
+                                s.save_settings();
+                                cx.notify();
+                            })).into_any_element()))
                     .child(
                         self.setting_row(
                             "Runtime",
@@ -352,7 +395,9 @@ impl Shell {
                 for (label, key) in [
                     ("Open repository", "⌘ O"),
                     ("New task", "⌘ N"),
-                    ("Send message", "⌘ Return"),
+                    ("Send message", "Return / ⌘ Return"),
+                    ("New line in prompt", "Shift Return"),
+                    ("Copy diff selection", "⌘ C"),
                     ("Search tasks", "⌘ F"),
                     ("Toggle sidebar", "⌘ B"),
                     ("Toggle changes", "⌘ D"),

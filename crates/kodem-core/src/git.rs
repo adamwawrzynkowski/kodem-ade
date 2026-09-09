@@ -417,11 +417,15 @@ pub fn feedback(
         start > 0 && end >= start,
         "Choose a nonempty source-line range"
     );
-    ensure!(!comment.trim().is_empty(), "Write a review comment");
+    ensure!(
+        !comment.trim().is_empty() && comment.len() <= 64 * 1024,
+        "Write a review comment under 64 KiB"
+    );
     let file = snapshot
         .files
         .get(file)
         .context("File is not in this snapshot")?;
+    ensure!(end - start <= 10000, "Choose at most 10001 source lines");
     let mut excerpt = Vec::new();
     for number in start..=end {
         let line = file
@@ -434,7 +438,23 @@ pub fn feedback(
             .context("Range crosses hidden context or does not belong to this side")?;
         excerpt.push(line.text.as_str());
     }
+    ensure!(
+        excerpt.iter().map(|line| line.len() + 1).sum::<usize>() <= 512 * 1024,
+        "Selected context exceeds 512 KiB"
+    );
     Ok(Feedback {
+        old_range: if side == Side::Old {
+            Some((start, end))
+        } else {
+            None
+        },
+        new_range: if side == Side::New {
+            Some((start, end))
+        } else {
+            None
+        },
+        first_row: None,
+        last_row: None,
         id: new_id(),
         snapshot_id: snapshot.id.clone(),
         path: file.path.clone(),
@@ -443,6 +463,86 @@ pub fn feedback(
         start,
         end,
         excerpt: excerpt.join("\n"),
+        comment,
+        digest: file.digest.clone(),
+    })
+}
+/// Captures an inclusive displayed diff-row range, preserving both removed and added lines.
+pub fn feedback_rows(
+    snapshot: &DiffSnapshot,
+    file: usize,
+    first_row: usize,
+    last_row: usize,
+    comment: String,
+) -> Result<Feedback> {
+    ensure!(first_row <= last_row, "Choose a nonempty diff range");
+    ensure!(
+        !comment.trim().is_empty() && comment.len() <= 64 * 1024,
+        "Write a review comment under 64 KiB"
+    );
+    let file = snapshot
+        .files
+        .get(file)
+        .context("File is not in this snapshot")?;
+    let rows = file
+        .lines
+        .get(first_row..=last_row)
+        .context("Selection is outside this snapshot")?;
+    ensure!(
+        rows.iter()
+            .any(|line| line.old.is_some() || line.new.is_some()),
+        "Choose source lines"
+    );
+    let side = if rows.iter().any(|line| line.new.is_some()) {
+        Side::New
+    } else {
+        Side::Old
+    };
+    let numbers: Vec<_> = rows
+        .iter()
+        .filter_map(|line| match side {
+            Side::New => line.new,
+            Side::Old => line.old,
+        })
+        .collect();
+    let excerpt = rows
+        .iter()
+        .map(|line| {
+            let marker = match line.kind {
+                LineKind::Added => "+",
+                LineKind::Removed => "-",
+                LineKind::Context => " ",
+                LineKind::Header => "",
+            };
+            format!("{marker}{}", line.text)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    ensure!(
+        excerpt.len() <= 512 * 1024,
+        "Selected context exceeds 512 KiB"
+    );
+    Ok(Feedback {
+        old_range: rows
+            .iter()
+            .filter_map(|l| l.old)
+            .next()
+            .zip(rows.iter().rev().find_map(|l| l.old)),
+        new_range: rows
+            .iter()
+            .filter_map(|l| l.new)
+            .next()
+            .zip(rows.iter().rev().find_map(|l| l.new)),
+        first_row: Some(first_row),
+        last_row: Some(last_row),
+        id: new_id(),
+        snapshot_id: snapshot.id.clone(),
+        path: file.path.clone(),
+        label: file.label.clone(),
+        side,
+        start: *numbers.first().context("No source lines")?,
+        end: *numbers.last().context("No source lines")?,
+        excerpt,
         comment,
         digest: file.digest.clone(),
     })

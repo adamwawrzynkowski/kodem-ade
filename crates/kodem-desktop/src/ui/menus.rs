@@ -47,7 +47,7 @@ impl Shell {
                                 s.panel = Panel::None;
                                 if s.comparison != comparison {
                                     s.comparison = comparison.clone();
-                                    s.selection = None;
+                                    s.diff_view = None;
                                     s.diff = None;
                                     s.new_diff = None;
                                     s.reviewing_file = false;

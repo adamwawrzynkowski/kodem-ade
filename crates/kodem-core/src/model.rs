@@ -75,6 +75,8 @@ pub struct Task {
     pub created: u64,
     pub updated: u64,
     pub feedback: Vec<Feedback>,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
     pub error: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -92,6 +94,10 @@ pub struct Message {
     pub id: String,
     pub task_id: String,
     pub kind: MessageKind,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
+    #[serde(default)]
+    pub feedback: Vec<Feedback>,
     pub text: String,
     pub complete: bool,
     pub created: u64,
@@ -134,6 +140,8 @@ pub struct TaskView {
     #[serde(default)]
     pub activities: Vec<Activity>,
     pub task: Task,
+    #[serde(default)]
+    pub outgoing: Vec<OutgoingMessage>,
     pub messages: Vec<Message>,
     pub before: Option<u64>,
     pub requests: Vec<InputRequest>,
@@ -162,6 +170,10 @@ pub struct Settings {
     pub light: bool,
     pub sort: Sort,
     pub selected_task: Option<String>,
+    #[serde(default)]
+    pub diff_placement: DiffPlacement,
+    #[serde(default)]
+    pub send_mode: SendMode,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -174,8 +186,60 @@ impl Default for Settings {
             light: false,
             sort: Sort::Recent,
             selected_task: None,
+            diff_placement: DiffPlacement::default(),
+            send_mode: SendMode::default(),
         }
     }
+}
+/// Chooses the surface used when opening a changed file.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub enum DiffPlacement {
+    #[default]
+    Conversation,
+    RightPanel,
+}
+/// Chooses how a message submitted during active work is delivered.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub enum SendMode {
+    #[default]
+    Queue,
+    Steer,
+}
+/// Identifies whether an imported file is sent as visual model input.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub enum AttachmentKind {
+    Image,
+    File,
+}
+/// Host-owned immutable content retained with drafts and outgoing messages.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Attachment {
+    pub id: String,
+    pub name: String,
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub kind: AttachmentKind,
+}
+/// Delivery state shown in the composer outbox.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub enum DeliveryState {
+    Queued,
+    Pending,
+    Failed,
+    Unknown,
+}
+/// Frozen input and delivery status owned by the host rather than the window.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OutgoingMessage {
+    pub id: String,
+    pub text: String,
+    pub attachments: Vec<Attachment>,
+    pub feedback: Vec<Feedback>,
+    pub created: u64,
+    pub state: DeliveryState,
+    pub error: Option<String>,
+    pub mode: SendMode,
+    pub expected_turn: Option<String>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Sort {
@@ -251,6 +315,14 @@ pub struct DiffSnapshot {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Feedback {
+    #[serde(default)]
+    pub first_row: Option<usize>,
+    #[serde(default)]
+    pub old_range: Option<(u32, u32)>,
+    #[serde(default)]
+    pub new_range: Option<(u32, u32)>,
+    #[serde(default)]
+    pub last_row: Option<usize>,
     pub id: String,
     pub snapshot_id: String,
     pub path: Vec<u8>,
@@ -315,6 +387,29 @@ pub enum Request {
         submission_id: String,
         text: String,
         feedback_ids: Vec<String>,
+        #[serde(default)]
+        attachment_ids: Vec<String>,
+        #[serde(default)]
+        mode: SendMode,
+    },
+    ImportAttachments {
+        task_id: String,
+        paths: Vec<PathBuf>,
+    },
+    RemoveAttachment {
+        task_id: String,
+        id: String,
+    },
+    RestoreOutgoing {
+        task_id: String,
+        id: String,
+    },
+    CancelQueued {
+        task_id: String,
+        id: String,
+    },
+    ResumeQueue {
+        task_id: String,
     },
     Interrupt {
         task_id: String,
@@ -338,6 +433,14 @@ pub enum Request {
         side: Side,
         start: u32,
         end: u32,
+        comment: String,
+    },
+    AddFeedbackRows {
+        task_id: String,
+        snapshot_id: String,
+        file: usize,
+        first_row: usize,
+        last_row: usize,
         comment: String,
     },
     RemoveFeedback {
@@ -379,6 +482,14 @@ pub enum Request {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
+    Accepted {
+        task_id: String,
+        submission_id: String,
+    },
+    Attachments {
+        task_id: String,
+        attachments: Vec<Attachment>,
+    },
     Workspace(Workspace),
     Task(TaskView),
     Project(Project),
@@ -399,4 +510,5 @@ pub struct SubmissionRecord {
     pub state: String,
     pub receipt: Option<String>,
     pub feedback: Vec<String>,
+    pub outgoing: Option<OutgoingMessage>,
 }
