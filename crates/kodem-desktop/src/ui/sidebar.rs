@@ -524,6 +524,14 @@ impl Shell {
                                     t,
                                 ))
                             })
+                            .when(task.state.active() && !needs_input, |d| {
+                                d.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_color(t.muted)
+                                        .child(elapsed(task.updated)),
+                                )
+                            })
                             .child(motion::active_icon(
                                 (
                                     ElementId::from("sidebar-status"),
@@ -534,14 +542,6 @@ impl Shell {
                                 task.state.active() && !needs_input,
                                 cx.reduce_motion(),
                             ))
-                            .when(task.state.active() && !needs_input, |d| {
-                                d.child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .text_color(t.muted)
-                                        .child(elapsed(task.updated)),
-                                )
-                            })
                             .into_any_element()
                     } else {
                         div()
