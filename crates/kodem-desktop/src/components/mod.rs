@@ -2,6 +2,7 @@
 #![allow(dead_code)] // Preserve the attributed upstream component builder contracts.
 mod button;
 mod input_frame;
+pub mod text_document;
 pub mod text_input;
 pub use button::Button;
 use gpui::{Refineable, Role, StyleRefinement, prelude::*};

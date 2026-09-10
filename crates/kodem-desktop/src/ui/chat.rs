@@ -16,6 +16,14 @@ impl Shell {
             .child(motion::window_texture(self.settings.light))
             .child(motion::chat_dither(self.settings.light, cx.reduce_motion()));
         if let Some(view) = self.view.clone() {
+            self.chat_selection.update(cx, |doc, _| {
+                doc.set_viewport(
+                    self.chat_scroll.clone(),
+                    view.messages.iter().map(|m| m.seq).collect(),
+                    px(self.composer_height + 16.),
+                )
+            });
+            panel = panel.child(self.chat_selection.clone());
             let state = &view.task.state;
             let state_color = match state {
                 RunState::Completed => t.added,
@@ -197,7 +205,7 @@ impl Shell {
                                 .max_w(px(940.))
                                 .min_w_0()
                                 .h_full()
-                                .pb(px(self.composer_height)),
+                                .pb(px(self.composer_height + 16.)),
                             ),
                     );
                 }
@@ -226,7 +234,6 @@ impl Shell {
                                 )
                             }),
                     )
-                    .child(self.activity_strip(cx))
                     .child(self.composer(false, cx))
                     .child(
                         canvas(
@@ -433,12 +440,16 @@ impl Shell {
             .on_drop(cx.listener(|s, paths: &ExternalPaths, _, cx| {
                 s.attach_paths(paths.paths().to_vec(), cx)
             }))
-            .rounded(px(16.))
+            .rounded(px(motion::COMPOSER_RADIUS))
             .border_1()
             .border_color(t.border)
             .shadow(t.elevation())
             .overflow_hidden()
             .child(motion::composer_backdrop(t))
+            .when(!empty, |d| {
+                d.child(self.activity_strip(cx))
+                    .child(self.changed_files_strip(cx))
+            })
             .when(has_context, |d| {
                 d.child(div().px_3().pt_3().child(attachments))
             });
@@ -632,8 +643,50 @@ impl Shell {
                         "Send message · Enter"
                     },
                 )
-                .h(px(30.))
-                .w(px(32.))
+                .relative()
+                .overflow_hidden()
+                .h(px(32.))
+                .w(px(34.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(if disabled {
+                    t.border
+                } else {
+                    t.text.opacity(0.18)
+                })
+                .shadow(vec![
+                    BoxShadow {
+                        inset: true,
+                        color: rgb_to_hsla(rgb(0xffffff)).opacity(0.22),
+                        offset: point(px(0.), px(1.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(0.),
+                    },
+                    BoxShadow {
+                        inset: true,
+                        color: t.shadow.opacity(0.35),
+                        offset: point(px(0.), px(-2.)),
+                        blur_radius: px(1.),
+                        spread_radius: px(0.),
+                    },
+                    BoxShadow {
+                        inset: false,
+                        color: t.shadow,
+                        offset: point(px(0.), px(2.)),
+                        blur_radius: px(3.),
+                        spread_radius: px(-1.),
+                    },
+                ])
+                .child(motion::button_dither())
+                .hover(move |b| {
+                    b.bg(if disabled {
+                        t.raised
+                    } else {
+                        t.accent.opacity(0.88)
+                    })
+                    .text_color(if disabled { t.subtle } else { t.inset })
+                })
+                .active(move |b| b.bg(t.accent).shadow(Vec::new()))
                 .bg(if disabled { t.raised } else { t.accent })
                 .text_color(if disabled { t.subtle } else { t.inset })
                 .disabled(disabled)
@@ -681,7 +734,23 @@ impl Shell {
         }
         wrapper.into_any_element()
     }
-    fn message(&mut self, index: usize, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn message(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        self.selection_inputs = Some(Vec::new());
+        let content = self.message_content(index, window, cx);
+        let inputs = self.selection_inputs.take().unwrap_or_default();
+        if let Some(message) = self.view.as_ref().and_then(|view| view.messages.get(index)) {
+            let order = message.seq;
+            self.chat_selection
+                .update(cx, |doc, cx| doc.register(order, inputs, cx));
+        }
+        content
+    }
+    fn message_content(
+        &mut self,
+        index: usize,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(message) = self
             .view
             .as_ref()

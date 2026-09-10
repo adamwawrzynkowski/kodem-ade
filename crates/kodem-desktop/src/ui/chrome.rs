@@ -301,6 +301,7 @@ impl Render for Shell {
                 | Panel::Access
                 | Panel::Projects
                 | Panel::TaskMenu
+                | Panel::ThreadMenu
                 | Panel::Sort
                 | Panel::Comparison
         ) {

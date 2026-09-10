@@ -11,6 +11,7 @@ impl Shell {
             Panel::Files => "Files",
             Panel::Check => "Run a project check",
             Panel::Rename => "Rename task",
+            Panel::DeleteTask => "Delete thread?",
             Panel::Questions => "Codex needs your input",
             Panel::None
             | Panel::Models
@@ -18,6 +19,7 @@ impl Shell {
             | Panel::Access
             | Panel::Projects
             | Panel::TaskMenu
+            | Panel::ThreadMenu
             | Panel::Sort
             | Panel::Comparison => "",
         };
@@ -31,6 +33,74 @@ impl Shell {
             .gap_3()
             .p_4();
         match self.panel {
+            Panel::DeleteTask => {
+                if let Some(task) = self
+                    .thread_menu
+                    .as_ref()
+                    .and_then(|context| {
+                        self.workspace
+                            .as_ref()?
+                            .tasks
+                            .iter()
+                            .find(|task| task.id == context.task_id)
+                    })
+                    .cloned()
+                {
+                    content = content.child(div().font_weight(FontWeight::SEMIBOLD).child(task.title.clone()))
+                        .child(div().text_size(px(13.)).text_color(theme.muted).child("Delete this thread and its local conversation history? This cannot be undone. Project files and the worktree stay on disk."));
+                    if let Some(error) = &self.error {
+                        content = content.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(theme.removed)
+                                .child(error.clone()),
+                        );
+                    }
+                    let id = task.id.clone();
+                    let deleting = self.deleting_task.as_ref() == Some(&id);
+                    content = content.child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_2()
+                            .mt_2()
+                            .child(
+                                self.ghost("cancel-delete-thread", "close", "Cancel")
+                                    .disabled(deleting)
+                                    .on_click(cx.listener(|s, _, _, cx| {
+                                        s.panel = Panel::None;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                self.primary(
+                                    "confirm-delete-thread",
+                                    "close",
+                                    if deleting {
+                                        "Deleting…"
+                                    } else {
+                                        "Delete thread"
+                                    },
+                                )
+                                .bg(theme.removed)
+                                .text_color(theme.canvas)
+                                .disabled(deleting)
+                                .on_click(cx.listener(
+                                    move |s, _, _, cx| {
+                                        if s.deleting_task.is_some() {
+                                            return;
+                                        }
+                                        s.deleting_task = Some(id.clone());
+                                        s.send(core::Request::DeleteTask {
+                                            task_id: id.clone(),
+                                        });
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
+                    );
+                }
+            }
             Panel::NewTask => {
                 content = content.child(
                     div()
@@ -445,6 +515,7 @@ impl Shell {
             | Panel::Access
             | Panel::Projects
             | Panel::TaskMenu
+            | Panel::ThreadMenu
             | Panel::Sort
             | Panel::Comparison => {}
         }

@@ -247,7 +247,7 @@ impl DiffView {
         cx: &mut Context<Self>,
     ) {
         match event {
-            SelectionInput::Begin { byte, extend } => {
+            SelectionInput::Begin { range, extend } => {
                 if self.pending_comment {
                     return;
                 }
@@ -256,12 +256,18 @@ impl DiffView {
                     self.reset_list();
                 }
                 self.gutter = None;
-                let point = Position { row, byte: *byte };
+                let point = Position {
+                    row,
+                    byte: range.end,
+                };
                 if *extend && self.text.as_ref().is_some_and(|s| s.column == column) {
                     self.text.as_mut().unwrap().head = point;
                 } else {
                     self.text = Some(TextSelection {
-                        anchor: point,
+                        anchor: Position {
+                            row,
+                            byte: range.start,
+                        },
                         head: point,
                         column,
                     });
@@ -399,11 +405,33 @@ impl DiffView {
             }
         } else if let Some(selection) = &self.text {
             let column = selection.column;
+            // Use the painted row's coordinates. List estimates can differ from
+            // the text hitbox at partial rows and were overwriting child selections.
+            let row = self
+                .rows
+                .iter()
+                .find_map(|(&(index, side), input)| {
+                    if side != column || index.abs_diff(row) > 2 {
+                        return None;
+                    }
+                    input
+                        .read(cx)
+                        .text_bounds()
+                        .filter(|b| position.y >= b.top() && position.y < b.bottom())
+                        .map(|_| index)
+                })
+                .unwrap_or(row);
             if self.visible(row, column) {
                 let byte = self
                     .rows
                     .get(&(row, column))
-                    .map(|input| input.read(cx).byte_at(position))
+                    .map(|input| {
+                        let input = input.read(cx);
+                        let position = input
+                            .text_bounds()
+                            .map_or(position, |b| point(position.x, b.top() + px(9.)));
+                        input.byte_at(position)
+                    })
                     .unwrap_or(self.lines[row].text.len());
                 self.text.as_mut().unwrap().head = Position { row, byte };
             }
@@ -643,6 +671,7 @@ impl Render for DiffView {
             .retain(|key, _| self.rows.contains_key(key));
         let entity = cx.entity();
         let bounds_entity = entity.clone();
+        let pointer_entity = entity.clone();
         let width = if self.split {
             (self.text_width + 66.) * 2.
         } else {
@@ -670,9 +699,6 @@ impl Render for DiffView {
                     view.selection_event(0, column, &SelectionInput::SelectAll, cx);
                 },
             ))
-            .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, window, cx| {
-                view.pointer_move(event, window, cx)
-            }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|view, _, window, cx| view.finish_drag(window, cx)),
@@ -686,7 +712,14 @@ impl Render for DiffView {
                     move |bounds, _, cx| {
                         bounds_entity.update(cx, |view, _| view.bounds = Some(bounds));
                     },
-                    |_, _, _, _| {},
+                    move |_, _, window, _| {
+                        let entity = pointer_entity.clone();
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Bubble && entity.read(cx).drag.is_some() {
+                                entity.update(cx, |view, cx| view.pointer_move(event, window, cx));
+                            }
+                        });
+                    },
                 )
                 .absolute()
                 .size_full(),

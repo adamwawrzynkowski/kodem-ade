@@ -14,6 +14,24 @@ use unicode_segmentation::*;
 actions!(
     text_input,
     [
+        WordLeft,
+        WordRight,
+        SelectWordLeft,
+        SelectWordRight,
+        LineStart,
+        LineEnd,
+        SelectLineStart,
+        SelectLineEnd,
+        SelectHome,
+        SelectEnd,
+        DeleteWordLeft,
+        DeleteWordRight,
+        DeleteLineStart,
+        DeleteLineEnd,
+        SelectUp,
+        SelectDown,
+        Undo,
+        Redo,
         Backspace,
         Delete,
         Left,
@@ -40,11 +58,18 @@ pub struct SubmitInput;
 /// Pointer and clipboard operations delegated by a row to its document owner.
 #[derive(Clone)]
 pub enum SelectionInput {
-    Begin { byte: usize, extend: bool },
+    Begin { range: Range<usize>, extend: bool },
     Move { byte: usize },
     End,
     Copy,
     SelectAll,
+}
+
+#[derive(Clone)]
+struct EditState {
+    content: SharedString,
+    selection: Range<usize>,
+    reversed: bool,
 }
 
 pub struct TextInput {
@@ -58,6 +83,9 @@ pub struct TextInput {
     line_height: Pixels,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
+    click_anchor: Option<Range<usize>>,
+    undo: Vec<EditState>,
+    redo: Vec<EditState>,
     readonly: bool,
     composer: bool,
     delegated_selection: bool,
@@ -81,6 +109,9 @@ impl TextInput {
             line_height: px(22.),
             last_bounds: None,
             is_selecting: false,
+            click_anchor: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
             readonly: false,
             composer: false,
             delegated_selection: false,
@@ -102,6 +133,12 @@ impl TextInput {
     }
     /// Applies a document-owned byte selection to this row.
     pub fn set_selection(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        let range = self
+            .content
+            .floor_char_boundary(range.start.min(self.content.len()))
+            ..self
+                .content
+                .floor_char_boundary(range.end.min(self.content.len()));
         if self.selected_range != range {
             self.selected_range = range;
             cx.notify();
@@ -109,14 +146,15 @@ impl TextInput {
     }
     /// Maps a pointer to a UTF-8 boundary in this row.
     pub fn byte_at(&self, position: Point<Pixels>) -> usize {
-        let position = if self.delegated_selection {
-            self.last_bounds.map_or(position, |bounds| {
-                point(position.x, bounds.top() + self.line_height / 2.)
-            })
-        } else {
-            position
-        };
         self.index_for_mouse_position(position)
+    }
+    /// Returns the last painted text bounds for cross-block pointer selection.
+    pub fn text_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.last_bounds
+    }
+    /// Returns the content length in UTF-8 bytes without allocating a copy.
+    pub fn text_len(&self) -> usize {
+        self.content.len()
     }
     /// Returns the current draft.
     pub fn text(&self) -> String {
@@ -124,6 +162,8 @@ impl TextInput {
     }
     /// Replaces the draft and resets selection after switching tasks.
     pub fn set_text(&mut self, text: String, cx: &mut Context<Self>) {
+        self.undo.clear();
+        self.redo.clear();
         self.content = text.into();
         self.prose = None;
         self.selected_range = self.content.len()..self.content.len();
@@ -161,7 +201,27 @@ impl TextInput {
         self.colors.clear();
         self.prose = Some((spans, light));
     }
-    fn vertical(&mut self, direction: f32, cx: &mut Context<Self>) {
+    fn visual_line_boundary(&self, end: bool) -> usize {
+        let byte = self.cursor_offset();
+        for (start, line) in &self.last_layout {
+            if byte >= *start
+                && byte <= start + line.len()
+                && let Some(position) = line.position_for_index(byte - start, self.line_height)
+            {
+                let x = if end {
+                    self.last_bounds.map_or(px(100000.), |b| b.size.width)
+                } else {
+                    px(0.)
+                };
+                return start
+                    + line
+                        .closest_index_for_position(point(x, position.y), self.line_height)
+                        .unwrap_or_else(|i| i);
+            }
+        }
+        line_boundary(&self.content, byte, end)
+    }
+    fn vertical(&mut self, direction: f32, extend: bool, cx: &mut Context<Self>) {
         let Some(bounds) = self.last_bounds else {
             return;
         };
@@ -176,17 +236,160 @@ impl TextInput {
                     bounds.left() + position.x,
                     bounds.top() + y + position.y + self.line_height * direction,
                 );
-                self.move_to(self.index_for_mouse_position(target), cx);
+                let byte = self.index_for_mouse_position(target);
+                if extend {
+                    self.select_to(byte, cx);
+                } else {
+                    self.move_to(byte, cx);
+                }
                 return;
             }
             y += line.size(self.line_height).height;
         }
     }
     fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
-        self.vertical(-1., cx);
+        self.vertical(-1., false, cx);
     }
     fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
-        self.vertical(1., cx);
+        self.vertical(1., false, cx);
+    }
+    fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(
+            word_boundary(&self.content, self.cursor_offset(), false),
+            cx,
+        );
+    }
+    fn word_right(&mut self, _: &WordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(word_boundary(&self.content, self.cursor_offset(), true), cx);
+    }
+    fn select_word_left(&mut self, _: &SelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(
+            word_boundary(&self.content, self.cursor_offset(), false),
+            cx,
+        );
+    }
+    fn select_word_right(&mut self, _: &SelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(word_boundary(&self.content, self.cursor_offset(), true), cx);
+    }
+    fn line_start(&mut self, _: &LineStart, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(self.visual_line_boundary(false), cx);
+    }
+    fn line_end(&mut self, _: &LineEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(self.visual_line_boundary(true), cx);
+    }
+    fn select_line_start(&mut self, _: &SelectLineStart, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.visual_line_boundary(false), cx);
+    }
+    fn select_line_end(&mut self, _: &SelectLineEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.visual_line_boundary(true), cx);
+    }
+    fn select_home(&mut self, _: &SelectHome, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(0, cx);
+    }
+    fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.content.len(), cx);
+    }
+    fn delete_word_left(
+        &mut self,
+        _: &DeleteWordLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.readonly {
+            return;
+        }
+        if self.selected_range.is_empty() {
+            self.select_to(
+                word_boundary(&self.content, self.cursor_offset(), false),
+                cx,
+            );
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+    fn delete_word_right(
+        &mut self,
+        _: &DeleteWordRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.readonly {
+            return;
+        }
+        if self.selected_range.is_empty() {
+            self.select_to(word_boundary(&self.content, self.cursor_offset(), true), cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+    fn delete_line_start(
+        &mut self,
+        _: &DeleteLineStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.readonly {
+            return;
+        }
+        if self.selected_range.is_empty() {
+            self.select_to(self.visual_line_boundary(false), cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+    fn delete_line_end(&mut self, _: &DeleteLineEnd, window: &mut Window, cx: &mut Context<Self>) {
+        if self.readonly {
+            return;
+        }
+        if self.selected_range.is_empty() {
+            self.select_to(self.visual_line_boundary(true), cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
+    }
+    fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.vertical(-1., true, cx);
+    }
+    fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.vertical(1., true, cx);
+    }
+    fn edit_state(&self) -> EditState {
+        EditState {
+            content: self.content.clone(),
+            selection: self.selected_range.clone(),
+            reversed: self.selection_reversed,
+        }
+    }
+    fn remember_edit(&mut self) {
+        if self.marked_range.is_some() {
+            return;
+        }
+        if self.undo.len() == 100 {
+            self.undo.remove(0);
+        }
+        self.undo.push(self.edit_state());
+        self.redo.clear();
+    }
+    fn restore_edit(&mut self, state: EditState, cx: &mut Context<Self>) {
+        self.content = state.content;
+        self.selected_range = state.selection;
+        self.selection_reversed = state.reversed;
+        self.marked_range = None;
+        cx.notify();
+    }
+    fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.readonly {
+            return;
+        }
+        if let Some(state) = self.undo.pop() {
+            self.redo.push(self.edit_state());
+            self.restore_edit(state, cx);
+        }
+    }
+    fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.readonly {
+            return;
+        }
+        if let Some(state) = self.redo.pop() {
+            self.undo.push(self.edit_state());
+            self.restore_edit(state, cx);
+        }
     }
     fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
         if self.composer && self.marked_range.is_none() {
@@ -283,16 +486,21 @@ impl TextInput {
                 return;
             }
         }
+        let byte = self.index_for_mouse_position(event.position);
+        let range = clicked_range(&self.content, byte, event.click_count);
         if self.delegated_selection {
             cx.emit(SelectionInput::Begin {
-                byte: self.index_for_mouse_position(event.position),
+                range,
                 extend: event.modifiers.shift,
             });
             return;
         }
         self.is_selecting = true;
-
-        if event.modifiers.shift {
+        self.click_anchor = (event.click_count > 1).then_some(range.clone());
+        if event.click_count > 1 {
+            self.move_to(range.start, cx);
+            self.select_to(range.end, cx);
+        } else if event.modifiers.shift {
             self.select_to(self.index_for_mouse_position(event.position), cx);
         } else {
             self.move_to(self.index_for_mouse_position(event.position), cx)
@@ -313,8 +521,20 @@ impl TextInput {
             });
             return;
         }
-        if self.is_selecting {
-            self.select_to(self.index_for_mouse_position(event.position), cx);
+        if self.is_selecting && event.pressed_button == Some(MouseButton::Left) {
+            let byte = self.index_for_mouse_position(event.position);
+            if let Some(anchor) = self.click_anchor.clone() {
+                let word = clicked_range(&self.content, byte, 2);
+                if byte < anchor.start {
+                    self.move_to(anchor.end, cx);
+                    self.select_to(word.start, cx);
+                } else {
+                    self.move_to(anchor.start, cx);
+                    self.select_to(word.end.max(anchor.end), cx);
+                }
+            } else {
+                self.select_to(byte, cx);
+            }
         }
     }
 
@@ -524,6 +744,8 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
+        self.remember_edit();
+        self.selection_reversed = false;
         self.content =
             (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
                 .into();
@@ -549,6 +771,8 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
+        self.remember_edit();
+        self.selection_reversed = false;
         self.content =
             (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
                 .into();
@@ -748,6 +972,12 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) {
+        let input = self.input.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase == gpui::DispatchPhase::Bubble && input.read(cx).is_selecting {
+                input.update(cx, |input, cx| input.on_mouse_move(event, window, cx));
+            }
+        });
         let focus = self.input.read(cx).focus_handle.clone();
         window.handle_input(
             &focus,
@@ -792,6 +1022,24 @@ impl Render for TextInput {
             })
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
+            .on_action(cx.listener(Self::word_left))
+            .on_action(cx.listener(Self::word_right))
+            .on_action(cx.listener(Self::select_word_left))
+            .on_action(cx.listener(Self::select_word_right))
+            .on_action(cx.listener(Self::line_start))
+            .on_action(cx.listener(Self::line_end))
+            .on_action(cx.listener(Self::select_line_start))
+            .on_action(cx.listener(Self::select_line_end))
+            .on_action(cx.listener(Self::select_home))
+            .on_action(cx.listener(Self::select_end))
+            .on_action(cx.listener(Self::delete_word_left))
+            .on_action(cx.listener(Self::delete_word_right))
+            .on_action(cx.listener(Self::delete_line_start))
+            .on_action(cx.listener(Self::delete_line_end))
+            .on_action(cx.listener(Self::select_up))
+            .on_action(cx.listener(Self::select_down))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))
@@ -838,6 +1086,37 @@ impl Focusable for TextInput {
 /// Registers standard macOS editing bindings for every native text input.
 pub fn init(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("home", Home, Some("TextInput")),
+        KeyBinding::new("end", End, Some("TextInput")),
+        KeyBinding::new("shift-home", SelectHome, Some("TextInput")),
+        KeyBinding::new("shift-end", SelectEnd, Some("TextInput")),
+        KeyBinding::new("ctrl-a", LineStart, Some("TextInput")),
+        KeyBinding::new("ctrl-e", LineEnd, Some("TextInput")),
+        KeyBinding::new("ctrl-b", Left, Some("TextInput")),
+        KeyBinding::new("ctrl-f", Right, Some("TextInput")),
+        KeyBinding::new("ctrl-p", Up, Some("TextInput")),
+        KeyBinding::new("ctrl-n", Down, Some("TextInput")),
+        KeyBinding::new("ctrl-h", Backspace, Some("TextInput")),
+        KeyBinding::new("ctrl-d", Delete, Some("TextInput")),
+        KeyBinding::new("ctrl-k", DeleteLineEnd, Some("TextInput")),
+        KeyBinding::new("alt-left", WordLeft, Some("TextInput")),
+        KeyBinding::new("alt-right", WordRight, Some("TextInput")),
+        KeyBinding::new("alt-shift-left", SelectWordLeft, Some("TextInput")),
+        KeyBinding::new("alt-shift-right", SelectWordRight, Some("TextInput")),
+        KeyBinding::new("cmd-left", LineStart, Some("TextInput")),
+        KeyBinding::new("cmd-right", LineEnd, Some("TextInput")),
+        KeyBinding::new("cmd-shift-left", SelectLineStart, Some("TextInput")),
+        KeyBinding::new("cmd-shift-right", SelectLineEnd, Some("TextInput")),
+        KeyBinding::new("cmd-shift-up", SelectHome, Some("TextInput")),
+        KeyBinding::new("cmd-shift-down", SelectEnd, Some("TextInput")),
+        KeyBinding::new("alt-backspace", DeleteWordLeft, Some("TextInput")),
+        KeyBinding::new("alt-delete", DeleteWordRight, Some("TextInput")),
+        KeyBinding::new("cmd-backspace", DeleteLineStart, Some("TextInput")),
+        KeyBinding::new("cmd-delete", DeleteLineEnd, Some("TextInput")),
+        KeyBinding::new("shift-up", SelectUp, Some("TextInput")),
+        KeyBinding::new("shift-down", SelectDown, Some("TextInput")),
+        KeyBinding::new("cmd-z", Undo, Some("TextInput")),
+        KeyBinding::new("cmd-shift-z", Redo, Some("TextInput")),
         KeyBinding::new("backspace", Backspace, Some("TextInput")),
         KeyBinding::new("delete", Delete, Some("TextInput")),
         KeyBinding::new("left", Left, Some("TextInput")),
@@ -847,8 +1126,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-a", SelectAll, Some("TextInput")),
         KeyBinding::new("cmd-a", SelectAll, Some("DiffDocument")),
         KeyBinding::new("cmd-c", Copy, Some("DiffDocument")),
-        KeyBinding::new("cmd-left", Home, Some("TextInput")),
-        KeyBinding::new("cmd-right", End, Some("TextInput")),
+        KeyBinding::new("cmd-up", Home, Some("TextInput")),
+        KeyBinding::new("cmd-down", End, Some("TextInput")),
         KeyBinding::new("cmd-v", Paste, Some("TextInput")),
         KeyBinding::new("cmd-c", Copy, Some("TextInput")),
         KeyBinding::new("cmd-x", Cut, Some("TextInput")),
@@ -950,4 +1229,46 @@ fn hsla_from_rgb(color: [u8; 3]) -> gpui::Hsla {
     gpui::rgb_to_hsla(rgb(((color[0] as u32) << 16)
         | ((color[1] as u32) << 8)
         | color[2] as u32))
+}
+
+fn word_boundary(text: &str, byte: usize, forward: bool) -> usize {
+    if forward {
+        text.unicode_word_indices()
+            .map(|(start, word)| start + word.len())
+            .find(|end| *end > byte)
+            .unwrap_or(text.len())
+    } else {
+        text.unicode_word_indices()
+            .map(|(start, _)| start)
+            .take_while(|start| *start < byte)
+            .last()
+            .unwrap_or(0)
+    }
+}
+
+fn line_boundary(text: &str, byte: usize, end: bool) -> usize {
+    if end {
+        text[byte..]
+            .find('\n')
+            .map_or(text.len(), |offset| byte + offset)
+    } else {
+        text[..byte].rfind('\n').map_or(0, |offset| offset + 1)
+    }
+}
+
+fn clicked_range(text: &str, byte: usize, count: usize) -> Range<usize> {
+    if count >= 3 {
+        let end = line_boundary(text, byte, true);
+        return line_boundary(text, byte, false)..(end + usize::from(end < text.len()));
+    }
+    if count == 2 {
+        return text
+            .split_word_bound_indices()
+            .find_map(|(start, word)| {
+                let end = start + word.len();
+                (start <= byte && (byte < end || end == text.len())).then_some(start..end)
+            })
+            .unwrap_or(byte..byte);
+    }
+    byte..byte
 }

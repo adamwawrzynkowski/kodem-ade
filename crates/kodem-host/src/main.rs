@@ -216,6 +216,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 review: None,
                 context_usage: None,
                 pinned: false,
+                settled: None,
                 archived: false,
                 created: now(),
                 updated: now(),
@@ -251,6 +252,13 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                     t.title_pending = false;
                 }
                 TaskEdit::Pin(pin) => t.pinned = pin,
+                TaskEdit::Settle(settled) => {
+                    ensure!(
+                        !t.state.active() && t.state != RunState::DeliveryUnknown,
+                        "Finish or reconcile this task before settling it"
+                    );
+                    t.settled = Some(settled);
+                }
                 TaskEdit::Archive(archive) => t.archived = archive,
                 TaskEdit::Draft(draft) => {
                     ensure!(draft.len() <= 1024 * 1024, "Draft exceeds 1 MiB");
@@ -270,6 +278,35 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 h.store.save_task(&t)?;
             }
             Ok(Response::Ok)
+        }
+        Request::DeleteTask { task_id } => {
+            let mut h = host.lock().unwrap();
+            ensure!(
+                !h.checks.contains(&task_id)
+                    && !h
+                        .terminals
+                        .get(&task_id)
+                        .is_some_and(|terminal| terminal.running()),
+                "Stop this task's check or terminal before deleting it"
+            );
+            h.store.delete_task(&task_id)?;
+            if let Some(session) = h.sessions.get(&task_id) {
+                let _ = session.send(provider::Control::Close);
+            }
+            h.requests.remove(&task_id);
+            h.activities.remove(&task_id);
+            h.terminals.remove(&task_id);
+            Ok(Response::Ok)
+        }
+        Request::TaskChanges { task_id } => {
+            let task = host.lock().unwrap().store.task(&task_id)?;
+            let comparison = if task.baseline.is_some() {
+                Comparison::Baseline
+            } else {
+                Comparison::WorkingTree
+            };
+            let summary = git::capture(&task, comparison)?.summary();
+            Ok(Response::TaskChanges { task_id, summary })
         }
         Request::SaveSettings(settings) => {
             host.lock().unwrap().store.save_settings(&settings)?;

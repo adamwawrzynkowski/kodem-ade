@@ -199,9 +199,9 @@ impl Shell {
                 }
             }
             let (open, settled): (Vec<_>, Vec<_>) = tasks.into_iter().partition(|task| {
-                task.state != RunState::Completed
-                    || task.pinned
-                    || self.selected.as_deref() == Some(&task.id)
+                !task.is_settled()
+                    || (task.settled.is_none()
+                        && (task.pinned || self.selected.as_deref() == Some(&task.id)))
             });
             let empty = open.is_empty() && settled.is_empty();
             for task in open {
@@ -307,16 +307,22 @@ impl Shell {
     ) -> AnyElement {
         let t = self.theme;
         let selected = self.selected.as_deref() == Some(&task.id);
-        let surface = t.raised;
-        let title_color = if selected {
-            t.text
+        let tint = project_tint(project);
+        let radius = px(9.);
+        let mut surface = if self.settings.light {
+            t.inset
         } else {
-            t.text.opacity(0.94)
+            t.raised
         };
+        if selected {
+            surface.lightness = (surface.lightness + 0.045).min(1.);
+        }
+        let title_color = t.text.opacity(0.94);
         let metadata = t.muted;
         let mut hover_surface = surface;
         hover_surface.lightness = (surface.lightness + 0.016).min(1.);
         let id = task.id.clone();
+        let menu_id = id.clone();
         let status_color = match task.state {
             RunState::Starting | RunState::Running => t.accent,
             RunState::Waiting => t.accent,
@@ -435,12 +441,14 @@ impl Shell {
         );
         div()
             .id((ElementId::from("task"), SharedString::from(id.clone())))
+            .relative()
+            .overflow_hidden()
             .w_full()
             .mb(px(6.))
             .px(px(10.))
             .py(px(5.))
             .line_height(relative(1.25))
-            .rounded(px(9.))
+            .rounded(radius)
             .bg(surface)
             .border_1()
             .border_color(t.muted.opacity(0.12))
@@ -462,6 +470,7 @@ impl Shell {
             ])
             .cursor_pointer()
             .hover(move |d| d.bg(hover_surface))
+            .child(motion::project_dither(tint, radius))
             .child(
                 div()
                     .h(px(20.))
@@ -529,6 +538,29 @@ impl Shell {
                 ),
             )
             .child(meta)
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |s, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    let viewport = window.viewport_size();
+                    s.thread_menu = Some(ThreadMenu {
+                        task_id: menu_id.clone(),
+                        position: point(
+                            event
+                                .position
+                                .x
+                                .clamp(px(8.), (viewport.width - px(244.)).max(px(8.))),
+                            event
+                                .position
+                                .y
+                                .clamp(px(8.), (viewport.height - px(192.)).max(px(8.))),
+                        ),
+                    });
+                    s.panel = Panel::ThreadMenu;
+                    window.focus(&s.focus, cx);
+                    cx.notify();
+                }),
+            )
             .on_click(cx.listener(move |s, _, _, cx| s.select_task(id.clone(), cx)))
             .into_any_element()
     }
@@ -561,9 +593,7 @@ pub(super) fn project_icon(project: &Project) -> AnyElement {
             "file-text",
         ][hash as usize % 8]
     };
-    let tint = [
-        0xb5a28c, 0xa7a0af, 0x9ca58f, 0xc49c75, 0x91aaa3, 0xb3999e, 0x9ba4b5, 0xb0aa8f,
-    ][(hash >> 8) as usize % 8];
+    let tint = project_tint(project);
     div()
         .size(px(18.))
         .rounded(px(4.))
@@ -571,10 +601,18 @@ pub(super) fn project_icon(project: &Project) -> AnyElement {
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgb(tint).opacity(0.08))
-        .child(icon(glyph).size(px(15.)).text_color(rgb(tint)))
+        .bg(tint.opacity(0.08))
+        .child(icon(glyph).size(px(15.)).text_color(tint))
         .into_any_element()
 }
+
+// Apply the same saturation boost to saved colors in icons and thread grain.
+fn project_tint(project: &Project) -> Hsla {
+    let mut color = rgb_to_hsla(rgb(project.color.unwrap_or(0xb5a28c)));
+    color.saturation = (color.saturation * 1.2).min(1.);
+    color
+}
+
 fn rank(state: &RunState) -> u8 {
     match state {
         RunState::Waiting => 0,

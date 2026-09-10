@@ -11,6 +11,7 @@ use std::{
 };
 
 pub(super) enum Control {
+    Close,
     Wake,
     Interrupt,
     Answer {
@@ -290,6 +291,7 @@ fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result
         }
         while let Ok(control) = controls.try_recv() {
             match control {
+                Control::Close => return Ok(()),
                 Control::Wake => {}
                 Control::Query {
                     method,

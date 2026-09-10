@@ -23,6 +23,8 @@ pub struct Project {
     pub path: PathBuf,
     pub name: String,
     pub pinned: bool,
+    #[serde(default)]
+    pub color: Option<u32>,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub enum RunState {
@@ -169,6 +171,8 @@ pub struct Task {
     #[serde(default)]
     pub context_usage: Option<ContextUsage>,
     pub pinned: bool,
+    #[serde(default)]
+    pub settled: Option<bool>,
     pub archived: bool,
     pub created: u64,
     pub updated: u64,
@@ -176,6 +180,14 @@ pub struct Task {
     #[serde(default)]
     pub attachments: Vec<Attachment>,
     pub error: Option<String>,
+}
+impl Task {
+    /// Resolves manual settlement while keeping active or uncertain work visible.
+    pub fn is_settled(&self) -> bool {
+        !self.state.active()
+            && self.state != RunState::DeliveryUnknown
+            && self.settled.unwrap_or(self.state == RunState::Completed)
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum MessageKind {
@@ -435,6 +447,14 @@ pub struct FileDelta {
     pub notice: Option<String>,
     pub digest: String,
 }
+/// Current task-baseline totals; omitted files have no inline line counts.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChangeSummary {
+    pub files: usize,
+    pub added: usize,
+    pub removed: usize,
+    pub omitted_files: usize,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DiffSnapshot {
     pub id: String,
@@ -446,6 +466,30 @@ pub struct DiffSnapshot {
     pub files: Vec<FileDelta>,
 }
 impl DiffSnapshot {
+    /// Counts changed files and available added/removed lines in this capture.
+    pub fn summary(&self) -> ChangeSummary {
+        ChangeSummary {
+            files: self.files.len(),
+            added: self
+                .files
+                .iter()
+                .flat_map(|file| &file.lines)
+                .filter(|line| line.kind == LineKind::Added)
+                .count(),
+            removed: self
+                .files
+                .iter()
+                .flat_map(|file| &file.lines)
+                .filter(|line| line.kind == LineKind::Removed)
+                .count(),
+            omitted_files: self
+                .files
+                .iter()
+                .filter(|file| file.notice.is_some())
+                .count(),
+        }
+    }
+
     /// Compares captured repository content without treating capture time or storage identity as a change.
     pub fn same_content(&self, other: &Self) -> bool {
         self.task_id == other.task_id
@@ -495,6 +539,7 @@ pub enum TaskEdit {
     Access(AccessMode),
     Rename(String),
     Pin(bool),
+    Settle(bool),
     Archive(bool),
     Draft(String),
     Model {
@@ -523,6 +568,12 @@ pub enum Request {
     EditTask {
         task_id: String,
         edit: TaskEdit,
+    },
+    DeleteTask {
+        task_id: String,
+    },
+    TaskChanges {
+        task_id: String,
     },
     SaveSettings(Settings),
     Submit {
@@ -640,6 +691,10 @@ pub enum Response {
     Project(Project),
     Created(Task),
     Diff(DiffSnapshot),
+    TaskChanges {
+        task_id: String,
+        summary: ChangeSummary,
+    },
     Resources(Vec<Resource>),
     Files(Vec<Vec<u8>>),
     Text(String),

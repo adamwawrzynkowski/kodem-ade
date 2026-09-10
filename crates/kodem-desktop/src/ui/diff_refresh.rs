@@ -40,6 +40,23 @@ pub(super) fn accepts_reply(
 }
 
 impl Shell {
+    /// Refreshes prompt totals independently of the review panel's current scope.
+    pub(super) fn refresh_task_changes(&mut self) {
+        let Some(task_id) = self.selected.clone() else {
+            return;
+        };
+        if self
+            .tx
+            .send(bridge::Command::Request(core::Request::TaskChanges {
+                task_id,
+            }))
+            .is_ok()
+        {
+            self.changes_refresh.pending += 1;
+            self.changes_refresh.requested_at = Some(Instant::now());
+        }
+    }
+
     /// Requests current repository content, giving the host the latest known snapshot to reuse.
     pub(super) fn refresh_diff(&mut self) {
         let Some(task_id) = self.selected.clone() else {

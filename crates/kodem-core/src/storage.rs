@@ -73,9 +73,20 @@ impl Store {
         )?;
         Ok(())
     }
-    /// Returns all registered repositories.
+    /// Returns registered repositories, saving a color for any project that predates colors.
     pub fn projects(&self) -> Result<Vec<Project>> {
-        self.read_json("SELECT json FROM projects ORDER BY path")
+        let mut projects: Vec<Project> =
+            self.read_json("SELECT json FROM projects ORDER BY path")?;
+        for project in &mut projects {
+            if project.color.is_none() {
+                project.color = Some(project_color());
+                self.db.execute(
+                    "UPDATE projects SET json=?1 WHERE id=?2",
+                    params![serde_json::to_string(project)?, project.id],
+                )?;
+            }
+        }
+        Ok(projects)
     }
     /// Adds a project once, using its canonical path as the identity boundary.
     pub fn add_project(&self, path: PathBuf) -> Result<Project> {
@@ -91,6 +102,7 @@ impl Store {
                 .into(),
             path,
             pinned: false,
+            color: Some(project_color()),
         };
         self.db.execute(
             "INSERT INTO projects VALUES(?1,?2,?3)",
@@ -109,6 +121,38 @@ impl Store {
             .query_row("SELECT json FROM tasks WHERE id=?1", [id], |r| r.get(0))
             .context("Task not found")?;
         Ok(serde_json::from_str(&json)?)
+    }
+    /// Deletes an idle task and its local conversation records in one transaction.
+    pub fn delete_task(&mut self, id: &str) -> Result<()> {
+        let task = self.task(id)?;
+        ensure!(
+            !task.state.active()
+                && task.active_turn.is_none()
+                && task.state != RunState::DeliveryUnknown
+                && !self.has_uncertain_submission(id)?,
+            "Finish or reconcile this task before deleting it"
+        );
+        ensure!(
+            !self
+                .outgoing(id)?
+                .iter()
+                .any(|message| message.state == DeliveryState::Queued),
+            "Cancel queued messages before deleting this task"
+        );
+        let mut settings = self.settings()?;
+        if settings.selected_task.as_deref() == Some(id) {
+            settings.selected_task = None;
+        }
+        let transaction = self.db.transaction()?;
+        transaction.execute("DELETE FROM messages WHERE task_id=?1", [id])?;
+        transaction.execute("DELETE FROM submissions WHERE task_id=?1", [id])?;
+        transaction.execute("DELETE FROM tasks WHERE id=?1", [id])?;
+        transaction.execute(
+            "INSERT INTO settings VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET json=excluded.json",
+            [serde_json::to_string(&settings)?],
+        )?;
+        transaction.commit()?;
+        Ok(())
     }
     /// Saves a task independently of other tasks and their drafts.
     pub fn save_task(&self, task: &Task) -> Result<()> {
@@ -474,4 +518,13 @@ impl Store {
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
+}
+
+// Keep randomly assigned colors readable against both sidebar themes.
+fn project_color() -> u32 {
+    let bytes = *uuid::Uuid::new_v4().as_bytes();
+    let palette = [
+        0xd99a73, 0x9ca9dc, 0x89bca7, 0xcba0cd, 0xc8b875, 0x7fb8ca, 0xd88f9e, 0xa7bc80,
+    ];
+    palette[bytes[0] as usize % palette.len()]
 }

@@ -1,6 +1,8 @@
 //! Small native animations shared by activity indicators and panel entrances.
 use super::*;
 
+pub(super) const COMPOSER_RADIUS: f32 = 16.;
+
 /// Applies a moving highlight to text while keeping a single stable text layout.
 pub(super) fn gleam(
     id: impl Into<ElementId>,
@@ -92,7 +94,7 @@ pub(super) fn system_reduce_motion() -> bool {
     }
 }
 
-/// Adds visible, slowly drifting grain behind chat content, static under Reduce Motion.
+/// Fades independently staggered dots to half or full brightness, holds, then fades out.
 pub(super) fn chat_dither(light: bool, reduce_motion: bool) -> AnyElement {
     let layer = div().absolute().inset_0();
     if reduce_motion {
@@ -101,44 +103,149 @@ pub(super) fn chat_dither(light: bool, reduce_motion: bool) -> AnyElement {
     layer
         .with_animation(
             "chat-background-dither",
-            Animation::new(Duration::from_secs(240))
+            Animation::new(Duration::from_secs(120))
                 .with_easing(|phase| phase)
                 .repeat(),
-            move |layer, phase| layer.child(dither_frame(light, phase)),
+            move |layer, phase| layer.child(dither_frame(light, phase * 120.)),
         )
         .into_any_element()
 }
 
-fn dither_frame(light: bool, phase: f32) -> impl IntoElement {
+fn dot_opacity(seed: u32, seconds: f32) -> f32 {
+    // Each period divides the animation duration, so its loop is seamless.
+    let period = [3., 4., 5., 6.][seed as usize % 4];
+    let offset = (seed >> 8) as f32 / (u32::MAX >> 8) as f32 * period;
+    let age = (seconds + offset).rem_euclid(period);
+    let ramp = if age < 0.5 {
+        age * 2.
+    } else if age < 1.5 {
+        1.
+    } else if age < 2. {
+        (2. - age) * 2.
+    } else {
+        0.
+    };
+    let peak = if seed & 4 == 0 { 0.5 } else { 1. };
+    peak * ramp * ramp * (3. - 2. * ramp)
+}
+
+fn dot_seed(x: u32, y: u32) -> u32 {
+    let mut n = x.wrapping_mul(0x9e3779b9) ^ y.wrapping_mul(0x85ebca6b);
+    n = (n ^ (n >> 16)).wrapping_mul(0x7feb352d);
+    n = (n ^ (n >> 15)).wrapping_mul(0x846ca68b);
+    n ^ (n >> 16)
+}
+
+fn dither_frame(light: bool, seconds: f32) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let tint = rgb_to_hsla(if light { rgb(0x000000) } else { rgb(0xffffff) });
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                // Dots never overlap: reserve one draw order for the entire grid instead
+                // of inserting thousands of tiny rectangles into GPUI's overlap tree.
+                window.paint_layer(bounds, |window| {
+                    for y in 0..(f32::from(bounds.size.height) / 8.).ceil() as u32 {
+                        for x in 0..(f32::from(bounds.size.width) / 8.).ceil() as u32 {
+                            let seed = dot_seed(x, y);
+                            if (seed >> 16).is_multiple_of(4) {
+                                continue;
+                            }
+                            let alpha =
+                                dot_opacity(seed, seconds) * if light { 0.09 } else { 0.14 };
+                            if alpha <= 0. {
+                                continue;
+                            }
+                            let origin = bounds.origin
+                                + point(px(x as f32 * 8. + 2.), px(y as f32 * 8. + 2.));
+                            window.paint_quad(gpui::fill(
+                                Bounds::new(origin, size(px(1.5), px(1.5))),
+                                tint.opacity(alpha),
+                            ));
+                        }
+                    }
+                });
+            });
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
+/// Adds the app icon's corner grain in a project's saved color.
+pub(super) fn project_dither(color: Hsla, radius: Pixels) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, cx| {
-            let tile = 256.;
             let width = f32::from(bounds.size.width);
             let height = f32::from(bounds.size.height);
-            // SVG bounds are pixel-snapped. Translate the cached sprite in the GPU
-            // after snapping, retaining fractional device pixels between frames.
-            let translation =
-                point(px(-phase * tile), px(-phase * tile)).scale(window.scale_factor());
-            let transform = TransformationMatrix::unit().translate(translation);
-            let tint = if light { rgb(0x000000) } else { rgb(0xffffff) };
-            let color = rgb_to_hsla(tint).opacity(if light { 0.08 } else { 0.14 });
+            let radius = f32::from(radius);
+            let data = rounded_project_dither(width, height, radius);
+            // SVGs support a rounded clip path; GPUI content masks are rectangular.
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                // Only placement changes. Every tile reuses the same cached SVG raster.
-                for y in 0..(height / tile).ceil() as usize + 2 {
-                    for x in 0..(width / tile).ceil() as usize + 2 {
-                        let origin = point(
-                            bounds.left() + px(x as f32 * tile),
-                            bounds.top() + px(y as f32 * tile),
-                        );
-                        let _ = window.paint_svg(
-                            Bounds::new(origin, size(px(tile), px(tile))),
-                            "chat-dither".into(),
-                            None,
-                            transform,
-                            color,
-                            cx,
-                        );
+                let _ = window.paint_svg(
+                    bounds,
+                    format!("thread-dither:{width}:{height}:{radius}").into(),
+                    Some(data.as_bytes()),
+                    Default::default(),
+                    color.opacity(0.72),
+                    cx,
+                );
+            });
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
+fn rounded_project_dither(width: f32, height: f32, radius: f32) -> String {
+    let edge = width.min(200.);
+    let grain = include_str!("../../../../assets/app/corner-warm.svg").replacen(
+        "<svg ",
+        &format!("<svg width=\"{edge}\" height=\"{edge}\" "),
+        1,
+    );
+    // Match the tile's inner border edge, including both bottom corners.
+    let inner_width = (width - 2.).max(0.);
+    let inner_height = (height - 2.).max(0.);
+    let inner_radius = (radius - 1.).max(0.);
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+<defs><clipPath id="tile-clip"><rect x="1" y="1" width="{inner_width}" height="{inner_height}" rx="{inner_radius}"/></clipPath></defs>
+<g clip-path="url(#tile-clip)">{grain}</g></svg>"#
+    )
+}
+
+/// Paints fine light and dark grain along the button bevel without covering its icon.
+pub(super) fn button_dither() -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            // The one-pixel grain points are separated by a two-pixel pitch.
+            window.paint_layer(bounds, |window| {
+                for y in (1..f32::from(bounds.size.height) as u32 - 1).step_by(2) {
+                    for x in (1..f32::from(bounds.size.width) as u32 - 1).step_by(2) {
+                        let edge = (x as f32)
+                            .min(y as f32)
+                            .min(f32::from(bounds.size.width) - x as f32)
+                            .min(f32::from(bounds.size.height) - y as f32);
+                        if edge > 5. || dot_seed(x, y).is_multiple_of(3) {
+                            continue;
+                        }
+                        let color = if x + y
+                            < (f32::from(bounds.size.width + bounds.size.height) / 2.) as u32
+                        {
+                            rgb(0xffffff)
+                        } else {
+                            rgb(0x000000)
+                        };
+                        window.paint_quad(gpui::fill(
+                            Bounds::new(
+                                bounds.origin + point(px(x as f32), px(y as f32)),
+                                size(px(1.), px(1.)),
+                            ),
+                            rgb_to_hsla(color).opacity((1. - edge / 6.) * 0.27),
+                        ));
                     }
                 }
             });
@@ -161,10 +268,26 @@ pub(super) fn composer_backdrop(theme: Theme) -> impl IntoElement {
                     size(bounds.size.width, height),
                 );
                 let corners = Corners {
-                    top_left: if band == 0 { px(16.) } else { px(0.) },
-                    top_right: if band == 0 { px(16.) } else { px(0.) },
-                    bottom_left: if band == bands - 1 { px(16.) } else { px(0.) },
-                    bottom_right: if band == bands - 1 { px(16.) } else { px(0.) },
+                    top_left: if band == 0 {
+                        px(COMPOSER_RADIUS)
+                    } else {
+                        px(0.)
+                    },
+                    top_right: if band == 0 {
+                        px(COMPOSER_RADIUS)
+                    } else {
+                        px(0.)
+                    },
+                    bottom_left: if band == bands - 1 {
+                        px(COMPOSER_RADIUS)
+                    } else {
+                        px(0.)
+                    },
+                    bottom_right: if band == bands - 1 {
+                        px(COMPOSER_RADIUS)
+                    } else {
+                        px(0.)
+                    },
                 };
                 window.paint_backdrop_filter(
                     region,
@@ -172,7 +295,9 @@ pub(super) fn composer_backdrop(theme: Theme) -> impl IntoElement {
                     &[Filter::Blur(px(6. + band as f32 * 2.))],
                 );
             }
-            window.paint_quad(fill(bounds, theme.raised.opacity(0.76)).corner_radii(px(16.)));
+            window.paint_quad(
+                fill(bounds, theme.raised.opacity(0.76)).corner_radii(px(COMPOSER_RADIUS)),
+            );
         },
     )
     .absolute()

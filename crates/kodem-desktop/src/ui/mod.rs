@@ -66,8 +66,14 @@ enum Panel {
     Access,
     Projects,
     TaskMenu,
+    ThreadMenu,
+    DeleteTask,
     Sort,
     Comparison,
+}
+struct ThreadMenu {
+    task_id: String,
+    position: Point<Pixels>,
 }
 struct PendingSubmission {
     task_id: String,
@@ -88,6 +94,8 @@ pub struct Shell {
     settings: Settings,
     theme: Theme,
     panel: Panel,
+    thread_menu: Option<ThreadMenu>,
+    deleting_task: Option<String>,
     error: Option<String>,
     status: String,
     host_connected: bool,
@@ -100,6 +108,8 @@ pub struct Shell {
     diff: Option<DiffSnapshot>,
     new_diff: Option<DiffSnapshot>,
     diff_refresh: diff_refresh::DiffRefresh,
+    changes_refresh: diff_refresh::DiffRefresh,
+    task_changes: Option<ChangeSummary>,
     diff_subscription: Option<Subscription>,
     file: usize,
     reviewing_file: bool,
@@ -112,6 +122,8 @@ pub struct Shell {
     folded: HashSet<String>,
     collapsed_changes: HashSet<String>,
     text_views: HashMap<String, Entity<TextInput>>,
+    chat_selection: Entity<crate::components::text_document::TextDocument>,
+    selection_inputs: Option<Vec<Entity<TextInput>>>,
     resources: Vec<core::Resource>,
     files: Vec<Vec<u8>>,
     file_text: Option<(String, String)>,
@@ -249,6 +261,9 @@ impl Shell {
                                 .tx
                                 .send(bridge::Command::Poll(s.selected.clone(), s.show_terminal));
                         }
+                        if s.host_connected && s.selected.is_some() && s.changes_refresh.due() {
+                            s.refresh_task_changes();
+                        }
                         if s.host_connected
                             && s.selected.is_some()
                             && (s.show_review || s.reviewing_file)
@@ -278,6 +293,8 @@ impl Shell {
             settings: Settings::default(),
             theme: Theme::new(false),
             panel: Panel::None,
+            thread_menu: None,
+            deleting_task: None,
             error: None,
             status: "Connecting to local host…".into(),
             host_connected: false,
@@ -290,6 +307,8 @@ impl Shell {
             diff: None,
             new_diff: None,
             diff_refresh: diff_refresh::DiffRefresh::default(),
+            changes_refresh: Default::default(),
+            task_changes: None,
             diff_subscription: None,
             file: 0,
             reviewing_file: false,
@@ -302,6 +321,8 @@ impl Shell {
             folded: HashSet::new(),
             collapsed_changes: HashSet::new(),
             text_views: HashMap::new(),
+            chat_selection: cx.new(|_| Default::default()),
+            selection_inputs: None,
             resources: Vec::new(),
             files: Vec::new(),
             file_text: None,
@@ -342,6 +363,9 @@ impl Shell {
         let _ = self.tx.send(bridge::Command::Request(request));
     }
     fn apply(&mut self, reply: bridge::Reply, cx: &mut Context<Self>) {
+        if matches!(reply.request, core::Request::TaskChanges { .. }) {
+            self.changes_refresh.completed();
+        }
         if matches!(reply.request, core::Request::CaptureDiff { .. }) {
             self.diff_refresh.completed();
         }
@@ -369,7 +393,8 @@ impl Shell {
             core::Request::Task { task_id, .. }
             | core::Request::ReadFile { task_id, .. }
             | core::Request::Files { task_id }
-            | core::Request::Terminal { task_id } => Some(task_id),
+            | core::Request::Terminal { task_id }
+            | core::Request::TaskChanges { task_id } => Some(task_id),
             _ => None,
         };
         if response_task.is_some_and(|id| self.selected.as_ref() != Some(id)) {
@@ -380,6 +405,14 @@ impl Shell {
         let response = match reply.result {
             Ok(r) => r,
             Err(e) => {
+                if matches!(reply.request, core::Request::DeleteTask { .. }) {
+                    self.deleting_task = None;
+                }
+                if matches!(reply.request, core::Request::TaskChanges { .. }) {
+                    // Retain the last consistent totals while files are being written.
+                    cx.notify();
+                    return;
+                }
                 if let core::Request::Submit {
                     task_id,
                     submission_id,
@@ -437,6 +470,13 @@ impl Shell {
                     }
                     cx.notify();
                     return;
+                }
+                if self
+                    .selected
+                    .as_ref()
+                    .is_some_and(|id| !workspace.tasks.iter().any(|task| &task.id == id))
+                {
+                    self.clear_selected_task(cx);
                 }
                 self.workspace = Some(workspace);
                 self.status = "Local host connected".into();
@@ -535,6 +575,11 @@ impl Shell {
                     self.submit_current(cx);
                 }
             }
+            Response::TaskChanges { task_id, summary } => {
+                if self.selected.as_ref() == Some(&task_id) {
+                    self.task_changes = Some(summary);
+                }
+            }
             Response::Diff(diff) => {
                 if self.selected.as_deref() != Some(&diff.task_id) {
                     return;
@@ -624,6 +669,30 @@ impl Shell {
             }
             Response::Terminal(terminal) => self.terminal = Some(terminal),
             Response::Ok => match reply.request {
+                core::Request::DeleteTask { task_id } => {
+                    self.deleting_task = None;
+                    self.thread_menu = None;
+                    self.panel = Panel::None;
+                    if let Some(workspace) = &mut self.workspace {
+                        workspace.tasks.retain(|task| task.id != task_id);
+                    }
+                    if self.selected.as_ref() == Some(&task_id) {
+                        self.clear_selected_task(cx);
+                    }
+                    self.send(core::Request::Hello);
+                }
+                core::Request::EditTask {
+                    task_id,
+                    edit: TaskEdit::Settle(_) | TaskEdit::Pin(_) | TaskEdit::Archive(_),
+                } => {
+                    if self.selected.as_ref() == Some(&task_id) {
+                        self.send(core::Request::Task {
+                            task_id,
+                            before: None,
+                        });
+                    }
+                    self.send(core::Request::Hello);
+                }
                 core::Request::Submit { .. } => {
                     self.status = "Prompt recorded; awaiting provider acknowledgement".into();
                 }
@@ -682,6 +751,29 @@ impl Shell {
         }
         cx.notify();
     }
+    fn clear_selected_task(&mut self, cx: &mut Context<Self>) {
+        self.selected = None;
+        self.view = None;
+        self.diff = None;
+        self.new_diff = None;
+        self.diff_view = None;
+        self.diff_subscription = None;
+        self.reviewing_file = false;
+        self.historical_diff = false;
+        self.task_changes = None;
+        self.terminal = None;
+        self.file_text = None;
+        self.text_views.clear();
+        self.chat_selection = cx.new(|_| Default::default());
+        self.input
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        self.draft_dirty = false;
+        self.settings.selected_task = None;
+        self.save_settings();
+        self.submitted_draft = None;
+        self.question_inputs.clear();
+        self.auto_submit_task = None;
+    }
     fn select_task(&mut self, id: String, cx: &mut Context<Self>) {
         if let Some(task_id) = &self.selected
             && self.view.is_some()
@@ -699,6 +791,7 @@ impl Shell {
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         self.draft_dirty = false;
         self.selected = Some(id.clone());
+        self.task_changes = None;
         self.view = None;
         self.diff = None;
         self.historical_diff = false;
@@ -706,6 +799,7 @@ impl Shell {
         self.diff_subscription = None;
         self.new_diff = None;
         self.text_views.clear();
+        self.chat_selection = cx.new(|_| Default::default());
         self.question_inputs.clear();
         self.file = 0;
         self.reviewing_file = false;
@@ -718,6 +812,7 @@ impl Shell {
             before: None,
         });
         self.refresh_diff();
+        self.refresh_task_changes();
         cx.notify();
     }
     fn save_window_placement(&self) {
@@ -774,17 +869,19 @@ impl Shell {
         cx.notify();
     }
     fn readonly(&mut self, key: String, text: String, cx: &mut Context<Self>) -> Entity<TextInput> {
-        if let Some(input) = self.text_views.get(&key) {
+        let input = if let Some(input) = self.text_views.get(&key) {
             if input.read(cx).text() != text {
                 input.update(cx, |input, cx| input.set_text(text, cx));
             }
-            return input.clone();
+            input.clone()
+        } else {
+            let input = cx.new(|cx| TextInput::readonly(text, cx));
+            self.text_views.insert(key, input.clone());
+            input
+        };
+        if let Some(inputs) = &mut self.selection_inputs {
+            inputs.push(input.clone());
         }
-        if self.text_views.len() > 400 {
-            self.text_views.clear();
-        }
-        let input = cx.new(|cx| TextInput::readonly(text, cx));
-        self.text_views.insert(key, input.clone());
         input
     }
     fn control(&self, id: impl Into<ElementId>) -> Button {

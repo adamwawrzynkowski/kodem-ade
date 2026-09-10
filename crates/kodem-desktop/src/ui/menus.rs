@@ -157,6 +157,95 @@ impl Shell {
                     );
                 }
             }
+            Panel::ThreadMenu => {
+                if let Some(context) = &self.thread_menu {
+                    menu = menu
+                        .left(context.position.x)
+                        .top(context.position.y)
+                        .w(px(236.));
+                    if let Some(task) = self
+                        .workspace
+                        .as_ref()
+                        .and_then(|workspace| {
+                            workspace
+                                .tasks
+                                .iter()
+                                .find(|task| task.id == context.task_id)
+                        })
+                        .cloned()
+                    {
+                        let open_id = task.id.clone();
+                        menu = menu.child(
+                            self.ghost("thread-open", "chat", "Open")
+                                .w_full()
+                                .justify_start()
+                                .on_click(cx.listener(move |s, _, _, cx| {
+                                    if s.selected.as_ref() != Some(&open_id) {
+                                        s.select_task(open_id.clone(), cx);
+                                    }
+                                    s.panel = Panel::None;
+                                    cx.notify();
+                                })),
+                        );
+                        let settled = task.is_settled();
+                        let settle_id = task.id.clone();
+                        let busy = task.state.active() || task.state == RunState::DeliveryUnknown;
+                        menu = menu.child(
+                            self.ghost(
+                                "thread-settle",
+                                if settled { "arrow-up" } else { "check" },
+                                if settled { "Unsettle" } else { "Settle" },
+                            )
+                            .w_full()
+                            .justify_start()
+                            .disabled(busy)
+                            .on_click(cx.listener(
+                                move |s, _, _, cx| {
+                                    s.send(core::Request::EditTask {
+                                        task_id: settle_id.clone(),
+                                        edit: TaskEdit::Settle(!settled),
+                                    });
+                                    s.panel = Panel::None;
+                                    cx.notify();
+                                },
+                            )),
+                        );
+                        let archive_id = task.id.clone();
+                        let archived = task.archived;
+                        menu = menu.child(
+                            self.ghost(
+                                "thread-archive",
+                                "archive",
+                                if archived { "Unarchive" } else { "Archive" },
+                            )
+                            .w_full()
+                            .justify_start()
+                            .on_click(cx.listener(
+                                move |s, _, _, cx| {
+                                    s.send(core::Request::EditTask {
+                                        task_id: archive_id.clone(),
+                                        edit: TaskEdit::Archive(!archived),
+                                    });
+                                    s.panel = Panel::None;
+                                    cx.notify();
+                                },
+                            )),
+                        );
+                        menu = menu.child(div().h(px(1.)).my_1().bg(t.border)).child(
+                            self.ghost("thread-delete", "close", "Delete…")
+                                .w_full()
+                                .justify_start()
+                                .text_color(t.removed)
+                                .disabled(busy)
+                                .on_click(cx.listener(|s, _, _, cx| {
+                                    s.error = None;
+                                    s.panel = Panel::DeleteTask;
+                                    cx.notify();
+                                })),
+                        );
+                    }
+                }
+            }
             Panel::TaskMenu => {
                 let right = if self.show_review && self.window_width > 1100. {
                     self.settings.review_width + 14.
