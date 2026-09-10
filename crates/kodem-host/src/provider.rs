@@ -983,7 +983,7 @@ impl Catalog {
     }
 }
 
-/// Reads account and model capabilities from the pinned provider runtime.
+/// Reads account and model capabilities from the selected provider runtime.
 pub(super) fn discover(host: Shared, cwd: Option<PathBuf>) -> Result<()> {
     let cwd = cwd.unwrap_or(std::env::current_dir()?);
     let mut codex = Catalog::open(&host, &cwd)?;

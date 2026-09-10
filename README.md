@@ -1,6 +1,6 @@
 # Kodem ADE
 
-A native Rust and GPUI coding workspace. This first implementation connects task conversations, Git review, captured feedback and a terminal through a durable local host. Codex is the supported provider, pinned to CLI 0.153.4.
+A native Rust and GPUI coding workspace. This first implementation connects task conversations, Git review, captured feedback and a terminal through a durable local host. Codex is the supported provider. Kodem requires CLI 0.153.4 or newer, with no upper version limit.
 
 ## Build on macOS
 
@@ -12,7 +12,7 @@ Requires Apple Silicon and macOS 14 or newer. Double-click one of these files in
 | [Build Release Nightly.command](Build%20Release%20Nightly.command) | Builds `target/nightly/Kodem Nightly.app` and publishes a GitHub prerelease |
 | [Build Release Production.command](Build%20Release%20Production.command) | Builds `target/production/Kodem.app` and publishes the latest stable GitHub release |
 
-All commands check Apple Command Line Tools, Git, Rust 1.97.1, rustfmt, Clippy and the complete pinned Codex runtime package. They install missing prerequisites, fetch locked Cargo dependencies, format-check, compile, package and verify signatures. They do not launch or stop the app. Debug keeps its current local workflow. Release commands keep local bundles and publish a ZIP for installation and updates; they do not replace an app in `/Applications` during publication.
+All commands check Apple Command Line Tools, Git, Rust 1.97.1, rustfmt, Clippy and a complete Codex runtime package at or above the minimum version. They reuse the newest valid installed Codex package, or install the minimum version when none is available. They install missing prerequisites, fetch locked Cargo dependencies, format-check, compile, package and verify signatures. They do not launch or stop the app. Debug keeps its current local workflow. Release commands keep local bundles and publish a ZIP for installation and updates; they do not replace an app in `/Applications` during publication.
 
 Release commands require GitHub CLI with repository write access, a clean checkout, and a commit already available on GitHub. They never commit or push source. Run `gh auth login` before publishing. Each channel starts at the workspace version and increments its patch version on subsequent releases. Set `KODEM_VERSION=X.X.X` to choose a newer version explicitly. Nightly uses `nightly/vX.X.X` tags and GitHub prereleases; Production uses `vX.X.X` and marks the release as latest. Uploads remain drafts until GitHub's SHA-256 digest matches the archive.
 
@@ -39,8 +39,10 @@ Open the app, choose a repository, then create a task. An isolated Git worktree 
 Kodem uses Codex's own authentication. If you have not signed in, run this in Terminal:
 
 ```sh
-~/.local/share/kodem/runtimes/0.153.4/bin/codex login
+codex login
 ```
+
+If Codex is installed only by Kodem's build setup, use `~/.local/share/kodem/runtimes/0.153.4/bin/codex login` instead.
 
 Use **Settings → Codex** to refresh the account connection. Choose the model, reasoning effort and access from their separate composer menus. The effort slider supports dragging and arrow keys. Access defaults to Workspace; AI auto-approve routes permission requests to Codex’s risk-based AI reviewer while retaining the workspace sandbox. Read only restricts execution, and Full access removes sandbox and approval prompts. These controls apply to the next turn and cannot change during active execution. Compose a prompt and press Return (or Command-Return); Shift-Return inserts a newline. Commands and file changes stream into the transcript. Approval requests wait for your response. Model questions appear inside the composer with selectable options, descriptions, and a custom-answer field. Answer every question and select **Send answers**; each new request triggers the configured attention notification. Async questions remain available after the model finishes or the app restarts; answers reach the active turn immediately or start the next turn. Stop interrupts the active turn. A transport failure with uncertain delivery requires explicit history reconciliation; Kodem does not silently resend your prompt.
 
@@ -78,7 +80,9 @@ The earlier redesign was inspected using actual native GPUI Metal frames and app
 
 The host starts on demand. Closing the window keeps active tasks and terminals alive. Settings includes an explicit host shutdown action. An unused host with no active task, check or terminal exits after five minutes.
 
-Data lives in `~/Library/Application Support/Kodem/`. Debug and release use the same store by default. `KODEM_DATA_DIR` selects an isolated store; `KODEM_CODEX_PATH` overrides the runtime path but must point into the complete supported Codex package. Database upgrades reject newer schemas, back up existing older schemas and apply changes transactionally.
+Data lives in `~/Library/Application Support/Kodem/`. Debug and release use the same store by default. `KODEM_DATA_DIR` selects an isolated store. Database upgrades reject newer schemas, back up existing older schemas and apply changes transactionally.
+
+`KODEM_CODEX_PATH` overrides the runtime path and must point into a complete Codex package meeting the minimum in `codex-min-version`. Otherwise Kodem selects the newest valid package from PATH, common installation locations and `~/.local/share/kodem/runtimes/*/`. Selection happens at runtime, so upgrading Codex does not require rebuilding Kodem. The installer and application share the same minimum requirement. Future incompatible app-server protocol changes may still require adapter updates.
 
 GPUI-CE 0.2.2 and its platform package 0.1.0 share one native type graph. The component layer contains a small, attributed port of GPUI Kit/base 0.6.0's Button and InputBase. It is not the full Kit library. See [third-party notices](assets/THIRD_PARTY.md).
 

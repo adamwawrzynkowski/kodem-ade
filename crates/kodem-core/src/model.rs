@@ -182,7 +182,7 @@ impl AccessMode {
             Self::FullAccess => "Full access",
         }
     }
-    /// Returns the pinned provider's thread sandbox mode.
+    /// Returns the provider's thread sandbox mode.
     pub fn sandbox(self) -> &'static str {
         match self {
             Self::ReadOnly => "read-only",

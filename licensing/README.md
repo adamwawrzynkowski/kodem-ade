@@ -37,7 +37,7 @@ embedded syntax definitions and themes. Review it when upgrading syntect.
 Other copied or embedded assets still require their own provenance review;
 Cargo metadata is not a complete asset-license audit.
 
-The current bundle contains Kodem and kodem-host. Codex 0.153.4 and its helper,
+The current bundle contains Kodem and kodem-host. Codex and its helper,
 ripgrep and shell are downloaded separately from OpenAI by the build setup.
 They are not covered by the Rust dependency notice snapshot or relicensed by
 Kodem's LICENSE. Before adding those binaries to an installer or app bundle,

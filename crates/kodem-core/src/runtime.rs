@@ -1,16 +1,17 @@
-//! Codex 0.153.4 app-server JSONL adapter. Wire fields checked against its generated schema.
+//! Codex app-server JSONL adapter, validated against the minimum supported version's schema.
 use crate::model::*;
 use anyhow::{Context, Result, bail, ensure};
+use semver::Version;
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver},
     time::{Duration, Instant},
 };
-pub const CODEX_VERSION: &str = "0.153.4";
+const CODEX_MIN_VERSION: &str = include_str!("../../../codex-min-version");
 pub struct Codex {
     child: Child,
     stdin: ChildStdin,
@@ -48,20 +49,62 @@ impl TitleOutput {
         }
     }
 }
-/// Finds the configured or installed CLI without relying on Finder's minimal PATH.
-pub fn executable() -> Result<PathBuf> {
+struct Runtime {
+    executable: PathBuf,
+    version: Version,
+}
+
+fn inspect_runtime(executable: &Path) -> Result<Runtime> {
+    let executable = executable.canonicalize()?;
+    let package = executable
+        .parent()
+        .and_then(Path::parent)
+        .context("Invalid Codex package path")?;
+    for relative in [
+        "bin/codex-code-mode-host",
+        "codex-path/rg",
+        "codex-resources/zsh/bin/zsh",
+        "codex-package.json",
+    ] {
+        ensure!(
+            package.join(relative).is_file(),
+            "Codex package is incomplete: missing {relative}. Run Build Debug.command to repair it."
+        );
+    }
+    let out = Command::new(&executable).arg("--version").output()?;
+    ensure!(out.status.success(), "Codex version query failed");
+    let output = String::from_utf8(out.stdout)?;
+    let version = Version::parse(
+        output
+            .trim()
+            .strip_prefix("codex-cli ")
+            .context("Invalid Codex version response")?,
+    )?;
+    let minimum = Version::parse(CODEX_MIN_VERSION.trim())?;
+    ensure!(
+        version.cmp_precedence(&minimum).is_ge(),
+        "Kodem requires Codex {minimum} or newer; found {version}. Run Build Debug.command to install a supported runtime."
+    );
+    let metadata: Value =
+        serde_json::from_slice(&std::fs::read(package.join("codex-package.json"))?)?;
+    ensure!(
+        metadata["version"].as_str() == Some(version.to_string().as_str()),
+        "Codex package metadata does not match CLI version {version}"
+    );
+    Ok(Runtime {
+        executable,
+        version,
+    })
+}
+
+fn installed_runtime() -> Result<Runtime> {
     if let Some(p) = std::env::var_os("KODEM_CODEX_PATH") {
-        let p = PathBuf::from(p);
-        ensure!(p.is_file(), "KODEM_CODEX_PATH is not a file");
-        return Ok(p);
+        return inspect_runtime(Path::new(&p)).context("Invalid KODEM_CODEX_PATH runtime");
     }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME is unavailable")?;
     let mut candidates = vec![
-        home.join(format!(
-            ".local/share/kodem/runtimes/{CODEX_VERSION}/bin/codex"
-        )),
         home.join(".local/bin/codex"),
         PathBuf::from("/opt/homebrew/bin/codex"),
         PathBuf::from("/usr/local/bin/codex"),
@@ -69,16 +112,33 @@ pub fn executable() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("PATH") {
         candidates.extend(std::env::split_paths(&path).map(|p| p.join("codex")));
     }
+    if let Ok(entries) = std::fs::read_dir(home.join(".local/share/kodem/runtimes")) {
+        candidates.extend(
+            entries
+                .flatten()
+                .map(|entry| entry.path().join("bin/codex")),
+        );
+    }
+    let mut seen = HashSet::new();
     candidates
         .into_iter()
-        .find(|p| p.is_file())
-        .context("Codex is not installed. Run Build Debug.command to install the required runtime.")
+        .filter_map(|p| p.canonicalize().ok())
+        .filter(|p| seen.insert(p.clone()))
+        .filter_map(|p| inspect_runtime(&p).ok())
+        .max_by(|a, b| a.version.cmp_precedence(&b.version))
+        .with_context(|| format!(
+            "No complete Codex {} or newer package found. Run Build Debug.command to install the required runtime.",
+            CODEX_MIN_VERSION.trim()
+        ))
+}
+
+/// Finds the configured or newest supported CLI without relying on Finder's minimal PATH.
+pub fn executable() -> Result<PathBuf> {
+    Ok(installed_runtime()?.executable)
 }
 /// Reports the installed version without exposing credentials or starting a provider turn.
 pub fn version() -> Result<String> {
-    let out = Command::new(executable()?).arg("--version").output()?;
-    ensure!(out.status.success(), "Codex version query failed");
-    Ok(String::from_utf8(out.stdout)?.trim().to_owned())
+    Ok(format!("codex-cli {}", installed_runtime()?.version))
 }
 impl Codex {
     /// Generates a bounded sidebar title in a separate ephemeral, restricted thread.
@@ -145,27 +205,7 @@ impl Codex {
 
     /// Starts and initializes one owned app-server process.
     pub fn start(cwd: &Path, mut event: impl FnMut(Value)) -> Result<Self> {
-        let executable = executable()?.canonicalize()?;
-        let package = executable
-            .parent()
-            .and_then(Path::parent)
-            .context("Invalid Codex package path")?;
-        for relative in [
-            "bin/codex-code-mode-host",
-            "codex-path/rg",
-            "codex-resources/zsh/bin/zsh",
-            "codex-package.json",
-        ] {
-            ensure!(
-                package.join(relative).is_file(),
-                "Codex package is incomplete: missing {relative}. Run Build Debug.command to repair it."
-            );
-        }
-        let version = version()?;
-        ensure!(
-            version.split_whitespace().last() == Some(CODEX_VERSION),
-            "This build supports Codex {CODEX_VERSION}; found {version}. Run the build command to install the matching runtime."
-        );
+        let executable = executable()?;
         let mut child = Command::new(executable)
             .current_dir(cwd)
             .args(["app-server", "--stdio", "-c",

@@ -3,8 +3,8 @@
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 KODEM_RUST_VERSION=1.97.1
-KODEM_CODEX_VERSION=0.153.4
-KODEM_RUNTIME_DIR="$HOME/.local/share/kodem/runtimes/$KODEM_CODEX_VERSION"
+KODEM_DEPENDENCIES_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+KODEM_CODEX_MIN_VERSION=$(cat "$KODEM_DEPENDENCIES_DIR/../codex-min-version")
 
 kodem_dependencies() {
     [[ "$(uname -s)" == Darwin ]] || { echo "These build commands require macOS." >&2; return 1; }
@@ -46,11 +46,16 @@ kodem_dependencies() {
     if ! rustup run "$KODEM_RUST_VERSION" cargo-clippy --version >/dev/null 2>&1; then rustup component add clippy --toolchain "$KODEM_RUST_VERSION"; fi
     export RUSTUP_TOOLCHAIN="$KODEM_RUST_VERSION"
     echo "Using $(rustc --version)"
-    if ! kodem_runtime_valid "$KODEM_RUNTIME_DIR"; then
-        echo "Installing the complete Codex $KODEM_CODEX_VERSION package from OpenAI…"
+    if ! kodem_find_runtime; then
+        if [[ "${KODEM_CODEX_PATH+x}" == x ]]; then
+            echo "KODEM_CODEX_PATH must point into a complete Codex $KODEM_CODEX_MIN_VERSION or newer package." >&2
+            return 1
+        fi
+        KODEM_RUNTIME_DIR="$HOME/.local/share/kodem/runtimes/$KODEM_CODEX_MIN_VERSION"
+        echo "Installing the complete Codex $KODEM_CODEX_MIN_VERSION package from OpenAI…"
         local archive_dir package_dir
         archive_dir=$(mktemp -d -t kodem-codex)
-        if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 "https://github.com/openai/codex/releases/download/rust-v$KODEM_CODEX_VERSION/codex-package-aarch64-apple-darwin.tar.gz" -o "$archive_dir/codex.tar.gz"; then rm -rf "$archive_dir"; return 1; fi
+        if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 "https://github.com/openai/codex/releases/download/rust-v$KODEM_CODEX_MIN_VERSION/codex-package-aarch64-apple-darwin.tar.gz" -o "$archive_dir/codex.tar.gz"; then rm -rf "$archive_dir"; return 1; fi
         mkdir "$archive_dir/package"
         if ! tar -xzf "$archive_dir/codex.tar.gz" -C "$archive_dir/package"; then rm -rf "$archive_dir"; return 1; fi
         package_dir="$archive_dir/package"
@@ -74,8 +79,8 @@ kodem_dependencies() {
             rm -rf "$archive_dir" "$runtime_stage"; return 1
         fi
         rm -rf "$archive_dir" "$runtime_stage.previous"
+        export KODEM_CODEX_PATH="$KODEM_RUNTIME_DIR/bin/codex"
     fi
-    export KODEM_CODEX_PATH="$KODEM_RUNTIME_DIR/bin/codex"
     echo "Using $("$KODEM_CODEX_PATH" --version)"
     # Cargo installs every pinned Rust dependency, including bundled SQLite.
     cargo fetch --locked
@@ -83,12 +88,66 @@ kodem_dependencies() {
 
 # Verifies the package layout, tool runner and bundled shell/search dependencies.
 kodem_runtime_valid() {
+    kodem_runtime_version "$1" >/dev/null
+}
+
+# Returns the version only after validating the complete package.
+kodem_runtime_version() {
     local root=$1
+    local package_version cli_version
     [[ -f "$root/codex-package.json" ]] || return 1
-    [[ "$(/usr/bin/plutil -extract version raw -o - "$root/codex-package.json" 2>/dev/null)" == "$KODEM_CODEX_VERSION" ]] || return 1
+    package_version=$(/usr/bin/plutil -extract version raw -o - "$root/codex-package.json" 2>/dev/null) || return 1
+    kodem_version_at_least "$package_version" "$KODEM_CODEX_MIN_VERSION" || return 1
     [[ -x "$root/bin/codex" && -x "$root/bin/codex-code-mode-host" && -x "$root/codex-path/rg" && -x "$root/codex-resources/zsh/bin/zsh" ]] || return 1
-    [[ "$("$root/bin/codex" --version 2>/dev/null)" == "codex-cli $KODEM_CODEX_VERSION" ]] || return 1
+    cli_version=$("$root/bin/codex" --version 2>/dev/null) || return 1
+    [[ "$cli_version" == "codex-cli $package_version" ]] || return 1
     "$root/bin/codex-code-mode-host" --help >/dev/null 2>&1 || return 1
     "$root/codex-path/rg" --version >/dev/null 2>&1 || return 1
     "$root/codex-resources/zsh/bin/zsh" -f -c 'exit 0' >/dev/null 2>&1 || return 1
+    echo "$package_version"
+}
+
+# Compares semantic version precedence, including prereleases and build metadata.
+kodem_version_at_least() {
+    /usr/bin/awk -v candidate="$1" -v minimum="$2" -f "$KODEM_DEPENDENCIES_DIR/codex-version.awk"
+}
+
+# Resolves CLI symlinks before checking the sibling package resources.
+kodem_runtime_root() {
+    local executable=$1 target hops=0
+    while [[ -L "$executable" ]]; do
+        ((hops += 1))
+        [[ "$hops" -le 40 ]] || return 1
+        target=$(readlink "$executable") || return 1
+        if [[ "$target" == /* ]]; then executable=$target
+        else executable="$(dirname "$executable")/$target"; fi
+    done
+    [[ -f "$executable" ]] || return 1
+    (cd "$(dirname "$executable")/.." && pwd -P)
+}
+
+# Honors an explicit override or selects the newest valid installed package.
+kodem_find_runtime() {
+    local candidate root version best_version="" best_root="" seen=$'\n'
+    local candidates=() path_entries=()
+    if [[ "${KODEM_CODEX_PATH+x}" == x ]]; then
+        candidates=("$KODEM_CODEX_PATH")
+    else
+        candidates=("$HOME/.local/bin/codex" /opt/homebrew/bin/codex /usr/local/bin/codex)
+        IFS=: read -r -a path_entries <<< "${PATH:-}"
+        for candidate in "${path_entries[@]}"; do candidates+=("${candidate:-.}/codex"); done
+        candidates+=("$HOME"/.local/share/kodem/runtimes/*/bin/codex)
+    fi
+    for candidate in "${candidates[@]}"; do
+        root=$(kodem_runtime_root "$candidate") || continue
+        [[ "$seen" != *$'\n'"$root"$'\n'* ]] || continue
+        seen+="$root"$'\n'
+        version=$(kodem_runtime_version "$root") || continue
+        if [[ -z "$best_version" ]] || kodem_version_at_least "$version" "$best_version"; then
+            best_version=$version
+            best_root=$root
+        fi
+    done
+    [[ -n "$best_root" ]] || return 1
+    export KODEM_CODEX_PATH="$best_root/bin/codex"
 }
