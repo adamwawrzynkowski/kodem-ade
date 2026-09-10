@@ -21,3 +21,9 @@ The app must be installed in a writable directory to replace itself. A download 
 An actual release upload/download/restart cycle and visual interaction remain untested. Optimized release packaging was not executed because publication requires a clean committed checkout already on GitHub. No commit or push was made. App control, launch and screenshots were excluded by the working agreement.
 
 The release integration follows [GitHub release metadata](https://docs.github.com/en/rest/releases/releases), [asset digests and downloads](https://docs.github.com/en/rest/releases/assets), and [GitHub CLI release creation](https://cli.github.com/manual/gh_release_create).
+
+## Draft publication lookup repair
+
+The first Nightly build uploaded its archive but failed with HTTP 404 when querying the unpublished release through the REST tag endpoint. Publication now resolves the draft with `gh release view --json apiUrl` and reads its asset digest from that release URL. A read-only probe of the actual publication function reproduced the old failure and passed with the corrected lookup; creation and publication were intercepted during that probe.
+
+The existing `nightly/v0.1.0` draft was then published after its source commit and archive checksum were verified. Its downloaded asset matched the local archive byte-for-byte. Workspace compilation, shell syntax and diff checks passed. Temporary probes and downloads were removed. This verifies release publication and download; app installation, reopening and visual interaction remain untested.

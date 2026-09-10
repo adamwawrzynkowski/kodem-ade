@@ -37,15 +37,16 @@ kodem_release_prepare() {
 
 # Publishes only after the archive upload and GitHub SHA-256 digest agree.
 kodem_release_publish() {
-    local channel=$1 archive=$2 title digest local_digest release_id
+    local channel=$1 archive=$2 title digest local_digest release_api
     local flags=(--latest)
     title="Kodem $release_version"
     if [[ "$channel" == nightly ]]; then title="Kodem Nightly $release_version"; flags=(--prerelease --latest=false); fi
     [[ "$(git rev-parse HEAD)" == "$release_commit" && -z "$(git status --porcelain --untracked-files=normal)" ]] || { echo 'Source changed during the build; refusing publication.' >&2; return 1; }
     # A failed upload leaves a draft, never a partial public release.
     gh release create "$release_tag" "$archive" --repo "$release_repository" --target "$release_commit" --title "$title" --generate-notes --draft "${flags[@]}"
-    release_id=$(gh api "repos/$release_repository/releases/tags/$release_tag" --jq .id)
-    digest=$(gh api "repos/$release_repository/releases/$release_id" --jq '.assets[] | select(.name == "Kodem-macos-aarch64.zip") | .digest')
+    # The REST tag endpoint cannot find an unpublished draft. The CLI resolves drafts too.
+    release_api=$(gh release view "$release_tag" --repo "$release_repository" --json apiUrl --jq .apiUrl)
+    digest=$(gh api "$release_api" --jq '.assets[] | select(.name == "Kodem-macos-aarch64.zip") | .digest')
     local_digest="sha256:$(/usr/bin/shasum -a 256 "$archive" | cut -d ' ' -f 1)"
     [[ "$digest" == "$local_digest" ]] || { echo "Upload verification failed. Release $release_tag remains a draft." >&2; return 1; }
     gh release edit "$release_tag" --repo "$release_repository" --draft=false "${flags[@]}"
