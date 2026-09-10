@@ -3,6 +3,46 @@ use super::*;
 use std::path::PathBuf;
 
 impl Shell {
+    /// Tracks only newly added draft context and stops requesting frames once it settles.
+    pub(super) fn sync_context_arrivals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut keys = HashSet::new();
+        if let Some(view) = &self.view {
+            keys.extend(view.task.attachments.iter().map(|a| a.id.clone()));
+            keys.extend(view.task.feedback.iter().map(|f| f.id.clone()));
+        } else {
+            keys.extend(
+                self.pending_attachments
+                    .iter()
+                    .map(|source| format!("pending:{source:?}")),
+            );
+        }
+        let initial = self.context_task != self.selected;
+        self.context_task = self.selected.clone();
+        if initial {
+            self.context_arrivals.clear();
+        }
+        self.context_arrivals.retain(|key, _| keys.contains(key));
+        let now = std::time::Instant::now();
+        for key in keys {
+            self.context_arrivals
+                .entry(key)
+                .or_insert_with(|| (!initial && !cx.reduce_motion()).then_some(now));
+        }
+        let mut active = false;
+        for time in self.context_arrivals.values_mut() {
+            if time.is_some_and(|time| {
+                cx.reduce_motion() || time.elapsed() >= Duration::from_millis(320)
+            }) {
+                *time = None;
+            }
+            active |= time.is_some();
+        }
+        if active {
+            window.request_animation_frame();
+        }
+        self.send_arrivals.retain(|_, arrival| !arrival.expired());
+    }
+
     /// Reports whether the draft has text or selected context to submit.
     pub(super) fn has_composer_content(&self, cx: &App) -> bool {
         !self.input.read(cx).text().trim().is_empty()
@@ -46,6 +86,23 @@ impl Shell {
             id: id.clone(),
             text: text.clone(),
             revision: self.draft_revision,
+            origin: self
+                .new_submission_origin
+                .take()
+                .or_else(|| {
+                    self.input
+                        .read(cx)
+                        .text_bounds()
+                        .map(|bounds| bounds.origin)
+                })
+                .map(|origin| {
+                    origin
+                        - point(
+                            px(crate::theme::MESSAGE_PADDING),
+                            px(crate::theme::MESSAGE_PADDING),
+                        )
+                }),
+            queued: view.task.state.active() && self.settings.send_mode == SendMode::Queue,
         });
         self.send(core::Request::EditTask {
             task_id: view.task.id.clone(),
@@ -73,6 +130,11 @@ impl Shell {
                 .find(|p| Some(&p.id) == self.selected_project.as_ref())
                 .or(w.projects.first())
         }) {
+            self.new_submission_origin = self
+                .input
+                .read(cx)
+                .text_bounds()
+                .map(|bounds| bounds.origin);
             self.empty_draft = self.input.read(cx).text();
             self.creating_task = true;
             self.send(core::Request::CreateTask {
@@ -606,7 +668,17 @@ impl Shell {
                     outgoing.feedback.len()
                 )));
             }
-            tray = tray.child(row);
+            tray = tray.child(
+                if let Some(arrival) = self.send_arrivals.get(&outgoing.id).filter(|a| a.queued) {
+                    motion::send_transition(
+                        row,
+                        arrival,
+                        cx.reduce_motion() || self.panel != Panel::None,
+                    )
+                } else {
+                    row.into_any_element()
+                },
+            );
         }
         tray.into_any_element()
     }

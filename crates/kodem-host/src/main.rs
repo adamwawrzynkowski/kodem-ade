@@ -605,9 +605,19 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             git::stage(&task, &snapshot, file)?;
             Ok(Response::Ok)
         }
-        Request::Resources { task_id } => {
-            Ok(Response::Resources(provider::resources(host, task_id)?))
-        }
+        Request::ComposerCatalog {
+            request_id: _,
+            task_id,
+            project_id,
+        } => Ok(Response::ComposerCatalog(provider::composer_catalog(
+            host, task_id, project_id,
+        )?)),
+        Request::Resources {
+            task_id,
+            project_id,
+        } => Ok(Response::Resources(provider::resources(
+            host, task_id, project_id,
+        )?)),
         Request::Files { task_id } => {
             let cwd = host.lock().unwrap().store.task(&task_id)?.cwd;
             Ok(Response::Files(git::files(&cwd)?))

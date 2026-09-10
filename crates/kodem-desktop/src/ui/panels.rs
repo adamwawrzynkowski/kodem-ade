@@ -133,6 +133,13 @@ impl Shell {
                             self.icon_button("refresh-resources", "refresh", "Refresh catalog")
                                 .on_click(cx.listener(|s, _, _, _| {
                                     s.send(core::Request::Resources {
+                                        project_id: s.selected_project.clone().or_else(|| {
+                                            s.workspace
+                                                .as_ref()?
+                                                .projects
+                                                .first()
+                                                .map(|p| p.id.clone())
+                                        }),
                                         task_id: s.selected.clone(),
                                     })
                                 })),

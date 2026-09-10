@@ -1034,9 +1034,22 @@ pub(super) fn discover(host: Shared, cwd: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 /// Reports instruction, skill, and MCP provenance through the existing provider owner when present.
-pub(super) fn resources(host: &Shared, task_id: Option<String>) -> Result<Vec<Resource>> {
+pub(super) fn resources(
+    host: &Shared,
+    task_id: Option<String>,
+    project_id: Option<String>,
+) -> Result<Vec<Resource>> {
     let cwd = if let Some(id) = task_id {
         host.lock().unwrap().store.task(&id)?.cwd
+    } else if let Some(id) = project_id {
+        host.lock()
+            .unwrap()
+            .store
+            .projects()?
+            .into_iter()
+            .find(|p| p.id == id)
+            .context("Project is no longer available")?
+            .path
     } else {
         std::env::current_dir()?
     };
@@ -1269,4 +1282,71 @@ fn merge_usage(current: &mut Option<UsageLimits>, value: &Value) {
         }
     }
     *current = Some(incoming);
+}
+
+/// Loads enabled skills for the selected task or project without coupling them to MCP health.
+pub(super) fn composer_catalog(
+    host: &Shared,
+    task_id: Option<String>,
+    project_id: Option<String>,
+) -> Result<ComposerCatalog> {
+    let cwd = {
+        let h = host.lock().unwrap();
+        if let Some(id) = task_id {
+            h.store.task(&id)?.cwd
+        } else if let Some(id) = project_id {
+            h.store
+                .projects()?
+                .into_iter()
+                .find(|p| p.id == id)
+                .context("Project is no longer available")?
+                .path
+        } else {
+            anyhow::bail!("Select a project to load its Codex skills");
+        }
+    };
+    let mut result = ComposerCatalog::default();
+    match kodem_core::runtime::composer_commands() {
+        Ok(commands) => result.commands = commands,
+        Err(error) => result.errors.push(format!("Commands: {error:#}")),
+    }
+    let skills = Catalog::open(host, &cwd)
+        .and_then(|mut codex| codex.call("skills/list", json!({"cwds":[cwd],"forceReload":true})));
+    match skills {
+        Ok(value) => {
+            for group in value["data"].as_array().into_iter().flatten() {
+                for skill in group["skills"].as_array().into_iter().flatten() {
+                    if skill["enabled"] != true {
+                        continue;
+                    }
+                    let (Some(name), Some(path)) = (skill["name"].as_str(), skill["path"].as_str())
+                    else {
+                        continue;
+                    };
+                    result.skills.push(ComposerSkill {
+                        name: name.into(),
+                        path: path.into(),
+                        description: skill["description"].as_str().unwrap_or_default().into(),
+                    });
+                }
+                for error in group["errors"].as_array().into_iter().flatten() {
+                    result.errors.push(
+                        error["message"]
+                            .as_str()
+                            .unwrap_or("Could not load a skill")
+                            .into(),
+                    );
+                }
+            }
+        }
+        Err(error) => result.errors.push(format!("Skills: {error:#}")),
+    }
+    result.skills.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then(a.path.cmp(&b.path))
+    });
+    result.skills.dedup_by(|a, b| a.path == b.path);
+    Ok(result)
 }

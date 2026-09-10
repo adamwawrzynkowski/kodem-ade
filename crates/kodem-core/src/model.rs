@@ -830,6 +830,33 @@ pub struct Feedback {
     pub comment: String,
     pub digest: String,
 }
+/// Composer actions backed by operations advertised by the installed Codex runtime.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ComposerCommand {
+    New,
+    Model,
+    Permissions,
+    Skills,
+    Mcp,
+    Status,
+}
+
+/// An enabled skill returned by Codex for the current working directory.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ComposerSkill {
+    pub name: String,
+    pub description: String,
+    pub path: PathBuf,
+}
+
+/// Runtime-backed composer choices, with partial discovery failures kept visible.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ComposerCatalog {
+    pub commands: Vec<ComposerCommand>,
+    pub skills: Vec<ComposerSkill>,
+    pub errors: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Resource {
     pub name: String,
@@ -975,8 +1002,14 @@ pub enum Request {
         snapshot_id: String,
         file: usize,
     },
+    ComposerCatalog {
+        request_id: String,
+        task_id: Option<String>,
+        project_id: Option<String>,
+    },
     Resources {
         task_id: Option<String>,
+        project_id: Option<String>,
     },
     Files {
         task_id: String,
@@ -1022,6 +1055,7 @@ pub enum Response {
         task_id: String,
         summary: ChangeSummary,
     },
+    ComposerCatalog(ComposerCatalog),
     Resources(Vec<Resource>),
     Files(Vec<Vec<u8>>),
     Text(String),

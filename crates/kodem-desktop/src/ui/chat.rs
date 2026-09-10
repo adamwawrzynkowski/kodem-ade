@@ -3,6 +3,8 @@ use crate::markdown;
 impl Shell {
     /// Builds the conversation with a measured floating composer and a clear review viewport.
     pub(super) fn chat(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        self.sync_slash(cx);
+        self.sync_context_arrivals(window, cx);
         let t = self.theme;
         let mut panel = div()
             .relative()
@@ -197,7 +199,7 @@ impl Shell {
                                 )
                             }),
                     )
-                    .child(self.composer(false, cx))
+                    .child(self.composer(false, window, cx))
                     .child(
                         canvas(
                             move |bounds, _, cx| {
@@ -231,7 +233,7 @@ impl Shell {
                             .px_8()
                             .pt(px(92.))
                             .child(self.empty_chat_greeting(cx))
-                            .child(self.composer(true, cx)),
+                            .child(self.composer(true, window, cx)),
                     ),
             );
         }
@@ -300,7 +302,7 @@ impl Shell {
             )
             .into_any_element()
     }
-    fn composer(&mut self, empty: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn composer(&mut self, empty: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let view = self.view.clone();
         let active = view.as_ref().is_some_and(|v| v.task.state.active());
@@ -333,6 +335,7 @@ impl Shell {
             .clone()
             .unwrap_or_else(|| "Reasoning".into());
         let mut wrapper = div()
+            .relative()
             .w_full()
             .flex_shrink_0()
             .max_w(px(940.))
@@ -350,19 +353,26 @@ impl Shell {
             .gap_2();
         if let Some(view) = &view {
             for feedback in &view.task.feedback {
-                attachments =
-                    attachments.child(self.context_card(feedback, Some(&view.task.id), cx));
+                attachments = attachments.child(motion::context_reveal(
+                    self.context_card(feedback, Some(&view.task.id), cx),
+                    self.context_arrivals.get(&feedback.id).copied().flatten(),
+                    cx.reduce_motion(),
+                ));
             }
             let mut files = div().flex().flex_wrap().flex_shrink_0().gap_2();
             for attachment in &view.task.attachments {
-                files = files.child(self.attachment_card(attachment, Some(&view.task.id), cx));
+                files = files.child(motion::context_reveal(
+                    self.attachment_card(attachment, Some(&view.task.id), cx),
+                    self.context_arrivals.get(&attachment.id).copied().flatten(),
+                    cx.reduce_motion(),
+                ));
             }
             attachments = attachments.child(files);
         } else {
             for (index, source) in self.pending_attachments.iter().enumerate() {
                 let skill = matches!(source, AttachmentSource::Skill(_));
                 let path = source.path();
-                attachments = attachments.child(
+                attachments = attachments.child(motion::context_reveal(
                     div()
                         .flex()
                         .flex_shrink_0()
@@ -406,7 +416,12 @@ impl Shell {
                         .when(skill, |d| {
                             d.child(div().text_size(px(10.)).text_color(t.muted).child("Skill"))
                         }),
-                );
+                    self.context_arrivals
+                        .get(&format!("pending:{source:?}"))
+                        .copied()
+                        .flatten(),
+                    cx.reduce_motion(),
+                ));
             }
         }
         let importing = self.pasting_images > 0
@@ -519,6 +534,9 @@ impl Shell {
                     .on_click(cx.listener(|s, _, _, cx| {
                         s.panel = Panel::Resources;
                         s.send(core::Request::Resources {
+                            project_id: s.selected_project.clone().or_else(|| {
+                                s.workspace.as_ref()?.projects.first().map(|p| p.id.clone())
+                            }),
                             task_id: s.selected.clone(),
                         });
                         cx.notify();
@@ -719,7 +737,9 @@ impl Shell {
                     }),
             );
         }
-        wrapper.into_any_element()
+        wrapper
+            .child(self.slash_menu(empty, window, cx))
+            .into_any_element()
     }
     fn message(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.selection_inputs = Some(Vec::new());
@@ -907,7 +927,24 @@ impl Shell {
             .w_full()
             .flex()
             .justify_center()
-            .child(outer.child(block))
+            .child(
+                outer.child(
+                    if let Some(arrival) = message
+                        .id
+                        .strip_prefix("submission-")
+                        .and_then(|id| self.send_arrivals.get(id))
+                        .filter(|a| !a.queued)
+                    {
+                        motion::send_transition(
+                            block,
+                            arrival,
+                            cx.reduce_motion() || self.panel != Panel::None,
+                        )
+                    } else {
+                        block.into_any_element()
+                    },
+                ),
+            )
             .into_any_element()
     }
 }

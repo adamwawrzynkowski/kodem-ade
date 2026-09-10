@@ -1,5 +1,6 @@
 //! Small native animations shared by activity indicators and panel entrances.
 use super::*;
+use crate::components::streaming_text::{reveal_blur, reveal_opacity};
 
 pub(super) const COMPOSER_RADIUS: f32 = 16.;
 
@@ -420,6 +421,166 @@ fn corner_texture(light: bool, accent: Option<Hsla>) -> impl IntoElement {
                     cx,
                 );
             });
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
+/// Shares one send transition across rerenders without replaying it when a row is recycled.
+#[derive(Clone)]
+pub(super) struct Arrival {
+    created: std::time::Instant,
+    started: std::rc::Rc<std::cell::Cell<Option<std::time::Instant>>>,
+    origin: Option<Point<Pixels>>,
+    pub queued: bool,
+}
+impl Arrival {
+    /// Captures the composer's actual screen position until the accepted row is laid out.
+    pub(super) fn new(origin: Option<Point<Pixels>>) -> Self {
+        Self {
+            created: std::time::Instant::now(),
+            started: Default::default(),
+            origin,
+            queued: false,
+        }
+    }
+    /// Bounds retained transition state, including submissions that never become visible.
+    pub(super) fn expired(&self) -> bool {
+        self.created.elapsed() > Duration::from_secs(3)
+    }
+}
+
+/// Paints a message at its interpolated position while keeping its final layout space stable.
+pub(super) fn send_transition<E: IntoElement + Styled + ParentElement>(
+    element: E,
+    arrival: &Arrival,
+    reduce: bool,
+) -> AnyElement {
+    if reduce || arrival.expired() {
+        return element.into_any_element();
+    }
+    let started = arrival.started.get().unwrap_or_else(|| {
+        let now = std::time::Instant::now();
+        arrival.started.set(Some(now));
+        now
+    });
+    let p = (started.elapsed().as_secs_f32() / 0.42).min(1.);
+    if p >= 1. {
+        return element.into_any_element();
+    }
+    TravelingElement {
+        child: Some(
+            element
+                .relative()
+                .opacity(reveal_opacity(p))
+                .filter(vec![Filter::Blur(reveal_blur(p))])
+                .child(arrival_gleam(p))
+                .into_any_element(),
+        ),
+        origin: arrival.origin,
+        progress: p,
+    }
+    .into_any_element()
+}
+
+struct TravelingElement {
+    child: Option<AnyElement>,
+    origin: Option<Point<Pixels>>,
+    progress: f32,
+}
+impl IntoElement for TravelingElement {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+impl Element for TravelingElement {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (self.child.as_mut().unwrap().request_layout(window, cx), ())
+    }
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        _: &mut App,
+    ) {
+        let source = self
+            .origin
+            .unwrap_or(bounds.origin + point(px(0.), px(16.)));
+        let offset = (source - bounds.origin) * (1. - self.progress).powi(3);
+        // Paint over the composer and escape the transcript/outbox scroll mask while in flight.
+        // The child keeps its final layout slot, so neighboring messages do not move each frame.
+        window.defer_draw(
+            self.child.take().unwrap(),
+            window.element_offset() + offset,
+            0,
+            None,
+        );
+    }
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        _: &mut App,
+    ) {
+        window.request_animation_frame();
+    }
+}
+
+/// Reveals newly added context with the streamed text's blur radius, fade curve and gentle lift.
+pub(super) fn context_reveal(
+    element: impl IntoElement,
+    added: Option<std::time::Instant>,
+    reduce: bool,
+) -> AnyElement {
+    let frame = div().relative().flex_shrink_0().min_w_0().child(element);
+    let Some(added) = added.filter(|time| !reduce && time.elapsed() < Duration::from_millis(320))
+    else {
+        return frame.into_any_element();
+    };
+    let p = (added.elapsed().as_secs_f32() / 0.32).min(1.);
+    frame
+        .top(px(6. * (1. - p).powi(3)))
+        .opacity(reveal_opacity(p))
+        .filter(vec![Filter::Blur(reveal_blur(p))])
+        .child(arrival_gleam(p))
+        .into_any_element()
+}
+
+// A brief luminance pulse matches the streamed glyph highlight across images and context cards.
+fn arrival_gleam(progress: f32) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let color = if window.text_style().color.lightness > 0.5 {
+                rgb(0xffffff)
+            } else {
+                rgb(0x000000)
+            };
+            let alpha = (std::f32::consts::PI * progress).sin().powi(2) * 0.045;
+            window.paint_quad(fill(bounds, rgb_to_hsla(color).opacity(alpha)).corner_radii(px(7.)));
         },
     )
     .absolute()

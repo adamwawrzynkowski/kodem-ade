@@ -49,11 +49,22 @@ actions!(
         Submit,
         Up,
         Down,
+        AcceptCompletion,
+        DismissCompletion,
     ]
 );
 
 /// Raised when a composer requests submission outside an IME composition.
 pub struct SubmitInput;
+
+/// Routes completion navigation while the composer retains keyboard focus.
+#[derive(Clone, Copy)]
+pub enum CompletionInput {
+    Previous,
+    Next,
+    Accept,
+    Dismiss,
+}
 
 /// Pointer and clipboard operations delegated by a row to its document owner.
 #[derive(Clone)]
@@ -88,6 +99,7 @@ pub struct TextInput {
     redo: Vec<EditState>,
     readonly: bool,
     composer: bool,
+    completion_open: bool,
     delegated_selection: bool,
     wrap: bool,
     syntax: Option<(String, bool)>,
@@ -115,6 +127,7 @@ impl TextInput {
             redo: Vec::new(),
             readonly: false,
             composer: false,
+            completion_open: false,
             delegated_selection: false,
             wrap: true,
             syntax: None,
@@ -128,6 +141,56 @@ impl TextInput {
         let mut input = Self::new(placeholder, cx);
         input.composer = true;
         input
+    }
+    /// Returns the slash token at a collapsed caret outside an IME composition.
+    pub fn slash_query(&self) -> Option<(Range<usize>, String)> {
+        if !self.composer || self.marked_range.is_some() || !self.selected_range.is_empty() {
+            return None;
+        }
+        slash_token(&self.content, self.cursor_offset())
+    }
+
+    /// Enables completion key routing without changing focus or IME behavior.
+    pub fn set_completion_open(&mut self, open: bool) {
+        self.completion_open = open;
+    }
+
+    /// Replaces a completion token as one undoable edit and keeps surrounding text.
+    pub fn complete_slash(&mut self, range: Range<usize>, text: &str, cx: &mut Context<Self>) {
+        if self.marked_range.is_some()
+            || range.end > self.content.len()
+            || !self.content.is_char_boundary(range.start)
+            || !self.content.is_char_boundary(range.end)
+        {
+            return;
+        }
+        self.remember_edit();
+        self.streaming = Default::default();
+        self.content =
+            (self.content[..range.start].to_owned() + text + &self.content[range.end..]).into();
+        self.selected_range = range.start + text.len()..range.start + text.len();
+        self.selection_reversed = false;
+        cx.notify();
+    }
+
+    fn completion_accept(&mut self, _: &AcceptCompletion, _: &mut Window, cx: &mut Context<Self>) {
+        if self.completion_open && self.marked_range.is_none() {
+            cx.emit(CompletionInput::Accept);
+        } else {
+            cx.propagate();
+        }
+    }
+    fn completion_dismiss(
+        &mut self,
+        _: &DismissCompletion,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.completion_open && self.marked_range.is_none() {
+            cx.emit(CompletionInput::Dismiss);
+        } else {
+            cx.propagate();
+        }
     }
     /// Lets a document coordinate selection across separately rendered rows.
     pub fn delegate_selection(&mut self) {
@@ -171,6 +234,9 @@ impl TextInput {
         self.selected_range = self.content.len()..self.content.len();
         self.marked_range = None;
         self.selection_reversed = false;
+        if self.composer {
+            self.streaming = Default::default();
+        }
         if let Some((extension, light)) = &self.syntax {
             self.colors = crate::syntax::spans(&self.content, extension, *light);
         }
@@ -279,10 +345,18 @@ impl TextInput {
         }
     }
     fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
-        self.vertical(-1., false, cx);
+        if self.completion_open && self.marked_range.is_none() {
+            cx.emit(CompletionInput::Previous);
+        } else {
+            self.vertical(-1., false, cx);
+        }
     }
     fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
-        self.vertical(1., false, cx);
+        if self.completion_open && self.marked_range.is_none() {
+            cx.emit(CompletionInput::Next);
+        } else {
+            self.vertical(1., false, cx);
+        }
     }
     fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.move_to(
@@ -398,6 +472,7 @@ impl TextInput {
         self.redo.clear();
     }
     fn restore_edit(&mut self, state: EditState, cx: &mut Context<Self>) {
+        self.streaming = Default::default();
         self.content = state.content;
         self.selected_range = state.selection;
         self.selection_reversed = state.reversed;
@@ -424,7 +499,11 @@ impl TextInput {
     }
     fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
         if self.composer && self.marked_range.is_none() {
-            cx.emit(SubmitInput);
+            if self.completion_open {
+                cx.emit(CompletionInput::Accept);
+            } else {
+                cx.emit(SubmitInput);
+            }
         }
     }
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
@@ -780,6 +859,12 @@ impl EntityInputHandler for TextInput {
         self.content =
             (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
                 .into();
+        if self.composer && !cx.reduce_motion() {
+            self.streaming
+                .replace(&self.content, range.clone(), new_text.len(), Instant::now());
+        } else {
+            self.streaming = Default::default();
+        }
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.marked_range.take();
         cx.notify();
@@ -803,6 +888,7 @@ impl EntityInputHandler for TextInput {
             .unwrap_or(self.selected_range.clone());
 
         self.remember_edit();
+        self.streaming = Default::default();
         self.selection_reversed = false;
         self.content =
             (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
@@ -1135,6 +1221,8 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::newline))
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(Self::completion_accept))
+            .on_action(cx.listener(Self::completion_dismiss))
             .on_action(cx.listener(Self::up))
             .on_action(cx.listener(Self::down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
@@ -1154,6 +1242,7 @@ impl Render for TextInput {
 }
 
 impl gpui::EventEmitter<SubmitInput> for TextInput {}
+impl gpui::EventEmitter<CompletionInput> for TextInput {}
 impl gpui::EventEmitter<crate::clipboard::PastedAttachments> for TextInput {}
 impl gpui::EventEmitter<SelectionInput> for TextInput {}
 
@@ -1215,6 +1304,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-enter", Newline, Some("TextInput")),
         KeyBinding::new("enter", Submit, Some("Composer")),
         KeyBinding::new("cmd-enter", Submit, Some("Composer")),
+        KeyBinding::new("tab", AcceptCompletion, Some("Composer")),
+        KeyBinding::new("escape", DismissCompletion, Some("Composer")),
         KeyBinding::new("up", Up, Some("TextInput")),
         KeyBinding::new("down", Down, Some("TextInput")),
     ]);
@@ -1299,21 +1390,43 @@ fn shape(
     } else {
         Vec::new()
     });
-    let runs = if let Some(start) = input.streaming.start() {
+    let runs = if input.streaming.start().is_some() {
         let mut offset = 0;
         runs.into_iter()
             .flat_map(|run| {
-                let end = offset + run.len;
-                let split = start.clamp(offset, end) - offset;
+                let start = offset;
+                let end = start + run.len;
                 offset = end;
-                let mut hidden = run.clone();
-                hidden.len -= split;
-                hidden.color.alpha = 0.;
-                hidden.underline = None;
-                hidden.strikethrough = None;
-                [TextRun { len: split, ..run }, hidden]
-                    .into_iter()
-                    .filter(|run| run.len > 0)
+                let mut segments = Vec::new();
+                let mut cursor = start;
+                for range in input
+                    .streaming
+                    .ranges()
+                    .filter(|range| range.end > start && range.start < end)
+                {
+                    let low = range.start.max(start);
+                    let high = range.end.min(end);
+                    if cursor < low {
+                        segments.push(TextRun {
+                            len: low - cursor,
+                            ..run.clone()
+                        });
+                    }
+                    let mut hidden = run.clone();
+                    hidden.len = high - low;
+                    hidden.color.alpha = 0.;
+                    hidden.underline = None;
+                    hidden.strikethrough = None;
+                    segments.push(hidden);
+                    cursor = high;
+                }
+                if cursor < end {
+                    segments.push(TextRun {
+                        len: end - cursor,
+                        ..run
+                    });
+                }
+                segments
             })
             .collect()
     } else {
@@ -1418,4 +1531,17 @@ fn clicked_range(text: &str, byte: usize, count: usize) -> Range<usize> {
             .unwrap_or(byte..byte);
     }
     byte..byte
+}
+
+// UTF-8 offsets are supplied by the native editor, never by a bytewise cursor increment.
+fn slash_token(text: &str, end: usize) -> Option<(Range<usize>, String)> {
+    let prefix = text.get(..end)?;
+    let start = prefix
+        .rfind(char::is_whitespace)
+        .map_or(0, |i| i + text[i..].chars().next().unwrap().len_utf8());
+    let query = text[start..end].strip_prefix('/')?;
+    if query.contains('/') || query.contains('\\') {
+        return None;
+    }
+    Some((start..end, query.into()))
 }

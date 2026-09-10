@@ -375,3 +375,57 @@ impl std::fmt::Display for Rejected {
     }
 }
 impl std::error::Error for Rejected {}
+
+/// Discovers composer operations from the installed runtime's generated protocol schema.
+/// Successful results are cached by executable and version; failed reads can be retried.
+pub fn composer_commands() -> Result<Vec<ComposerCommand>> {
+    use std::sync::{Mutex, OnceLock};
+    type Cache = Option<(PathBuf, Version, Vec<ComposerCommand>)>;
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    let runtime = installed_runtime()?;
+    let mut cache = CACHE.get_or_init(|| Mutex::new(None)).lock().unwrap();
+    if let Some((path, version, commands)) = cache.as_ref()
+        && *path == runtime.executable
+        && *version == runtime.version
+    {
+        return Ok(commands.clone());
+    }
+    let directory = tempfile::tempdir()?;
+    let output = Command::new(&runtime.executable)
+        .args(["app-server", "generate-json-schema", "--out"])
+        .arg(directory.path())
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "Could not read Codex command capabilities"
+    );
+    let schema: Value =
+        serde_json::from_slice(&std::fs::read(directory.path().join("ClientRequest.json"))?)?;
+    let requests = schema["oneOf"]
+        .as_array()
+        .context("Missing Codex request schema")?;
+    // Slash names belong to the client. Only offer actions this client implements
+    // and this exact runtime advertises, never send TUI commands as prompt text.
+    let commands: Vec<_> = [
+        (ComposerCommand::New, "thread/start"),
+        (ComposerCommand::Model, "model/list"),
+        (ComposerCommand::Permissions, "turn/start"),
+        (ComposerCommand::Skills, "skills/list"),
+        (ComposerCommand::Mcp, "mcpServerStatus/list"),
+        (ComposerCommand::Status, "account/rateLimits/read"),
+    ]
+    .into_iter()
+    .filter_map(|(command, method)| {
+        requests
+            .iter()
+            .any(|r| {
+                r["properties"]["method"]["enum"]
+                    .as_array()
+                    .is_some_and(|methods| methods.iter().any(|v| v == method))
+            })
+            .then_some(command)
+    })
+    .collect();
+    *cache = Some((runtime.executable, runtime.version, commands.clone()));
+    Ok(commands)
+}

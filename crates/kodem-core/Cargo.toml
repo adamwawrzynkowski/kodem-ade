@@ -12,6 +12,7 @@ serde_json.workspace = true
 uuid.workspace = true
 sha2.workspace = true
 semver = "1"
+tempfile = "3"
 rusqlite = { version = "0.38", features = ["bundled"] }
 libc = "0.2"
 

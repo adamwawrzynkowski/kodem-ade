@@ -19,6 +19,7 @@ mod questions;
 mod review;
 mod settings;
 mod sidebar;
+mod slash;
 mod tool_calls;
 mod updates;
 mod usage;
@@ -85,6 +86,8 @@ struct PendingSubmission {
     id: String,
     text: String,
     revision: u64,
+    origin: Option<Point<Pixels>>,
+    queued: bool,
 }
 pub struct Shell {
     tx: mpsc::Sender<bridge::Command>,
@@ -137,6 +140,10 @@ pub struct Shell {
     chat_selection: Entity<crate::components::text_document::TextDocument>,
     selection_inputs: Option<Vec<Entity<TextInput>>>,
     resources: Vec<core::Resource>,
+    slash: slash::SlashPicker,
+    send_arrivals: HashMap<String, motion::Arrival>,
+    context_arrivals: HashMap<String, Option<std::time::Instant>>,
+    context_task: Option<String>,
     files: Vec<Vec<u8>>,
     file_text: Option<(String, String)>,
     dragging_sidebar: bool,
@@ -164,6 +171,7 @@ pub struct Shell {
     empty_draft: String,
     creating_task: bool,
     auto_submit_task: Option<String>,
+    new_submission_origin: Option<Point<Pixels>>,
     composer_height: f32,
     composer_spring: motion::ComposerSpring,
     settings_section: usize,
@@ -214,11 +222,18 @@ impl Shell {
             cx.subscribe(&input, |s, _, _: &SubmitInput, cx| s.submit_current(cx)),
             cx.subscribe(
                 &input,
+                |s, _, key: &crate::components::text_input::CompletionInput, cx| {
+                    s.slash_key(key, cx)
+                },
+            ),
+            cx.subscribe(
+                &input,
                 |s, _, pasted: &crate::clipboard::PastedAttachments, cx| {
                     s.paste_attachments(pasted, cx);
                 },
             ),
             cx.observe(&input, |s, input, cx| {
+                s.sync_slash(cx);
                 let text = input.read(cx).text();
                 if text != s.observed_draft {
                     s.draft_revision += 1;
@@ -360,6 +375,10 @@ impl Shell {
             chat_selection: cx.new(|_| Default::default()),
             selection_inputs: None,
             resources: Vec::new(),
+            slash: Default::default(),
+            send_arrivals: HashMap::new(),
+            context_arrivals: HashMap::new(),
+            context_task: None,
             files: Vec::new(),
             file_text: None,
             dragging_sidebar: false,
@@ -387,6 +406,7 @@ impl Shell {
             empty_draft: String::new(),
             creating_task: false,
             auto_submit_task: None,
+            new_submission_origin: None,
             composer_height: 170.,
             composer_spring: motion::ComposerSpring::default(),
             settings_section: 0,
@@ -443,6 +463,17 @@ impl Shell {
         let response = match reply.result {
             Ok(r) => r,
             Err(e) => {
+                if matches!(reply.request, core::Request::ComposerCatalog { .. }) {
+                    self.receive_slash_catalog(
+                        &reply.request,
+                        ComposerCatalog {
+                            errors: vec![e],
+                            ..Default::default()
+                        },
+                    );
+                    cx.notify();
+                    return;
+                }
                 self.answer_failed(&reply.request);
                 if matches!(reply.request, core::Request::DeleteTask { .. }) {
                     self.deleting_task = None;
@@ -471,9 +502,11 @@ impl Shell {
                 }
                 if matches!(reply.request, core::Request::CreateTask { .. }) {
                     self.creating_task = false;
+                    self.new_submission_origin = None;
                 }
                 if matches!(reply.request, core::Request::ImportAttachments { .. }) {
                     self.auto_submit_task = None;
+                    self.new_submission_origin = None;
                 }
                 self.error = Some(e);
                 cx.notify();
@@ -676,6 +709,14 @@ impl Shell {
                     .is_some_and(|p| p.task_id == task_id && p.id == submission_id)
                 {
                     let pending = self.submitted_draft.take().unwrap();
+                    if self.selected.as_ref() == Some(&task_id) && !cx.reduce_motion() {
+                        self.send_arrivals.retain(|_, arrival| !arrival.expired());
+                        let mut arrival = motion::Arrival::new(pending.origin);
+                        arrival.queued = pending.queued;
+                        self.send_arrivals.insert(submission_id.clone(), arrival);
+                        self.follow = true;
+                        self.chat_scroll.scroll_to_end();
+                    }
                     if self.selected.as_ref() == Some(&task_id)
                         && self.draft_revision == pending.revision
                         && self.input.read(cx).text() == pending.text
@@ -721,6 +762,9 @@ impl Shell {
                     task_id,
                     before: None,
                 });
+            }
+            Response::ComposerCatalog(catalog) => {
+                self.receive_slash_catalog(&reply.request, catalog)
             }
             Response::Resources(resources) => self.resources = resources,
             Response::Files(files) => self.files = files,
@@ -839,6 +883,8 @@ impl Shell {
         cx.notify();
     }
     fn clear_selected_task(&mut self, cx: &mut Context<Self>) {
+        self.slash = Default::default();
+        self.send_arrivals.clear();
         self.selected = None;
         self.view = None;
         self.diff = None;
@@ -861,6 +907,7 @@ impl Shell {
         self.question_inputs.clear();
         self.answering.clear();
         self.auto_submit_task = None;
+        self.new_submission_origin = None;
     }
     fn select_task(&mut self, id: String, cx: &mut Context<Self>) {
         if self.creating_task {
@@ -884,6 +931,11 @@ impl Shell {
         self.input
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         self.draft_dirty = false;
+        self.slash = Default::default();
+        self.send_arrivals.clear();
+        if self.auto_submit_task.as_ref() != Some(&id) {
+            self.new_submission_origin = None;
+        }
         self.selected = Some(id.clone());
         self.task_changes = None;
         self.view = None;

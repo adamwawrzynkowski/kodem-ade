@@ -334,6 +334,13 @@ impl Shell {
                                 .on_click(cx.listener(|s, _, _, cx| {
                                     s.panel = Panel::Resources;
                                     s.send(core::Request::Resources {
+                                        project_id: s.selected_project.clone().or_else(|| {
+                                            s.workspace
+                                                .as_ref()?
+                                                .projects
+                                                .first()
+                                                .map(|p| p.id.clone())
+                                        }),
                                         task_id: s.selected.clone(),
                                     });
                                     cx.notify();

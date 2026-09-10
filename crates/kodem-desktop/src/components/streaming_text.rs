@@ -24,6 +24,16 @@ pub(super) struct RevealingGlyph {
     pub progress: f32,
 }
 
+/// Shared blur curve for arriving text, composer context and sent messages.
+pub(crate) fn reveal_blur(progress: f32) -> Pixels {
+    px(2.4 * (1. - progress).powi(2))
+}
+
+/// Shared opacity curve for progressive content reveals.
+pub(crate) fn reveal_opacity(progress: f32) -> f32 {
+    1. - (1. - progress).powi(3)
+}
+
 /// Paints only arriving glyphs, sharing at most eight blur layers per text line.
 pub(super) fn paint_glyphs(glyphs: Vec<RevealingGlyph>, window: &mut Window) {
     let mut groups: [Vec<RevealingGlyph>; 8] = Default::default();
@@ -50,11 +60,11 @@ pub(super) fn paint_glyphs(glyphs: Vec<RevealingGlyph>, window: &mut Window) {
         if !bounds.intersects(&window.content_mask().bounds) {
             continue;
         }
-        let blur = 2.4 * (1. - progress / group.len() as f32).powi(2);
+        let blur = reveal_blur(progress / group.len() as f32);
         window.with_filter_layer(
             bounds,
             Corners::default(),
-            &[Filter::Blur(px(blur))],
+            &[Filter::Blur(blur)],
             |window| {
                 for glyph in group {
                     let p = glyph.progress;
@@ -62,7 +72,7 @@ pub(super) fn paint_glyphs(glyphs: Vec<RevealingGlyph>, window: &mut Window) {
                     let mut color = glyph.color;
                     let target = if color.lightness > 0.5 { 1. } else { 0. };
                     color.lightness += (target - color.lightness) * gleam;
-                    color.alpha *= 1. - (1. - p).powi(3);
+                    color.alpha *= reveal_opacity(p);
                     let _ = window.paint_glyph(
                         glyph.origin,
                         glyph.font,
@@ -107,6 +117,53 @@ impl StreamingText {
         while self.letters.len() > MAX_LETTERS {
             self.letters.pop_front();
         }
+    }
+
+    /// Tracks an arbitrary composer edit, shifting unchanged ranges and revealing inserted graphemes.
+    pub(super) fn replace(
+        &mut self,
+        new: &str,
+        replaced: Range<usize>,
+        inserted: usize,
+        now: Instant,
+    ) {
+        self.prune(now);
+        let delta = inserted as isize - replaced.len() as isize;
+        self.letters.retain_mut(|(range, _)| {
+            if range.end <= replaced.start {
+                return true;
+            }
+            if range.start < replaced.end {
+                return false;
+            }
+            range.start = range.start.saturating_add_signed(delta);
+            range.end = range.end.saturating_add_signed(delta);
+            true
+        });
+        let end = replaced.start + inserted;
+        let letters: Vec<_> = new
+            .grapheme_indices(true)
+            .filter(|(start, letter)| *start < end && start + letter.len() > replaced.start)
+            .take(MAX_LETTERS)
+            .collect();
+        let step = Duration::from_secs_f32(0.008_f32.min(0.12 / letters.len().max(1) as f32));
+        for (index, (start, letter)) in letters.into_iter().enumerate() {
+            let range = start..start + letter.len();
+            self.letters
+                .retain(|(old, _)| old.end <= range.start || old.start >= range.end);
+            self.letters.push_back((range, now + step * index as u32));
+        }
+        self.letters
+            .make_contiguous()
+            .sort_by_key(|(range, _)| range.start);
+        while self.letters.len() > MAX_LETTERS {
+            self.letters.pop_front();
+        }
+    }
+
+    /// Returns the byte spans painted by the reveal overlay, including edits in the middle of text.
+    pub(super) fn ranges(&self) -> impl Iterator<Item = Range<usize>> + '_ {
+        self.letters.iter().map(|(range, _)| range.clone())
     }
 
     /// Drops settled letters so idle text no longer requests animation frames.

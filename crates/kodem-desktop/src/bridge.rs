@@ -138,6 +138,21 @@ fn start_at(
                 }
             };
             for request in requests {
+                // Catalog discovery is read-only and can take longer than a turn update.
+                // Keep it off the ordered mutation lane so typing '/' cannot delay Send.
+                if matches!(request, Request::ComposerCatalog { .. }) {
+                    let root = root.clone();
+                    let replies = replies.clone();
+                    std::thread::spawn(move || {
+                        let result = ipc::request(&root, &request).map_err(|e| format!("{e:#}"));
+                        let _ = replies.send(Reply {
+                            request,
+                            connected: true,
+                            result,
+                        });
+                    });
+                    continue;
+                }
                 let result = ipc::request(root, &request).map_err(|e| format!("{e:#}"));
                 let connected = result.is_ok() || !matches!(request, Request::Hello);
                 if replies

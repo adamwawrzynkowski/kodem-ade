@@ -3,7 +3,7 @@
 mod button;
 mod inline_bubbles;
 mod input_frame;
-mod streaming_text;
+pub(crate) mod streaming_text;
 pub mod text_document;
 pub mod text_input;
 pub use button::Button;
