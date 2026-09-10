@@ -72,7 +72,7 @@ pub fn executable() -> Result<PathBuf> {
     candidates
         .into_iter()
         .find(|p| p.is_file())
-        .context("Codex is not installed. Run Build Debug.command or Build Release.command.")
+        .context("Codex is not installed. Run Build Debug.command to install the required runtime.")
 }
 /// Reports the installed version without exposing credentials or starting a provider turn.
 pub fn version() -> Result<String> {
@@ -158,7 +158,7 @@ impl Codex {
         ] {
             ensure!(
                 package.join(relative).is_file(),
-                "Codex package is incomplete: missing {relative}. Run Build Debug.command or Build Release.command to repair it."
+                "Codex package is incomplete: missing {relative}. Run Build Debug.command to repair it."
             );
         }
         let version = version()?;

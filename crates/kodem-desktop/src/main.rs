@@ -8,6 +8,7 @@ mod syntax;
 mod theme;
 mod tool_output;
 mod ui;
+mod updater;
 mod window_state;
 use gpui::{prelude::*, *};
 use std::borrow::Cow;

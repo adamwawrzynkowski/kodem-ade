@@ -20,6 +20,7 @@ mod review;
 mod settings;
 mod sidebar;
 mod tool_calls;
+mod updates;
 mod usage;
 use crate::icons::icon;
 use crate::{
@@ -87,6 +88,9 @@ struct PendingSubmission {
 }
 pub struct Shell {
     tx: mpsc::Sender<bridge::Command>,
+    update_state: crate::updater::State,
+    update_tx: mpsc::Sender<crate::updater::State>,
+    last_update_check: std::time::Instant,
     focus: FocusHandle,
     workspace: Option<Workspace>,
     view: Option<TaskView>,
@@ -173,6 +177,7 @@ impl Shell {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let (tx, rx) = bridge::start();
+        let (update_tx, update_rx) = mpsc::channel();
         let input =
             cx.new(|cx| TextInput::composer("Describe what you want to build or change…", cx));
         let aux = cx.new(|cx| TextInput::new("Type here…", cx));
@@ -237,6 +242,18 @@ impl Shell {
                 }
                 if this
                     .update(cx, |s, cx| {
+                        while let Ok(state) = update_rx.try_recv() {
+                            s.update_state = state;
+                            cx.notify();
+                        }
+                        if s.last_update_check.elapsed() >= Duration::from_secs(30 * 60)
+                            && matches!(
+                                s.update_state,
+                                crate::updater::State::Idle | crate::updater::State::Failed(_)
+                            )
+                        {
+                            s.check_for_updates(cx);
+                        }
                         for reply in updates {
                             s.apply(reply, cx);
                         }
@@ -255,6 +272,9 @@ impl Shell {
                     .await;
                 if this
                     .update(cx, |s, cx| {
+                        if matches!(s.update_state, crate::updater::State::Installing) {
+                            return;
+                        }
                         if s.draft_dirty && s.view.is_some() && s.submitted_draft.is_none() {
                             if let Some(task_id) = &s.selected {
                                 s.send(core::Request::EditTask {
@@ -289,8 +309,11 @@ impl Shell {
             }
         })
         .detach();
-        let shell = Self {
+        let mut shell = Self {
             tx,
+            update_state: crate::updater::State::Idle,
+            update_tx,
+            last_update_check: std::time::Instant::now(),
             focus,
             workspace: None,
             view: None,
@@ -370,6 +393,7 @@ impl Shell {
             effort_slider: None,
             image_preview: None,
         };
+        shell.check_for_updates(cx);
         shell.send(core::Request::Hello);
         shell
     }
@@ -892,11 +916,14 @@ impl Shell {
         }
     }
     fn save_settings(&self) {
+        self.send(core::Request::SaveSettings(self.settings_snapshot()));
+    }
+    fn settings_snapshot(&self) -> Settings {
         let mut settings = self.settings.clone();
         settings.show_review = self.show_review;
         settings.show_terminal = self.show_terminal;
         settings.split_diff = self.split;
-        self.send(core::Request::SaveSettings(settings));
+        settings
     }
     fn open_project(&mut self, _: &OpenProject, _: &mut Window, cx: &mut Context<Self>) {
         let chosen = cx.prompt_for_paths(PathPromptOptions {

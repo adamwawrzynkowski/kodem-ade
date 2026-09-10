@@ -4,25 +4,33 @@ A native Rust and GPUI coding workspace. This first implementation connects task
 
 ## Build on macOS
 
-Requires Apple Silicon and macOS 14 or newer. Double-click either file in Finder:
+Requires Apple Silicon and macOS 14 or newer. Double-click one of these files in Finder:
 
 | Command | Result |
 | --- | --- |
-| [Build Debug.command](Build%20Debug.command) | Builds `target/debug/Kodem Debug.app` |
-| [Build Release.command](Build%20Release.command) | Builds `target/release/Kodem.app` and installs `/Applications/Kodem.app` |
+| [Build Debug.command](Build%20Debug.command) | Builds `target/debug/Kodem Debug.app`, local only |
+| [Build Release Nightly.command](Build%20Release%20Nightly.command) | Builds `target/nightly/Kodem Nightly.app` and publishes a GitHub prerelease |
+| [Build Release Production.command](Build%20Release%20Production.command) | Builds `target/production/Kodem.app` and publishes the latest stable GitHub release |
 
-Both commands check Apple Command Line Tools, Git, Rust 1.97.1, rustfmt, Clippy and the complete pinned Codex runtime package, including `codex-code-mode-host`, bundled ripgrep and zsh. They install missing prerequisites and fetch the locked Cargo dependencies. SQLite is bundled; Homebrew, Node and Python are not required. First builds need an internet connection. Apple tools and installation into a protected Applications directory can require an administrator password. If Apple only offers its interactive tools installer, finish that installer and rerun the command.
+All commands check Apple Command Line Tools, Git, Rust 1.97.1, rustfmt, Clippy and the complete pinned Codex runtime package. They install missing prerequisites, fetch locked Cargo dependencies, format-check, compile, package and verify signatures. They do not launch or stop the app. Debug keeps its current local workflow. Release commands keep local bundles and publish a ZIP for installation and updates; they do not replace an app in `/Applications` during publication.
 
-The scripts format-check, compile, package and verify the app signature. They do not launch or stop the app. Release installation replaces `/Applications/Kodem.app` after verifying a staged bundle. A hidden rollback copy is removed after successful verification; legacy `Kodem.previous.<timestamp>-<pid>.app` copies with Kodem's bundle identifier are also removed. It refuses to replace an unrelated application. If Kodem is running, the command reports that a restart is required to load the installed build. Finish active work, quit the old app, then open `/Applications/Kodem.app`. You do not need to rebuild after quitting. Installed executables and metadata are compared against the packaged output before success is reported.
-
-The same commands work from Terminal:
+Release commands require GitHub CLI with repository write access, a clean checkout, and a commit already available on GitHub. They never commit or push source. Run `gh auth login` before publishing. Each channel starts at the workspace version and increments its patch version on subsequent releases. Set `KODEM_VERSION=X.X.X` to choose a newer version explicitly. Nightly uses `nightly/vX.X.X` tags and GitHub prereleases; Production uses `vX.X.X` and marks the release as latest. Uploads remain drafts until GitHub's SHA-256 digest matches the archive.
 
 ```sh
 ./'Build Debug.command'
-./'Build Release.command'
+./'Build Release Nightly.command'
+./'Build Release Production.command'
 ```
 
-Set `KODEM_NONINTERACTIVE=1` to skip the final Return prompt. Normal incremental builds reuse `target/aarch64-apple-darwin/`; the app bundles remain in `target/debug/` and `target/release/`. The scripts explicitly choose the output directory and Apple Silicon target, so Cargo environment overrides cannot make packaging pick up an older executable. Each bundle includes a timestamped build ID and `Contents/Resources/BuildInfo.txt`. Command output is saved to `target/build-debug.log` or `target/build-release.log`. These are local, ad hoc signed bundles; notarization and automatic updates are not implemented.
+Set `KODEM_NONINTERACTIVE=1` to skip the final Return prompt. Incremental builds reuse `target/aarch64-apple-darwin/`. Build metadata is embedded in the executable and `Contents/Info.plist`; `Contents/Resources/BuildInfo.txt` includes the build ID. Logs are saved under `target/build-debug.log`, `target/build-nightly.log` and `target/build-production.log`. Bundles use ad hoc signatures; Developer ID signing and notarization are not configured.
+
+## Updates
+
+Install the released app in a writable Applications folder. Nightly and Production check their own GitHub release channels at startup and every 30 minutes. Debug does not make update requests. The titlebar shows `Kodem X.X.X` or `Kodem Nightly X.X.X`, with the version in a subtle rounded badge.
+
+When an update is available, **Update ↓** appears beside Settings. Click it to download and view progress. Once the archive's size, SHA-256 digest, bundle identity, channel, version and code signature have been checked, the control becomes a reload icon. Click to save state, stop the idle host, install and reopen. Active tasks and checks block restart; terminal sessions close when the update is applied. Failed downloads can be retried. Installation failures restore the previous bundle and retain a log.
+
+The release repository is private. Users need GitHub CLI installed and signed in with read access to `adamwawrzynkowski/kodem-ade`; credentials are never bundled. Public releases work without a token if the repository becomes public. The Codex runtime remains a separate prerequisite installed by the build commands. See [release implementation](docs/implementation/releases.md) for the channel and installation contract.
 
 ## Start a task
 
@@ -76,7 +84,7 @@ GPUI-CE 0.2.2 and its platform package 0.1.0 share one native type graph. The co
 
 The accepted [architecture](docs/design/architecture.md), [design guidance](docs/design/design-guidance.md), [implementation plan](docs/design/implementation-plan.md) and [research](docs/design/research.md) remain available. [Design validation](docs/design/validation.md) records the earlier dependency probe separately from this implementation.
 
-The bundled app icon comes from `assets/app/AppIcon_1024x1024.png`. Both build commands generate a complete macOS iconset from that source. The window uses the saved accent for its top-left dithering and gray for its bottom-right shading. Settings → Appearance offers Orange, Blue, Green, Purple, Pink and Teal. Orange remains the default; the choice also colors controls, inline formatting and working indicators.
+The bundled app icon comes from `assets/app/AppIcon_1024x1024.png`. All build commands generate a complete macOS iconset from that source. The window uses the saved accent for its top-left dithering and gray for its bottom-right shading. Settings → Appearance offers Orange, Blue, Green, Purple, Pink and Teal. Orange remains the default; the choice also colors controls, inline formatting and working indicators.
 
 Settings → Projects lets you rename projects and choose their accent and icon, including your own image. Imported images are stored as small PNG copies, so moving or deleting the original does not remove the project icon. New projects follow the app accent; existing saved project colors are retained. Removing a project hides it and its tasks while keeping files and local history. Reopen the repository to restore it. Active or unresolved work must finish before removal.
 

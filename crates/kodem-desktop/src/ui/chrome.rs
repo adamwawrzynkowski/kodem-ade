@@ -5,7 +5,7 @@ impl Shell {
         let sidebar_width = if self.settings.collapsed {
             96.
         } else {
-            self.settings.sidebar_width + 1.
+            self.settings.sidebar_width.max(300.) + 1.
         };
         let project = self.workspace.as_ref().and_then(|w| {
             let id = self
@@ -49,6 +49,18 @@ impl Shell {
                                 .text_size(px(16.))
                                 .font_weight(FontWeight::EXTRA_BOLD)
                                 .child("Kodem"),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .px_2()
+                                .py(px(2.))
+                                .rounded(px(6.))
+                                .bg(t.selected.opacity(0.55))
+                                .text_color(t.muted)
+                                .text_size(px(11.))
+                                .text_ellipsis()
+                                .child(crate::updater::version_label()),
                         )
                         .child(div().flex_1())
                         .child(

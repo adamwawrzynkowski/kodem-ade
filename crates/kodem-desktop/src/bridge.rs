@@ -3,6 +3,12 @@ use kodem_core::{Request, Response, ipc};
 use std::sync::mpsc;
 pub enum Command {
     Flush(mpsc::Sender<()>),
+    PrepareUpdate {
+        settings: Option<kodem_core::Settings>,
+        draft: Option<(String, String)>,
+        done: mpsc::Sender<Result<(), String>>,
+    },
+    ResumeAfterUpdate,
     Request(Request),
     ImportAttachments {
         task_id: String,
@@ -26,10 +32,52 @@ fn start_at(
     let (tx, commands) = mpsc::channel();
     let (replies, rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let mut paused = false;
         while let Ok(command) = commands.recv() {
             // Keep clipboard files alive until the host has copied them, even if the window closes.
             let _clipboard_images;
             let requests = match command {
+                Command::PrepareUpdate {
+                    settings,
+                    draft,
+                    done,
+                } => {
+                    let result = root.as_ref().map_err(Clone::clone).and_then(|root| {
+                        if settings.is_some() || draft.is_some() {
+                            ipc::connect_or_start(root).map_err(|e| format!("{e:#}"))?;
+                        }
+                        if let Some(settings) = settings {
+                            ipc::request(root, &Request::SaveSettings(settings))
+                                .map_err(|e| format!("Could not save settings: {e:#}"))?;
+                        }
+                        if let Some((task_id, text)) = draft {
+                            ipc::request(
+                                root,
+                                &Request::EditTask {
+                                    task_id,
+                                    edit: kodem_core::TaskEdit::Draft(text),
+                                },
+                            )
+                            .map_err(|e| format!("Could not save draft: {e:#}"))?;
+                        }
+                        if !ipc::socket(root).exists() {
+                            return Ok(());
+                        }
+                        match ipc::request(root, &Request::Shutdown)
+                            .map_err(|e| format!("{e:#}"))?
+                        {
+                            Response::Ok => Ok(()),
+                            _ => Err("The host did not accept update shutdown".into()),
+                        }
+                    });
+                    paused = result.is_ok();
+                    let _ = done.send(result);
+                    continue;
+                }
+                Command::ResumeAfterUpdate => {
+                    paused = false;
+                    continue;
+                }
                 Command::Flush(done) => {
                     let _ = done.send(());
                     continue;
@@ -57,6 +105,16 @@ fn start_at(
                     r
                 }
             };
+            if paused {
+                for request in requests {
+                    let _ = replies.send(Reply {
+                        request,
+                        connected: false,
+                        result: Err("Kodem is restarting to install an update".into()),
+                    });
+                }
+                continue;
+            }
             // Keep this worker alive after a failed handshake. Polls and the explicit
             // refresh action reconnect; rejected mutations are reported, never replayed.
             let connection = root.as_ref().map_err(Clone::clone).and_then(|root| {

@@ -28,6 +28,7 @@ impl Shell {
                         .on_click(cx.listener(|s, _, w, cx| s.open_project(&OpenProject, w, cx))),
                 )
                 .child(div().flex_1())
+                .child(self.update_control(true, cx))
                 .child(
                     self.icon_button("rail-settings", "settings", "Settings · ⌘,")
                         .on_click(cx.listener(|s, _, _, cx| {
@@ -285,13 +286,27 @@ impl Shell {
                         })),
                 )
                 .child(
-                    self.ghost("settings", "settings", "Settings")
-                        .on_click(cx.listener(|s, _, _, cx| {
-                            s.panel = Panel::Settings;
-                            cx.notify();
-                        })),
+                    self.ghost(
+                        "settings",
+                        "settings",
+                        if self.settings.sidebar_width < 280.
+                            && !matches!(
+                                self.update_state,
+                                crate::updater::State::Idle | crate::updater::State::Checking
+                            )
+                        {
+                            ""
+                        } else {
+                            "Settings"
+                        },
+                    )
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.panel = Panel::Settings;
+                        cx.notify();
+                    })),
                 )
                 .child(div().flex_1())
+                .child(self.update_control(false, cx))
                 .child(
                     div()
                         .size(px(5.))
