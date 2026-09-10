@@ -307,7 +307,7 @@ impl Shell {
     ) -> AnyElement {
         let t = self.theme;
         let selected = self.selected.as_deref() == Some(&task.id);
-        let surface = if selected { t.selected } else { t.raised };
+        let surface = t.raised;
         let title_color = if selected {
             t.text
         } else {

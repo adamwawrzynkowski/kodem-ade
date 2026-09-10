@@ -328,8 +328,19 @@ impl TextInput {
     }
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.replace_text_in_range(None, &text, window, cx);
+        if self.readonly {
+            return;
+        }
+        if let Some(content) = cx
+            .read_from_clipboard()
+            .and_then(|item| crate::clipboard::content(item, self.composer))
+        {
+            match content {
+                crate::clipboard::PasteContent::Text(text) => {
+                    self.replace_text_in_range(None, &text, window, cx);
+                }
+                crate::clipboard::PasteContent::Attachments(attachments) => cx.emit(attachments),
+            }
         }
     }
 
@@ -815,6 +826,7 @@ impl Render for TextInput {
 }
 
 impl gpui::EventEmitter<SubmitInput> for TextInput {}
+impl gpui::EventEmitter<crate::clipboard::PastedAttachments> for TextInput {}
 impl gpui::EventEmitter<SelectionInput> for TextInput {}
 
 impl Focusable for TextInput {

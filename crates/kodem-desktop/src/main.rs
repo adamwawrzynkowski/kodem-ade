@@ -1,5 +1,6 @@
 //! Native macOS desktop for Kodem's durable local host.
 mod bridge;
+mod clipboard;
 mod components;
 mod icons;
 mod markdown;

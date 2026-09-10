@@ -2988,11 +2988,13 @@ dependencies = [
  "anyhow",
  "gpui-ce",
  "gpui_ce_platform",
+ "image",
  "kodem-core",
  "objc2-app-kit 0.3.2",
  "pulldown-cmark",
  "serde_json",
  "syntect",
+ "tempfile",
  "unicode-segmentation",
 ]
 

@@ -4,6 +4,11 @@ use std::sync::mpsc;
 pub enum Command {
     Flush(mpsc::Sender<()>),
     Request(Request),
+    ImportAttachments {
+        task_id: String,
+        sources: Vec<kodem_core::AttachmentSource>,
+        images: Vec<tempfile::TempPath>,
+    },
     Poll(Option<String>, bool),
 }
 pub struct Reply {
@@ -22,12 +27,22 @@ fn start_at(
     let (replies, rx) = mpsc::channel();
     std::thread::spawn(move || {
         while let Ok(command) = commands.recv() {
+            // Keep clipboard files alive until the host has copied them, even if the window closes.
+            let _clipboard_images;
             let requests = match command {
                 Command::Flush(done) => {
                     let _ = done.send(());
                     continue;
                 }
                 Command::Request(r) => vec![r],
+                Command::ImportAttachments {
+                    task_id,
+                    sources,
+                    images,
+                } => {
+                    _clipboard_images = images;
+                    vec![Request::ImportAttachments { task_id, sources }]
+                }
                 Command::Poll(task, terminal) => {
                     let mut r = vec![Request::Hello];
                     if let Some(task_id) = task {

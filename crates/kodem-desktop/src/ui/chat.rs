@@ -386,7 +386,8 @@ impl Shell {
                             )
                             .on_click(cx.listener(
                                 move |s, _, _, cx| {
-                                    s.pending_attachments.remove(index);
+                                    let source = s.pending_attachments.remove(index);
+                                    s.clipboard_images.remove(source.path());
                                     cx.notify();
                                 },
                             )),
@@ -397,10 +398,11 @@ impl Shell {
                 );
             }
         }
-        let importing = self
-            .selected
-            .as_ref()
-            .is_some_and(|id| self.importing_tasks.get(id).copied().unwrap_or(0) > 0);
+        let importing = self.pasting_images > 0
+            || self
+                .selected
+                .as_ref()
+                .is_some_and(|id| self.importing_tasks.get(id).copied().unwrap_or(0) > 0);
         if importing {
             attachments = attachments.child(
                 div()
@@ -573,7 +575,7 @@ impl Shell {
             toolbar = toolbar.child(
                 self.primary("create-from-composer", "plus", "Create task")
                     .h(px(30.))
-                    .disabled(project.is_none() || self.start_after_create)
+                    .disabled(project.is_none() || self.start_after_create || importing)
                     .on_click(cx.listener(move |s, _, _, cx| {
                         if let Some(project) = &project {
                             s.empty_draft = s.input.read(cx).text();

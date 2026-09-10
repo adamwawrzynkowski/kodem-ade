@@ -126,6 +126,8 @@ pub struct Shell {
     observed_draft: String,
     importing_tasks: HashMap<String, usize>,
     pending_attachments: Vec<AttachmentSource>,
+    clipboard_images: HashMap<std::path::PathBuf, tempfile::TempPath>,
+    pasting_images: usize,
     diff_view: Option<Entity<diff_view::DiffView>>,
     sidebar_hovered: bool,
     task_order: HashMap<String, usize>,
@@ -181,6 +183,12 @@ impl Shell {
             }),
             cx.on_focus_lost(window, |s, window, cx| window.focus(&s.focus, cx)),
             cx.subscribe(&input, |s, _, _: &SubmitInput, cx| s.submit_current(cx)),
+            cx.subscribe(
+                &input,
+                |s, _, pasted: &crate::clipboard::PastedAttachments, cx| {
+                    s.paste_attachments(pasted, cx);
+                },
+            ),
             cx.observe(&input, |s, input, cx| {
                 let text = input.read(cx).text();
                 if text != s.observed_draft {
@@ -298,6 +306,8 @@ impl Shell {
             observed_draft: String::new(),
             importing_tasks: HashMap::new(),
             pending_attachments: Vec::new(),
+            clipboard_images: HashMap::new(),
+            pasting_images: 0,
             diff_view: None,
             sidebar_hovered: false,
             task_order: HashMap::new(),
@@ -491,6 +501,7 @@ impl Shell {
                 self.view = Some(view);
                 if self.auto_submit_task.as_ref() == self.selected.as_ref()
                     && self.auto_submit_task.is_some()
+                    && self.pasting_images == 0
                     && self
                         .selected
                         .as_ref()

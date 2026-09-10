@@ -15,6 +15,7 @@ impl Shell {
     /// Sends the same composition for keyboard and pointer submission.
     pub(super) fn submit_current(&mut self, cx: &mut Context<Self>) {
         if self.panel != Panel::None
+            || self.pasting_images > 0
             || self.submitted_draft.is_some()
             || !self.has_composer_content(cx)
         {
@@ -82,6 +83,51 @@ impl Shell {
         self.attach_sources(paths.into_iter().map(AttachmentSource::File).collect(), cx);
     }
 
+    /// Routes copied files and prepares raw clipboard images for the existing attachment import.
+    pub(super) fn paste_attachments(
+        &mut self,
+        pasted: &crate::clipboard::PastedAttachments,
+        cx: &mut Context<Self>,
+    ) {
+        if pasted.images.is_empty() {
+            self.attach_paths(pasted.paths.clone(), cx);
+            return;
+        }
+        let pasted = pasted.clone();
+        let selected = self.selected.clone();
+        self.pasting_images += 1;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_executor().spawn(async move {
+                crate::clipboard::stage_images(pasted.images).map(|images| (pasted.paths, images))
+            }).await;
+            let _ = this.update(cx, |s, cx| {
+                s.pasting_images -= 1;
+                match result {
+                    Ok((mut paths, images)) => {
+                        if selected.is_none() && s.selected.is_some() {
+                            s.error = Some("Image paste cancelled because the task changed. Paste again in the intended task.".into());
+                        } else {
+                            for image in images {
+                                let path = image.to_path_buf();
+                                paths.push(path.clone());
+                                s.clipboard_images.insert(path, image);
+                            }
+                            let sources = paths.into_iter().map(AttachmentSource::File).collect();
+                            if let Some(task_id) = selected {
+                                s.import_attachments(task_id, sources);
+                            } else {
+                                s.attach_sources(sources, cx);
+                            }
+                        }
+                    }
+                    Err(error) => s.error = Some(format!("Could not paste image: {error:#}")),
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+
     /// Adds an explicit skill reference using the same durable attachment flow as files.
     pub(super) fn attach_skill(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.attach_sources(vec![AttachmentSource::Skill(path)], cx);
@@ -106,7 +152,15 @@ impl Shell {
     /// Tracks an asynchronous import for the task that requested it.
     pub(super) fn import_attachments(&mut self, task_id: String, sources: Vec<AttachmentSource>) {
         *self.importing_tasks.entry(task_id.clone()).or_default() += 1;
-        self.send(core::Request::ImportAttachments { task_id, sources });
+        let images = sources
+            .iter()
+            .filter_map(|source| self.clipboard_images.remove(source.path()))
+            .collect();
+        let _ = self.tx.send(bridge::Command::ImportAttachments {
+            task_id,
+            sources,
+            images,
+        });
     }
 
     /// Opens the native multiple-file picker used by the composer paperclip.
