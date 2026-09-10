@@ -56,6 +56,7 @@ impl Shell {
                     "loader",
                     t.accent,
                     true,
+                    cx.reduce_motion(),
                 ))
             })
             .on_click(cx.listener(move |s, _, _, cx| s.toggle_tool_detail(&group_key, index, cx))),

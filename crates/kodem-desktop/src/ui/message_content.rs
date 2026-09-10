@@ -152,7 +152,7 @@ impl Shell {
 
     fn message_prose(&mut self, key: &str, text: RichText, cx: &mut Context<Self>) -> AnyElement {
         let input = self.readonly(key.to_owned(), text.text, cx);
-        input.update(cx, |input, _| input.prose(text.spans, self.settings.light));
+        input.update(cx, |input, _| input.prose(text.spans, self.theme));
         div()
             .w_full()
             .min_w_0()

@@ -73,24 +73,88 @@ impl Store {
         )?;
         Ok(())
     }
-    /// Returns registered repositories, saving a color for any project that predates colors.
+    /// Returns projects currently registered in the workspace.
     pub fn projects(&self) -> Result<Vec<Project>> {
-        let mut projects: Vec<Project> =
-            self.read_json("SELECT json FROM projects ORDER BY path")?;
-        for project in &mut projects {
-            if project.color.is_none() {
-                project.color = Some(project_color());
-                self.db.execute(
-                    "UPDATE projects SET json=?1 WHERE id=?2",
-                    params![serde_json::to_string(project)?, project.id],
-                )?;
-            }
+        let projects: Vec<Project> = self.read_json("SELECT json FROM projects ORDER BY path")?;
+        Ok(projects
+            .into_iter()
+            .filter(|project| !project.removed)
+            .collect())
+    }
+    /// Saves project presentation without changing its repository identity.
+    pub fn customize_project(
+        &self,
+        id: &str,
+        name: &str,
+        color: Option<u32>,
+        icon: ProjectIcon,
+    ) -> Result<()> {
+        ensure!(
+            !name.trim().is_empty() && name.len() < 512 && !name.chars().any(char::is_control),
+            "Enter a project name under 512 bytes without control characters"
+        );
+        ensure!(
+            color.is_none_or(|color| color <= 0xffffff),
+            "Invalid project color"
+        );
+        let mut project = self
+            .projects()?
+            .into_iter()
+            .find(|p| p.id == id)
+            .context("Project not found")?;
+        project.name = name.trim().into();
+        project.color = color;
+        project.icon = icon;
+        self.save_project(&project)
+    }
+    /// Removes a project from navigation while retaining its files and restorable history.
+    pub fn remove_project(&self, id: &str) -> Result<()> {
+        let mut project = self
+            .projects()?
+            .into_iter()
+            .find(|p| p.id == id)
+            .context("Project not found")?;
+        let tasks = self.tasks()?;
+        for task in tasks.iter().filter(|t| t.project_id == id) {
+            ensure!(
+                !task.state.active()
+                    && task.active_turn.is_none()
+                    && task.state != RunState::DeliveryUnknown
+                    && !self.has_uncertain_submission(&task.id)?
+                    && !self
+                        .outgoing(&task.id)?
+                        .iter()
+                        .any(|m| m.state == DeliveryState::Queued),
+                "Finish or reconcile this project's tasks and cancel queued messages before removing it"
+            );
         }
-        Ok(projects)
+        project.removed = true;
+        let mut settings = self.settings()?;
+        if tasks
+            .iter()
+            .any(|t| t.project_id == id && settings.selected_task.as_ref() == Some(&t.id))
+        {
+            settings.selected_task = None;
+        }
+        let transaction = self.db.unchecked_transaction()?;
+        self.save_project(&project)?;
+        self.write_settings(&settings)?;
+        transaction.commit()?;
+        Ok(())
+    }
+    fn save_project(&self, project: &Project) -> Result<()> {
+        self.db.execute(
+            "UPDATE projects SET json=?1 WHERE id=?2",
+            params![serde_json::to_string(project)?, project.id],
+        )?;
+        Ok(())
     }
     /// Adds a project once, using its canonical path as the identity boundary.
     pub fn add_project(&self, path: PathBuf) -> Result<Project> {
-        if let Some(p) = self.projects()?.into_iter().find(|p| p.path == path) {
+        let projects: Vec<Project> = self.read_json("SELECT json FROM projects")?;
+        if let Some(mut p) = projects.into_iter().find(|p| p.path == path) {
+            p.removed = false;
+            self.save_project(&p)?;
             return Ok(p);
         }
         let p = Project {
@@ -102,7 +166,9 @@ impl Store {
                 .into(),
             path,
             pinned: false,
-            color: Some(project_color()),
+            color: None,
+            icon: ProjectIcon::default(),
+            removed: false,
         };
         self.db.execute(
             "INSERT INTO projects VALUES(?1,?2,?3)",
@@ -556,13 +622,4 @@ impl Store {
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
-}
-
-// Keep randomly assigned colors readable against both sidebar themes.
-fn project_color() -> u32 {
-    let bytes = *uuid::Uuid::new_v4().as_bytes();
-    let palette = [
-        0xd99a73, 0x9ca9dc, 0x89bca7, 0xcba0cd, 0xc8b875, 0x7fb8ca, 0xd88f9e, 0xa7bc80,
-    ];
-    palette[bytes[0] as usize % palette.len()]
 }

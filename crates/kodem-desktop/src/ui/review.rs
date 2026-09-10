@@ -40,7 +40,10 @@ impl Shell {
             .flex()
             .flex_col()
             .bg(t.inset)
-            .child(motion::window_texture(self.settings.light))
+            .child(motion::window_texture(
+                self.settings.light,
+                self.theme.accent,
+            ))
             .overflow_hidden()
             .when(!center, |panel| {
                 panel.child(

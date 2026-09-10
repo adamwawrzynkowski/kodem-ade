@@ -25,6 +25,112 @@ pub struct Project {
     pub pinned: bool,
     #[serde(default)]
     pub color: Option<u32>,
+    #[serde(default)]
+    pub icon: ProjectIcon,
+    #[serde(default)]
+    pub removed: bool,
+}
+/// Named accents with coordinated foreground colors for both appearances.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AccentColor {
+    #[default]
+    Orange,
+    Blue,
+    Green,
+    Purple,
+    Pink,
+    Teal,
+}
+impl AccentColor {
+    pub const ALL: [Self; 6] = [
+        Self::Orange,
+        Self::Blue,
+        Self::Green,
+        Self::Purple,
+        Self::Pink,
+        Self::Teal,
+    ];
+    /// Returns the label shown in color pickers.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Orange => "Orange",
+            Self::Blue => "Blue",
+            Self::Green => "Green",
+            Self::Purple => "Purple",
+            Self::Pink => "Pink",
+            Self::Teal => "Teal",
+        }
+    }
+    /// Returns a readable RGB foreground for the selected appearance.
+    pub fn rgb(self, light: bool) -> u32 {
+        match (self, light) {
+            (Self::Orange, false) => 0xcb864c,
+            (Self::Orange, true) => 0x956324,
+            (Self::Blue, false) => 0x78aaf0,
+            (Self::Blue, true) => 0x2965aa,
+            (Self::Green, false) => 0x82bd87,
+            (Self::Green, true) => 0x34743b,
+            (Self::Purple, false) => 0xb59be6,
+            (Self::Purple, true) => 0x7852ac,
+            (Self::Pink, false) => 0xdc93b2,
+            (Self::Pink, true) => 0xa4416c,
+            (Self::Teal, false) => 0x78bebc,
+            (Self::Teal, true) => 0x277977,
+        }
+    }
+}
+/// Project glyphs or an imported image stored by the local host.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ProjectIcon {
+    #[default]
+    Auto,
+    Folder,
+    Code,
+    Cube,
+    Book,
+    Branch,
+    Terminal,
+    File,
+    Image(PathBuf),
+}
+impl ProjectIcon {
+    pub const ALL: [Self; 8] = [
+        Self::Auto,
+        Self::Folder,
+        Self::Code,
+        Self::Cube,
+        Self::Book,
+        Self::Branch,
+        Self::Terminal,
+        Self::File,
+    ];
+    /// Returns the picker label for this icon.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Auto => "Automatic",
+            Self::Folder => "Folder",
+            Self::Code => "Code",
+            Self::Cube => "Cube",
+            Self::Book => "Book",
+            Self::Branch => "Branch",
+            Self::Terminal => "Terminal",
+            Self::File => "File",
+            Self::Image(_) => "Custom image",
+        }
+    }
+    /// Returns the bundled asset, or lets the desktop choose its existing automatic glyph.
+    pub fn glyph(&self) -> Option<&'static str> {
+        match self {
+            Self::Auto | Self::Image(_) => None,
+            Self::Folder => Some("folder"),
+            Self::Code => Some("code"),
+            Self::Cube => Some("cube"),
+            Self::Book => Some("book"),
+            Self::Branch => Some("branch"),
+            Self::Terminal => Some("square-terminal"),
+            Self::File => Some("file-text"),
+        }
+    }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub enum RunState {
@@ -351,6 +457,7 @@ pub struct Settings {
     pub comfortable: bool,
     pub font_size: f32,
     pub light: bool,
+    pub accent: AccentColor,
     pub sort: Sort,
     pub selected_task: Option<String>,
     #[serde(default)]
@@ -373,6 +480,7 @@ impl Default for Settings {
             comfortable: false,
             font_size: 14.,
             light: false,
+            accent: AccentColor::default(),
             sort: Sort::Recent,
             selected_task: None,
             diff_placement: DiffPlacement::default(),
@@ -699,9 +807,19 @@ pub enum Request {
     OpenProject {
         path: PathBuf,
     },
+    CustomizeProject {
+        project_id: String,
+        name: String,
+        color: Option<u32>,
+        icon: ProjectIcon,
+    },
+    RemoveProject {
+        project_id: String,
+    },
     CreateTask {
         project_id: String,
         worktree: bool,
+        preferences: AgentPreferences,
     },
     Task {
         task_id: String,

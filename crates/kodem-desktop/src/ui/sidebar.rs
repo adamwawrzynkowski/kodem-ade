@@ -15,7 +15,10 @@ impl Shell {
                 .items_center()
                 .py_3()
                 .gap_2()
-                .child(motion::window_texture(self.settings.light))
+                .child(motion::window_texture(
+                    self.settings.light,
+                    self.theme.accent,
+                ))
                 .child(
                     self.icon_button("rail-new", "edit", "New task · ⌘N")
                         .on_click(cx.listener(|s, _, w, cx| s.new_task(&NewTask, w, cx))),
@@ -54,7 +57,10 @@ impl Shell {
             .flex_col()
             .overflow_hidden()
             .text_size(px(12.))
-            .child(motion::window_texture(self.settings.light))
+            .child(motion::window_texture(
+                self.settings.light,
+                self.theme.accent,
+            ))
             .on_hover(cx.listener(|s, hovered, _, cx| {
                 s.sidebar_hovered = *hovered;
                 cx.notify();
@@ -307,7 +313,7 @@ impl Shell {
     ) -> AnyElement {
         let t = self.theme;
         let selected = self.selected.as_deref() == Some(&task.id);
-        let tint = project_tint(project);
+        let tint = project_tint(project, self.theme);
         let radius = px(9.);
         let mut surface = if self.settings.light {
             t.inset
@@ -336,19 +342,9 @@ impl Shell {
             }
         };
         let status = if needs_input {
-            "Needs input".into()
-        } else if task.state.active() {
-            format!(
-                "{} {}",
-                if task.state == RunState::Running {
-                    "Working"
-                } else {
-                    task.state.label()
-                },
-                elapsed(task.updated)
-            )
+            "Needs input"
         } else {
-            task.state.label().into()
+            task.state.label()
         };
         let mut meta = div()
             .h(px(20.))
@@ -486,7 +482,7 @@ impl Shell {
                     .gap_2()
                     .text_size(px(11.))
                     .text_color(metadata)
-                    .child(project_icon(project))
+                    .child(project_icon(project, self.theme))
                     .child(
                         div()
                             .flex_1()
@@ -503,6 +499,16 @@ impl Shell {
                             .items_center()
                             .gap_1()
                             .text_color(status_color)
+                            .when(needs_input, |d| {
+                                d.child(motion::gleam(
+                                    (
+                                        ElementId::from("sidebar-status-label"),
+                                        SharedString::from(id.clone()),
+                                    ),
+                                    status,
+                                    t,
+                                ))
+                            })
                             .child(motion::active_icon(
                                 (
                                     ElementId::from("sidebar-status"),
@@ -511,15 +517,16 @@ impl Shell {
                                 if needs_input { "shield" } else { "loader" },
                                 status_color,
                                 task.state.active() && !needs_input,
+                                cx.reduce_motion(),
                             ))
-                            .child(motion::gleam(
-                                (
-                                    ElementId::from("sidebar-status-label"),
-                                    SharedString::from(id.clone()),
-                                ),
-                                status,
-                                t,
-                            ))
+                            .when(task.state.active() && !needs_input, |d| {
+                                d.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .text_color(t.muted)
+                                        .child(elapsed(task.updated)),
+                                )
+                            })
                             .into_any_element()
                     } else {
                         div()
@@ -569,7 +576,21 @@ impl Shell {
     }
 }
 /// Returns a stable, distinct project glyph and tint without filesystem work during rendering.
-pub(super) fn project_icon(project: &Project) -> AnyElement {
+pub(super) fn project_icon(project: &Project, theme: Theme) -> AnyElement {
+    if let ProjectIcon::Image(path) = &project.icon {
+        return img(path.clone())
+            .size(px(18.))
+            .rounded(px(4.))
+            .flex_shrink_0()
+            .object_fit(ObjectFit::Contain)
+            .with_fallback(move || {
+                icon("file")
+                    .size(px(18.))
+                    .text_color(theme.accent)
+                    .into_any_element()
+            })
+            .into_any_element();
+    }
     let hash = project
         .path
         .to_string_lossy()
@@ -596,7 +617,8 @@ pub(super) fn project_icon(project: &Project) -> AnyElement {
             "file-text",
         ][hash as usize % 8]
     };
-    let tint = project_tint(project);
+    let glyph = project.icon.glyph().unwrap_or(glyph);
+    let tint = project_tint(project, theme);
     div()
         .size(px(18.))
         .rounded(px(4.))
@@ -609,11 +631,15 @@ pub(super) fn project_icon(project: &Project) -> AnyElement {
         .into_any_element()
 }
 
-// Apply the same saturation boost to saved colors in icons and thread grain.
-fn project_tint(project: &Project) -> Hsla {
-    let mut color = rgb_to_hsla(rgb(project.color.unwrap_or(0xb5a28c)));
-    color.saturation = (color.saturation * 1.2).min(1.);
-    color
+// Use readable theme variants for named colors and preserve legacy custom RGB colors.
+fn project_tint(project: &Project, theme: Theme) -> Hsla {
+    project.color.map_or(theme.accent, |color| {
+        let color = AccentColor::ALL
+            .into_iter()
+            .find(|accent| accent.rgb(false) == color)
+            .map_or(color, |accent| accent.rgb(theme.canvas.lightness > 0.5));
+        rgb_to_hsla(rgb(color))
+    })
 }
 
 fn rank(task: &core::Task) -> u8 {

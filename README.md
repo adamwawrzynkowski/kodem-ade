@@ -76,7 +76,11 @@ GPUI-CE 0.2.2 and its platform package 0.1.0 share one native type graph. The co
 
 The accepted [architecture](docs/design/architecture.md), [design guidance](docs/design/design-guidance.md), [implementation plan](docs/design/implementation-plan.md) and [research](docs/design/research.md) remain available. [Design validation](docs/design/validation.md) records the earlier dependency probe separately from this implementation.
 
-The bundled app icon comes from `assets/app/AppIcon_1024x1024.png`. Both build commands generate a complete macOS iconset from that source. The window carries subtle orange top-left and gray bottom-right dithered shading.
+The bundled app icon comes from `assets/app/AppIcon_1024x1024.png`. Both build commands generate a complete macOS iconset from that source. The window uses the saved accent for its top-left dithering and gray for its bottom-right shading. Settings → Appearance offers Orange, Blue, Green, Purple, Pink and Teal. Orange remains the default; the choice also colors controls, inline formatting and working indicators.
+
+Settings → Projects lets you rename projects and choose their accent and icon, including your own image. Imported images are stored as small PNG copies, so moving or deleting the original does not remove the project icon. New projects follow the app accent; existing saved project colors are retained. Removing a project hides it and its tasks while keeping files and local history. Reopen the repository to restore it. Active or unresolved work must finish before removal.
+
+New Task opens an empty chat with the app icon and a greeting using the local account's first name. Click the project name to switch or add a repository, and choose New worktree or Current checkout inside the composer. Choose a model, reasoning effort and access before creating the task. The compact + button and Enter both create the task and immediately submit the first message. Working indicators use a nine-pixel dither box, with a static pattern when reduced motion is enabled.
 
 The desktop retries failed local connections. An older idle host accepts an upgrade through its guarded shutdown request; active tasks and checks postpone that upgrade. A newer host is never downgraded by an older app. Settings distinguish an unavailable host from an unavailable runtime, and rejected operations are not replayed during reconnect.
 

@@ -132,7 +132,7 @@ impl Render for EffortSlider {
         let progress = (self.visual / count).clamp(0., 1.);
         let stop_count = self.options.len();
         let entity = cx.entity();
-        let blue: Hsla = rgb_to_hsla(rgb(0x328be8));
+        let accent = t.accent;
         div()
             .id("effort-slider")
             .track_focus(&self.focus)
@@ -239,7 +239,7 @@ impl Render for EffortSlider {
                                     track.origin,
                                     size(center - track.left() + px(14.), track.size.height),
                                 );
-                                window.paint_quad(fill(filled, blue).corner_radii(px(14.)));
+                                window.paint_quad(fill(filled, accent).corner_radii(px(14.)));
                                 for i in 0..stop_count {
                                     let x = bounds.left()
                                         + px(slider_center(

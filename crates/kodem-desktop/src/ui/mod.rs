@@ -14,6 +14,7 @@ mod message_content;
 mod model_picker;
 mod motion;
 mod panels;
+mod projects;
 mod questions;
 mod review;
 mod settings;
@@ -55,7 +56,9 @@ actions!(
 #[derive(Clone, PartialEq)]
 enum Panel {
     None,
-    NewTask,
+    CustomizeProject,
+    RemoveProject,
+    ChatProjects,
     Settings,
     Resources,
     Files,
@@ -95,13 +98,17 @@ pub struct Shell {
     settings: Settings,
     theme: Theme,
     panel: Panel,
+    composer_menu_anchor: Option<Point<Pixels>>,
     thread_menu: Option<ThreadMenu>,
     deleting_task: Option<String>,
     error: Option<String>,
     status: String,
     host_connected: bool,
     new_worktree: bool,
+    new_preferences: Option<AgentPreferences>,
     selected_project: Option<String>,
+    editing_project: Option<Project>,
+    greeting_name: String,
     show_review: bool,
     show_terminal: bool,
     terminal: Option<TerminalView>,
@@ -151,7 +158,7 @@ pub struct Shell {
     sidebar_project: Option<String>,
     settled_collapsed: bool,
     empty_draft: String,
-    start_after_create: bool,
+    creating_task: bool,
     auto_submit_task: Option<String>,
     composer_height: f32,
     composer_spring: motion::ComposerSpring,
@@ -295,13 +302,17 @@ impl Shell {
             settings: Settings::default(),
             theme: Theme::new(false),
             panel: Panel::None,
+            composer_menu_anchor: None,
             thread_menu: None,
             deleting_task: None,
             error: None,
             status: "Connecting to local host…".into(),
             host_connected: false,
             new_worktree: true,
+            new_preferences: None,
             selected_project: None,
+            editing_project: None,
+            greeting_name: user_first_name(),
             show_review: true,
             show_terminal: false,
             terminal: None,
@@ -351,7 +362,7 @@ impl Shell {
             sidebar_project: None,
             settled_collapsed: false,
             empty_draft: String::new(),
-            start_after_create: false,
+            creating_task: false,
             auto_submit_task: None,
             composer_height: 170.,
             composer_spring: motion::ComposerSpring::default(),
@@ -435,7 +446,7 @@ impl Shell {
                     viewer.update(cx, |v, cx| v.context_failed(cx));
                 }
                 if matches!(reply.request, core::Request::CreateTask { .. }) {
-                    self.start_after_create = false;
+                    self.creating_task = false;
                 }
                 if matches!(reply.request, core::Request::ImportAttachments { .. }) {
                     self.auto_submit_task = None;
@@ -447,13 +458,27 @@ impl Shell {
         };
         match response {
             Response::Workspace(workspace) => {
+                if !workspace
+                    .projects
+                    .iter()
+                    .any(|p| self.selected_project.as_ref() == Some(&p.id))
+                {
+                    self.selected_project = workspace.projects.first().map(|p| p.id.clone());
+                }
+                if self
+                    .sidebar_project
+                    .as_ref()
+                    .is_some_and(|id| !workspace.projects.iter().any(|p| &p.id == id))
+                {
+                    self.sidebar_project = None;
+                }
                 cx.set_reduce_motion(motion::system_reduce_motion());
                 if self.workspace.is_none() {
                     self.settings = workspace.settings.clone();
                     self.show_review = self.settings.show_review;
                     self.show_terminal = self.settings.show_terminal;
                     self.split = self.settings.split_diff;
-                    self.theme = Theme::new(self.settings.light);
+                    self.theme = Theme::with_accent(self.settings.light, self.settings.accent);
                     let selected = self
                         .settings
                         .selected_task
@@ -486,11 +511,15 @@ impl Shell {
                 self.status = "Local host connected".into();
             }
             Response::Project(project) => {
+                if self.selected.is_some() {
+                    self.open_empty_chat(cx);
+                }
                 self.selected_project = Some(project.id);
-                self.panel = Panel::NewTask;
+                self.panel = Panel::None;
                 self.send(core::Request::Hello);
             }
             Response::Created(task) => {
+                self.new_preferences = None;
                 self.selected_project = Some(task.project_id.clone());
                 if !self.empty_draft.is_empty() {
                     let draft = std::mem::take(&mut self.empty_draft);
@@ -503,10 +532,11 @@ impl Shell {
                     let paths = std::mem::take(&mut self.pending_attachments);
                     self.import_attachments(task.id.clone(), paths);
                 }
-                if self.start_after_create {
+                if std::mem::take(&mut self.creating_task) {
                     self.auto_submit_task = Some(task.id.clone());
-                    self.start_after_create = false;
                 }
+                self.input
+                    .update(cx, |input, cx| input.set_text(String::new(), cx));
                 self.select_task(task.id, cx);
                 self.panel = Panel::None;
                 self.send(core::Request::Hello);
@@ -677,6 +707,22 @@ impl Shell {
             }
             Response::Terminal(terminal) => self.terminal = Some(terminal),
             Response::Ok => match reply.request {
+                core::Request::CustomizeProject { .. } => {
+                    self.editing_project = None;
+                    self.panel = Panel::None;
+                    self.send(core::Request::Hello);
+                }
+                core::Request::RemoveProject { project_id } => {
+                    self.editing_project = None;
+                    self.panel = Panel::None;
+                    if self.selected_project.as_ref() == Some(&project_id) {
+                        self.selected_project = None;
+                    }
+                    if self.sidebar_project.as_ref() == Some(&project_id) {
+                        self.sidebar_project = None;
+                    }
+                    self.send(core::Request::Hello);
+                }
                 core::Request::DeleteTask { task_id } => {
                     self.deleting_task = None;
                     self.thread_menu = None;
@@ -793,6 +839,12 @@ impl Shell {
         self.auto_submit_task = None;
     }
     fn select_task(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.creating_task {
+            return;
+        }
+        if self.selected.is_none() && self.auto_submit_task.as_ref() != Some(&id) {
+            self.empty_draft = self.input.read(cx).text();
+        }
         if let Some(task_id) = &self.selected
             && self.view.is_some()
             && self.submitted_draft.as_ref().is_none_or(|p| {
@@ -863,8 +915,29 @@ impl Shell {
         })
         .detach();
     }
-    fn new_task(&mut self, _: &NewTask, _: &mut Window, cx: &mut Context<Self>) {
-        self.panel = Panel::NewTask;
+    fn new_task(&mut self, _: &NewTask, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_empty_chat(cx);
+        window.focus(&self.input.read(cx).focus_handle(cx), cx);
+    }
+    fn open_empty_chat(&mut self, cx: &mut Context<Self>) {
+        if self.creating_task {
+            return;
+        }
+        if let Some(view) = &self.view {
+            self.selected_project = Some(view.task.project_id.clone());
+            if self.submitted_draft.is_none() {
+                self.send(core::Request::EditTask {
+                    task_id: view.task.id.clone(),
+                    edit: TaskEdit::Draft(self.input.read(cx).text()),
+                });
+            }
+        }
+        if self.selected.is_some() {
+            self.clear_selected_task(cx);
+            let draft = self.empty_draft.clone();
+            self.input.update(cx, |input, cx| input.set_text(draft, cx));
+        }
+        self.panel = Panel::None;
         cx.notify();
     }
     fn submit(&mut self, _: &SendPrompt, _: &mut Window, cx: &mut Context<Self>) {
@@ -1066,4 +1139,17 @@ pub fn init(cx: &mut App) {
             ],
         },
     ]);
+}
+
+// Resolve the local account's first name once, outside rendering.
+fn user_first_name() -> String {
+    std::process::Command::new("/usr/bin/id")
+        .arg("-F")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .or_else(|| std::env::var("USER").ok())
+        .and_then(|name| name.split_whitespace().next().map(str::to_owned))
+        .unwrap_or_else(|| "there".into())
 }

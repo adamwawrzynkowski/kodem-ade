@@ -28,7 +28,10 @@ impl Shell {
             .bg(t.sidebar)
             .border_b_1()
             .border_color(t.border)
-            .child(motion::window_texture(self.settings.light))
+            .child(motion::window_texture(
+                self.settings.light,
+                self.theme.accent,
+            ))
             .child(
                 div()
                     .w(px(sidebar_width))
@@ -76,7 +79,15 @@ impl Shell {
                         })),
                 )
             })
-            .child(icon("folder-closed").text_color(t.accent))
+            .child(
+                project
+                    .map(|project| sidebar::project_icon(project, t))
+                    .unwrap_or_else(|| {
+                        icon("folder-closed")
+                            .text_color(t.accent)
+                            .into_any_element()
+                    }),
+            )
             .child(
                 div()
                     .text_size(px(13.))
@@ -300,6 +311,7 @@ impl Render for Shell {
                 | Panel::Reasoning
                 | Panel::Access
                 | Panel::Projects
+                | Panel::ChatProjects
                 | Panel::TaskMenu
                 | Panel::ThreadMenu
                 | Panel::Sort

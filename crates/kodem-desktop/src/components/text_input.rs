@@ -92,7 +92,7 @@ pub struct TextInput {
     wrap: bool,
     syntax: Option<(String, bool)>,
     colors: Vec<(Range<usize>, [u8; 3])>,
-    prose: Option<(Vec<crate::markdown::Span>, bool)>,
+    prose: Option<(Vec<crate::markdown::Span>, crate::theme::Theme)>,
 }
 
 impl TextInput {
@@ -199,11 +199,11 @@ impl TextInput {
         self.wrap = wrap;
     }
     /// Applies Markdown styles to selectable prose and restores wrapping after a block changes kind.
-    pub fn prose(&mut self, spans: Vec<crate::markdown::Span>, light: bool) {
+    pub fn prose(&mut self, spans: Vec<crate::markdown::Span>, theme: crate::theme::Theme) {
         self.wrap = true;
         self.syntax = None;
         self.colors.clear();
-        self.prose = Some((spans, light));
+        self.prose = Some((spans, theme));
     }
     fn bubble_padding(&self) -> Pixels {
         if self
@@ -1021,8 +1021,8 @@ impl Element for TextElement {
                 bounds.size.height,
             ),
         );
-        if let Some((_, light)) = self.input.read(cx).prose.as_ref() {
-            let theme = crate::theme::Theme::new(*light);
+        if let Some((_, theme)) = self.input.read(cx).prose.as_ref() {
+            let theme = *theme;
             let mut y = px(0.);
             for (_, line) in &prepaint.lines {
                 line.paint_bubbles(
@@ -1214,8 +1214,8 @@ fn shape(
         strikethrough: None,
         letter_spacing: None,
     };
-    let runs: Vec<TextRun> = if let Some((spans, light)) = &input.prose {
-        let theme = crate::theme::Theme::new(*light);
+    let runs: Vec<TextRun> = if let Some((spans, theme)) = &input.prose {
+        let theme = *theme;
         spans
             .iter()
             .map(|span| {

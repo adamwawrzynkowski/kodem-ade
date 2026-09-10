@@ -23,23 +23,7 @@ impl Shell {
         }
         let text = self.input.read(cx).text();
         let Some(view) = &self.view else {
-            if self.start_after_create {
-                return;
-            }
-            if let Some(project) = self.workspace.as_ref().and_then(|w| {
-                w.projects
-                    .iter()
-                    .find(|p| Some(&p.id) == self.selected_project.as_ref())
-                    .or(w.projects.first())
-            }) {
-                self.empty_draft = text;
-                self.start_after_create = true;
-                self.send(core::Request::CreateTask {
-                    project_id: project.id.clone(),
-                    worktree: self.new_worktree,
-                });
-                cx.notify();
-            }
+            self.create_composer_task(cx);
             return;
         };
         if self
@@ -76,6 +60,28 @@ impl Shell {
             mode: self.settings.send_mode,
         });
         cx.notify();
+    }
+
+    /// Creates one task and submits its first message after the draft and attachments load.
+    fn create_composer_task(&mut self, cx: &mut Context<Self>) {
+        if self.creating_task || self.selected.is_some() || self.pasting_images > 0 {
+            return;
+        }
+        if let Some(project) = self.workspace.as_ref().and_then(|w| {
+            w.projects
+                .iter()
+                .find(|p| Some(&p.id) == self.selected_project.as_ref())
+                .or(w.projects.first())
+        }) {
+            self.empty_draft = self.input.read(cx).text();
+            self.creating_task = true;
+            self.send(core::Request::CreateTask {
+                project_id: project.id.clone(),
+                worktree: self.new_worktree,
+                preferences: self.composer_preferences(),
+            });
+            cx.notify();
+        }
     }
 
     /// Imports dropped or chosen paths through the host without blocking the UI.

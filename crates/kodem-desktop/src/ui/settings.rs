@@ -20,6 +20,7 @@ impl Shell {
             ("bot", "Codex"),
             ("bell", "Notifications"),
             ("keyboard", "Shortcuts"),
+            ("folder", "Projects"),
         ]
         .into_iter()
         .enumerate()
@@ -48,6 +49,9 @@ impl Shell {
             .flex_col()
             .gap_4();
         match self.settings_section {
+            5 => {
+                body = body.child(self.project_settings(cx));
+            }
             0 => {
                 body = body.child(self.section_title(
                     "Appearance",
@@ -58,7 +62,7 @@ impl Shell {
                     .into_iter()
                     .enumerate()
                 {
-                    let preview = Theme::new(light);
+                    let preview = Theme::with_accent(light, self.settings.accent);
                     themes = themes.child(
                         div()
                             .flex_1()
@@ -115,7 +119,7 @@ impl Shell {
                                     )
                                     .on_click(cx.listener(move |s, _, _, cx| {
                                         s.settings.light = light;
-                                        s.theme = Theme::new(light);
+                                        s.theme = Theme::with_accent(light, s.settings.accent);
                                         s.save_settings();
                                         cx.notify();
                                     })),
@@ -125,7 +129,7 @@ impl Shell {
                                     .when(self.settings.light == light, |b| b.text_color(t.accent))
                                     .on_click(cx.listener(move |s, _, _, cx| {
                                         s.settings.light = light;
-                                        s.theme = Theme::new(light);
+                                        s.theme = Theme::with_accent(light, s.settings.accent);
                                         s.save_settings();
                                         cx.notify();
                                     })),
@@ -134,6 +138,7 @@ impl Shell {
                 }
                 body = body
                     .child(themes)
+                    .child(self.accent_choices(cx))
                     .child(
                         self.setting_row(
                             "Conversation text",
@@ -582,7 +587,8 @@ impl Shell {
             .into_any_element(),
         )
     }
-    fn section_title(&self, title: &str, detail: &str) -> AnyElement {
+    /// Returns a settings section heading and its description.
+    pub(super) fn section_title(&self, title: &str, detail: &str) -> AnyElement {
         div()
             .flex()
             .flex_col()

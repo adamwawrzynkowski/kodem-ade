@@ -73,6 +73,7 @@ impl Shell {
                                 glyph,
                                 t.accent,
                                 spin && !waiting,
+                                cx.reduce_motion(),
                             )),
                     )
                     .child(motion::gleam("agent-state-label", label, t))
@@ -125,6 +126,7 @@ impl Shell {
                                     glyph,
                                     t.accent,
                                     spin,
+                                    cx.reduce_motion(),
                                 )),
                         )
                         .child(motion::gleam(

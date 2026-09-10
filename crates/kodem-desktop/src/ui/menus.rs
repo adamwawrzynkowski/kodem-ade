@@ -18,32 +18,42 @@ impl Shell {
             .gap_1()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         match self.panel {
-            Panel::Projects => {
+            Panel::Projects | Panel::ChatProjects => {
+                let chat_picker = self.panel == Panel::ChatProjects;
                 menu = menu
                     .left(px(12.))
                     .top(px(if self.search_visible { 158. } else { 112. }))
                     .w(px((self.settings.sidebar_width - 24.).max(220.)));
-                menu = menu.child(
-                    self.ghost("all-projects", "folder-open", "All projects")
-                        .w_full()
-                        .justify_start()
-                        .when(self.sidebar_project.is_none(), |b| {
-                            b.bg(t.selected).text_color(t.text)
-                        })
-                        .on_click(cx.listener(|s, _, _, cx| {
-                            s.sidebar_project = None;
-                            s.panel = Panel::None;
-                            cx.notify();
-                        })),
-                );
+                if !chat_picker {
+                    menu = menu.child(
+                        self.ghost("all-projects", "folder-open", "All projects")
+                            .w_full()
+                            .justify_start()
+                            .when(self.sidebar_project.is_none(), |b| {
+                                b.bg(t.selected).text_color(t.text)
+                            })
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.sidebar_project = None;
+                                s.panel = Panel::None;
+                                cx.notify();
+                            })),
+                    );
+                }
+                if chat_picker {
+                    menu = menu.relative().left_auto().top_auto().w(px(320.));
+                }
                 if let Some(workspace) = self.workspace.clone() {
                     let mut projects = div()
                         .id("project-choices")
                         .max_h(px(360.))
                         .overflow_y_scroll();
                     for project in workspace.projects {
-                        let selected = self.sidebar_project.as_ref() == Some(&project.id);
-                        let glyph = sidebar::project_icon(&project);
+                        let selected = if chat_picker {
+                            self.selected_project.as_ref() == Some(&project.id)
+                        } else {
+                            self.sidebar_project.as_ref() == Some(&project.id)
+                        };
+                        let glyph = sidebar::project_icon(&project, t);
                         let id = project.id.clone();
                         projects = projects.child(
                             self.control((
@@ -63,7 +73,9 @@ impl Shell {
                             .child(div().flex_1().min_w_0().text_ellipsis().child(project.name))
                             .on_click(cx.listener(
                                 move |s, _, _, cx| {
-                                    s.sidebar_project = Some(id.clone());
+                                    if !chat_picker {
+                                        s.sidebar_project = Some(id.clone());
+                                    }
                                     s.selected_project = Some(id.clone());
                                     s.panel = Panel::None;
                                     cx.notify();
@@ -73,6 +85,24 @@ impl Shell {
                     }
                     menu = menu.child(projects);
                 }
+                menu = menu
+                    .child(div().h(px(1.)).my_1().bg(t.border))
+                    .child(
+                        self.ghost("picker-add-project", "plus", "Add project…")
+                            .justify_start()
+                            .on_click(
+                                cx.listener(|s, _, w, cx| s.open_project(&OpenProject, w, cx)),
+                            ),
+                    )
+                    .child(
+                        self.ghost("picker-manage-projects", "settings", "Customize projects…")
+                            .justify_start()
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.settings_section = 5;
+                                s.panel = Panel::Settings;
+                                cx.notify();
+                            })),
+                    );
             }
 
             Panel::Comparison => {
@@ -334,15 +364,8 @@ impl Shell {
                 }
             }
             Panel::Models | Panel::Reasoning | Panel::Access => {
-                let right =
-                    if self.selected.is_some() && self.show_review && self.window_width > 1100. {
-                        self.settings.review_width.min(self.window_width * 0.55) + 24.
-                    } else {
-                        24.
-                    };
                 menu = menu
-                    .bottom(px(94.))
-                    .right(px(right))
+                    .relative()
                     .w(px(348.))
                     .max_h(relative(0.8))
                     .overflow_y_scroll()
@@ -361,11 +384,30 @@ impl Shell {
                     cx.notify();
                 }),
             )
-            .child(menu.with_animation(
-                ("menu-enter", self.panel.clone() as usize),
-                Animation::new(Duration::from_millis(130)),
-                |d, p| d.opacity(p),
-            ))
+            .child({
+                let menu = menu.with_animation(
+                    ("menu-enter", self.panel.clone() as usize),
+                    Animation::new(Duration::from_millis(130)),
+                    |d, p| d.opacity(p),
+                );
+                if matches!(
+                    self.panel,
+                    Panel::Models | Panel::Reasoning | Panel::Access | Panel::ChatProjects
+                ) {
+                    anchored()
+                        .position(
+                            self.composer_menu_anchor
+                                .unwrap_or(point(px(24.), px(120.))),
+                        )
+                        .anchor(Anchor::TopRight)
+                        .offset(point(px(0.), px(16.)))
+                        .snap_to_window_with_margin(px(8.))
+                        .child(menu)
+                        .into_any_element()
+                } else {
+                    menu.into_any_element()
+                }
+            })
             .into_any_element()
     }
 }

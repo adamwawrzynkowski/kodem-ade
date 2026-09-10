@@ -10,20 +10,15 @@ impl Shell {
             .map(|w| w.runtime.clone())
             .unwrap_or_default();
         let mut content = div().flex().flex_col().flex_shrink_0().gap_1();
-        let Some(view) = self.view.clone() else {
-            return content
-                .child(
-                    div()
-                        .p_2()
-                        .text_size(px(12.))
-                        .text_color(t.muted)
-                        .child("Create a task to choose its model, effort and access."),
-                )
-                .into_any_element();
-        };
-        let disabled = view.task.state.active();
+        let preferences = self.composer_preferences();
+        let task_id = self.view.as_ref().map(|view| view.task.id.clone());
+        let disabled = self.creating_task
+            || self
+                .view
+                .as_ref()
+                .is_some_and(|view| view.task.state.active());
         if self.panel == Panel::Models {
-            let task_id = view.task.id.clone();
+            let default_task_id = task_id.clone();
             let mut models = div()
                 .id("model-list")
                 .max_h(px(220.))
@@ -35,22 +30,16 @@ impl Shell {
                     .h(px(32.))
                     .justify_start()
                     .disabled(disabled)
-                    .when(view.task.model.is_none(), |b| {
+                    .when(preferences.model.is_none(), |b| {
                         b.bg(t.selected).text_color(t.text)
                     })
-                    .on_click(cx.listener(move |s, _, _, _| {
-                        s.send(core::Request::EditTask {
-                            task_id: task_id.clone(),
-                            edit: TaskEdit::Model {
-                                model: None,
-                                effort: None,
-                            },
-                        })
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.choose_model(default_task_id.clone(), None, None, cx);
                     })),
             );
             for (i, model) in runtime.models.iter().enumerate() {
-                let chosen = view.task.model.as_deref() == Some(&model.id);
-                let id = view.task.id.clone();
+                let chosen = preferences.model.as_deref() == Some(&model.id);
+                let id = task_id.clone();
                 let model_id = model.id.clone();
                 let effort = model.default_effort.clone();
                 models = models.child(
@@ -64,14 +53,13 @@ impl Shell {
                         .when(chosen, |b| {
                             b.child(icon("check").size(px(13.)).text_color(t.accent))
                         })
-                        .on_click(cx.listener(move |s, _, _, _| {
-                            s.send(core::Request::EditTask {
-                                task_id: id.clone(),
-                                edit: TaskEdit::Model {
-                                    model: Some(model_id.clone()),
-                                    effort: Some(effort.clone()),
-                                },
-                            })
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            s.choose_model(
+                                id.clone(),
+                                Some(model_id.clone()),
+                                Some(effort.clone()),
+                                cx,
+                            );
                         })),
                 );
             }
@@ -81,11 +69,19 @@ impl Shell {
             if let Some(model) = runtime
                 .models
                 .iter()
-                .find(|m| Some(&m.id) == view.task.model.as_ref())
+                .find(|m| Some(&m.id) == preferences.model.as_ref())
                 .filter(|m| !m.efforts.is_empty())
             {
-                let selected = view.task.effort.as_deref().unwrap_or(&model.default_effort);
-                let key = format!("{}:{}:{:?}", view.task.id, model.id, model.efforts);
+                let selected = preferences
+                    .effort
+                    .as_deref()
+                    .unwrap_or(&model.default_effort);
+                let key = format!(
+                    "{}:{}:{:?}",
+                    task_id.as_deref().unwrap_or("new-task"),
+                    model.id,
+                    model.efforts
+                );
                 if self
                     .effort_slider
                     .as_ref()
@@ -99,18 +95,17 @@ impl Shell {
                             cx,
                         )
                     });
-                    let task_id = view.task.id.clone();
+                    let task_id = task_id.clone();
                     let model_id = model.id.clone();
                     let subscription = cx.subscribe(
                         &slider,
-                        move |s, _, event: &effort_slider::EffortSelected, _| {
-                            s.send(core::Request::EditTask {
-                                task_id: task_id.clone(),
-                                edit: TaskEdit::Model {
-                                    model: Some(model_id.clone()),
-                                    effort: Some(event.0.clone()),
-                                },
-                            });
+                        move |s, _, event: &effort_slider::EffortSelected, cx| {
+                            s.choose_model(
+                                task_id.clone(),
+                                Some(model_id.clone()),
+                                Some(event.0.clone()),
+                                cx,
+                            );
                         },
                     );
                     self.effort_slider = Some((key, slider, subscription));
@@ -138,8 +133,8 @@ impl Shell {
             .into_iter()
             .enumerate()
             {
-                let id = view.task.id.clone();
-                let chosen = view.task.access == access;
+                let id = task_id.clone();
+                let chosen = preferences.access == access;
                 let description = match access {
                     AccessMode::ReadOnly => "Inspect files without editing or network access",
                     AccessMode::Workspace => "Edit the checkout; ask for broader permissions",
@@ -188,11 +183,18 @@ impl Shell {
                     .when(chosen, |b| {
                         b.child(icon("check").size(px(13.)).text_color(t.accent))
                     })
-                    .on_click(cx.listener(move |s, _, _, _| {
-                        s.send(core::Request::EditTask {
-                            task_id: id.clone(),
-                            edit: TaskEdit::Access(access),
-                        })
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        if let Some(task_id) = &id {
+                            s.send(core::Request::EditTask {
+                                task_id: task_id.clone(),
+                                edit: TaskEdit::Access(access),
+                            });
+                        } else {
+                            let mut preferences = s.composer_preferences();
+                            preferences.access = access;
+                            s.new_preferences = Some(preferences);
+                        }
+                        cx.notify();
                     })),
                 );
             }
@@ -226,5 +228,43 @@ impl Shell {
             );
         }
         content.into_any_element()
+    }
+    /// Returns current task options or the draft's overrides of the saved defaults.
+    pub(super) fn composer_preferences(&self) -> AgentPreferences {
+        if let Some(view) = &self.view {
+            AgentPreferences {
+                model: view.task.model.clone(),
+                effort: view.task.effort.clone(),
+                access: view.task.access,
+            }
+        } else {
+            self.new_preferences.clone().unwrap_or_else(|| {
+                self.workspace
+                    .as_ref()
+                    .map(|w| w.settings.agent_defaults.clone())
+                    .unwrap_or_default()
+            })
+        }
+    }
+
+    fn choose_model(
+        &mut self,
+        task_id: Option<String>,
+        model: Option<String>,
+        effort: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(task_id) = task_id {
+            self.send(core::Request::EditTask {
+                task_id,
+                edit: TaskEdit::Model { model, effort },
+            });
+        } else {
+            let mut preferences = self.composer_preferences();
+            preferences.model = model;
+            preferences.effort = effort;
+            self.new_preferences = Some(preferences);
+        }
+        cx.notify();
     }
 }

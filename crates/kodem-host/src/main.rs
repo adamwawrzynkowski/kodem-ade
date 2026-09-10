@@ -1,6 +1,7 @@
 //! On-demand local host. Window closure never drops provider or PTY ownership.
 mod attachments;
 mod notifications;
+mod project_icons;
 mod provider;
 mod terminal;
 mod titles;
@@ -160,11 +161,18 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                     usage_host.lock().unwrap().usage_refreshing = false;
                 });
             }
+            let projects = h.store.projects()?;
+            let tasks = h
+                .store
+                .tasks()?
+                .into_iter()
+                .filter(|task| projects.iter().any(|p| p.id == task.project_id))
+                .collect();
             Ok(Response::Workspace(Workspace {
                 notification_delivery: h.notifications.status(),
                 protocol: ipc::PROTOCOL,
-                projects: h.store.projects()?,
-                tasks: h.store.tasks()?,
+                projects,
+                tasks,
                 settings: h.store.settings()?,
                 runtime: h.runtime.clone(),
             }))
@@ -187,9 +195,67 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 host.lock().unwrap().store.add_project(path)?,
             ))
         }
+        Request::CustomizeProject {
+            project_id,
+            name,
+            color,
+            icon,
+        } => {
+            let previous = host
+                .lock()
+                .unwrap()
+                .store
+                .projects()?
+                .into_iter()
+                .find(|p| p.id == project_id)
+                .context("Project not found")?
+                .icon;
+            let imported = if let ProjectIcon::Image(source) = &icon {
+                if icon != previous {
+                    Some(project_icons::import(root, source)?)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let saved_icon = imported
+                .as_ref()
+                .map_or(icon, |path| ProjectIcon::Image(path.clone()));
+            let result =
+                host.lock()
+                    .unwrap()
+                    .store
+                    .customize_project(&project_id, &name, color, saved_icon);
+            if result.is_err()
+                && let Some(path) = imported
+            {
+                let _ = std::fs::remove_file(path);
+            }
+            result?;
+            Ok(Response::Ok)
+        }
+        Request::RemoveProject { project_id } => {
+            let h = host.lock().unwrap();
+            for task in h
+                .store
+                .tasks()?
+                .iter()
+                .filter(|t| t.project_id == project_id)
+            {
+                ensure!(
+                    !h.checks.contains(&task.id)
+                        && !h.terminals.get(&task.id).is_some_and(|t| t.running()),
+                    "Stop this project's checks and terminals before removing it"
+                );
+            }
+            h.store.remove_project(&project_id)?;
+            Ok(Response::Ok)
+        }
         Request::CreateTask {
             project_id,
             worktree,
+            preferences: defaults,
         } => {
             let p = host
                 .lock()
@@ -207,7 +273,6 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             };
             let baseline = git::head(&cwd);
             let branch = git::branch(&cwd);
-            let defaults = host.lock().unwrap().store.settings()?.agent_defaults;
             let task = Task {
                 id,
                 project_id,
@@ -221,8 +286,8 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 active_turn: None,
                 state: RunState::Idle,
                 draft: String::new(),
-                model: defaults.model,
-                effort: defaults.effort,
+                model: defaults.model.clone(),
+                effort: defaults.effort.clone(),
                 access: defaults.access,
                 review: None,
                 context_usage: None,
@@ -236,7 +301,10 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 error: None,
                 questions: Vec::new(),
             };
-            host.lock().unwrap().store.save_task(&task)?;
+            host.lock()
+                .unwrap()
+                .store
+                .save_task_preferences(&task, defaults)?;
             Ok(Response::Created(task))
         }
         Request::Task { task_id, before } => Ok(Response::Task(task_view(

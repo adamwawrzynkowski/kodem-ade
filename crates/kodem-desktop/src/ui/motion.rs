@@ -41,13 +41,50 @@ pub(super) fn gleam(
         .into_any_element()
 }
 
-/// Rotates execution indicators and softly pulses the other active glyphs.
+/// Animates a nine-pixel working box and softly pulses other active glyphs.
 pub(super) fn active_icon(
     id: impl Into<ElementId>,
     glyph: &'static str,
     color: Hsla,
     spin: bool,
+    reduce_motion: bool,
 ) -> AnyElement {
+    if spin || glyph == "loader" {
+        let frame = move |phase: f32| {
+            div()
+                .size(px(14.))
+                .flex_shrink_0()
+                .flex()
+                .flex_col()
+                .gap(px(1.))
+                .children((0..3).map(move |row| {
+                    div().flex().gap(px(1.)).children((0..3).map(move |col| {
+                        let seed = dot_seed(col, row);
+                        div()
+                            .size(px(4.))
+                            .rounded(px(0.8))
+                            .bg(color.opacity(0.2 + 0.8 * dot_opacity(seed, phase * 60.)))
+                    }))
+                }))
+        };
+        return if reduce_motion {
+            frame(0.).into_any_element()
+        } else {
+            div()
+                .with_animation(
+                    id,
+                    Animation::new(Duration::from_secs(60)).repeat(),
+                    move |d, phase| d.child(frame(phase)),
+                )
+                .into_any_element()
+        };
+    }
+    if reduce_motion {
+        return icon(glyph)
+            .size(px(14.))
+            .text_color(color)
+            .into_any_element();
+    }
     svg()
         .path(glyph)
         .size(px(14.))
@@ -55,14 +92,10 @@ pub(super) fn active_icon(
         .text_color(color)
         .with_animation(
             id,
-            Animation::new(Duration::from_millis(if spin { 1400 } else { 1800 })).repeat(),
+            Animation::new(Duration::from_millis(1800)).repeat(),
             move |svg, phase| {
-                if spin {
-                    svg.with_transformation(Transformation::rotate(percentage(phase)))
-                } else {
-                    let scale = 0.9 + 0.1 * (phase * std::f32::consts::TAU).cos();
-                    svg.with_transformation(Transformation::scale(size(scale, scale)))
-                }
+                let scale = 0.9 + 0.1 * (phase * std::f32::consts::TAU).cos();
+                svg.with_transformation(Transformation::scale(size(scale, scale)))
             },
         )
         .into_any_element()
@@ -352,28 +385,28 @@ impl Shell {
 }
 
 /// Paints warm corner lighting behind a container's content, clipped to that container.
-pub(super) fn window_texture(light: bool) -> impl IntoElement {
-    corner_texture(light, true)
+pub(super) fn window_texture(light: bool, accent: Hsla) -> impl IntoElement {
+    corner_texture(light, Some(accent))
 }
 
 /// Keeps the gray corner lighting visible above file-list and diff backgrounds.
 pub(super) fn cool_corner(light: bool) -> impl IntoElement {
-    corner_texture(light, false)
+    corner_texture(light, None)
 }
 
-fn corner_texture(light: bool, warm: bool) -> impl IntoElement {
+fn corner_texture(light: bool, accent: Option<Hsla>) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, cx| {
             let viewport = window.viewport_size();
             let edge = px(440.).min(viewport.width).min(viewport.height);
-            let (asset, origin, color) = if warm {
-                ("corner-warm", point(px(0.), px(0.)), rgb(0xd98137))
+            let (asset, origin, color) = if let Some(accent) = accent {
+                ("corner-warm", point(px(0.), px(0.)), accent)
             } else {
                 (
                     "corner-cool",
                     point(viewport.width - edge, viewport.height - edge),
-                    rgb(0x9da4ae),
+                    rgb_to_hsla(rgb(0x9da4ae)),
                 )
             };
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
@@ -382,7 +415,7 @@ fn corner_texture(light: bool, warm: bool) -> impl IntoElement {
                     asset.into(),
                     None,
                     Default::default(),
-                    rgb_to_hsla(color).opacity(if light { 0.18 } else { 0.48 }),
+                    color.opacity(if light { 0.18 } else { 0.48 }),
                     cx,
                 );
             });

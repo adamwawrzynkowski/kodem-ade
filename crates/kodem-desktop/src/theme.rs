@@ -70,6 +70,17 @@ impl Theme {
             }
         }
     }
+    /// Applies the saved accent to shared controls, formatting, and selected surfaces.
+    pub fn with_accent(light: bool, accent: kodem_core::AccentColor) -> Self {
+        let mut theme = Self::new(light);
+        theme.accent = rgb_to_hsla(rgb(accent.rgb(light)));
+        if accent != kodem_core::AccentColor::Orange {
+            theme.accent_bg = theme.accent;
+            theme.accent_bg.lightness = if light { 0.93 } else { 0.14 };
+            theme.accent_bg.saturation *= 0.5;
+        }
+        theme
+    }
     /// Returns a shallow contact shadow for a floating input or panel.
     pub fn elevation(self) -> Vec<BoxShadow> {
         vec![

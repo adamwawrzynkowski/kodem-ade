@@ -3008,6 +3008,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
+ "image",
  "kodem-core",
  "libc",
  "objc2 0.6.4",

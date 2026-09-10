@@ -5,7 +5,8 @@ impl Shell {
     pub(super) fn panel(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let title = match self.panel {
-            Panel::NewTask => "New task",
+            Panel::CustomizeProject => "Customize project",
+            Panel::RemoveProject => "Remove project?",
             Panel::Settings => "Settings",
             Panel::Resources => "Skills, instructions & MCP",
             Panel::Files => "Files",
@@ -18,6 +19,7 @@ impl Shell {
             | Panel::Reasoning
             | Panel::Access
             | Panel::Projects
+            | Panel::ChatProjects
             | Panel::TaskMenu
             | Panel::ThreadMenu
             | Panel::Sort
@@ -101,145 +103,17 @@ impl Shell {
                     );
                 }
             }
-            Panel::NewTask => {
-                content = content.child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme.muted)
-                        .child("Choose where this task will work."),
-                );
-                let projects = self
-                    .workspace
-                    .as_ref()
-                    .map(|w| w.projects.clone())
-                    .unwrap_or_default();
-                if self.selected_project.is_none() {
-                    self.selected_project = projects.first().map(|p| p.id.clone());
+            Panel::CustomizeProject => {
+                content = content.child(self.project_editor(cx));
+            }
+            Panel::RemoveProject => {
+                if let Some(project) = self.editing_project.clone() {
+                    content = content.child(div().font_weight(FontWeight::SEMIBOLD).child(project.name))
+                        .child("Remove this project from Kodem? Files and chat history are kept. Open the repository again to restore it.")
+                        .when_some(self.error.clone(), |d, error| d.child(div().text_color(theme.removed).child(error)))
+                        .child(self.button("remove-project-confirm", "close", "Remove project").text_color(theme.removed)
+                            .on_click(cx.listener(move |s, _, _, _| s.send(core::Request::RemoveProject { project_id: project.id.clone() }))));
                 }
-                for (i, project) in projects.iter().enumerate() {
-                    let id = project.id.clone();
-                    let chosen = self.selected_project.as_ref() == Some(&id);
-                    content = content.child(
-                        div()
-                            .id(("choose-project", i))
-                            .p_3()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .rounded(px(8.))
-                            .border_1()
-                            .border_color(if chosen { theme.accent } else { theme.border })
-                            .bg(if chosen { theme.accent_bg } else { theme.inset })
-                            .cursor_pointer()
-                            .child(icon("folder").text_color(theme.accent))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(px(13.))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(project.name.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .text_color(theme.muted)
-                                            .text_ellipsis()
-                                            .child(project.path.display().to_string()),
-                                    ),
-                            )
-                            .when(chosen, |d| d.child(icon("check").text_color(theme.accent)))
-                            .on_click(cx.listener(move |s, _, _, cx| {
-                                s.selected_project = Some(id.clone());
-                                cx.notify();
-                            })),
-                    );
-                }
-                content = content
-                    .child(
-                        self.ghost("panel-open", "plus", "Open another repository")
-                            .justify_start()
-                            .on_click(
-                                cx.listener(|s, _, w, cx| s.open_project(&OpenProject, w, cx)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .mt_3()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Checkout"),
-                    );
-                for (i, (isolated, title, detail)) in [
-                    (
-                        true,
-                        "New worktree",
-                        "A separate branch and directory for this task.",
-                    ),
-                    (
-                        false,
-                        "Current checkout",
-                        "Work on the current branch, including its uncommitted edits.",
-                    ),
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    content = content.child(
-                        div()
-                            .id(("checkout", i))
-                            .p_3()
-                            .rounded(px(8.))
-                            .border_1()
-                            .border_color(if self.new_worktree == isolated {
-                                theme.accent
-                            } else {
-                                theme.border
-                            })
-                            .cursor_pointer()
-                            .flex()
-                            .gap_3()
-                            .child(
-                                icon(if self.new_worktree == isolated {
-                                    "circle-check"
-                                } else {
-                                    "branch"
-                                })
-                                .text_color(theme.muted),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(div().text_size(px(13.)).child(title))
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .text_color(theme.muted)
-                                            .child(detail),
-                                    ),
-                            )
-                            .on_click(cx.listener(move |s, _, _, cx| {
-                                s.new_worktree = isolated;
-                                cx.notify();
-                            })),
-                    );
-                }
-                content = content.child(
-                    div().mt_2().flex().justify_end().child(
-                        self.primary("create-task", "plus", "Create task")
-                            .disabled(projects.is_empty())
-                            .on_click(cx.listener(|s, _, _, _| {
-                                if let Some(project_id) = &s.selected_project {
-                                    s.send(core::Request::CreateTask {
-                                        project_id: project_id.clone(),
-                                        worktree: s.new_worktree,
-                                    });
-                                }
-                            })),
-                    ),
-                );
             }
             Panel::Settings => {
                 content = content.p_0().gap_0().child(self.settings_panel(cx));
@@ -442,6 +316,7 @@ impl Shell {
             | Panel::Reasoning
             | Panel::Access
             | Panel::Projects
+            | Panel::ChatProjects
             | Panel::TaskMenu
             | Panel::ThreadMenu
             | Panel::Sort

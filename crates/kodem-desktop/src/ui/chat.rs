@@ -13,7 +13,10 @@ impl Shell {
             .flex_col()
             .overflow_hidden()
             .bg(t.canvas)
-            .child(motion::window_texture(self.settings.light))
+            .child(motion::window_texture(
+                self.settings.light,
+                self.theme.accent,
+            ))
             .child(motion::chat_dither(self.settings.light, cx.reduce_motion()));
         if let Some(view) = self.view.clone() {
             self.chat_selection.update(cx, |doc, _| {
@@ -25,12 +28,6 @@ impl Shell {
             });
             panel = panel.child(self.chat_selection.clone());
             let state = &view.task.state;
-            let state_color = match state {
-                RunState::Completed => t.added,
-                RunState::Failed | RunState::DeliveryUnknown => t.removed,
-                RunState::Waiting | RunState::Running | RunState::Starting => t.accent,
-                _ => t.muted,
-            };
             let center_diff =
                 self.reviewing_file && self.settings.diff_placement == DiffPlacement::Conversation;
             if !center_diff {
@@ -43,44 +40,6 @@ impl Shell {
                         .items_center()
                         .gap_2()
                         .child(div().flex_1())
-                        .child(if state.active() {
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .text_size(px(10.))
-                                .child(motion::active_icon(
-                                    "task-state-icon",
-                                    if state == &RunState::Waiting {
-                                        "shield"
-                                    } else {
-                                        "loader"
-                                    },
-                                    state_color,
-                                    state != &RunState::Waiting,
-                                ))
-                                .child(motion::gleam("task-state-label", state.label(), t))
-                                .into_any_element()
-                        } else {
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .text_size(px(10.))
-                                .text_color(state_color)
-                                .child(
-                                    icon(match state {
-                                        RunState::Completed => "check",
-                                        RunState::Idle => "chat",
-                                        RunState::Interrupted => "stop",
-                                        RunState::DeliveryUnknown => "shield",
-                                        _ => "circle-x",
-                                    })
-                                    .size(px(12.)),
-                                )
-                                .child(state.label())
-                                .into_any_element()
-                        })
                         .child(
                             self.icon_button("task-menu", "ellipsis", "Task actions")
                                 .on_click(cx.listener(|s, _, _, cx| {
@@ -271,31 +230,8 @@ impl Shell {
                             .mx_auto()
                             .px_8()
                             .pt(px(92.))
-                            .child(
-                                div()
-                                    .text_size(px(24.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .mb_2()
-                                    .child("New task"),
-                            )
-                            .child(div().text_size(px(14.)).text_color(t.muted).mb_6().child(
-                                "Choose a repository and describe what you want to work on.",
-                            ))
-                            .child(self.composer(true, cx))
-                            .child(
-                                div()
-                                    .px_2()
-                                    .pt_4()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .text_size(px(11.))
-                                    .text_color(t.subtle)
-                                    .child(icon("branch").size(px(13.)))
-                                    .child(
-                                        "An isolated worktree keeps this task's changes separate.",
-                                    ),
-                            ),
+                            .child(self.empty_chat_greeting(cx))
+                            .child(self.composer(true, cx)),
                     ),
             );
         }
@@ -303,6 +239,66 @@ impl Shell {
             panel = panel.child(self.terminal_panel(window, cx));
         }
         panel.into_any_element()
+    }
+    fn empty_chat_greeting(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let project = self.workspace.as_ref().and_then(|w| {
+            w.projects
+                .iter()
+                .find(|p| Some(&p.id) == self.selected_project.as_ref())
+                .or(w.projects.first())
+        });
+        let name = project
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "a project".into());
+        div()
+            .w_full()
+            .mb_6()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_4()
+            .child(img("app-icon").size(px(64.)).rounded(px(14.)))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_center()
+                    .items_center()
+                    .gap_1()
+                    .text_size(px(26.))
+                    .child(format!(
+                        "Hey {}, what should we build in",
+                        self.greeting_name
+                    ))
+                    .child(
+                        self.control("greeting-project")
+                            .h(px(38.))
+                            .px_0()
+                            .border_0()
+                            .shadow(Vec::new())
+                            .bg(hsla(0., 0., 0., 0.))
+                            .text_size(px(26.))
+                            .max_w_full()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .border_b_1()
+                            .border_color(t.muted)
+                            .text_color(t.accent)
+                            .cursor_pointer()
+                            .accessibility_label("Choose project")
+                            .child(name)
+                            .on_click(cx.listener(|s, event: &ClickEvent, _, cx| {
+                                if !s.creating_task {
+                                    s.composer_menu_anchor = Some(event.position());
+                                    s.panel = Panel::ChatProjects;
+                                    cx.notify();
+                                }
+                            })),
+                    )
+                    .child("?"),
+            )
+            .into_any_element()
     }
     fn composer(&mut self, empty: bool, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
@@ -321,9 +317,10 @@ impl Shell {
                     .or(w.projects.first())
             })
             .cloned();
-        let model = view
+        let preferences = self.composer_preferences();
+        let model = preferences
+            .model
             .as_ref()
-            .and_then(|v| v.task.model.as_ref())
             .map(|id| {
                 self.workspace
                     .as_ref()
@@ -331,7 +328,10 @@ impl Shell {
                     .map_or_else(|| id.clone(), |m| m.name.clone())
             })
             .unwrap_or_else(|| "Codex default".into());
-        let effort = view.as_ref().and_then(|v| v.task.effort.clone());
+        let effort = preferences
+            .effort
+            .clone()
+            .unwrap_or_else(|| "Reasoning".into());
         let mut wrapper = div()
             .w_full()
             .flex_shrink_0()
@@ -421,7 +421,13 @@ impl Shell {
                     .items_center()
                     .gap_2()
                     .text_size(px(11.))
-                    .child(motion::active_icon("import-icon", "loader", t.accent, true))
+                    .child(motion::active_icon(
+                        "import-icon",
+                        "loader",
+                        t.accent,
+                        true,
+                        cx.reduce_motion(),
+                    ))
                     .child(motion::gleam("import-label", "Importing attachments…", t)),
             );
         }
@@ -459,10 +465,6 @@ impl Shell {
                 d.child(div().px_3().pt_3().child(attachments))
             });
         if empty {
-            let label = project
-                .as_ref()
-                .map(|p| p.name.clone())
-                .unwrap_or_else(|| "Choose repository".into());
             editor = editor.child(
                 div()
                     .px_3()
@@ -471,21 +473,6 @@ impl Shell {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        self.ghost("composer-repo", "folder-closed", label)
-                            .bg(t.sidebar)
-                            .text_color(t.text)
-                            .child(icon("chevron-down").size(px(12.)))
-                            .on_click(cx.listener(|s, _, w, cx| {
-                                if s.workspace.as_ref().is_none_or(|w| w.projects.is_empty()) {
-                                    s.open_project(&OpenProject, w, cx);
-                                } else {
-                                    s.empty_draft = s.input.read(cx).text();
-                                    s.panel = Panel::NewTask;
-                                    cx.notify();
-                                }
-                            })),
-                    )
                     .child(
                         self.ghost(
                             "composer-worktree",
@@ -544,7 +531,8 @@ impl Shell {
                     .child(div().max_w(px(150.)).min_w_0().text_ellipsis().child(model))
                     .text_size(px(11.))
                     .child(icon("chevron-down").size(px(11.)))
-                    .on_click(cx.listener(|s, _, _, cx| {
+                    .on_click(cx.listener(|s, event: &ClickEvent, _, cx| {
+                        s.composer_menu_anchor = Some(event.position());
                         s.panel = Panel::Models;
                         if s.workspace
                             .as_ref()
@@ -555,158 +543,152 @@ impl Shell {
                         cx.notify();
                     })),
             )
-            .when_some(effort, |d, e| {
+            .map(|d| {
                 d.child(div().w(px(1.)).h(px(14.)).mx_1().bg(t.border))
                     .child(
-                        self.ghost("composer-effort", "settings-2", e)
+                        self.ghost("composer-effort", "settings-2", effort)
                             .text_size(px(11.))
                             .child(icon("chevron-down").size(px(10.)))
-                            .on_click(cx.listener(|s, _, _, cx| {
+                            .on_click(cx.listener(|s, event: &ClickEvent, _, cx| {
+                                s.composer_menu_anchor = Some(event.position());
                                 s.panel = Panel::Reasoning;
                                 cx.notify();
                             })),
                     )
             })
-            .when_some(view.as_ref(), |d, view| {
+            .map(|d| {
                 d.child(div().w(px(1.)).h(px(14.)).mx_1().bg(t.border))
                     .child(
                         self.ghost(
                             "composer-access",
-                            match view.task.access {
+                            match preferences.access {
                                 AccessMode::FullAccess => "lock-open",
                                 AccessMode::AutoReview => "bot",
                                 _ => "shield",
                             },
-                            view.task.access.label(),
+                            preferences.access.label(),
                         )
                         .text_size(px(11.))
                         .child(icon("chevron-down").size(px(10.)))
-                        .on_click(cx.listener(|s, _, _, cx| {
-                            s.panel = Panel::Access;
-                            cx.notify();
-                        })),
+                        .on_click(cx.listener(
+                            |s, event: &ClickEvent, _, cx| {
+                                s.composer_menu_anchor = Some(event.position());
+                                s.panel = Panel::Access;
+                                cx.notify();
+                            },
+                        )),
                     )
             });
-        if empty {
+        if active {
             toolbar = toolbar.child(
-                self.primary("create-from-composer", "plus", "Create task")
-                    .h(px(30.))
-                    .disabled(project.is_none() || self.start_after_create || importing)
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        if let Some(project) = &project {
-                            s.empty_draft = s.input.read(cx).text();
-                            s.send(core::Request::CreateTask {
-                                project_id: project.id.clone(),
-                                worktree: s.new_worktree,
-                            });
-                            s.status = "Creating task…".into();
-                            cx.notify();
-                        }
-                    })),
-            );
-        }
-        if !empty {
-            if active {
-                toolbar = toolbar.child(
-                    self.ghost(
-                        "active-send-mode",
-                        if self.settings.send_mode == SendMode::Queue {
-                            "arrow-down"
-                        } else {
-                            "arrow-right"
-                        },
-                        if self.settings.send_mode == SendMode::Queue {
-                            "Queue"
-                        } else {
-                            "Steer"
-                        },
-                    )
-                    .text_size(px(11.))
-                    .on_click(cx.listener(|s, _, _, cx| {
-                        s.settings.send_mode = if s.settings.send_mode == SendMode::Queue {
-                            SendMode::Steer
-                        } else {
-                            SendMode::Queue
-                        };
-                        s.save_settings();
-                        cx.notify();
-                    })),
-                );
-            }
-            let disabled = !active
-                && (unknown
-                    || importing
-                    || self.submitted_draft.is_some()
-                    || !self.has_composer_content(cx));
-            toolbar = toolbar.child(
-                self.icon_button(
-                    "composer-submit",
-                    if active { "stop" } else { "arrow-up" },
-                    if active {
-                        "Stop current turn"
+                self.ghost(
+                    "active-send-mode",
+                    if self.settings.send_mode == SendMode::Queue {
+                        "arrow-down"
                     } else {
-                        "Send message · Enter"
+                        "arrow-right"
+                    },
+                    if self.settings.send_mode == SendMode::Queue {
+                        "Queue"
+                    } else {
+                        "Steer"
                     },
                 )
-                .relative()
-                .overflow_hidden()
-                .h(px(32.))
-                .w(px(34.))
-                .rounded(px(8.))
-                .border_1()
-                .border_color(if disabled {
-                    t.border
-                } else {
-                    t.text.opacity(0.18)
-                })
-                .shadow(vec![
-                    BoxShadow {
-                        inset: true,
-                        color: rgb_to_hsla(rgb(0xffffff)).opacity(0.22),
-                        offset: point(px(0.), px(1.)),
-                        blur_radius: px(0.),
-                        spread_radius: px(0.),
-                    },
-                    BoxShadow {
-                        inset: true,
-                        color: t.shadow.opacity(0.35),
-                        offset: point(px(0.), px(-2.)),
-                        blur_radius: px(1.),
-                        spread_radius: px(0.),
-                    },
-                    BoxShadow {
-                        inset: false,
-                        color: t.shadow,
-                        offset: point(px(0.), px(2.)),
-                        blur_radius: px(3.),
-                        spread_radius: px(-1.),
-                    },
-                ])
-                .child(motion::button_dither())
-                .hover(move |b| {
-                    b.bg(if disabled {
-                        t.raised
+                .text_size(px(11.))
+                .on_click(cx.listener(|s, _, _, cx| {
+                    s.settings.send_mode = if s.settings.send_mode == SendMode::Queue {
+                        SendMode::Steer
                     } else {
-                        t.accent.opacity(0.88)
-                    })
-                    .text_color(if disabled { t.subtle } else { t.inset })
-                })
-                .active(move |b| b.bg(t.accent).shadow(Vec::new()))
-                .bg(if disabled { t.raised } else { t.accent })
-                .text_color(if disabled { t.subtle } else { t.inset })
-                .disabled(disabled)
-                .when(disabled, |b| b.cursor_default())
-                .on_click(cx.listener(|s, _, w, cx| {
-                    if let Some(view) = s.view.as_ref().filter(|v| v.task.state.active()) {
-                        s.send(core::Request::Interrupt {
-                            task_id: view.task.id.clone(),
-                        });
-                    } else {
-                        s.submit(&SendPrompt, w, cx);
-                    }
+                        SendMode::Queue
+                    };
+                    s.save_settings();
+                    cx.notify();
                 })),
             );
         }
+        let disabled = !active
+            && (unknown
+                || importing
+                || self.creating_task
+                || (empty && project.is_none())
+                || self.submitted_draft.is_some()
+                || !self.has_composer_content(cx));
+        toolbar = toolbar.child(
+            self.icon_button(
+                "composer-submit",
+                if active {
+                    "stop"
+                } else if empty {
+                    "plus"
+                } else {
+                    "arrow-up"
+                },
+                if active {
+                    "Stop current turn"
+                } else if empty {
+                    "Create task and send message · Enter"
+                } else {
+                    "Send message · Enter"
+                },
+            )
+            .relative()
+            .overflow_hidden()
+            .h(px(32.))
+            .w(px(34.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(if disabled {
+                t.border
+            } else {
+                t.text.opacity(0.18)
+            })
+            .shadow(vec![
+                BoxShadow {
+                    inset: true,
+                    color: rgb_to_hsla(rgb(0xffffff)).opacity(0.22),
+                    offset: point(px(0.), px(1.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(0.),
+                },
+                BoxShadow {
+                    inset: true,
+                    color: t.shadow.opacity(0.35),
+                    offset: point(px(0.), px(-2.)),
+                    blur_radius: px(1.),
+                    spread_radius: px(0.),
+                },
+                BoxShadow {
+                    inset: false,
+                    color: t.shadow,
+                    offset: point(px(0.), px(2.)),
+                    blur_radius: px(3.),
+                    spread_radius: px(-1.),
+                },
+            ])
+            .child(motion::button_dither())
+            .hover(move |b| {
+                b.bg(if disabled {
+                    t.raised
+                } else {
+                    t.accent.opacity(0.88)
+                })
+                .text_color(if disabled { t.subtle } else { t.inset })
+            })
+            .active(move |b| b.bg(t.accent).shadow(Vec::new()))
+            .bg(if disabled { t.raised } else { t.accent })
+            .text_color(if disabled { t.subtle } else { t.inset })
+            .disabled(disabled)
+            .when(disabled, |b| b.cursor_default())
+            .on_click(cx.listener(move |s, _, w, cx| {
+                if let Some(view) = s.view.as_ref().filter(|v| v.task.state.active()) {
+                    s.send(core::Request::Interrupt {
+                        task_id: view.task.id.clone(),
+                    });
+                } else {
+                    s.submit(&SendPrompt, w, cx);
+                }
+            })),
+        );
         editor = editor.child(toolbar);
         wrapper = wrapper.child(editor);
         if !empty {
@@ -823,6 +805,7 @@ impl Shell {
                             glyph,
                             color,
                             false,
+                            cx.reduce_motion(),
                         )
                     } else {
                         icon(glyph)
