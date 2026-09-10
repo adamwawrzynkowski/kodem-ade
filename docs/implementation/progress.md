@@ -251,3 +251,16 @@ Release installation keeps a hidden rollback bundle only until the replacement p
 Temporary nonvisual checks passed database reopen, task/default preferences, stale layout saves, independent access defaults, older settings defaults, all three saved window modes, malformed placement handling, GPU fractional translation, and Git ignore behavior. Temporary verification sources and fixture directories were removed. App visual testing remains prohibited; appearance and pointer interactions have not been tested.
 
 Final workspace Clippy with warnings denied, formatting, shell syntax and git diff --check passed. Debug build `20260909T235227Z-5e3d101-dirty` and release `20260909T235311Z-5e3d101-dirty` compiled and passed package verification. The release is installed at `/Applications/Kodem.app`; desktop, host, plist, icon and build metadata match the release package byte-for-byte, and strict signature verification passed. No generated legacy backups, rollback copies or staging copies remain in Applications. No app was launched, controlled or visually tested. No commit or push was made.
+
+
+## Composer-contained context and skill chips
+
+Draft suggestions, files and skills now appear inside the rounded prompt container, above the text editor. The container grows with selected context and reserves its measured height in the transcript; the context region scrolls after 160px. Captured suggestions still show only their title and source range. The outgoing queue remains above the prompt because those messages have already been submitted.
+
+One rightmost control switches between Send while idle and Stop during active work. Empty Send is disabled and visually subdued, with the same content predicate used by keyboard submission. Enter continues to queue or steer active-turn input, and the footer reflects that choice.
+
+The skill catalog adds a typed skill attachment instead of editing prompt text. It uses the existing bounded import, persistence, removal, queue and restore flows. Skill chips show the skill name and type; the host keeps an immutable file copy and the original skill path for resolving sibling resources. Ordinary uploads of a file named SKILL.md remain ordinary file attachments. Protocol 8 carries the typed import source and skill attachment metadata.
+
+A temporary nonvisual test passed explicit skill versus ordinary file importing, frozen content after source changes, model-payload skill invocation, queue persistence across database reopen, restoration without adding editor text, invalid skill rejection, and deletion of imported copies without deleting the source. Verification code, executable and fixture files were removed afterward. Workspace Clippy with warnings denied passed. Computer History status remained unavailable with error -1743; the current code and supplied screenshot were used. No app was launched, controlled or visually tested.
+
+Debug `20260910T000118Z-125448d-dirty` and release `20260910T000209Z-125448d-dirty` builds passed. Release is installed at `/Applications/Kodem.app`. Installed executables, plist, icon and build metadata match the release package; strict signature verification passed. There are no generated backup, staging or rollback copies in Applications. Formatting and git diff --check passed. No app visual testing, commit or push was performed.

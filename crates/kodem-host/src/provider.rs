@@ -27,6 +27,13 @@ pub(super) enum Control {
 fn prompt_for(message: &OutgoingMessage) -> Result<String> {
     let mut prompt = message.text.clone();
     for attachment in &message.attachments {
+        if let AttachmentKind::Skill { source } = &attachment.kind {
+            prompt.push_str(&format!(
+                "\n\nUse the skill at {}. Resolve its relative resources from the original skill directory.\nImmutable copy of the selected SKILL.md: {}",
+                serde_json::to_string(source)?,
+                serde_json::to_string(&attachment.path)?
+            ));
+        }
         if attachment.kind == AttachmentKind::File {
             prompt.push_str(&format!(
                 "\n\nAttached file: {}\nImmutable local copy: {}",

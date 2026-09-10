@@ -12,7 +12,7 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-pub const PROTOCOL: u32 = 7;
+pub const PROTOCOL: u32 = 8;
 pub const MAX_PACKET: u64 = 32 * 1024 * 1024;
 /// Resolves the user's data directory, with an explicit override for isolated installations.
 pub fn data_dir() -> Result<PathBuf> {

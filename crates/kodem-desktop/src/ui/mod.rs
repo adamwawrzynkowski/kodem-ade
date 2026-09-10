@@ -122,7 +122,7 @@ pub struct Shell {
     draft_revision: u64,
     observed_draft: String,
     importing_tasks: HashMap<String, usize>,
-    pending_paths: Vec<std::path::PathBuf>,
+    pending_attachments: Vec<AttachmentSource>,
     diff_view: Option<Entity<diff_view::DiffView>>,
     sidebar_hovered: bool,
     task_order: HashMap<String, usize>,
@@ -293,7 +293,7 @@ impl Shell {
             draft_revision: 0,
             observed_draft: String::new(),
             importing_tasks: HashMap::new(),
-            pending_paths: Vec::new(),
+            pending_attachments: Vec::new(),
             diff_view: None,
             sidebar_hovered: false,
             task_order: HashMap::new(),
@@ -416,9 +416,9 @@ impl Shell {
                         edit: TaskEdit::Draft(draft),
                     });
                 }
-                if !self.pending_paths.is_empty() {
-                    let paths = std::mem::take(&mut self.pending_paths);
-                    self.import_paths(task.id.clone(), paths);
+                if !self.pending_attachments.is_empty() {
+                    let paths = std::mem::take(&mut self.pending_attachments);
+                    self.import_attachments(task.id.clone(), paths);
                 }
                 if self.start_after_create {
                     self.auto_submit_task = Some(task.id.clone());

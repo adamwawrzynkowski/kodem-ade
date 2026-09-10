@@ -3,15 +3,26 @@ use super::*;
 use std::path::PathBuf;
 
 impl Shell {
+    /// Reports whether the draft has text or selected context to submit.
+    pub(super) fn has_composer_content(&self, cx: &App) -> bool {
+        !self.input.read(cx).text().trim().is_empty()
+            || self.view.as_ref().map_or_else(
+                || !self.pending_attachments.is_empty(),
+                |v| !v.task.feedback.is_empty() || !v.task.attachments.is_empty(),
+            )
+    }
+
     /// Sends the same composition for keyboard and pointer submission.
     pub(super) fn submit_current(&mut self, cx: &mut Context<Self>) {
-        if self.panel != Panel::None || self.submitted_draft.is_some() {
+        if self.panel != Panel::None
+            || self.submitted_draft.is_some()
+            || !self.has_composer_content(cx)
+        {
             return;
         }
         let text = self.input.read(cx).text();
         let Some(view) = &self.view else {
-            if self.start_after_create || (text.trim().is_empty() && self.pending_paths.is_empty())
-            {
+            if self.start_after_create {
                 return;
             }
             if let Some(project) = self.workspace.as_ref().and_then(|w| {
@@ -30,15 +41,12 @@ impl Shell {
             }
             return;
         };
-        if (text.trim().is_empty()
-            && view.task.feedback.is_empty()
-            && view.task.attachments.is_empty())
-            || self
-                .importing_tasks
-                .get(&view.task.id)
-                .copied()
-                .unwrap_or(0)
-                > 0
+        if self
+            .importing_tasks
+            .get(&view.task.id)
+            .copied()
+            .unwrap_or(0)
+            > 0
         {
             return;
         }
@@ -71,15 +79,24 @@ impl Shell {
 
     /// Imports dropped or chosen paths through the host without blocking the UI.
     pub(super) fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
-        if paths.is_empty() {
+        self.attach_sources(paths.into_iter().map(AttachmentSource::File).collect(), cx);
+    }
+
+    /// Adds an explicit skill reference using the same durable attachment flow as files.
+    pub(super) fn attach_skill(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.attach_sources(vec![AttachmentSource::Skill(path)], cx);
+    }
+
+    fn attach_sources(&mut self, sources: Vec<AttachmentSource>, cx: &mut Context<Self>) {
+        if sources.is_empty() {
             return;
         }
         if let Some(task_id) = self.selected.clone() {
-            self.import_paths(task_id, paths);
+            self.import_attachments(task_id, sources);
         } else {
-            for path in paths {
-                if !self.pending_paths.contains(&path) {
-                    self.pending_paths.push(path);
+            for source in sources {
+                if !self.pending_attachments.contains(&source) {
+                    self.pending_attachments.push(source);
                 }
             }
         }
@@ -87,9 +104,9 @@ impl Shell {
     }
 
     /// Tracks an asynchronous import for the task that requested it.
-    pub(super) fn import_paths(&mut self, task_id: String, paths: Vec<PathBuf>) {
+    pub(super) fn import_attachments(&mut self, task_id: String, sources: Vec<AttachmentSource>) {
         *self.importing_tasks.entry(task_id.clone()).or_default() += 1;
-        self.send(core::Request::ImportAttachments { task_id, paths });
+        self.send(core::Request::ImportAttachments { task_id, sources });
     }
 
     /// Opens the native multiple-file picker used by the composer paperclip.
@@ -107,7 +124,10 @@ impl Shell {
                     if selected == s.selected {
                         s.attach_paths(paths, cx);
                     } else if let Some(task_id) = selected {
-                        s.import_paths(task_id, paths);
+                        s.import_attachments(
+                            task_id,
+                            paths.into_iter().map(AttachmentSource::File).collect(),
+                        );
                     }
                 });
             }
@@ -123,6 +143,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
+        let skill_name = match &attachment.kind {
+            AttachmentKind::Skill { source } => source
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|name| name.to_string_lossy().into_owned()),
+            _ => None,
+        };
         let mut card = div()
             .flex()
             .items_center()
@@ -133,6 +160,7 @@ impl Shell {
             .shadow(t.elevation())
             .border_1()
             .border_color(t.border)
+            .flex_shrink_0()
             .min_w_0()
             .max_w(px(280.));
         card = card.child(if attachment.kind == AttachmentKind::Image {
@@ -147,7 +175,9 @@ impl Shell {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(icon("file").text_color(t.accent))
+                .child(
+                    icon(if skill_name.is_some() { "code" } else { "file" }).text_color(t.accent),
+                )
                 .into_any_element()
         });
         card = card.child(
@@ -155,17 +185,19 @@ impl Shell {
                 .flex_1()
                 .min_w_0()
                 .child(
-                    div()
-                        .text_size(px(11.))
-                        .text_ellipsis()
-                        .child(attachment.name.clone()),
+                    div().text_size(px(11.)).text_ellipsis().child(
+                        skill_name
+                            .clone()
+                            .unwrap_or_else(|| attachment.name.clone()),
+                    ),
                 )
-                .child(
-                    div()
-                        .text_size(px(10.))
-                        .text_color(t.muted)
-                        .child(file_size(attachment.bytes)),
-                ),
+                .child(div().text_size(px(10.)).text_color(t.muted).child(
+                    if skill_name.is_some() {
+                        "Skill".into()
+                    } else {
+                        file_size(attachment.bytes)
+                    },
+                )),
         );
         if let Some(task_id) = task_id {
             let task_id = task_id.to_owned();

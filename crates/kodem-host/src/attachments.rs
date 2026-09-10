@@ -5,27 +5,41 @@ use std::{
     fs,
     io::{Read, Write},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 const FILE_LIMIT: u64 = 32 * 1024 * 1024;
 const BATCH_LIMIT: u64 = 128 * 1024 * 1024;
 
 /// Copies a bounded batch into private storage and removes partial imports on failure.
-pub(super) fn import(root: &Path, paths: Vec<PathBuf>) -> Result<Vec<Attachment>> {
+pub(super) fn import(root: &Path, sources: Vec<AttachmentSource>) -> Result<Vec<Attachment>> {
     ensure!(
-        !paths.is_empty() && paths.len() <= 32,
+        !sources.is_empty() && sources.len() <= 32,
         "Drop between 1 and 32 files"
     );
     let mut imported = Vec::new();
     let mut created = Vec::new();
     let result = (|| {
         let mut total = 0;
-        for source in paths {
+        for selected in sources {
+            let source = selected.path();
+            let skill = if matches!(selected, AttachmentSource::Skill(_)) {
+                ensure!(
+                    source.file_name().is_some_and(|name| name == "SKILL.md"),
+                    "Select a SKILL.md file"
+                );
+                Some(
+                    source
+                        .canonicalize()
+                        .context("Skill source is unavailable")?,
+                )
+            } else {
+                None
+            };
             let mut input = fs::OpenOptions::new()
                 .read(true)
                 .custom_flags(libc::O_NONBLOCK)
-                .open(&source)
+                .open(source)
                 .with_context(|| format!("Cannot open {}", source.display()))?;
             let meta = input.metadata()?;
             ensure!(
@@ -46,7 +60,9 @@ pub(super) fn import(root: &Path, paths: Vec<PathBuf>) -> Result<Vec<Attachment>
             );
             total += bytes.len() as u64;
             ensure!(total <= BATCH_LIMIT, "Attachment batch exceeds 128 MiB");
-            let kind = if bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+            let kind = if let Some(source) = skill {
+                AttachmentKind::Skill { source }
+            } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n")
                 || bytes.starts_with(&[0xff, 0xd8, 0xff])
                 || bytes.starts_with(b"GIF87a")
                 || bytes.starts_with(b"GIF89a")

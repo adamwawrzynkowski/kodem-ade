@@ -330,13 +330,13 @@ impl Shell {
         wrapper = wrapper.child(self.outgoing_tray(cx));
         let mut attachments = div()
             .id("composer-context")
-            .max_h(px(120.))
+            .max_h(px(160.))
+            .flex_shrink_0()
             .restrict_scroll_to_axis()
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap_2()
-            .mb_2();
+            .gap_2();
         if let Some(view) = &view {
             for feedback in &view.task.feedback {
                 attachments =
@@ -348,16 +348,19 @@ impl Shell {
             }
             attachments = attachments.child(files);
         } else {
-            for (index, path) in self.pending_paths.iter().enumerate() {
+            for (index, source) in self.pending_attachments.iter().enumerate() {
+                let skill = matches!(source, AttachmentSource::Skill(_));
+                let path = source.path();
                 attachments = attachments.child(
                     div()
                         .flex()
+                        .flex_shrink_0()
                         .items_center()
                         .gap_2()
                         .p_2()
                         .bg(t.sidebar)
                         .rounded(px(7.))
-                        .child(icon("paperclip").text_color(t.accent))
+                        .child(icon(if skill { "code" } else { "paperclip" }).text_color(t.accent))
                         .child(
                             div()
                                 .flex_1()
@@ -365,10 +368,14 @@ impl Shell {
                                 .text_ellipsis()
                                 .text_size(px(11.))
                                 .child(
-                                    path.file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy()
-                                        .into_owned(),
+                                    (if skill {
+                                        path.parent().and_then(|p| p.file_name())
+                                    } else {
+                                        path.file_name()
+                                    })
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .into_owned(),
                                 ),
                         )
                         .child(
@@ -379,11 +386,14 @@ impl Shell {
                             )
                             .on_click(cx.listener(
                                 move |s, _, _, cx| {
-                                    s.pending_paths.remove(index);
+                                    s.pending_attachments.remove(index);
                                     cx.notify();
                                 },
                             )),
-                        ),
+                        )
+                        .when(skill, |d| {
+                            d.child(div().text_size(px(10.)).text_color(t.muted).child("Skill"))
+                        }),
                 );
             }
         }
@@ -402,7 +412,11 @@ impl Shell {
                     .child(motion::gleam("import-label", "Importing attachments…", t)),
             );
         }
-        wrapper = wrapper.child(attachments);
+        let has_context = importing
+            || view.as_ref().map_or_else(
+                || !self.pending_attachments.is_empty(),
+                |v| !v.task.feedback.is_empty() || !v.task.attachments.is_empty(),
+            );
         let mut editor = div()
             .id("composer-drop-target")
             .relative()
@@ -422,7 +436,10 @@ impl Shell {
             .border_color(t.border)
             .shadow(t.elevation())
             .overflow_hidden()
-            .child(motion::composer_backdrop(t));
+            .child(motion::composer_backdrop(t))
+            .when(has_context, |d| {
+                d.child(div().px_3().pt_3().child(attachments))
+            });
         if empty {
             let label = project
                 .as_ref()
@@ -569,20 +586,6 @@ impl Shell {
                         }
                     })),
             );
-        } else if active {
-            let id = view.as_ref().unwrap().task.id.clone();
-            toolbar = toolbar.child(
-                self.icon_button("stop", "stop", "Stop current turn")
-                    .h(px(30.))
-                    .w(px(32.))
-                    .bg(t.accent)
-                    .text_color(t.inset)
-                    .on_click(cx.listener(move |s, _, _, _| {
-                        s.send(core::Request::Interrupt {
-                            task_id: id.clone(),
-                        })
-                    })),
-            );
         }
         if !empty {
             if active {
@@ -612,22 +615,36 @@ impl Shell {
                     })),
                 );
             }
+            let disabled = !active
+                && (unknown
+                    || importing
+                    || self.submitted_draft.is_some()
+                    || !self.has_composer_content(cx));
             toolbar = toolbar.child(
-                self.icon_button("send", "arrow-up", "Send message · Enter")
-                    .h(px(30.))
-                    .w(px(32.))
-                    .bg(t.accent)
-                    .text_color(t.inset)
-                    .disabled(
-                        unknown
-                            || importing
-                            || self.submitted_draft.is_some()
-                            || (self.input.read(cx).text().trim().is_empty()
-                                && view.as_ref().is_none_or(|v| {
-                                    v.task.feedback.is_empty() && v.task.attachments.is_empty()
-                                })),
-                    )
-                    .on_click(cx.listener(|s, _, w, cx| s.submit(&SendPrompt, w, cx))),
+                self.icon_button(
+                    "composer-submit",
+                    if active { "stop" } else { "arrow-up" },
+                    if active {
+                        "Stop current turn"
+                    } else {
+                        "Send message · Enter"
+                    },
+                )
+                .h(px(30.))
+                .w(px(32.))
+                .bg(if disabled { t.raised } else { t.accent })
+                .text_color(if disabled { t.subtle } else { t.inset })
+                .disabled(disabled)
+                .when(disabled, |b| b.cursor_default())
+                .on_click(cx.listener(|s, _, w, cx| {
+                    if let Some(view) = s.view.as_ref().filter(|v| v.task.state.active()) {
+                        s.send(core::Request::Interrupt {
+                            task_id: view.task.id.clone(),
+                        });
+                    } else {
+                        s.submit(&SendPrompt, w, cx);
+                    }
+                })),
             );
         }
         editor = editor.child(toolbar);
@@ -649,7 +666,15 @@ impl Shell {
                         "Current checkout"
                     })
                     .child(div().flex_1())
-                    .child("Enter to send · Shift+Enter for newline"),
+                    .child(if active {
+                        if self.settings.send_mode == SendMode::Queue {
+                            "Enter to queue · Shift+Enter for newline"
+                        } else {
+                            "Enter to steer · Shift+Enter for newline"
+                        }
+                    } else {
+                        "Enter to send · Shift+Enter for newline"
+                    }),
             );
         }
         wrapper.into_any_element()

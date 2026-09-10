@@ -322,11 +322,26 @@ pub enum SendMode {
     Queue,
     Steer,
 }
-/// Identifies whether an imported file is sent as visual model input.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+/// Preserves whether imported context is an image, ordinary file or explicit skill invocation.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum AttachmentKind {
     Image,
     File,
+    Skill { source: PathBuf },
+}
+/// Distinguishes a file upload from an explicit skill invocation before importing it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum AttachmentSource {
+    File(PathBuf),
+    Skill(PathBuf),
+}
+impl AttachmentSource {
+    /// Returns the selected file path for importing and draft display.
+    pub fn path(&self) -> &std::path::Path {
+        match self {
+            Self::File(path) | Self::Skill(path) => path,
+        }
+    }
 }
 /// Host-owned immutable content retained with drafts and outgoing messages.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -512,7 +527,7 @@ pub enum Request {
     },
     ImportAttachments {
         task_id: String,
-        paths: Vec<PathBuf>,
+        sources: Vec<AttachmentSource>,
     },
     RemoveAttachment {
         task_id: String,

@@ -297,9 +297,9 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 submission_id,
             })
         }
-        Request::ImportAttachments { task_id, paths } => {
+        Request::ImportAttachments { task_id, sources } => {
             host.lock().unwrap().store.task(&task_id)?;
-            let imported = attachments::import(root, paths)?;
+            let imported = attachments::import(root, sources)?;
             let registration = (|| {
                 let h = host.lock().unwrap();
                 let mut task = h.store.task(&task_id)?;

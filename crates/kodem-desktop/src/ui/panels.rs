@@ -265,9 +265,7 @@ impl Shell {
                                     )
                                     .on_click(cx.listener(
                                         move |s, _, _, cx| {
-                                            let mut text = s.input.read(cx).text();
-                                            text.push_str(&format!("\nUse the skill at {source}."));
-                                            s.input.update(cx, |i, cx| i.set_text(text, cx));
+                                            s.attach_skill(source.clone().into(), cx);
                                             s.panel = Panel::None;
                                             cx.notify();
                                         },
