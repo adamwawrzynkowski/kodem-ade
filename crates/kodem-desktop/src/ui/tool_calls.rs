@@ -210,6 +210,7 @@ impl Shell {
                     "sh",
                     output.title,
                     Some(140.),
+                    false,
                     cx,
                 ));
             }
@@ -257,6 +258,7 @@ impl Shell {
                     language,
                     if full { &body } else { &excerpt },
                     Some(280.),
+                    false,
                     cx,
                 ));
                 if truncated {

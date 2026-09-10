@@ -988,13 +988,27 @@ impl Shell {
         cx.notify();
     }
     fn readonly(&mut self, key: String, text: String, cx: &mut Context<Self>) -> Entity<TextInput> {
+        self.readonly_streaming(key, text, false, cx)
+    }
+    fn readonly_streaming(
+        &mut self,
+        key: String,
+        text: String,
+        streaming: bool,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextInput> {
+        let animate = streaming && !cx.reduce_motion();
         let input = if let Some(input) = self.text_views.get(&key) {
             if input.read(cx).text() != text {
-                input.update(cx, |input, cx| input.set_text(text, cx));
+                input.update(cx, |input, cx| input.set_streamed_text(text, animate, cx));
             }
             input.clone()
         } else {
-            let input = cx.new(|cx| TextInput::readonly(text, cx));
+            let input = cx.new(|cx| {
+                let mut input = TextInput::readonly(String::new(), cx);
+                input.set_streamed_text(text, animate, cx);
+                input
+            });
             self.text_views.insert(key, input.clone());
             input
         };

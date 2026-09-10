@@ -1,5 +1,5 @@
 // Adapted from GPUI input example 0.3.4; Apache-2.0.
-use std::ops::Range;
+use std::{ops::Range, time::Instant};
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
@@ -93,6 +93,7 @@ pub struct TextInput {
     syntax: Option<(String, bool)>,
     colors: Vec<(Range<usize>, [u8; 3])>,
     prose: Option<(Vec<crate::markdown::Span>, crate::theme::Theme)>,
+    streaming: super::streaming_text::StreamingText,
 }
 
 impl TextInput {
@@ -119,6 +120,7 @@ impl TextInput {
             syntax: None,
             colors: Vec::new(),
             prose: None,
+            streaming: Default::default(),
         }
     }
     /// Creates a prompt editor where Enter submits and Shift-Enter inserts a newline.
@@ -173,6 +175,20 @@ impl TextInput {
             self.colors = crate::syntax::spans(&self.content, extension, *light);
         }
         cx.notify();
+    }
+    /// Updates streamed text while keeping existing letters and selections in place.
+    pub fn set_streamed_text(&mut self, text: String, animate: bool, cx: &mut Context<Self>) {
+        if animate || self.streaming.start().is_some() {
+            self.streaming.append(&self.content, &text, Instant::now());
+        }
+        let selection = self.selected_range.clone();
+        self.set_text(text, cx);
+        self.selected_range = self
+            .content
+            .floor_char_boundary(selection.start.min(self.content.len()))
+            ..self
+                .content
+                .floor_char_boundary(selection.end.min(self.content.len()));
     }
     /// Builds selectable read-only text without an editing caret.
     pub fn readonly(text: String, cx: &mut Context<Self>) -> Self {
@@ -1047,6 +1063,13 @@ impl Element for TextElement {
                 window,
                 cx,
             );
+            let glyphs = line.streaming_glyphs(
+                point(bounds.left(), bounds.top() + y),
+                height,
+                &self.input.read(cx).streaming,
+                Instant::now(),
+            );
+            super::streaming_text::paint_glyphs(glyphs, window);
             y += line.size(height).height;
         }
         if let Some(cursor) = prepaint.cursor.take() {
@@ -1061,7 +1084,15 @@ impl Element for TextElement {
 }
 
 impl Render for TextInput {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if cx.reduce_motion() {
+            self.streaming = Default::default();
+        } else {
+            self.streaming.prune(Instant::now());
+            if self.streaming.start().is_some() {
+                window.request_animation_frame();
+            }
+        }
         div()
             .flex()
             .key_context(if self.composer {
@@ -1263,6 +1294,31 @@ fn shape(
             })
             .collect()
     };
+    let paint_runs = std::sync::Arc::new(if input.streaming.start().is_some() {
+        runs.clone()
+    } else {
+        Vec::new()
+    });
+    let runs = if let Some(start) = input.streaming.start() {
+        let mut offset = 0;
+        runs.into_iter()
+            .flat_map(|run| {
+                let end = offset + run.len;
+                let split = start.clamp(offset, end) - offset;
+                offset = end;
+                let mut hidden = run.clone();
+                hidden.len -= split;
+                hidden.color.alpha = 0.;
+                hidden.underline = None;
+                hidden.strikethrough = None;
+                [TextRun { len: split, ..run }, hidden]
+                    .into_iter()
+                    .filter(|run| run.len > 0)
+            })
+            .collect()
+    } else {
+        runs
+    };
     let mut bubbles: Vec<Range<usize>> = Vec::new();
     if let Some((spans, _)) = &input.prose {
         for span in spans.iter().filter(|span| span.style.is_bubble()) {
@@ -1306,7 +1362,12 @@ fn shape(
             start += line.len() + 1;
             (
                 offset,
-                super::inline_bubbles::TextLine::new(line, map.clone(), display_start),
+                super::inline_bubbles::TextLine::new(
+                    line,
+                    map.clone(),
+                    display_start,
+                    paint_runs.clone(),
+                ),
             )
         })
         .collect()

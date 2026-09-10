@@ -8,6 +8,7 @@ impl Shell {
         &mut self,
         key: &str,
         blocks: Vec<Block>,
+        streaming: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
@@ -15,7 +16,7 @@ impl Shell {
         for (index, block) in blocks.into_iter().enumerate() {
             let key = format!("{key}:{index}");
             let element = match block {
-                Block::Text(text) => self.message_prose(&key, text, cx),
+                Block::Text(text) => self.message_prose(&key, text, streaming, cx),
                 Block::Heading { level, text } => {
                     let extra = match level {
                         1 => 8.,
@@ -27,11 +28,11 @@ impl Shell {
                         .mt_2()
                         .text_size(px(self.settings.font_size + extra))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(self.message_prose(&key, text, cx))
+                        .child(self.message_prose(&key, text, streaming, cx))
                         .into_any_element()
                 }
                 Block::Code { language, text } => {
-                    self.message_code(&key, &language, &text, None, cx)
+                    self.message_code(&key, &language, &text, None, streaming, cx)
                 }
                 Block::Quote(blocks) => div()
                     .border_l_2()
@@ -39,7 +40,7 @@ impl Shell {
                     .pl_3()
                     .py_1()
                     .text_color(t.muted)
-                    .child(self.message_blocks(&key, blocks, cx))
+                    .child(self.message_blocks(&key, blocks, streaming, cx))
                     .into_any_element(),
                 Block::Rule => div().h(px(1.)).my_2().bg(t.border).into_any_element(),
                 Block::List { start, items } => {
@@ -73,6 +74,7 @@ impl Shell {
                                 .child(div().flex_1().min_w_0().child(self.message_blocks(
                                     &format!("{key}:item:{index}"),
                                     item.blocks,
+                                    streaming,
                                     cx,
                                 ))),
                         );
@@ -128,6 +130,7 @@ impl Shell {
                                     .child(self.message_prose(
                                         &format!("{key}:{row_index}:{col}"),
                                         cell,
+                                        streaming,
                                         cx,
                                     )),
                             );
@@ -150,8 +153,14 @@ impl Shell {
         content.into_any_element()
     }
 
-    fn message_prose(&mut self, key: &str, text: RichText, cx: &mut Context<Self>) -> AnyElement {
-        let input = self.readonly(key.to_owned(), text.text, cx);
+    fn message_prose(
+        &mut self,
+        key: &str,
+        text: RichText,
+        streaming: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let input = self.readonly_streaming(key.to_owned(), text.text, streaming, cx);
         input.update(cx, |input, _| input.prose(text.spans, self.theme));
         div()
             .w_full()
@@ -168,10 +177,11 @@ impl Shell {
         language: &str,
         text: &str,
         max_height: Option<f32>,
+        streaming: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
-        let input = self.readonly(format!("code:{key}"), text.to_owned(), cx);
+        let input = self.readonly_streaming(format!("code:{key}"), text.to_owned(), streaming, cx);
         input.update(cx, |input, _| input.code(language, self.settings.light));
         let width = text
             .lines()

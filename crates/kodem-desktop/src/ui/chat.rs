@@ -846,13 +846,21 @@ impl Shell {
         for feedback in &message.feedback {
             block = block.child(self.context_card(feedback, None, cx));
         }
-        block = block.child(div().text_size(px(self.settings.font_size - 1.)).child(
-            self.message_blocks(
-                &format!("message:{}", message.id),
-                markdown::blocks(&message.text),
-                cx,
+        block = block.child(
+            div().text_size(px(self.settings.font_size - 1.)).child(
+                self.message_blocks(
+                    &format!("message:{}", message.id),
+                    markdown::blocks(&message.text),
+                    message.kind == MessageKind::Assistant
+                        && !message.complete
+                        && self
+                            .view
+                            .as_ref()
+                            .is_some_and(|view| view.task.state == RunState::Running),
+                    cx,
+                ),
             ),
-        ));
+        );
         if !user {
             block = block.child(
                 div()

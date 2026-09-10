@@ -100,6 +100,7 @@ pub(super) struct TextLine {
     map: Arc<PaddingMap>,
     display_start: usize,
     source_start: usize,
+    paint_runs: Arc<Vec<TextRun>>,
 }
 impl Deref for TextLine {
     type Target = WrappedLine;
@@ -109,14 +110,81 @@ impl Deref for TextLine {
 }
 impl TextLine {
     /// Associates a shaped display line with the source bytes it represents.
-    pub(super) fn new(line: WrappedLine, map: Arc<PaddingMap>, display_start: usize) -> Self {
+    pub(super) fn new(
+        line: WrappedLine,
+        map: Arc<PaddingMap>,
+        display_start: usize,
+        paint_runs: Arc<Vec<TextRun>>,
+    ) -> Self {
         let source_start = map.source_index(display_start);
         Self {
             line,
             map,
             display_start,
             source_start,
+            paint_runs,
         }
+    }
+    /// Reuses shaped glyph positions for the transient streaming overlay.
+    pub(super) fn streaming_glyphs(
+        &self,
+        origin: Point<Pixels>,
+        height: Pixels,
+        streaming: &super::streaming_text::StreamingText,
+        now: std::time::Instant,
+    ) -> Vec<super::streaming_text::RevealingGlyph> {
+        let Some(start) = streaming.start() else {
+            return Vec::new();
+        };
+        if self.source_start + self.len() <= start {
+            return Vec::new();
+        }
+        let layout = &self.line.unwrapped_layout;
+        let baseline = (height - layout.ascent - layout.descent) / 2. + layout.ascent;
+        let mut wraps = self.line.wrap_boundaries().iter().peekable();
+        let mut row = 0;
+        let mut row_x = px(0.);
+        let mut glyphs = Vec::new();
+        for (run_ix, run) in layout.runs.iter().enumerate() {
+            for (glyph_ix, glyph) in run.glyphs.iter().enumerate() {
+                if wraps
+                    .peek()
+                    .is_some_and(|wrap| wrap.run_ix == run_ix && wrap.glyph_ix == glyph_ix)
+                {
+                    wraps.next();
+                    row += 1;
+                    row_x = glyph.position.x;
+                }
+                let source = self.map.source_index(self.display_start + glyph.index);
+                // GPUI paints color emoji independently of the text foreground alpha.
+                if glyph.is_emoji {
+                    continue;
+                }
+                let Some(progress) = streaming.progress(source, now) else {
+                    continue;
+                };
+                let mut end = 0;
+                let Some(style) = self.paint_runs.iter().find(|run| {
+                    end += run.len;
+                    source < end
+                }) else {
+                    continue;
+                };
+                glyphs.push(super::streaming_text::RevealingGlyph {
+                    origin: origin
+                        + point(
+                            glyph.position.x - row_x,
+                            height * row + baseline + glyph.position.y,
+                        ),
+                    font: run.font_id,
+                    id: glyph.id,
+                    font_size: layout.font_size,
+                    color: style.color,
+                    progress,
+                });
+            }
+        }
+        glyphs
     }
     /// Returns this line's original byte length without visual padding.
     pub(super) fn len(&self) -> usize {

@@ -206,7 +206,8 @@ fn dither_frame(light: bool, seconds: f32) -> impl IntoElement {
 }
 
 /// Adds the app icon's corner grain in a project's saved color.
-pub(super) fn project_dither(color: Hsla, radius: Pixels) -> impl IntoElement {
+pub(super) fn project_dither(mut color: Hsla, radius: Pixels) -> impl IntoElement {
+    color.saturation = (color.saturation * 1.18).min(1.);
     canvas(
         |_, _, _| {},
         move |bounds, _, window, cx| {
@@ -221,7 +222,7 @@ pub(super) fn project_dither(color: Hsla, radius: Pixels) -> impl IntoElement {
                     format!("thread-dither:{width}:{height}:{radius}").into(),
                     Some(data.as_bytes()),
                     Default::default(),
-                    color.opacity(0.72),
+                    color.opacity(0.82),
                     cx,
                 );
             });
