@@ -139,7 +139,7 @@ impl Shell {
             self.creating_task = true;
             self.send(core::Request::CreateTask {
                 project_id: project.id.clone(),
-                worktree: self.new_worktree,
+                worktree: self.composer_worktree(),
                 preferences: self.composer_preferences(),
             });
             cx.notify();

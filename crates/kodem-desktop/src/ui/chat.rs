@@ -492,14 +492,14 @@ impl Shell {
                         self.ghost(
                             "composer-worktree",
                             "branch",
-                            if self.new_worktree {
+                            if self.composer_worktree() {
                                 "New worktree"
                             } else {
                                 "Current checkout"
                             },
                         )
                         .on_click(cx.listener(|s, _, _, cx| {
-                            s.new_worktree = !s.new_worktree;
+                            s.new_worktree_override = Some(!s.composer_worktree());
                             cx.notify();
                         })),
                     ),

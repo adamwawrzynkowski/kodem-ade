@@ -525,6 +525,7 @@ pub struct Settings {
     #[serde(default)]
     pub send_mode: SendMode,
     pub agent_defaults: AgentPreferences,
+    pub default_worktree: bool,
     pub show_review: bool,
     pub show_terminal: bool,
     pub split_diff: bool,
@@ -546,6 +547,7 @@ impl Default for Settings {
             diff_placement: DiffPlacement::default(),
             send_mode: SendMode::default(),
             agent_defaults: AgentPreferences::default(),
+            default_worktree: false,
             show_review: true,
             show_terminal: false,
             split_diff: false,

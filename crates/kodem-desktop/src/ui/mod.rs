@@ -111,7 +111,7 @@ pub struct Shell {
     error: Option<String>,
     status: String,
     host_connected: bool,
-    new_worktree: bool,
+    new_worktree_override: Option<bool>,
     new_preferences: Option<AgentPreferences>,
     selected_project: Option<String>,
     editing_project: Option<Project>,
@@ -346,7 +346,7 @@ impl Shell {
             error: None,
             status: "Connecting to local host…".into(),
             host_connected: false,
-            new_worktree: true,
+            new_worktree_override: None,
             new_preferences: None,
             selected_project: None,
             editing_project: None,
@@ -576,6 +576,7 @@ impl Shell {
                 self.send(core::Request::Hello);
             }
             Response::Created(task) => {
+                self.new_worktree_override = None;
                 self.new_preferences = None;
                 self.selected_project = Some(task.project_id.clone());
                 if !self.empty_draft.is_empty() {
@@ -883,6 +884,7 @@ impl Shell {
         cx.notify();
     }
     fn clear_selected_task(&mut self, cx: &mut Context<Self>) {
+        self.new_worktree_override = None;
         self.slash = Default::default();
         self.send_arrivals.clear();
         self.selected = None;
@@ -998,10 +1000,15 @@ impl Shell {
         self.open_empty_chat(cx);
         window.focus(&self.input.read(cx).focus_handle(cx), cx);
     }
+    fn composer_worktree(&self) -> bool {
+        self.new_worktree_override
+            .unwrap_or(self.settings.default_worktree)
+    }
     fn open_empty_chat(&mut self, cx: &mut Context<Self>) {
         if self.creating_task {
             return;
         }
+        self.new_worktree_override = None;
         if let Some(view) = &self.view {
             self.selected_project = Some(view.task.project_id.clone());
             if self.submitted_draft.is_none() {

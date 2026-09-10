@@ -34,7 +34,7 @@ The release repository is private. Users need GitHub CLI installed and signed in
 
 ## Start a task
 
-Open the app, choose a repository, then create a task. An isolated Git worktree is the default; a repository needs an initial commit for that option. You can also choose its current checkout. Selecting a task never checks out another branch in your original working directory.
+Open the app, choose a repository, then create a task. Tasks use the current checkout by default. Choose **Settings → Workspace → Default task location** to default to a new worktree instead; a repository needs an initial commit for that option. Each new task starts with the saved preference, and you can override it in the composer for that task. Selecting a task never checks out another branch in your original working directory.
 
 Kodem uses Codex's own authentication. If you have not signed in, run this in Terminal:
 

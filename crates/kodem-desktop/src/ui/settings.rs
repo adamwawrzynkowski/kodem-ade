@@ -207,6 +207,28 @@ impl Shell {
                     )
                     .child(
                         self.setting_row(
+                            "Default task location",
+                            "Use this for every new task. You can override it in the composer.",
+                            self.button(
+                                "default-task-location",
+                                "branch",
+                                if self.settings.default_worktree {
+                                    "New worktree"
+                                } else {
+                                    "Current checkout"
+                                },
+                            )
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.settings.default_worktree = !s.settings.default_worktree;
+                                s.new_worktree_override = None;
+                                s.save_settings();
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                        ),
+                    )
+                    .child(
+                        self.setting_row(
                             "Open file diffs in",
                             "Choose where a file opens when you select a change.",
                             self.button(
