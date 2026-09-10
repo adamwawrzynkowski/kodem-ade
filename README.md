@@ -102,4 +102,4 @@ Kodem uses HTTP streaming for its OpenAI sessions to avoid repeated WebSocket co
 
 ## License
 
-Kodem is proprietary software. See [LICENSE](LICENSE). Third-party components retain their own licenses; see [third-party notices](assets/THIRD_PARTY.md) and [licensing maintenance](licensing/README.md). Builds verify the reviewed notice snapshot and bundle it with the application.
+Kodem is proprietary software. See [LICENSE](LICENSE). Third-party components retain their own licenses; see [third-party notices](assets/THIRD_PARTY.md) and [licensing maintenance](licensing/README.md). Builds verify license notices and regenerate stale notices under `target/` using the existing license policy. The pinned scanner is installed when needed. Generated notices are bundled without changing tracked files; unresolved license review failures still stop the build.

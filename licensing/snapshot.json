@@ -1,6 +1,6 @@
 {
   "inputs": {
-    "Cargo.lock": "8ce6f5258b231c0686a1ae6db297f5d9dc4df8d0b5a1c9d431ef4f64021a628b",
+    "Cargo.lock": "233ca2aef2403e130fe011eb0ccbf2921aee4eb7604c60bf1d9865a29daebca3",
     "Cargo.toml": "697b415e9ddddc5dbb1d2f54eee1240fc179f6f6799c29a65c36ed5ebe952d28",
     "LICENSE": "7de28eeff500ea66eaaa1d950319b5d760bf9a50a2c335427838a4b11bad6c1b",
     "about.toml": "da2721a9cea560519bd9a618e80605826bfe8fa13336a5c9346b27018bd3d671",
@@ -14,13 +14,13 @@
     "assets/licenses/manrope-OFL.txt": "e01b637272e0cbdfb240184dd98ea5cc671556d9894dae2668d92ab2c906787c",
     "assets/licenses/openai-icon-source.txt": "b88a324474f412b43c1805c08516b0d2a9d7986989a797f3bd1e07b5d1a10b35",
     "assets/licenses/simple-icons.txt": "9046848b63a5c92bff14e4accca80bd987e0623b74adf9226ce5198d312b79d5",
-    "crates/kodem-core/Cargo.toml": "4a63d15328af8237953a6d204e3297d72fc2a57f9403147479472adc1d98b079",
+    "crates/kodem-core/Cargo.toml": "7d2537b8fc51ce23202feb29d398ed39d7d59e14d6daa1f5c47317488988e19f",
     "crates/kodem-desktop/Cargo.toml": "a042e8418cac68bf9ff94974b04f843767f71a0c2ca58a6d4e92a48faaab5575",
     "crates/kodem-host/Cargo.toml": "aa7ec952f03a9dab9a6397093b6ac3b1fe28ed1ba7f737054e3dfa929c4c7710",
-    "licensing/README.md": "4b4f1760052e5e497bf5120ed381366c591638d0b62830fb9698c55c64df1a4d",
+    "licensing/README.md": "3bed85358a49108ae18bfc6b1f5b1d4a40799632a3f4b8c72d5ee19d420122c2",
     "licensing/clarifications.json": "5ec167c1fcd609aa59989994e85ebefb6ae214b9a8eb39591cf33089fb764e34",
     "rust-toolchain.toml": "559f488c181e0e9e77cf17c29de663977f036ec7ff2e2060585714bf53c52d62",
-    "scripts/licenses.py": "465cb70d0d4695207c1af21cfd0a5f287882b90a5f1f0454fa03e024fdf8616f"
+    "scripts/licenses.py": "fce26a8012cae31dcdbfdad2caf801906092a0c61e06acd13c9ca4767b6879f2"
   },
   "outputs": {
     "assets/licenses/Rust-THIRD-PARTY.txt": "31a6965dc3337e11a51188b81d59111fe0dc77ceb5355f645d82101362394829",

@@ -31,7 +31,7 @@ cargo fmt --all -- --check
 # Pin both the output root and target. Shell/global Cargo overrides must never
 # make packaging read an older executable from another output directory.
 build_target=aarch64-apple-darwin
-python3 scripts/licenses.py check --target "$build_target"
+python3 scripts/licenses.py prepare --target "$build_target"
 if [[ "$configuration" == release ]]; then
     cargo build --workspace --release --locked --target "$build_target" --target-dir "$KODEM_ROOT/target"
 else
@@ -54,6 +54,7 @@ cp "$executables/kodem-host" "$bundle/Contents/MacOS/kodem-host"
 chmod 755 "$bundle/Contents/MacOS/kodem" "$bundle/Contents/MacOS/kodem-host"
 cp LICENSE "$bundle/Contents/Resources/LICENSE"
 cp assets/licenses/* "$bundle/Contents/Resources/licenses/"
+cp target/licensing/assets/licenses/* "$bundle/Contents/Resources/licenses/"
 cp assets/THIRD_PARTY.md "$bundle/Contents/Resources/THIRD_PARTY.md"
 cp assets/sounds/kodem-*.wav "$bundle/Contents/Resources/"
 icon_source="$KODEM_ROOT/assets/app/AppIcon_1024x1024.png"

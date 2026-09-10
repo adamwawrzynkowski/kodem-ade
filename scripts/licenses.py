@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refresh reviewed Rust notices, or reject stale notices before packaging."""
+"""Prepare validated build notices, refresh tracked notices, or check their snapshot."""
 import argparse
 import gzip
 import hashlib
@@ -19,7 +19,8 @@ NOTICE = "assets/licenses/Rust-THIRD-PARTY.txt"
 SOURCE = "assets/licenses/option-ext-0.2.0-source.tar.gz"
 STANDARD_LIBRARY = "assets/licenses/Rust-standard-library.html"
 OUTPUTS = [NOTICE, SOURCE, STANDARD_LIBRARY]
-SNAPSHOT = ROOT / "licensing/snapshot.json"
+SNAPSHOT = "licensing/snapshot.json"
+BUILD_ROOT = ROOT / "target/licensing"
 
 
 def digest(path):
@@ -31,23 +32,68 @@ def inputs():
     """Hash dependency declarations and the reviewed licensing inputs."""
     paths = [ROOT / p for p in ["Cargo.lock", "Cargo.toml", "rust-toolchain.toml", "about.toml", "LICENSE", "scripts/licenses.py", "assets/THIRD_PARTY.md"]]
     paths += list((ROOT / "crates").glob("*/Cargo.toml"))
-    paths += [p for p in (ROOT / "licensing").rglob("*") if p.is_file() and p != SNAPSHOT]
+    paths += [p for p in (ROOT / "licensing").rglob("*") if p.is_file() and p != ROOT / SNAPSHOT]
     paths += [p for p in (ROOT / "assets/licenses").rglob("*") if p.is_file() and str(p.relative_to(ROOT)) not in OUTPUTS]
     return {str(p.relative_to(ROOT)): digest(p) for p in sorted(paths)}
 
 
-def check():
-    """Reject stale or altered notice artifacts without network access."""
-    saved = json.loads(SNAPSHOT.read_text())
+def stale_files(artifact_root):
+    """List missing, stale or altered snapshot artifacts without network access."""
+    snapshot = artifact_root / SNAPSHOT
+    if not snapshot.is_file():
+        return [SNAPSHOT]
+    saved = json.loads(snapshot.read_text())
     current = inputs()
     changed = sorted(k for k in set(current) | set(saved["inputs"]) if current.get(k) != saved["inputs"].get(k))
-    for name, expected in saved["outputs"].items():
-        path = ROOT / name
-        if not path.is_file() or digest(path) != expected:
+    for name in OUTPUTS:
+        path = artifact_root / name
+        if not path.is_file() or digest(path) != saved["outputs"].get(name):
             changed.append(name)
+    return changed
+
+
+def check(artifact_root=ROOT):
+    """Reject stale or altered notice artifacts without network access."""
+    changed = stale_files(artifact_root)
     if changed:
         raise SystemExit("Licensing snapshot is stale: " + ", ".join(changed) + "\nReview dependency licenses, then run python3 scripts/licenses.py refresh.")
+    saved = json.loads((artifact_root / SNAPSHOT).read_text())
     print("License notices verified for {} external packages ({})".format(saved["package_count"], TARGET))
+
+
+def cargo_about(install):
+    """Resolve the pinned scanner, installing a build-local copy when requested."""
+    override = os.environ.get("KODEM_CARGO_ABOUT")
+    local_root = ROOT / "target/license-tools" / TOOL_VERSION
+    candidates = [override] if override else [str(local_root / "bin/cargo-about"), shutil.which("cargo-about")]
+    for tool in candidates:
+        if not tool or not Path(tool).is_file():
+            continue
+        version = subprocess.check_output([tool, "--version"], text=True).strip()
+        if version == "cargo-about " + TOOL_VERSION:
+            return tool
+        if override:
+            raise SystemExit("Expected cargo-about " + TOOL_VERSION + "; found " + version)
+    if override:
+        raise SystemExit("KODEM_CARGO_ABOUT does not point to a cargo-about executable: " + override)
+    if not install:
+        raise SystemExit("Install cargo-about: cargo install cargo-about --version " + TOOL_VERSION + " --locked --features cli")
+    print("Installing cargo-about " + TOOL_VERSION + " for license generation", flush=True)
+    subprocess.run(["cargo", "install", "cargo-about", "--version", "=" + TOOL_VERSION, "--locked", "--features", "cli", "--root", str(local_root)], cwd=ROOT, check=True)
+    return cargo_about(install=False)
+
+
+def prepare():
+    """Prepare current notices under target without changing tracked release inputs."""
+    if not stale_files(ROOT):
+        for name in [*OUTPUTS, SNAPSHOT]:
+            destination = BUILD_ROOT / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, destination)
+    elif stale_files(BUILD_ROOT):
+        print("Regenerating build license notices using the existing license policy", flush=True)
+        refresh(BUILD_ROOT, install_tools=True)
+    check(BUILD_ROOT)
 
 
 def source_archive(package):
@@ -67,14 +113,9 @@ def source_archive(package):
     return buffer.getvalue()
 
 
-def refresh():
+def refresh(artifact_root=ROOT, install_tools=False):
     """Generate locked notices with cargo-about and version-specific reviewed clarifications."""
-    tool = os.environ.get("KODEM_CARGO_ABOUT") or shutil.which("cargo-about")
-    if not tool:
-        raise SystemExit("Install cargo-about: cargo install cargo-about --version " + TOOL_VERSION + " --locked")
-    version = subprocess.check_output([tool, "--version"], text=True).strip()
-    if version != "cargo-about " + TOOL_VERSION:
-        raise SystemExit("Expected cargo-about " + TOOL_VERSION + "; found " + version)
+    tool = cargo_about(install_tools)
     with tempfile.TemporaryDirectory(prefix="kodem-licenses-") as temporary:
         output = Path(temporary) / "licenses.json"
         subprocess.run([tool, "generate", "--workspace", "--locked", "--offline", "--fail", "--format", "json", "--target", TARGET, "--output-file", str(output)], cwd=ROOT, check=True)
@@ -131,26 +172,33 @@ def refresh():
     if [(p["name"], p["version"]) for p in mpl] != [("option-ext", "0.2.0")]:
         raise SystemExit("Review MPL source packaging for the changed dependency set")
     sysroot = Path(subprocess.check_output(["rustc", "--print", "sysroot"], cwd=ROOT, text=True).strip())
-    standard_library = (sysroot / "share/doc/rust/COPYRIGHT-library.html").read_bytes()
+    library_notice = sysroot / "share/doc/rust/COPYRIGHT-library.html"
+    if not library_notice.is_file() and install_tools:
+        subprocess.run(["rustup", "component", "add", "rust-docs"], cwd=ROOT, check=True)
+    standard_library = library_notice.read_bytes()
     notice_bytes = ("\n".join(lines).rstrip() + "\n").encode()
     archive_bytes = source_archive(mpl[0])
-    (ROOT / STANDARD_LIBRARY).write_bytes(standard_library)
-    (ROOT / NOTICE).write_bytes(notice_bytes)
-    (ROOT / SOURCE).write_bytes(archive_bytes)
-    snapshot = {"tool_version": TOOL_VERSION, "target": TARGET, "package_count": len(packages), "inputs": inputs(), "outputs": {p: digest(ROOT / p) for p in OUTPUTS}}
-    SNAPSHOT.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
-    check()
+    (artifact_root / NOTICE).parent.mkdir(parents=True, exist_ok=True)
+    (artifact_root / STANDARD_LIBRARY).write_bytes(standard_library)
+    (artifact_root / NOTICE).write_bytes(notice_bytes)
+    (artifact_root / SOURCE).write_bytes(archive_bytes)
+    snapshot = {"tool_version": TOOL_VERSION, "target": TARGET, "package_count": len(packages), "inputs": inputs(), "outputs": {p: digest(artifact_root / p) for p in OUTPUTS}}
+    (artifact_root / SNAPSHOT).parent.mkdir(parents=True, exist_ok=True)
+    (artifact_root / SNAPSHOT).write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
+    check(artifact_root)
 
 
 def main():
-    """Run the requested notice refresh or offline packaging check."""
+    """Run build preparation, tracked notice refresh or the offline snapshot check."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["refresh", "check"])
+    parser.add_argument("command", choices=["prepare", "refresh", "check"])
     parser.add_argument("--target", default=TARGET, help="The application build target")
     args = parser.parse_args()
     if args.target != TARGET:
         parser.error("No reviewed licensing policy for target " + args.target)
-    if args.command == "refresh":
+    if args.command == "prepare":
+        prepare()
+    elif args.command == "refresh":
         refresh()
     else:
         check()
