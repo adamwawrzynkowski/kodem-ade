@@ -103,7 +103,7 @@ impl Shell {
                             .when(selected, |b| b.child(icon("check").size(px(12.))))
                             .on_click(cx.listener(move |s, _, _, cx| {
                                 s.panel = Panel::None;
-                                if s.comparison != comparison {
+                                if s.comparison != comparison || s.historical_diff {
                                     s.comparison = comparison.clone();
                                     s.diff_view = None;
                                     s.diff = None;

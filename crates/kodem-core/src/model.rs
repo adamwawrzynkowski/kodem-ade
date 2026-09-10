@@ -418,14 +418,14 @@ pub enum LineKind {
     Removed,
     Header,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DiffLine {
     pub old: Option<u32>,
     pub new: Option<u32>,
     pub kind: LineKind,
     pub text: String,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct FileDelta {
     pub path: Vec<u8>,
     pub old_path: Option<Vec<u8>>,
@@ -444,6 +444,16 @@ pub struct DiffSnapshot {
     pub captured: u64,
     pub index_digest: String,
     pub files: Vec<FileDelta>,
+}
+impl DiffSnapshot {
+    /// Compares captured repository content without treating capture time or storage identity as a change.
+    pub fn same_content(&self, other: &Self) -> bool {
+        self.task_id == other.task_id
+            && self.comparison == other.comparison
+            && self.baseline == other.baseline
+            && self.index_digest == other.index_digest
+            && self.files == other.files
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Feedback {
@@ -555,6 +565,8 @@ pub enum Request {
     CaptureDiff {
         task_id: String,
         comparison: Comparison,
+        #[serde(default)]
+        previous: Option<String>,
     },
     LoadSnapshot {
         id: String,

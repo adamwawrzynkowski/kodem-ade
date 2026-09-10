@@ -445,6 +445,20 @@ impl Store {
         }
         Ok(())
     }
+    /// Reuses the previous immutable snapshot when a refresh observes identical repository content.
+    pub fn save_refreshed_snapshot(
+        &self,
+        snapshot: &mut DiffSnapshot,
+        previous: Option<&str>,
+    ) -> Result<()> {
+        if let Some(previous) = previous.and_then(|id| self.snapshot(id).ok())
+            && previous.same_content(snapshot)
+        {
+            *snapshot = previous;
+            return Ok(());
+        }
+        self.save_snapshot(snapshot)
+    }
     /// Loads the immutable content of a historical review snapshot.
     pub fn snapshot(&self, id: &str) -> Result<DiffSnapshot> {
         ensure!(

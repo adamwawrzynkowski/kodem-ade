@@ -377,10 +377,14 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         Request::CaptureDiff {
             task_id,
             comparison,
+            previous,
         } => {
             let task = host.lock().unwrap().store.task(&task_id)?;
             let mut snapshot = git::capture(&task, comparison)?;
-            host.lock().unwrap().store.save_snapshot(&mut snapshot)?;
+            host.lock()
+                .unwrap()
+                .store
+                .save_refreshed_snapshot(&mut snapshot, previous.as_deref())?;
             Ok(Response::Diff(snapshot))
         }
         Request::LoadSnapshot { id } => {

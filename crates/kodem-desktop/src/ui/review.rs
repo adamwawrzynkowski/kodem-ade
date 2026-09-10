@@ -100,9 +100,9 @@ impl Shell {
                         self.ghost("use-current", "refresh", "Load latest")
                             .on_click(cx.listener(|s, _, _, cx| {
                                 s.panel = Panel::None;
-                                s.diff = s.new_diff.take();
-                                s.file = 0;
-                                s.reviewing_file = false;
+                                if let Some(diff) = s.new_diff.take() {
+                                    s.install_diff(diff);
+                                }
                                 cx.notify();
                             })),
                     ),
@@ -252,7 +252,7 @@ impl Shell {
                     });
                     let task_id = snapshot.task_id.clone();
                     let snapshot_id = snapshot.id.clone();
-                    self._subscriptions.push(cx.subscribe(
+                    self.diff_subscription = Some(cx.subscribe(
                         &view,
                         move |shell, _, event: &diff_view::ContextRequested, cx| {
                             shell.send(core::Request::AddFeedbackRows {

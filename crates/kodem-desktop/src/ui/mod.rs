@@ -5,6 +5,7 @@ mod change_tree;
 mod chat;
 mod chrome;
 mod composition;
+mod diff_refresh;
 mod diff_view;
 mod effort_slider;
 mod image_preview;
@@ -98,6 +99,8 @@ pub struct Shell {
     terminal_focus: FocusHandle,
     diff: Option<DiffSnapshot>,
     new_diff: Option<DiffSnapshot>,
+    diff_refresh: diff_refresh::DiffRefresh,
+    diff_subscription: Option<Subscription>,
     file: usize,
     reviewing_file: bool,
     historical_diff: bool,
@@ -246,6 +249,14 @@ impl Shell {
                                 .tx
                                 .send(bridge::Command::Poll(s.selected.clone(), s.show_terminal));
                         }
+                        if s.host_connected
+                            && s.selected.is_some()
+                            && (s.show_review || s.reviewing_file)
+                            && !s.historical_diff
+                            && s.diff_refresh.due()
+                        {
+                            s.refresh_diff();
+                        }
                     })
                     .is_err()
                 {
@@ -278,6 +289,8 @@ impl Shell {
             terminal_focus: cx.focus_handle(),
             diff: None,
             new_diff: None,
+            diff_refresh: diff_refresh::DiffRefresh::default(),
+            diff_subscription: None,
             file: 0,
             reviewing_file: false,
             historical_diff: false,
@@ -329,6 +342,17 @@ impl Shell {
         let _ = self.tx.send(bridge::Command::Request(request));
     }
     fn apply(&mut self, reply: bridge::Reply, cx: &mut Context<Self>) {
+        if matches!(reply.request, core::Request::CaptureDiff { .. }) {
+            self.diff_refresh.completed();
+        }
+        if !diff_refresh::accepts_reply(
+            &reply.request,
+            self.selected.as_deref(),
+            &self.comparison,
+            self.historical_diff,
+        ) {
+            return;
+        }
         if reply.connected && !self.host_connected {
             self.error = None;
         }
@@ -515,35 +539,24 @@ impl Shell {
                 if self.selected.as_deref() != Some(&diff.task_id) {
                     return;
                 }
-                if self
-                    .diff_view
-                    .as_ref()
-                    .is_some_and(|viewer| viewer.read(cx).has_selection())
-                    && self.diff.as_ref().is_some_and(|d| d.id != diff.id)
+                let historical = matches!(reply.request, core::Request::LoadSnapshot { .. });
+                if !historical
+                    && self
+                        .diff
+                        .as_ref()
+                        .is_some_and(|current| current.same_content(&diff))
+                {
+                    self.new_diff = None;
+                } else if !historical
+                    && self.reviewing_file
+                    && self
+                        .diff_view
+                        .as_ref()
+                        .is_some_and(|viewer| viewer.read(cx).has_selection())
                 {
                     self.new_diff = Some(diff);
                 } else {
-                    let selected_label = self
-                        .diff
-                        .as_ref()
-                        .and_then(|d| d.files.get(self.file))
-                        .map(|f| &f.label);
-                    if self.reviewing_file {
-                        if let Some(index) = diff
-                            .files
-                            .iter()
-                            .position(|f| Some(&f.label) == selected_label)
-                        {
-                            self.file = index;
-                        } else {
-                            self.reviewing_file = false;
-                            self.file = 0;
-                        }
-                    }
-                    self.historical_diff =
-                        matches!(reply.request, core::Request::LoadSnapshot { .. });
-                    self.diff = Some(diff);
-                    self.text_views.retain(|k, _| !k.starts_with("diff:"));
+                    self.install_diff(diff);
                 }
             }
             Response::Accepted {
@@ -690,6 +703,7 @@ impl Shell {
         self.diff = None;
         self.historical_diff = false;
         self.diff_view = None;
+        self.diff_subscription = None;
         self.new_diff = None;
         self.text_views.clear();
         self.question_inputs.clear();
@@ -705,14 +719,6 @@ impl Shell {
         });
         self.refresh_diff();
         cx.notify();
-    }
-    fn refresh_diff(&self) {
-        if let Some(task_id) = &self.selected {
-            self.send(core::Request::CaptureDiff {
-                task_id: task_id.clone(),
-                comparison: self.comparison.clone(),
-            });
-        }
     }
     fn save_window_placement(&self) {
         if let Err(error) = crate::window_state::save(self.window_placement) {

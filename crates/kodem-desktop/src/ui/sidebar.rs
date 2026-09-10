@@ -387,6 +387,8 @@ impl Shell {
                     s.show_review = true;
                     s.save_settings();
                     if let Some(id) = &snapshot {
+                        s.historical_diff = true;
+                        s.new_diff = None;
                         s.send(core::Request::LoadSnapshot { id: id.clone() });
                     }
                 }))
