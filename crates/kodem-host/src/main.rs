@@ -1,5 +1,6 @@
 //! On-demand local host. Window closure never drops provider or PTY ownership.
 mod attachments;
+mod notifications;
 mod provider;
 mod terminal;
 mod titles;
@@ -16,6 +17,7 @@ use std::{
 
 struct Host {
     store: Store,
+    notifications: notifications::Notifications,
     runtime: RuntimeInfo,
     sessions: HashMap<String, mpsc::Sender<provider::Control>>,
     requests: HashMap<String, Vec<InputRequest>>,
@@ -62,6 +64,7 @@ fn run() -> Result<()> {
     };
     let host = Arc::new(Mutex::new(Host {
         store,
+        notifications: notifications::Notifications::start(),
         runtime: info,
         sessions: HashMap::new(),
         requests: HashMap::new(),
@@ -155,12 +158,17 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 });
             }
             Ok(Response::Workspace(Workspace {
+                notification_delivery: h.notifications.status(),
                 protocol: ipc::PROTOCOL,
                 projects: h.store.projects()?,
                 tasks: h.store.tasks()?,
                 settings: h.store.settings()?,
                 runtime: h.runtime.clone(),
             }))
+        }
+        Request::TestNotification { sound } => {
+            host.lock().unwrap().notifications.test(sound);
+            Ok(Response::Ok)
         }
         Request::Reconcile { task_id } => {
             provider::reconcile(host, &task_id)?;

@@ -2973,7 +2973,11 @@ name = "kodem-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "block2 0.6.2",
  "libc",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "objc2-user-notifications",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3003,8 +3007,12 @@ name = "kodem-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "block2 0.6.2",
  "kodem-core",
  "libc",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "objc2-user-notifications",
  "portable-pty",
  "serde_json",
  "vt100",

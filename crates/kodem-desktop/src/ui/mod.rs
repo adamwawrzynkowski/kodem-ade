@@ -723,6 +723,7 @@ impl Shell {
                 }
                 core::Request::EditTask { .. }
                 | core::Request::SaveSettings(_)
+                | core::Request::TestNotification { .. }
                 | core::Request::TerminalInput { .. }
                 | core::Request::TerminalResize { .. } => {}
                 core::Request::Shutdown => cx.quit(),

@@ -48,6 +48,8 @@ Paste copied files or images with Command-V, drop them into the composer, or use
 
 **Settings → Codex → Messages during a turn** selects Queue or Steer. Queue waits for successful completion; Steer adds input to the running turn without restarting it. The composer also exposes the current choice while work runs. The tray above it shows upcoming messages; expand an entry to inspect its content, cancel it, or restore it to an empty composer for editing. Failures and interruptions pause the queue until Resume. Unknown delivery requires Check history before resuming; uncertain messages are never replayed automatically.
 
+**Settings → Notifications** controls alerts for tasks that need input or attention, finish, fail, or are interrupted. Choose Chime, Bell, Glass, Pulse, or Ascend, turn sounds off, and use **Test notification** to send a preview. The host sends alerts after task state changes, including while the window is closed. Repeated events and stored history do not replay alerts. Settings reports submission or permission errors; macOS notification and Focus settings control presentation.
+
 The Files dialog provides read-only text previews. The terminal starts a shell in the task's checkout. Run check records the command, checkout revision, working-tree digest, output and exit code in the conversation. Skills & MCP shows provider-reported inventory and discovered instruction files.
 
 ## Current scope

@@ -18,6 +18,7 @@ impl Shell {
             ("sun", "Appearance"),
             ("folder", "Workspace"),
             ("bot", "Codex"),
+            ("bell", "Notifications"),
             ("keyboard", "Shortcuts"),
         ]
         .into_iter()
@@ -392,6 +393,120 @@ impl Shell {
                     .child(div().text_size(px(12.)).text_color(t.muted).child("Tasks and terminals continue when you close the window. An idle host stops after five minutes when no task or shell is running."))
                     .child(self.ghost("shutdown-host", "stop", "Stop idle host and quit").justify_start().on_click(cx.listener(|s, _, _, _| s.send(core::Request::Shutdown)))));
             }
+            3 => {
+                body = body
+                    .child(self.section_title(
+                        "Notifications",
+                        "Get task updates, even after closing the window.",
+                    ))
+                    .child(self.notification_toggle(
+                        "notifications-enabled",
+                        "Task notifications",
+                        "Send macOS notifications for the events selected below.",
+                        self.settings.notifications.enabled,
+                        |n| &mut n.enabled,
+                        cx,
+                    ))
+                    .child(self.notification_toggle(
+                        "notifications-attention",
+                        "Needs attention",
+                        "When a task needs input, approval, or delivery reconciliation.",
+                        self.settings.notifications.attention,
+                        |n| &mut n.attention,
+                        cx,
+                    ))
+                    .child(self.notification_toggle(
+                        "notifications-completed",
+                        "Finished",
+                        "When a task finishes its turn.",
+                        self.settings.notifications.completed,
+                        |n| &mut n.completed,
+                        cx,
+                    ))
+                    .child(self.notification_toggle(
+                        "notifications-failed",
+                        "Failed",
+                        "When a task or its submission fails.",
+                        self.settings.notifications.failed,
+                        |n| &mut n.failed,
+                        cx,
+                    ))
+                    .child(self.notification_toggle(
+                        "notifications-interrupted",
+                        "Interrupted",
+                        "When a task stops before finishing.",
+                        self.settings.notifications.interrupted,
+                        |n| &mut n.interrupted,
+                        cx,
+                    ))
+                    .child(self.notification_toggle(
+                        "notifications-sound",
+                        "Play sound",
+                        "Use the selected sound with task notifications.",
+                        self.settings.notifications.play_sound,
+                        |n| &mut n.play_sound,
+                        cx,
+                    ));
+                let mut sounds = div().flex().flex_wrap().gap_2();
+                for (i, sound) in NotificationSound::ALL.into_iter().enumerate() {
+                    let selected = self.settings.notifications.sound == sound;
+                    sounds = sounds.child(
+                        self.ghost(
+                            ("notification-sound", i),
+                            if selected { "circle-check" } else { "bell" },
+                            sound.label(),
+                        )
+                        .when(selected, |b| b.bg(t.accent_bg).text_color(t.accent))
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            s.settings.notifications.sound = sound;
+                            s.save_settings();
+                            cx.notify();
+                        })),
+                    );
+                }
+                let delivery = self.workspace.as_ref().map(|w| &w.notification_delivery);
+                let pending = matches!(delivery, Some(NotificationDelivery::Pending));
+                body = body
+                    .child(div().text_size(px(13.)).child("Notification sound"))
+                    .child(sounds)
+                    .child(self.setting_row("Test notification", "Send a preview using the selected sound settings, even if task notifications are off.",
+                        self.button("test-notification", "bell", if pending { "Sending…" } else { "Test notification" })
+                            .disabled(pending)
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                if let Some(workspace) = &mut s.workspace {
+                                    workspace.notification_delivery = NotificationDelivery::Pending;
+                                }
+                                s.send(core::Request::TestNotification {
+                                    sound: s.settings.notifications.play_sound.then_some(s.settings.notifications.sound),
+                                });
+                                cx.notify();
+                            })).into_any_element()))
+                    .child(div().text_size(px(12.)).text_color(t.muted).child("macOS controls notification permission, banners, sounds, and Focus settings."));
+                let message = match delivery {
+                    Some(NotificationDelivery::Pending) => {
+                        Some("Waiting for macOS. Allow notifications if prompted.".into())
+                    }
+                    Some(NotificationDelivery::Submitted) => {
+                        Some("Notification submitted to macOS.".into())
+                    }
+                    Some(NotificationDelivery::Failed(error)) => Some(error.clone()),
+                    _ => None,
+                };
+                if let Some(message) = message {
+                    body = body.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(
+                                if matches!(delivery, Some(NotificationDelivery::Failed(_))) {
+                                    t.removed
+                                } else {
+                                    t.muted
+                                },
+                            )
+                            .child(message),
+                    );
+                }
+            }
             _ => {
                 body = body.child(self.section_title(
                     "Keyboard shortcuts",
@@ -440,6 +555,32 @@ impl Shell {
             .child(navigation)
             .child(body)
             .into_any_element()
+    }
+    fn notification_toggle(
+        &self,
+        id: &'static str,
+        label: &str,
+        detail: &str,
+        enabled: bool,
+        field: fn(&mut NotificationSettings) -> &mut bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.setting_row(
+            label,
+            detail,
+            self.button(
+                id,
+                if enabled { "check" } else { "minus" },
+                if enabled { "On" } else { "Off" },
+            )
+            .on_click(cx.listener(move |s, _, _, cx| {
+                let enabled = field(&mut s.settings.notifications);
+                *enabled = !*enabled;
+                s.save_settings();
+                cx.notify();
+            }))
+            .into_any_element(),
+        )
     }
     fn section_title(&self, title: &str, detail: &str) -> AnyElement {
         div()

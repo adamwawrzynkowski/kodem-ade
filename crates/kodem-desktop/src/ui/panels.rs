@@ -522,6 +522,8 @@ impl Shell {
         div()
             .absolute()
             .inset_0()
+            // Dialogs must block clicks, hover, and scroll in the workspace behind them.
+            .occlude()
             .bg(rgba(0x00000090))
             .flex()
             .items_center()

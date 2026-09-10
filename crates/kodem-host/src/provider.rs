@@ -190,7 +190,7 @@ pub(super) fn resume_queue(host: Shared, task_id: &str) -> Result<()> {
         );
         task.state = RunState::Idle;
         task.error = None;
-        h.store.save_task(&task)?;
+        h.save_task_with_notification(&task)?;
     }
     ensure_owner(host, task_id.into());
     Ok(())
@@ -223,7 +223,7 @@ fn ensure_owner(host: Shared, task_id: String) {
                 task.error = Some(format!(
                     "{error:#}. Queued messages are retained; no uncertain input was resent."
                 ));
-                let _ = h.store.save_task(&task);
+                let _ = h.save_task_with_notification(&task);
             }
         }
         let mut h = host.lock().unwrap();
@@ -269,7 +269,7 @@ fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result
         let h = host.lock().unwrap();
         let mut task = h.store.task(task_id)?;
         task.provider_thread = Some(thread.clone());
-        h.store.save_task(&task)?;
+        h.save_task_with_notification(&task)?;
     }
     crate::titles::start(host.clone(), task_id)?;
     let mut branch_refresh = Instant::now();
@@ -282,7 +282,7 @@ fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result
                 let mut task = h.store.task(task_id)?;
                 if task.branch != branch {
                     task.branch = branch;
-                    h.store.save_task(&task)?;
+                    h.save_task_with_notification(&task)?;
                 }
             }
         }
@@ -335,7 +335,7 @@ fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result
                         && h.requests.get(task_id).is_none_or(|r| r.is_empty())
                     {
                         task.state = RunState::Running;
-                        h.store.save_task(&task)?;
+                        h.save_task_with_notification(&task)?;
                     }
                 }
             }
@@ -394,7 +394,7 @@ fn dispatch_next(
             {
                 task.state = RunState::Interrupted;
                 task.error = Some("Queue paused because another task is using this checkout. Resume after it finishes.".into());
-                h.store.save_task(&task)?;
+                h.save_task_with_notification(&task)?;
                 return Ok(());
             }
             h.activities.remove(task_id);
@@ -448,7 +448,7 @@ fn dispatch_next(
             if message.expected_turn.is_none() && task.state == RunState::Starting {
                 task.state = RunState::Running;
                 task.active_turn = Some(turn.into());
-                h.store.save_task(&task)?;
+                h.save_task_with_notification(&task)?;
             }
         }
         Err(error) => {
@@ -464,7 +464,7 @@ fn dispatch_next(
                     RunState::DeliveryUnknown
                 };
                 task.error = Some(format!("{error:#}"));
-                h.store.save_task(&task)?;
+                h.save_task_with_notification(&task)?;
             }
             if !rejected {
                 return Err(error);
@@ -518,7 +518,7 @@ fn ingest(
                 params: p.clone(),
             });
         task.state = RunState::Waiting;
-        h.store.save_task(&task)?;
+        h.save_task_with_notification(&task)?;
         return Ok(());
     }
     if let Some(branch) = observed_branch {
@@ -542,7 +542,7 @@ fn ingest(
                         .filter(|v| *v > 0),
                     reported: now(),
                 });
-                h.store.save_task(&task)?;
+                h.save_task_with_notification(&task)?;
             }
         }
         "account/rateLimits/updated" => {
@@ -552,7 +552,7 @@ fn ingest(
             task.active_turn = p["turn"]["id"].as_str().map(str::to_owned);
             task.state = RunState::Running;
             task.updated = now();
-            h.store.save_task(&task)?;
+            h.save_task_with_notification(&task)?;
         }
         "turn/completed" => {
             if let Some(review) = completed_review {
@@ -601,7 +601,7 @@ fn ingest(
             task.error = p["turn"]["error"]["message"].as_str().map(str::to_owned);
             task.updated = now();
             h.requests.remove(task_id);
-            h.store.save_task(&task)?;
+            h.save_task_with_notification(&task)?;
             items.clear();
         }
         "serverRequest/resolved" => {
@@ -613,7 +613,7 @@ fn ingest(
                 && h.requests.get(task_id).is_none_or(|r| r.is_empty())
             {
                 task.state = RunState::Running;
-                h.store.save_task(&task)?;
+                h.save_task_with_notification(&task)?;
             }
         }
         "item/agentMessage/delta" | "item/commandExecution/outputDelta" => {
@@ -1167,7 +1167,7 @@ pub(super) fn reconcile(host: &Shared, task_id: &str) -> Result<()> {
                 .into(),
         );
     }
-    h.store.save_task(&current)?;
+    h.save_task_with_notification(&current)?;
     Ok(())
 }
 

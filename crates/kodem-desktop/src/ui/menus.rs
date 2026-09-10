@@ -353,6 +353,7 @@ impl Shell {
         div()
             .absolute()
             .inset_0()
+            .occlude()
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|s, _, _, cx| {

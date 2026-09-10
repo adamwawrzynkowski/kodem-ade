@@ -57,6 +57,7 @@ cp "$executables/kodem-host" "$bundle/Contents/MacOS/kodem-host"
 chmod 755 "$bundle/Contents/MacOS/kodem" "$bundle/Contents/MacOS/kodem-host"
 cp assets/licenses/* "$bundle/Contents/Resources/licenses/"
 cp assets/THIRD_PARTY.md "$bundle/Contents/Resources/THIRD_PARTY.md"
+cp assets/sounds/kodem-*.wav "$bundle/Contents/Resources/"
 icon_source="$KODEM_ROOT/assets/app/AppIcon_1024x1024.png"
 [[ -f "$icon_source" ]] || { echo "Missing app icon: $icon_source" >&2; exit 1; }
 iconset="$work_dir/AppIcon.iconset"
@@ -93,9 +94,13 @@ Configuration: $configuration
 Target: $build_target
 Source: $KODEM_ROOT
 INFO
-/usr/bin/codesign --force --sign - "$bundle/Contents/MacOS/kodem-host"
+# UserNotifications checks the sender's code identity against the requested bundle.
+# An automatically generated helper identifier cannot post for the parent app.
+/usr/bin/codesign --force --sign - --identifier "$bundle_id" "$bundle/Contents/MacOS/kodem-host"
 /usr/bin/codesign --force --sign - "$bundle"
 /usr/bin/codesign --verify --deep --strict "$bundle"
+host_identity=$(/usr/bin/codesign -d --verbose=2 "$bundle/Contents/MacOS/kodem-host" 2>&1 | /usr/bin/sed -n 's/^Identifier=//p')
+[[ "$host_identity" == "$bundle_id" ]] || { echo "Host notification identity does not match $bundle_id" >&2; exit 1; }
 /usr/bin/file "$bundle/Contents/MacOS/kodem" "$bundle/Contents/MacOS/kodem-host"
 # Keep a local app bundle for both configurations.
 output="$KODEM_ROOT/target/$configuration/$app_name.app"

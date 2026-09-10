@@ -12,6 +12,10 @@ mod window_state;
 use gpui::{prelude::*, *};
 use std::borrow::Cow;
 fn main() {
+    // Foreground presentation is handled by the desktop process, even for host-sent alerts.
+    #[cfg(target_os = "macos")]
+    let _notification_presentation =
+        kodem_core::notification_presentation::NotificationPresentation::install();
     gpui_platform::application()
         .with_assets(icons::Assets)
         .run(|cx| {

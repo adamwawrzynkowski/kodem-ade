@@ -283,6 +283,7 @@ pub struct AgentPreferences {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub notifications: NotificationSettings,
     pub sidebar_width: f32,
     pub review_width: f32,
     pub collapsed: bool,
@@ -303,6 +304,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            notifications: NotificationSettings::default(),
             sidebar_width: 260.,
             review_width: 520.,
             collapsed: false,
@@ -319,6 +321,81 @@ impl Default for Settings {
             split_diff: false,
         }
     }
+}
+/// Controls task alerts independently of macOS notification permissions.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotificationSettings {
+    pub enabled: bool,
+    pub attention: bool,
+    pub completed: bool,
+    pub failed: bool,
+    pub interrupted: bool,
+    pub play_sound: bool,
+    pub sound: NotificationSound,
+}
+impl Default for NotificationSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            attention: true,
+            completed: true,
+            failed: true,
+            interrupted: true,
+            play_sound: true,
+            sound: NotificationSound::default(),
+        }
+    }
+}
+/// Bundled notification sounds, with stable persisted names.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum NotificationSound {
+    #[default]
+    Chime,
+    Bell,
+    Glass,
+    Pulse,
+    Ascend,
+}
+impl NotificationSound {
+    pub const ALL: [Self; 5] = [
+        Self::Chime,
+        Self::Bell,
+        Self::Glass,
+        Self::Pulse,
+        Self::Ascend,
+    ];
+
+    /// Returns the sound's settings label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Chime => "Chime",
+            Self::Bell => "Bell",
+            Self::Glass => "Glass",
+            Self::Pulse => "Pulse",
+            Self::Ascend => "Ascend",
+        }
+    }
+
+    /// Returns the audio resource name used by macOS Notification Center.
+    pub fn filename(self) -> &'static str {
+        match self {
+            Self::Chime => "kodem-chime.wav",
+            Self::Bell => "kodem-bell.wav",
+            Self::Glass => "kodem-glass.wav",
+            Self::Pulse => "kodem-pulse.wav",
+            Self::Ascend => "kodem-ascend.wav",
+        }
+    }
+}
+/// Reports submission to Notification Center, without claiming a banner was displayed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub enum NotificationDelivery {
+    #[default]
+    Idle,
+    Pending,
+    Submitted,
+    Failed(String),
 }
 /// Chooses the surface used when opening a changed file.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -394,6 +471,8 @@ pub enum Sort {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Workspace {
+    #[serde(default)]
+    pub notification_delivery: NotificationDelivery,
     pub protocol: u32,
     pub projects: Vec<Project>,
     pub tasks: Vec<Task>,
@@ -576,6 +655,9 @@ pub enum Request {
         task_id: String,
     },
     SaveSettings(Settings),
+    TestNotification {
+        sound: Option<NotificationSound>,
+    },
     Submit {
         task_id: String,
         submission_id: String,
