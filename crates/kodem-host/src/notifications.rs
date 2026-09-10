@@ -79,24 +79,38 @@ impl Host {
         let previous = self.store.task(&task.id)?.state;
         self.store.save_task(task)?;
         if previous != task.state {
-            // A notification preference failure must never fail an already persisted turn.
-            match self.store.settings() {
-                Ok(settings) => {
-                    if let Some(title) = alert_title(&settings.notifications, &task.state) {
-                        self.notifications.enqueue(Alert {
-                            title: format!("Kodem · {title}"),
-                            body: task.title.clone(),
-                            sound: settings
-                                .notifications
-                                .play_sound
-                                .then_some(settings.notifications.sound),
-                        });
-                    }
-                }
-                Err(error) => eprintln!("Could not read notification preferences: {error:#}"),
-            }
+            self.notify_task_state(task);
         }
         Ok(())
+    }
+
+    /// Queues the current task alert, including each distinct pending input request.
+    pub(super) fn notify_task_state(&self, task: &Task) {
+        self.notify_task(task, &task.state);
+    }
+
+    /// Alerts for async questions without claiming that the provider stopped working.
+    pub(super) fn notify_input_needed(&self, task: &Task) {
+        self.notify_task(task, &RunState::Waiting);
+    }
+
+    fn notify_task(&self, task: &Task, state: &RunState) {
+        // A notification preference failure must never fail an already persisted turn.
+        match self.store.settings() {
+            Ok(settings) => {
+                if let Some(title) = alert_title(&settings.notifications, state) {
+                    self.notifications.enqueue(Alert {
+                        title: format!("Kodem · {title}"),
+                        body: task.title.clone(),
+                        sound: settings
+                            .notifications
+                            .play_sound
+                            .then_some(settings.notifications.sound),
+                    });
+                }
+            }
+            Err(error) => eprintln!("Could not read notification preferences: {error:#}"),
+        }
     }
 }
 

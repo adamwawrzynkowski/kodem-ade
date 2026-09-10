@@ -314,22 +314,43 @@ fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result
                     }
                 }
                 Control::Answer { id, response } => {
-                    {
+                    let request = {
                         let h = host.lock().unwrap();
-                        if !h
+                        let Some(request) = h
                             .requests
                             .get(task_id)
-                            .is_some_and(|r| r.iter().any(|r| r.id == id))
-                        {
+                            .and_then(|r| r.iter().find(|r| r.id == id))
+                            .cloned()
+                        else {
                             continue;
-                        }
-                    }
+                        };
+                        request
+                    };
+                    let answer = (request.method == "item/tool/requestUserInput")
+                        .then(|| crate::answer_text(&request, &response));
                     codex.answer(id.clone(), response)?;
                     let mut h = host.lock().unwrap();
                     if let Some(requests) = h.requests.get_mut(task_id) {
                         requests.retain(|r| r.id != id);
                     }
                     let mut task = h.store.task(task_id)?;
+                    if let Some(text) = answer {
+                        h.store.message(&Message {
+                            seq: 0,
+                            id: format!(
+                                "{}:{}",
+                                task.active_turn.as_deref().unwrap_or("unknown"),
+                                request.answer_submission_id()
+                            ),
+                            task_id: task_id.into(),
+                            kind: MessageKind::User,
+                            text,
+                            attachments: Vec::new(),
+                            feedback: Vec::new(),
+                            complete: true,
+                            created: now(),
+                        })?;
+                    }
                     if task.state == RunState::Waiting
                         && task.active_turn.is_some()
                         && h.requests.get(task_id).is_none_or(|r| r.is_empty())
@@ -508,6 +529,12 @@ fn ingest(
     let mut h = host.lock().unwrap();
     let mut task = h.store.task(task_id)?;
     if value.get("id").is_some() {
+        if h.requests
+            .get(task_id)
+            .is_some_and(|requests| requests.iter().any(|request| request.id == value["id"]))
+        {
+            return Ok(());
+        }
         h.requests
             .entry(task_id.into())
             .or_default()
@@ -518,7 +545,8 @@ fn ingest(
                 params: p.clone(),
             });
         task.state = RunState::Waiting;
-        h.save_task_with_notification(&task)?;
+        h.store.save_task(&task)?;
+        h.notify_task_state(&task);
         return Ok(());
     }
     if let Some(branch) = observed_branch {
@@ -714,6 +742,24 @@ fn ingest(
             };
             append_bounded(&mut message.text, &text);
             h.store.message(&message)?;
+            if message.complete
+                && let Some(request) = InputRequest::from_async_message(
+                    task_id,
+                    p["turnId"].as_str().unwrap_or("unknown"),
+                    item,
+                )?
+                && !task
+                    .questions
+                    .iter()
+                    .any(|pending| pending.id == request.id)
+                && !h
+                    .store
+                    .has_submission(task_id, &request.answer_submission_id())?
+            {
+                task.questions.push(request);
+                h.store.save_task(&task)?;
+                h.notify_input_needed(&task);
+            }
             if message.complete {
                 items.remove(&key);
             } else {

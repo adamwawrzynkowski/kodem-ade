@@ -128,13 +128,16 @@ fn fs2_lock(file: &fs::File) -> Result<()> {
 }
 fn task_view(h: &Host, id: &str, before: Option<u64>) -> Result<TaskView> {
     let (messages, before) = h.store.messages(id, before)?;
+    let task = h.store.task(id)?;
+    let mut requests = h.requests.get(id).cloned().unwrap_or_default();
+    requests.extend(task.questions.iter().cloned());
     Ok(TaskView {
         activities: h.activities.get(id).cloned().unwrap_or_default(),
-        task: h.store.task(id)?,
+        task,
         outgoing: h.store.outgoing(id)?,
         messages,
         before,
-        requests: h.requests.get(id).cloned().unwrap_or_default(),
+        requests,
     })
 }
 fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Response> {
@@ -231,6 +234,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 feedback: Vec::new(),
                 attachments: Vec::new(),
                 error: None,
+                questions: Vec::new(),
             };
             host.lock().unwrap().store.save_task(&task)?;
             Ok(Response::Created(task))
@@ -407,12 +411,33 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             response,
         } => {
             let h = host.lock().unwrap();
+            let task = h.store.task(&task_id)?;
             let request = h
                 .requests
                 .get(&task_id)
                 .and_then(|r| r.iter().find(|r| r.id == id))
+                .or_else(|| task.questions.iter().find(|r| r.id == id))
                 .context("This request is no longer pending")?;
             validate_answer(request, &response)?;
+            if request.is_async() {
+                let submission_id = request.answer_submission_id();
+                let text = answer_text(request, &response);
+                drop(h);
+                provider::submit(
+                    host.clone(),
+                    task_id.clone(),
+                    submission_id,
+                    text,
+                    Vec::new(),
+                    Vec::new(),
+                    SendMode::Steer,
+                )?;
+                let h = host.lock().unwrap();
+                let mut task = h.store.task(&task_id)?;
+                task.questions.retain(|r| r.id != id);
+                h.store.save_task(&task)?;
+                return Ok(Response::Ok);
+            }
             h.sessions
                 .get(&task_id)
                 .context("Provider disconnected")?
@@ -568,6 +593,52 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         }
     }
 }
+// Called only after validate_answer has checked all question IDs and answer strings.
+fn answer_text(request: &InputRequest, response: &Value) -> String {
+    fn literal(text: &str) -> String {
+        let mut escaped = String::with_capacity(text.len());
+        for character in text.chars() {
+            if character.is_ascii_punctuation() {
+                escaped.push('\\');
+            }
+            escaped.push(character);
+        }
+        escaped
+    }
+    request.params["questions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|question| {
+            let id = question["id"].as_str().unwrap();
+            let quoted_question = question["question"]
+                .as_str()
+                .unwrap_or("Question")
+                .lines()
+                .map(|line| format!("> {}", literal(line)))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let answers = response["answers"][id]["answers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|answer| {
+                    let text = answer.as_str().unwrap();
+                    let escaped = text.lines().map(literal).collect::<Vec<_>>().join("  \n");
+                    if !text.contains('\n') && text == text.trim() {
+                        format!("**{escaped}**")
+                    } else {
+                        escaped
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            format!("{quoted_question}\n\n{answers}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n---\n\n")
+}
+
 fn validate_answer(request: &InputRequest, response: &Value) -> Result<()> {
     if request.method.ends_with("requestApproval") {
         let decision = response["decision"]
@@ -594,7 +665,9 @@ fn validate_answer(request: &InputRequest, response: &Value) -> Result<()> {
             ensure!(
                 response["answers"][id]["answers"]
                     .as_array()
-                    .is_some_and(|a| !a.is_empty() && a.iter().all(|s| s.is_string())),
+                    .is_some_and(|a| !a.is_empty()
+                        && a.iter()
+                            .all(|s| { s.as_str().is_some_and(|text| !text.trim().is_empty()) })),
                 "Answer every question before submitting"
             )
         }

@@ -379,133 +379,61 @@ impl Shell {
             }
             Panel::Questions => {
                 if let Some(view) = self.view.clone() {
-                    for (i, request) in view.requests.into_iter().enumerate() {
-                        content = content.child(div().font_weight(FontWeight::SEMIBOLD).child(
-                            if request.method.ends_with("requestApproval") {
-                                "Permission requested"
-                            } else {
-                                "Your input"
-                            },
-                        ));
-                        if request.method.ends_with("requestApproval") {
-                            content=content.child(request.params["reason"].as_str().unwrap_or("Codex requests permission for this operation").to_owned()).child(div().font_family("JetBrains Mono").text_size(px(12.)).child(request.params["command"].as_str().unwrap_or("File changes; inspect the corresponding file-change item in the transcript.").to_owned()));
-                            let decisions = request.params["availableDecisions"]
-                                .as_array()
-                                .cloned()
-                                .unwrap_or_else(|| {
-                                    vec![json!("accept"), json!("decline"), json!("cancel")]
-                                });
-                            let mut row = div().flex().gap_2();
-                            for (j, decision) in decisions.into_iter().enumerate() {
-                                let Some(decision) = decision.as_str().map(str::to_owned) else {
-                                    continue;
-                                };
-                                let id = request.id.clone();
-                                let task_id = request.task_id.clone();
-                                row = row.child(
-                                    self.button(
-                                        ("decision", i * 10 + j),
-                                        if decision.starts_with("accept") {
-                                            "shield"
-                                        } else {
-                                            "close"
-                                        },
-                                        match decision.as_str() {
-                                            "accept" => "Allow once",
-                                            "acceptForSession" => "Allow for session",
-                                            "decline" => "Decline",
-                                            "cancel" => "Cancel turn",
-                                            _ => &decision,
-                                        },
-                                    )
-                                    .on_click(cx.listener(
-                                        move |s, _, _, cx| {
-                                            s.send(core::Request::Answer {
-                                                task_id: task_id.clone(),
-                                                id: id.clone(),
-                                                response: json!({"decision":decision}),
-                                            });
-                                            s.panel = Panel::None;
-                                            cx.notify();
-                                        },
-                                    )),
-                                );
-                            }
-                            content = content.child(row);
-                        } else if let Some(questions) = request.params["questions"].as_array() {
-                            for (q, question) in questions.iter().enumerate() {
-                                let id = question["id"].as_str().unwrap_or_default();
-                                let key = format!("{}:{id}", request.id);
-                                let input = self
-                                    .question_inputs
-                                    .entry(key)
-                                    .or_insert_with(|| {
-                                        cx.new(|cx| TextInput::new("Type your answer…", cx))
-                                    })
-                                    .clone();
-                                content = content.child(
-                                    question["question"]
-                                        .as_str()
-                                        .unwrap_or("Question")
-                                        .to_owned(),
-                                );
-                                if let Some(options) = question["options"].as_array() {
-                                    for (j, option) in options.iter().enumerate() {
-                                        let label =
-                                            option["label"].as_str().unwrap_or_default().to_owned();
-                                        let chosen = input.read(cx).text() == label;
-                                        let answer = input.clone();
-                                        content =
-                                            content.child(
-                                                self.button(
-                                                    ("answer", i * 1000 + q * 100 + j),
-                                                    if chosen { "check" } else { "chat" },
-                                                    label.clone(),
-                                                )
-                                                .on_click(cx.listener(move |_, _, _, cx| {
-                                                    answer.update(cx, |input, cx| {
-                                                        input.set_text(label.clone(), cx)
-                                                    });
-                                                    cx.notify();
-                                                })),
-                                            );
-                                    }
-                                }
-                                content = content.child(input);
-                            }
+                    for (i, request) in view
+                        .requests
+                        .into_iter()
+                        .filter(|r| r.method.ends_with("requestApproval"))
+                        .enumerate()
+                    {
+                        content = content.child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Permission requested"),
+                        );
+                        content=content.child(request.params["reason"].as_str().unwrap_or("Codex requests permission for this operation").to_owned()).child(div().font_family("JetBrains Mono").text_size(px(12.)).child(request.params["command"].as_str().unwrap_or("File changes; inspect the corresponding file-change item in the transcript.").to_owned()));
+                        let decisions = request.params["availableDecisions"]
+                            .as_array()
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                vec![json!("accept"), json!("decline"), json!("cancel")]
+                            });
+                        let mut row = div().flex().gap_2();
+                        for (j, decision) in decisions.into_iter().enumerate() {
+                            let Some(decision) = decision.as_str().map(str::to_owned) else {
+                                continue;
+                            };
                             let id = request.id.clone();
                             let task_id = request.task_id.clone();
-                            let keys: Vec<String> = questions
-                                .iter()
-                                .filter_map(|q| q["id"].as_str().map(str::to_owned))
-                                .collect();
-                            content = content.child(
-                                self.primary(("submit-answers", i), "check", "Submit answers")
-                                    .on_click(cx.listener(move |s, _, _, cx| {
-                                        let mut answers = serde_json::Map::new();
-                                        for key in &keys {
-                                            if let Some(input) =
-                                                s.question_inputs.get(&format!("{id}:{key}"))
-                                            {
-                                                let answer = input.read(cx).text();
-                                                if !answer.trim().is_empty() {
-                                                    answers.insert(
-                                                        key.clone(),
-                                                        json!({"answers":[answer]}),
-                                                    );
-                                                }
-                                            }
-                                        }
+                            row = row.child(
+                                self.button(
+                                    ("decision", i * 10 + j),
+                                    if decision.starts_with("accept") {
+                                        "shield"
+                                    } else {
+                                        "close"
+                                    },
+                                    match decision.as_str() {
+                                        "accept" => "Allow once",
+                                        "acceptForSession" => "Allow for session",
+                                        "decline" => "Decline",
+                                        "cancel" => "Cancel turn",
+                                        _ => &decision,
+                                    },
+                                )
+                                .on_click(cx.listener(
+                                    move |s, _, _, cx| {
                                         s.send(core::Request::Answer {
                                             task_id: task_id.clone(),
                                             id: id.clone(),
-                                            response: json!({"answers":answers}),
+                                            response: json!({"decision":decision}),
                                         });
                                         s.panel = Panel::None;
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             );
                         }
+                        content = content.child(row);
                     }
                 }
             }

@@ -14,6 +14,7 @@ mod message_content;
 mod model_picker;
 mod motion;
 mod panels;
+mod questions;
 mod review;
 mod settings;
 mod sidebar;
@@ -135,7 +136,8 @@ pub struct Shell {
     show_archived: bool,
     poll_pending: bool,
     draft_dirty: bool,
-    question_inputs: HashMap<String, Entity<TextInput>>,
+    question_inputs: HashMap<(String, String), questions::AnswerDraft>,
+    answering: HashSet<String>,
     submitted_draft: Option<PendingSubmission>,
     draft_revision: u64,
     observed_draft: String,
@@ -335,6 +337,7 @@ impl Shell {
             poll_pending: false,
             draft_dirty: false,
             question_inputs: HashMap::new(),
+            answering: HashSet::new(),
             submitted_draft: None,
             draft_revision: 0,
             observed_draft: String::new(),
@@ -405,6 +408,7 @@ impl Shell {
         let response = match reply.result {
             Ok(r) => r,
             Err(e) => {
+                self.answer_failed(&reply.request);
                 if matches!(reply.request, core::Request::DeleteTask { .. }) {
                     self.deleting_task = None;
                 }
@@ -562,6 +566,10 @@ impl Shell {
                         self.chat_scroll.scroll_to(anchor);
                     }
                 }
+                let pending: HashSet<_> = view.requests.iter().map(|r| r.id.to_string()).collect();
+                self.question_inputs
+                    .retain(|(request, _), _| pending.contains(request));
+                self.answering.retain(|request| pending.contains(request));
                 self.view = Some(view);
                 if self.auto_submit_task.as_ref() == self.selected.as_ref()
                     && self.auto_submit_task.is_some()
@@ -710,6 +718,13 @@ impl Shell {
                         });
                     }
                 }
+                core::Request::Answer { task_id, .. } => {
+                    self.send(core::Request::Task {
+                        task_id,
+                        before: None,
+                    });
+                    self.send(core::Request::Hello);
+                }
                 core::Request::StageFile { .. } => self.refresh_diff(),
                 core::Request::EditTask {
                     task_id,
@@ -730,6 +745,7 @@ impl Shell {
                 _ => self.send(core::Request::Hello),
             },
             Response::Error(e) => {
+                self.answer_failed(&reply.request);
                 if let core::Request::Submit {
                     task_id,
                     submission_id,
@@ -773,6 +789,7 @@ impl Shell {
         self.save_settings();
         self.submitted_draft = None;
         self.question_inputs.clear();
+        self.answering.clear();
         self.auto_submit_task = None;
     }
     fn select_task(&mut self, id: String, cx: &mut Context<Self>) {
@@ -802,6 +819,7 @@ impl Shell {
         self.text_views.clear();
         self.chat_selection = cx.new(|_| Default::default());
         self.question_inputs.clear();
+        self.answering.clear();
         self.file = 0;
         self.reviewing_file = false;
         self.terminal = None;

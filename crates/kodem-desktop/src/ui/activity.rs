@@ -76,16 +76,29 @@ impl Shell {
                             )),
                     )
                     .child(motion::gleam("agent-state-label", label, t))
-                    .when(waiting, |d| {
-                        d.child(div().flex_1()).child(
-                            self.icon_button("activity-respond", "arrow-right", "Respond to agent")
+                    .when(
+                        waiting
+                            && view
+                                .requests
+                                .iter()
+                                .any(|r| r.method.ends_with("requestApproval")),
+                        |d| {
+                            d.child(div().flex_1()).child(
+                                self.icon_button(
+                                    "activity-respond",
+                                    "arrow-right",
+                                    "Respond to agent",
+                                )
                                 .size(px(20.))
-                                .on_click(cx.listener(|s, _, _, cx| {
-                                    s.panel = Panel::Questions;
-                                    cx.notify();
-                                })),
-                        )
-                    }),
+                                .on_click(cx.listener(
+                                    |s, _, _, cx| {
+                                        s.panel = Panel::Questions;
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                        },
+                    ),
             );
         } else {
             for activity in &view.activities {

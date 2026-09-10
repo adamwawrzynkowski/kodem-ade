@@ -130,7 +130,11 @@ impl Shell {
                         .child(error.clone()),
                 );
             }
-            if !view.requests.is_empty() {
+            if view
+                .requests
+                .iter()
+                .any(|r| r.method.ends_with("requestApproval"))
+            {
                 panel = panel.child(
                     div()
                         .mx_5()
@@ -146,7 +150,7 @@ impl Shell {
                         .gap_3()
                         .text_size(px(12.))
                         .child(icon("shield").text_color(t.accent))
-                        .child(div().flex_1().child("Codex is waiting for your input"))
+                        .child(div().flex_1().child("Codex needs your permission"))
                         .child(self.primary("open-requests", "shield", "Respond").on_click(
                             cx.listener(|s, _, _, cx| {
                                 s.panel = Panel::Questions;
@@ -449,6 +453,7 @@ impl Shell {
             .when(!empty, |d| {
                 d.child(self.activity_strip(cx))
                     .child(self.changed_files_strip(cx))
+                    .child(self.question_panel(cx))
             })
             .when(has_context, |d| {
                 d.child(div().px_3().pt_3().child(attachments))

@@ -169,6 +169,7 @@ impl Codex {
         let mut child = Command::new(executable)
             .current_dir(cwd)
             .args(["app-server", "--stdio", "-c",
+                "features.default_mode_request_user_input=true", "-c",
                 "model_providers.kodem-http={name=\"OpenAI\",requires_openai_auth=true,supports_websockets=false}"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

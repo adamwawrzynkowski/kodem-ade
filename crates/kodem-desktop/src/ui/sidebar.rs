@@ -189,7 +189,7 @@ impl Shell {
                         Sort::Recent => b.updated.cmp(&a.updated),
                         Sort::Created => b.created.cmp(&a.created),
                         Sort::Name => a.title.cmp(&b.title),
-                        Sort::Attention => rank(&a.state).cmp(&rank(&b.state)),
+                        Sort::Attention => rank(a).cmp(&rank(b)),
                     })
                     .then_with(|| a.id.cmp(&b.id))
             });
@@ -323,14 +323,21 @@ impl Shell {
         hover_surface.lightness = (surface.lightness + 0.016).min(1.);
         let id = task.id.clone();
         let menu_id = id.clone();
-        let status_color = match task.state {
-            RunState::Starting | RunState::Running => t.accent,
-            RunState::Waiting => t.accent,
-            RunState::Failed | RunState::DeliveryUnknown => t.removed,
-            RunState::Completed => t.muted,
-            _ => t.muted,
+        let needs_input = task.needs_input();
+        let status_color = if needs_input {
+            t.accent
+        } else {
+            match task.state {
+                RunState::Starting | RunState::Running => t.accent,
+                RunState::Waiting => t.accent,
+                RunState::Failed | RunState::DeliveryUnknown => t.removed,
+                RunState::Completed => t.muted,
+                _ => t.muted,
+            }
         };
-        let status = if task.state.active() {
+        let status = if needs_input {
+            "Needs input".into()
+        } else if task.state.active() {
             format!(
                 "{} {}",
                 if task.state == RunState::Running {
@@ -490,7 +497,7 @@ impl Shell {
                     .when(task.pinned, |d| {
                         d.child(icon("pin").size(px(10.)).text_color(t.accent))
                     })
-                    .child(if task.state.active() {
+                    .child(if task.state.active() || needs_input {
                         div()
                             .flex()
                             .items_center()
@@ -501,13 +508,9 @@ impl Shell {
                                     ElementId::from("sidebar-status"),
                                     SharedString::from(id.clone()),
                                 ),
-                                if task.state == RunState::Waiting {
-                                    "shield"
-                                } else {
-                                    "loader"
-                                },
+                                if needs_input { "shield" } else { "loader" },
                                 status_color,
-                                task.state != RunState::Waiting,
+                                task.state.active() && !needs_input,
                             ))
                             .child(motion::gleam(
                                 (
@@ -613,8 +616,11 @@ fn project_tint(project: &Project) -> Hsla {
     color
 }
 
-fn rank(state: &RunState) -> u8 {
-    match state {
+fn rank(task: &core::Task) -> u8 {
+    if task.needs_input() {
+        return 0;
+    }
+    match task.state {
         RunState::Waiting => 0,
         RunState::Failed | RunState::DeliveryUnknown => 1,
         RunState::Running | RunState::Starting => 2,

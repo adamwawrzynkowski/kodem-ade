@@ -180,11 +180,19 @@ pub struct Task {
     #[serde(default)]
     pub attachments: Vec<Attachment>,
     pub error: Option<String>,
+    /// Async questions remain answerable after the producing turn or host exits.
+    #[serde(default)]
+    pub questions: Vec<InputRequest>,
 }
 impl Task {
+    /// Reports pending blocking or asynchronous requests for user input.
+    pub fn needs_input(&self) -> bool {
+        self.state == RunState::Waiting || !self.questions.is_empty()
+    }
     /// Resolves manual settlement while keeping active or uncertain work visible.
     pub fn is_settled(&self) -> bool {
         !self.state.active()
+            && !self.needs_input()
             && self.state != RunState::DeliveryUnknown
             && self.settled.unwrap_or(self.state == RunState::Completed)
     }
@@ -218,6 +226,59 @@ pub struct InputRequest {
     pub task_id: String,
     pub method: String,
     pub params: serde_json::Value,
+}
+impl InputRequest {
+    /// Identifies questions answered as user messages rather than JSON-RPC responses.
+    pub fn is_async(&self) -> bool {
+        self.method == "item/agentMessage"
+    }
+
+    /// Gives async answers a stable outbox identity across retries and repeated events.
+    pub fn answer_submission_id(&self) -> String {
+        use sha2::{Digest, Sha256};
+        format!(
+            "answer-{:x}",
+            Sha256::digest(format!("{}:{}", self.task_id, self.id))
+        )
+    }
+
+    /// Normalizes the runtime's structured async message metadata for the answer form.
+    pub fn from_async_message(
+        task_id: &str,
+        turn_id: &str,
+        item: &serde_json::Value,
+    ) -> anyhow::Result<Option<Self>> {
+        #[derive(Deserialize)]
+        struct Question {
+            title: String,
+            options: Option<Vec<String>>,
+        }
+        if item["type"] != "agentMessage" || item["questions"].is_null() {
+            return Ok(None);
+        }
+        let questions: Vec<Question> = serde_json::from_value(item["questions"].clone())?;
+        if questions.is_empty() {
+            return Ok(None);
+        }
+        let id = item["id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Async question has no item ID"))?;
+        let questions: Vec<_> = questions
+            .into_iter()
+            .enumerate()
+            .map(|(index, question)| {
+                serde_json::json!({"id":index.to_string(),"question":question.title,
+                "options":question.options.map(|options| options.into_iter().map(|label|
+                    serde_json::json!({"label":label,"description":""})).collect::<Vec<_>>())})
+            })
+            .collect();
+        Ok(Some(Self {
+            id: serde_json::json!(format!("{turn_id}:{id}")),
+            task_id: task_id.into(),
+            method: "item/agentMessage".into(),
+            params: serde_json::json!({"questions":questions}),
+        }))
+    }
 }
 /// Provider-reported work currently in progress, separate from the saved transcript.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
