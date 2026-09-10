@@ -5,6 +5,7 @@ mod icons;
 mod markdown;
 mod syntax;
 mod theme;
+mod tool_output;
 mod ui;
 mod window_state;
 use gpui::{prelude::*, *};

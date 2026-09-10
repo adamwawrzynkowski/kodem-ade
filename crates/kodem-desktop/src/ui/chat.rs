@@ -1,5 +1,5 @@
 use super::*;
-use crate::markdown::{self, Block};
+use crate::markdown;
 impl Shell {
     /// Builds the conversation with a measured floating composer and a clear review viewport.
     pub(super) fn chat(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -690,119 +690,14 @@ impl Shell {
         };
         let t = self.theme;
         let user = message.kind == MessageKind::User;
-        let tool = message.kind == MessageKind::Tool;
-        let messages = &self.view.as_ref().unwrap().messages;
-        let group_start = if tool {
-            (0..index)
-                .rev()
-                .find(|i| messages[*i].kind != MessageKind::Tool)
-                .map_or(0, |i| i + 1)
-        } else {
-            index
-        };
-        let group_count = messages
-            .iter()
-            .skip(group_start)
-            .take_while(|m| m.kind == MessageKind::Tool)
-            .count();
-        let group_complete = messages
-            .iter()
-            .skip(group_start)
-            .take(group_count)
-            .all(|m| m.complete);
-        let group_id = messages[group_start].id.clone();
-        let group_active = self.view.as_ref().is_some_and(|v| {
-            v.task.state == RunState::Running
-                && v.activities.iter().any(|a| {
-                    messages
-                        .iter()
-                        .skip(group_start)
-                        .take(group_count)
-                        .any(|m| m.id == a.id)
-                })
-        });
+        if message.kind == MessageKind::Tool {
+            return self.tool_calls(index, cx);
+        }
         let message_active = self.view.as_ref().is_some_and(|v| {
             v.task.state == RunState::Running && v.activities.iter().any(|a| a.id == message.id)
         });
-        let expanded = self.folded.contains(&group_id);
-        let id = group_id;
         let text = message.text.clone();
-        let mut outer = div().w_full().px_5().py(px(if tool { 2. } else { 8. }));
-        if tool && !expanded && index != group_start {
-            return div().into_any_element();
-        }
-        if tool && !expanded {
-            let title = if group_count > 1 {
-                format!("{group_count} tool calls")
-            } else {
-                message
-                    .text
-                    .lines()
-                    .next()
-                    .unwrap_or("Tool activity")
-                    .chars()
-                    .take(100)
-                    .collect()
-            };
-            return div()
-                .w_full()
-                .flex()
-                .justify_center()
-                .child(
-                    outer.child(
-                        div()
-                            .id((ElementId::from("tool-row"), SharedString::from(id.clone())))
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .py_1()
-                            .cursor_pointer()
-                            .text_color(t.muted)
-                            .text_size(px(12.))
-                            .hover(move |d| d.text_color(t.text))
-                            .child(icon("chevron-right").size(px(12.)))
-                            .child(if group_active {
-                                motion::active_icon(
-                                    (
-                                        ElementId::from("tool-progress"),
-                                        SharedString::from(id.clone()),
-                                    ),
-                                    "loader",
-                                    t.accent,
-                                    true,
-                                )
-                            } else {
-                                icon("square-terminal").size(px(14.)).into_any_element()
-                            })
-                            .child(div().flex_1().min_w_0().text_ellipsis().child(
-                                if group_active {
-                                    motion::gleam(
-                                        (
-                                            ElementId::from("tool-label"),
-                                            SharedString::from(id.clone()),
-                                        ),
-                                        title,
-                                        t,
-                                    )
-                                } else {
-                                    div().child(title).into_any_element()
-                                },
-                            ))
-                            .child(if group_complete {
-                                icon("check").size(px(12.)).text_color(t.subtle)
-                            } else {
-                                icon("loader").size(px(12.)).text_color(t.accent)
-                            })
-                            .on_click(cx.listener(move |s, _, _, cx| {
-                                s.folded.insert(id.clone());
-                                s.chat_scroll
-                                    .reset(s.view.as_ref().map_or(0, |v| v.messages.len()));
-                                cx.notify();
-                            })),
-                    ),
-                )
-                .into_any_element();
-        }
+        let mut outer = div().w_full().px_5().py_2();
         let mut block = div().w_full();
         if user {
             outer = outer.flex().justify_end();
@@ -880,27 +775,7 @@ impl Shell {
                                 .child("Working…"),
                         )
                     })
-                    .child(div().flex_1())
-                    .when(tool, |d| {
-                        d.child(
-                            self.icon_button(
-                                (
-                                    ElementId::from("collapse"),
-                                    SharedString::from(message.id.clone()),
-                                ),
-                                "chevron-down",
-                                "Collapse tool output",
-                            )
-                            .on_click(cx.listener(
-                                move |s, _, _, cx| {
-                                    s.folded.remove(&id);
-                                    s.chat_scroll
-                                        .reset(s.view.as_ref().map_or(0, |v| v.messages.len()));
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                    }),
+                    .child(div().flex_1()),
             );
         }
         if !message.attachments.is_empty() {
@@ -913,90 +788,13 @@ impl Shell {
         for feedback in &message.feedback {
             block = block.child(self.context_card(feedback, None, cx));
         }
-        for (n, part) in markdown::blocks(&message.text).into_iter().enumerate() {
-            let (text, language, heading, quote) = match part {
-                Block::Text(s) => (s, None, false, false),
-                Block::Heading(s) => (s, None, true, false),
-                Block::Code { language, text } => (text, Some(language), false, false),
-                Block::Quote(s) => (s, None, false, true),
-                Block::Table(s) => (s, Some(String::new()), false, false),
-            };
-            let code = language.is_some();
-            let width = text.lines().map(|l| l.chars().count()).max().unwrap_or(0) as f32
-                * (self.settings.font_size - 1.)
-                * 0.64
-                + 24.;
-            let input = self.readonly(format!("message:{}:{n}", message.id), text.clone(), cx);
-            if let Some(language) = &language {
-                input.update(cx, |i, _| i.code(language, self.settings.light));
-            }
-            let mut body = div()
-                .mb(px(if user { 0. } else { 4. }))
-                .text_size(px(self.settings.font_size - 2.))
-                .line_height(relative(1.45))
-                .when(heading, |d| {
-                    d.text_size(px(self.settings.font_size + 3.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .mt_2()
-                })
-                .when(quote, |d| {
-                    d.border_l_2()
-                        .border_color(t.accent)
-                        .pl_3()
-                        .text_color(t.muted)
-                });
-            if code {
-                let copied = text.clone();
-                body = body
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(t.border)
-                    .bg(t.inset)
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .px_3()
-                            .h(px(30.))
-                            .flex()
-                            .items_center()
-                            .text_size(px(10.))
-                            .text_color(t.muted)
-                            .border_b_1()
-                            .border_color(t.border)
-                            .child(language.unwrap_or_default())
-                            .child(div().flex_1())
-                            .child(
-                                self.icon_button(
-                                    (
-                                        ElementId::from("copy-code"),
-                                        SharedString::from(format!("{}:{n}", message.id)),
-                                    ),
-                                    "copy",
-                                    "Copy code",
-                                )
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))
-                                }),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id((
-                                ElementId::from("code-scroll"),
-                                SharedString::from(format!("{}:{n}", message.id)),
-                            ))
-                            .w_full()
-                            .overflow_x_scroll()
-                            .p_3()
-                            .font_family("JetBrains Mono")
-                            .text_size(px(self.settings.font_size - 2.))
-                            .child(div().min_w_full().w(px(width)).child(input)),
-                    );
-            } else {
-                body = body.child(input);
-            }
-            block = block.child(body);
-        }
+        block = block.child(div().text_size(px(self.settings.font_size - 1.)).child(
+            self.message_blocks(
+                &format!("message:{}", message.id),
+                markdown::blocks(&message.text),
+                cx,
+            ),
+        ));
         if !user {
             block = block.child(
                 div()

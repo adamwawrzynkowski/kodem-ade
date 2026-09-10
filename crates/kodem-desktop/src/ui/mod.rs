@@ -9,12 +9,14 @@ mod diff_view;
 mod effort_slider;
 mod image_preview;
 mod menus;
+mod message_content;
 mod model_picker;
 mod motion;
 mod panels;
 mod review;
 mod settings;
 mod sidebar;
+mod tool_calls;
 mod usage;
 use crate::icons::icon;
 use crate::{

@@ -64,6 +64,7 @@ pub struct TextInput {
     wrap: bool,
     syntax: Option<(String, bool)>,
     colors: Vec<(Range<usize>, [u8; 3])>,
+    prose: Option<(Vec<crate::markdown::Span>, bool)>,
 }
 
 impl TextInput {
@@ -86,6 +87,7 @@ impl TextInput {
             wrap: true,
             syntax: None,
             colors: Vec::new(),
+            prose: None,
         }
     }
     /// Creates a prompt editor where Enter submits and Shift-Enter inserts a newline.
@@ -123,6 +125,7 @@ impl TextInput {
     /// Replaces the draft and resets selection after switching tasks.
     pub fn set_text(&mut self, text: String, cx: &mut Context<Self>) {
         self.content = text.into();
+        self.prose = None;
         self.selected_range = self.content.len()..self.content.len();
         self.marked_range = None;
         self.selection_reversed = false;
@@ -140,6 +143,7 @@ impl TextInput {
     }
     /// Configures wrapping and syntax colors for a captured code block.
     pub fn code(&mut self, extension: &str, light: bool) {
+        self.prose = None;
         self.wrap = false;
         if self
             .syntax
@@ -149,6 +153,13 @@ impl TextInput {
             self.syntax = Some((extension.into(), light));
             self.colors = crate::syntax::spans(&self.content, extension, light);
         }
+    }
+    /// Applies Markdown styles to selectable prose and restores wrapping after a block changes kind.
+    pub fn prose(&mut self, spans: Vec<crate::markdown::Span>, light: bool) {
+        self.wrap = true;
+        self.syntax = None;
+        self.colors.clear();
+        self.prose = Some((spans, light));
     }
     fn vertical(&mut self, direction: f32, cx: &mut Context<Self>) {
         let Some(bounds) = self.last_bounds else {
@@ -257,6 +268,21 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus_handle, cx);
+        if self.readonly
+            && event.modifiers.platform
+            && let Some((spans, _)) = &self.prose
+        {
+            let byte = self.index_for_mouse_position(event.position);
+            if let Some(url) = spans
+                .iter()
+                .find(|span| span.range.contains(&byte))
+                .and_then(|span| span.style.link.as_deref())
+                .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+            {
+                cx.open_url(url);
+                return;
+            }
+        }
         if self.delegated_selection {
             cx.emit(SelectionInput::Begin {
                 byte: self.index_for_mouse_position(event.position),
@@ -848,7 +874,41 @@ fn shape(
         strikethrough: None,
         letter_spacing: None,
     };
-    let runs = if input.colors.is_empty() {
+    let runs = if let Some((spans, light)) = &input.prose {
+        let theme = crate::theme::Theme::new(*light);
+        spans
+            .iter()
+            .map(|span| {
+                let mut styled = run.clone();
+                styled.len = span.range.len();
+                if span.style.bold {
+                    styled.font.weight = gpui::FontWeight::BOLD;
+                }
+                if span.style.italic {
+                    styled.font.style = gpui::FontStyle::Italic;
+                }
+                if span.style.code {
+                    styled.font.family = "JetBrains Mono".into();
+                    styled.background_color = Some(theme.raised);
+                }
+                if span.style.strike {
+                    styled.strikethrough = Some(gpui::StrikethroughStyle {
+                        thickness: px(1.),
+                        color: None,
+                    });
+                }
+                if span.style.link.is_some() {
+                    styled.color = theme.accent;
+                    styled.underline = Some(gpui::UnderlineStyle {
+                        thickness: px(1.),
+                        color: None,
+                        wavy: false,
+                    });
+                }
+                styled
+            })
+            .collect()
+    } else if input.colors.is_empty() {
         vec![run]
     } else {
         input
