@@ -2,7 +2,8 @@
 name = "kodem-desktop"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
+publish.workspace = true
 
 [[bin]]
 name = "kodem"

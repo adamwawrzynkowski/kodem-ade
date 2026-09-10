@@ -95,3 +95,7 @@ The desktop retries failed local connections. An older idle host accepts an upgr
 The interface uses bundled IBM Plex Sans, with bold Manrope for the Kodem wordmark and JetBrains Mono for code. Task cards use compact spacing, subdued project colors and shaded surfaces. Model, reasoning and access pickers omit redundant headings. Context fills as a clockwise sector; account usage fills as a clockwise ring. Progressive backdrop blur is confined to the rounded prompt field, beneath its input and toolbar.
 
 Kodem uses HTTP streaming for its OpenAI sessions to avoid repeated WebSocket connection failures at thread startup. Retryable provider errors appear as transient reconnect status; terminal errors remain in the transcript. Custom provider selections are preserved.
+
+## License
+
+Kodem is proprietary software. See [LICENSE](LICENSE). Third-party components retain their own licenses; see [third-party notices](assets/THIRD_PARTY.md) and [licensing maintenance](licensing/README.md). Builds verify the reviewed notice snapshot and bundle it with the application.
