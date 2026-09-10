@@ -80,6 +80,7 @@ pub(super) struct DiffView {
     lines: Vec<DiffLine>,
     extension: String,
     split: bool,
+    wrap: bool,
     theme: Theme,
     light: bool,
     list: ListState,
@@ -105,6 +106,7 @@ impl DiffView {
         snapshot: &DiffSnapshot,
         file: usize,
         split: bool,
+        wrap: bool,
         theme: Theme,
         light: bool,
         cx: &mut Context<Self>,
@@ -129,6 +131,7 @@ impl DiffView {
             lines: delta.lines.clone(),
             extension: delta.label.rsplit('.').next().unwrap_or("").into(),
             split,
+            wrap,
             theme,
             light,
             list: ListState::new(delta.lines.len(), ListAlignment::Top, px(240.))
@@ -157,18 +160,25 @@ impl DiffView {
     pub(super) fn configure(
         &mut self,
         split: bool,
+        wrap: bool,
         theme: Theme,
         light: bool,
         cx: &mut Context<Self>,
     ) {
-        let changed = self.split != split || self.light != light;
+        let layout_changed = self.split != split || self.wrap != wrap;
+        let changed = layout_changed || self.light != light;
         if self.split != split {
             self.text = None;
             self.drag = None;
         }
         self.split = split;
+        self.wrap = wrap;
         self.theme = theme;
         self.light = light;
+        if layout_changed {
+            self.list.remeasure();
+            self.horizontal.set_offset(point(px(0.), px(0.)));
+        }
         if changed {
             self.sync_selection(cx);
         }
@@ -353,20 +363,23 @@ impl DiffView {
         if self.drag.take() == Some(Drag::Gutter) && self.gutter.is_some() {
             self.comment_open = true;
             self.reset_list();
-            if let (Some(index), Some(bounds)) = (self.comment_index(), self.bounds) {
-                let top = self.list.logical_scroll_top();
-                let comment_y =
-                    (index as f32 - top.item_ix as f32) * 24. - f32::from(top.offset_in_item);
-                // The newly inserted row has not been measured yet. Reveal its actual
-                // editor height, rather than the ordinary 24px row estimate.
-                if comment_y < 0. || comment_y + 164. > f32::from(bounds.size.height) {
-                    let preceding = ((f32::from(bounds.size.height) - 164.).max(0.) / 24.) as usize;
-                    self.list.scroll_to(ListOffset {
-                        item_ix: index.saturating_sub(preceding),
-                        offset_in_item: px(0.),
-                    });
-                }
-            }
+            // Reveal the editor using measured row bounds when available.
+            let entity = cx.weak_entity();
+            window.on_next_frame(move |_, cx| {
+                let _ = entity.update(cx, |view, cx| {
+                    if let Some(index) = view.comment_index() {
+                        if view.list.bounds_for_item(index).is_some() {
+                            view.list.scroll_to_reveal_item(index);
+                        } else {
+                            view.list.scroll_to(ListOffset {
+                                item_ix: index,
+                                offset_in_item: px(0.),
+                            });
+                        }
+                        cx.notify();
+                    }
+                });
+            });
             window.focus(&self.comment.read(cx).focus_handle(cx), cx);
         }
         cx.notify();
@@ -393,43 +406,40 @@ impl DiffView {
         let Some(bounds) = self.bounds else {
             return;
         };
-        let top = self.list.logical_scroll_top();
-        let distance = f32::from(position.y - bounds.top() + top.offset_in_item).max(0.);
-        let row = (top.item_ix + (distance / 24.) as usize).min(self.lines.len().saturating_sub(1));
         if self.lines.is_empty() {
             return;
         }
+        let top = self.list.logical_scroll_top().item_ix;
+        let y = position.y.max(bounds.top()).min(bounds.bottom() - px(0.1));
+        let mut item = top;
+        for index in top..self.list.item_count() {
+            let Some(bounds) = self.list.bounds_for_item(index) else {
+                break;
+            };
+            item = index;
+            if y < bounds.bottom() {
+                break;
+            }
+        }
+        let row = self.actual_row(item).min(self.lines.len() - 1);
         if drag == Drag::Gutter {
             if let Some(selection) = &mut self.gutter {
                 selection.1 = row;
             }
         } else if let Some(selection) = &self.text {
             let column = selection.column;
-            // Use the painted row's coordinates. List estimates can differ from
-            // the text hitbox at partial rows and were overwriting child selections.
-            let row = self
-                .rows
-                .iter()
-                .find_map(|(&(index, side), input)| {
-                    if side != column || index.abs_diff(row) > 2 {
-                        return None;
-                    }
-                    input
-                        .read(cx)
-                        .text_bounds()
-                        .filter(|b| position.y >= b.top() && position.y < b.bottom())
-                        .map(|_| index)
-                })
-                .unwrap_or(row);
             if self.visible(row, column) {
                 let byte = self
                     .rows
                     .get(&(row, column))
                     .map(|input| {
                         let input = input.read(cx);
-                        let position = input
-                            .text_bounds()
-                            .map_or(position, |b| point(position.x, b.top() + px(9.)));
+                        let position = input.text_bounds().map_or(position, |b| {
+                            point(
+                                position.x,
+                                position.y.max(b.top()).min(b.bottom() - px(0.1)),
+                            )
+                        });
                         input.byte_at(position)
                     })
                     .unwrap_or(self.lines[row].text.len());
@@ -487,10 +497,18 @@ impl DiffView {
         let line = self.lines[row].clone();
         let t = self.theme;
         if !self.visible(row, column) {
-            return div().h(px(24.)).flex_1().bg(t.inset).into_any_element();
+            return div()
+                .min_h(px(24.))
+                .flex_1()
+                .min_w_0()
+                .bg(t.inset)
+                .into_any_element();
         }
         let input = self.row_input(row, column, cx);
-        input.update(cx, |input, _| input.code(&self.extension, self.light));
+        input.update(cx, |input, _| {
+            input.code(&self.extension, self.light);
+            input.set_wrap(self.wrap);
+        });
         let selected = self.range().is_some_and(|(a, b)| row >= a && row <= b);
         let marker = match line.kind {
             LineKind::Added => "+",
@@ -518,8 +536,8 @@ impl DiffView {
                 cx.listener(|view, _, window, cx| window.focus(&view.focus, cx)),
             )
             .flex()
-            .items_center()
-            .h(px(24.))
+            .min_h(px(24.))
+            .when(!self.wrap, |d| d.h(px(24.)))
             // Virtual rows are layout roots: auto width uses the input's 400px intrinsic fallback.
             .when(column == 0, |d| d.w_full())
             .flex_1()
@@ -540,7 +558,8 @@ impl DiffView {
                 div()
                     .id(("line-gutter", row * 3 + column as usize))
                     .w(px(if column == 0 { 102. } else { 66. }))
-                    .h_full()
+                    .min_h(px(24.))
+                    .pt(px(3.))
                     .flex_shrink_0()
                     .pl_2()
                     .border_l_2()
@@ -560,6 +579,7 @@ impl DiffView {
                 div()
                     .min_w_0()
                     .flex_1()
+                    .py(px(3.))
                     .overflow_hidden()
                     .text_color(t.text)
                     .child(input),
@@ -578,7 +598,8 @@ impl DiffView {
             div()
                 .w_full()
                 .flex()
-                .h(px(24.))
+                .min_h(px(24.))
+                .when(!self.wrap, |d| d.h(px(24.)))
                 .child(self.cell(row, 1, cx))
                 .child(self.cell(row, 2, cx))
                 .into_any_element()
@@ -672,7 +693,9 @@ impl Render for DiffView {
         let entity = cx.entity();
         let bounds_entity = entity.clone();
         let pointer_entity = entity.clone();
-        let width = if self.split {
+        let width = if self.wrap {
+            0.
+        } else if self.split {
             (self.text_width + 66.) * 2.
         } else {
             self.text_width + 102.
@@ -728,7 +751,7 @@ impl Render for DiffView {
                 div()
                     .id("diff-horizontal")
                     .size_full()
-                    .overflow_x_scroll()
+                    .when(!self.wrap, |d| d.overflow_x_scroll())
                     .restrict_scroll_to_axis()
                     .track_scroll(&self.horizontal)
                     .child(

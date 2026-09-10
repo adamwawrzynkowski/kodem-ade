@@ -79,7 +79,7 @@ pub struct TextInput {
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
-    last_layout: Vec<(usize, gpui::WrappedLine)>,
+    last_layout: Vec<(usize, super::inline_bubbles::TextLine)>,
     line_height: Pixels,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
@@ -194,12 +194,27 @@ impl TextInput {
             self.colors = crate::syntax::spans(&self.content, extension, light);
         }
     }
+    /// Sets whether text wraps to its available width without changing syntax colors.
+    pub fn set_wrap(&mut self, wrap: bool) {
+        self.wrap = wrap;
+    }
     /// Applies Markdown styles to selectable prose and restores wrapping after a block changes kind.
     pub fn prose(&mut self, spans: Vec<crate::markdown::Span>, light: bool) {
         self.wrap = true;
         self.syntax = None;
         self.colors.clear();
         self.prose = Some((spans, light));
+    }
+    fn bubble_padding(&self) -> Pixels {
+        if self
+            .prose
+            .as_ref()
+            .is_some_and(|(spans, _)| spans.iter().any(|span| span.style.is_bubble()))
+        {
+            px(crate::theme::INLINE_PADDING)
+        } else {
+            px(0.)
+        }
     }
     fn visual_line_boundary(&self, end: bool) -> usize {
         let byte = self.cursor_offset();
@@ -829,7 +844,7 @@ struct TextElement {
 }
 
 struct PrepaintState {
-    lines: Vec<(usize, gpui::WrappedLine)>,
+    lines: Vec<(usize, super::inline_bubbles::TextLine)>,
     cursor: Option<PaintQuad>,
     selections: Vec<PaintQuad>,
 }
@@ -864,6 +879,7 @@ impl Element for TextElement {
         (
             window.request_measured_layout(style, move |known, available, window, cx| {
                 let input = input.read(cx);
+                let padding = input.bubble_padding();
                 let width = known.width.or(match available.width {
                     gpui::AvailableSpace::Definite(w) => Some(w),
                     _ => None,
@@ -872,7 +888,11 @@ impl Element for TextElement {
                     input,
                     &text_style,
                     font_size,
-                    if input.wrap { width } else { None },
+                    if input.wrap {
+                        width.map(|width| (width - padding * 2.).max(px(1.)))
+                    } else {
+                        None
+                    },
                     window,
                 );
                 let measured = lines
@@ -896,7 +916,15 @@ impl Element for TextElement {
     ) -> PrepaintState {
         let input = self.input.read(cx);
         let style = window.text_style();
+        let padding = input.bubble_padding();
         let height = window.line_height();
+        let bounds = Bounds::new(
+            bounds.origin + point(padding, px(0.)),
+            size(
+                (bounds.size.width - padding * 2.).max(px(1.)),
+                bounds.size.height,
+            ),
+        );
         let lines = shape(
             input,
             &style,
@@ -984,10 +1012,31 @@ impl Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
+        let padding = self.input.read(cx).bubble_padding();
+        let height = window.line_height();
+        let bounds = Bounds::new(
+            bounds.origin + point(padding, px(0.)),
+            size(
+                (bounds.size.width - padding * 2.).max(px(1.)),
+                bounds.size.height,
+            ),
+        );
+        if let Some((_, light)) = self.input.read(cx).prose.as_ref() {
+            let theme = crate::theme::Theme::new(*light);
+            let mut y = px(0.);
+            for (_, line) in &prepaint.lines {
+                line.paint_bubbles(
+                    point(bounds.left(), bounds.top() + y),
+                    height,
+                    theme,
+                    window,
+                );
+                y += line.size(height).height;
+            }
+        }
         for selection in prepaint.selections.drain(..) {
             window.paint_quad(selection);
         }
-        let height = window.line_height();
         let mut y = px(0.);
         for (_, line) in &prepaint.lines {
             let _ = line.paint(
@@ -1146,7 +1195,7 @@ fn shape(
     font_size: Pixels,
     width: Option<Pixels>,
     window: &mut Window,
-) -> Vec<(usize, gpui::WrappedLine)> {
+) -> Vec<(usize, super::inline_bubbles::TextLine)> {
     let text = if input.content.is_empty() {
         input.placeholder.clone()
     } else {
@@ -1165,7 +1214,7 @@ fn shape(
         strikethrough: None,
         letter_spacing: None,
     };
-    let runs = if let Some((spans, light)) = &input.prose {
+    let runs: Vec<TextRun> = if let Some((spans, light)) = &input.prose {
         let theme = crate::theme::Theme::new(*light);
         spans
             .iter()
@@ -1180,7 +1229,9 @@ fn shape(
                 }
                 if span.style.code {
                     styled.font.family = "JetBrains Mono".into();
-                    styled.background_color = Some(theme.raised);
+                }
+                if span.style.code || span.style.reference {
+                    styled.color = theme.accent;
                 }
                 if span.style.strike {
                     styled.strikethrough = Some(gpui::StrikethroughStyle {
@@ -1200,7 +1251,7 @@ fn shape(
             })
             .collect()
     } else if input.colors.is_empty() {
-        vec![run]
+        vec![run.clone()]
     } else {
         input
             .colors
@@ -1212,6 +1263,37 @@ fn shape(
             })
             .collect()
     };
+    let mut bubbles: Vec<Range<usize>> = Vec::new();
+    if let Some((spans, _)) = &input.prose {
+        for span in spans.iter().filter(|span| span.style.is_bubble()) {
+            if let Some(last) = bubbles.last_mut()
+                && last.end == span.range.start
+            {
+                last.end = span.range.end;
+            } else {
+                bubbles.push(span.range.clone());
+            }
+        }
+    }
+    let (text, runs, map) = if bubbles.is_empty() {
+        (
+            text,
+            runs,
+            std::sync::Arc::new(super::inline_bubbles::PaddingMap::default()),
+        )
+    } else {
+        let mut spacer = TextRun {
+            len: '\u{a0}'.len_utf8(),
+            ..run
+        };
+        let space_width = window
+            .text_system()
+            .shape_line("\u{a0}".into(), font_size, &[spacer.clone()], None)
+            .width();
+        spacer.letter_spacing = Some(px(crate::theme::INLINE_PADDING) - space_width);
+        let (text, runs, map) = super::inline_bubbles::pad_text(&text, runs, &bubbles, spacer);
+        (text.into(), runs, map)
+    };
     let mut start = 0;
     window
         .text_system()
@@ -1219,9 +1301,13 @@ fn shape(
         .unwrap_or_default()
         .into_iter()
         .map(|line| {
-            let offset = start;
+            let display_start = start;
+            let offset = map.source_index(start);
             start += line.len() + 1;
-            (offset, line)
+            (
+                offset,
+                super::inline_bubbles::TextLine::new(line, map.clone(), display_start),
+            )
         })
         .collect()
 }

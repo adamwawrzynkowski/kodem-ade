@@ -1,5 +1,13 @@
 //! Shared colors and depth for the native workspace.
 use gpui::*;
+/// Padding on all four sides of user-message bubbles.
+pub const MESSAGE_PADDING: f32 = 12.;
+/// Corner radius for user-message bubbles.
+pub const MESSAGE_RADIUS: f32 = 9.;
+/// Horizontal padding for inline blocks; their height follows the font size.
+pub const INLINE_PADDING: f32 = 3.;
+/// Corner radius for compact inline text blocks.
+pub const INLINE_RADIUS: f32 = 4.;
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub canvas: Hsla,

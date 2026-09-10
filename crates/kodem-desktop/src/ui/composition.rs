@@ -436,6 +436,8 @@ impl Shell {
             let task_id = view.task.id.clone();
             let restore_task = task_id.clone();
             let restore_id = id.clone();
+            let steer_task = task_id.clone();
+            let steer_id = id.clone();
             let expanded_key = format!("outgoing:{id}");
             let expanded = self.folded.contains(&expanded_key);
             let label = match outgoing.state {
@@ -489,6 +491,29 @@ impl Shell {
                                     outgoing.text.clone()
                                 }),
                         )
+                        .when(outgoing.state == DeliveryState::Queued, |d| {
+                            d.child(
+                                self.icon_button(
+                                    ("steer-queued", index),
+                                    "arrow-right",
+                                    "Steer immediately",
+                                )
+                                .size(px(22.))
+                                .disabled(
+                                    !view.task.state.active()
+                                        || view.task.active_turn.is_none()
+                                        || outgoing.expected_turn.is_some(),
+                                )
+                                .on_click(cx.listener(
+                                    move |s, _, _, _| {
+                                        s.send(core::Request::SteerQueued {
+                                            task_id: steer_task.clone(),
+                                            id: steer_id.clone(),
+                                        });
+                                    },
+                                )),
+                            )
+                        })
                         .when(
                             matches!(
                                 outgoing.state,

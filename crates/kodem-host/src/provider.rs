@@ -170,6 +170,19 @@ pub(super) fn submit(
     Ok(())
 }
 
+/// Promotes queued input to steering and wakes its existing provider session.
+pub(super) fn steer_queued(host: Shared, task_id: &str, id: &str) -> Result<()> {
+    let h = host.lock().unwrap();
+    ensure!(!h.shutdown, "Host is restarting. Retry after reconnecting.");
+    let sender = h
+        .sessions
+        .get(task_id)
+        .context("No live provider session to steer")?;
+    h.store.steer_outgoing(task_id, id)?;
+    sender.send(Control::Wake)?;
+    Ok(())
+}
+
 /// Explicitly resumes retained queued input after a failure or a host restart.
 pub(super) fn resume_queue(host: Shared, task_id: &str) -> Result<()> {
     {

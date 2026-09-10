@@ -397,6 +397,11 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             provider::resume_queue(host.clone(), &task_id)?;
             Ok(Response::Ok)
         }
+        Request::SteerQueued { task_id, id } => {
+            provider::steer_queued(host.clone(), &task_id, &id)?;
+            let h = host.lock().unwrap();
+            Ok(Response::Task(task_view(&h, &task_id, None)?))
+        }
         Request::Interrupt { task_id } => {
             let h = host.lock().unwrap();
             let tx = h.sessions.get(&task_id).context(

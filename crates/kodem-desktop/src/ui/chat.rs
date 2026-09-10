@@ -797,9 +797,8 @@ impl Shell {
                 .max_w(relative(0.86))
                 .bg(t.raised)
                 .shadow(t.elevation())
-                .rounded(px(9.))
-                .px_3()
-                .py_2();
+                .rounded(px(crate::theme::MESSAGE_RADIUS))
+                .p(px(crate::theme::MESSAGE_PADDING));
         } else if message.kind != MessageKind::Assistant {
             let (name, glyph, color) = match message.kind {
                 MessageKind::Error => ("Error", "circle-x", t.removed),

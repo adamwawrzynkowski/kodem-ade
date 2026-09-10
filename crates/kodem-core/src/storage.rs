@@ -397,6 +397,44 @@ impl Store {
         }
         Ok(result)
     }
+    /// Binds an undispatched message to the active turn without changing its saved content.
+    pub fn steer_outgoing(&self, task_id: &str, id: &str) -> Result<()> {
+        let task = self.task(task_id)?;
+        ensure!(task.state.active(), "There is no active turn to steer");
+        ensure!(
+            !self.has_uncertain_submission(task_id)?,
+            "Reconcile uncertain delivery before steering"
+        );
+        let turn = task
+            .active_turn
+            .context("The turn is still starting. Wait until it begins before steering.")?;
+        let mut message = self
+            .outgoing(task_id)?
+            .into_iter()
+            .find(|message| message.id == id)
+            .context("Outgoing message not found")?;
+        ensure!(
+            message.state == DeliveryState::Queued,
+            "Message is no longer queued"
+        );
+        ensure!(
+            message
+                .expected_turn
+                .as_ref()
+                .is_none_or(|expected| expected == &turn),
+            "This message belongs to a different turn"
+        );
+        message.mode = SendMode::Steer;
+        message.expected_turn = Some(turn);
+        ensure!(
+            self.db.execute(
+                "UPDATE submissions SET payload=?3 WHERE id=?1 AND task_id=?2 AND state='queued'",
+                params![id, task_id, serde_json::to_string(&message)?],
+            )? == 1,
+            "Message is no longer queued"
+        );
+        Ok(())
+    }
     /// Claims one accepted message and records its transcript before external delivery.
     pub fn claim_outgoing(&self, task: &Task, message: &OutgoingMessage) -> Result<()> {
         let tx = self.db.unchecked_transaction()?;

@@ -1,6 +1,7 @@
 //! A narrow GPUI Kit/base compatibility port on the GPUI-CE type graph.
 #![allow(dead_code)] // Preserve the attributed upstream component builder contracts.
 mod button;
+mod inline_bubbles;
 mod input_frame;
 pub mod text_document;
 pub mod text_input;

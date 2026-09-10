@@ -361,6 +361,7 @@ pub struct Settings {
     pub show_review: bool,
     pub show_terminal: bool,
     pub split_diff: bool,
+    pub wrap_diff: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -380,6 +381,7 @@ impl Default for Settings {
             show_review: true,
             show_terminal: false,
             split_diff: false,
+            wrap_diff: true,
         }
     }
 }
@@ -742,6 +744,10 @@ pub enum Request {
         id: String,
     },
     CancelQueued {
+        task_id: String,
+        id: String,
+    },
+    SteerQueued {
         task_id: String,
         id: String,
     },

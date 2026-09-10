@@ -8,7 +8,15 @@ pub struct InlineStyle {
     pub italic: bool,
     pub strike: bool,
     pub code: bool,
+    pub quoted: bool,
+    pub reference: bool,
     pub link: Option<String>,
+}
+impl InlineStyle {
+    /// Identifies text displayed inside an inline message bubble.
+    pub fn is_bubble(&self) -> bool {
+        self.code || self.quoted || self.reference || self.link.is_some()
+    }
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Span {
@@ -19,6 +27,186 @@ pub struct Span {
 pub struct RichText {
     pub text: String,
     pub spans: Vec<Span>,
+}
+impl RichText {
+    fn push(&mut self, text: &str, style: InlineStyle) {
+        if text.is_empty() {
+            return;
+        }
+        let start = self.text.len();
+        self.text.push_str(text);
+        if let Some(last) = self.spans.last_mut()
+            && last.style == style
+        {
+            last.range.end = self.text.len();
+        } else {
+            self.spans.push(Span {
+                range: start..self.text.len(),
+                style,
+            });
+        }
+    }
+
+    fn formatted(self) -> Self {
+        // Match quotes across emphasis/link events, but keep literal code and unfinished
+        // streaming quotes intact. All ranges below still refer to the parsed source.
+        let mut quotes = Vec::new();
+        let mut open = None;
+        let mut style_index = 0;
+        for (index, ch) in self.text.char_indices() {
+            while self.spans[style_index].range.end <= index {
+                style_index += 1;
+            }
+            if self.spans[style_index].style.code {
+                continue;
+            }
+            if ch == '\n' {
+                open = None;
+            } else if let Some((start, content_start, closing)) = open {
+                if ch == closing {
+                    if !self.text[content_start..index].trim().is_empty() {
+                        quotes.push((start..content_start, index..index + ch.len_utf8()));
+                    }
+                    open = None;
+                }
+            } else if matches!(ch, '"' | '“') {
+                open = Some((
+                    index,
+                    index + ch.len_utf8(),
+                    if ch == '“' { '”' } else { '"' },
+                ));
+            }
+        }
+        let mut boundaries = vec![0, self.text.len()];
+        boundaries.extend(self.spans.iter().map(|span| span.range.end));
+        for (open, close) in &quotes {
+            boundaries.extend([open.start, open.end, close.start, close.end]);
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        let mut result = Self::default();
+        let mut span_index = 0;
+        let mut quote_index = 0;
+        for pair in boundaries.windows(2) {
+            let range = pair[0]..pair[1];
+            while self.spans[span_index].range.end <= range.start {
+                span_index += 1;
+            }
+            while quotes
+                .get(quote_index)
+                .is_some_and(|(_, close)| close.end <= range.start)
+            {
+                quote_index += 1;
+            }
+            let mut style = self.spans[span_index].style.clone();
+            if let Some((open, close)) = quotes.get(quote_index) {
+                if open.contains(&range.start) || close.contains(&range.start) {
+                    continue;
+                }
+                style.quoted |= range.start >= open.end && range.end <= close.start;
+            }
+            let text = &self.text[range];
+            for token in text.split_inclusive(char::is_whitespace) {
+                let reference = token
+                    .trim()
+                    .trim_start_matches(|ch: char| "()[]{}\"“”,;!?".contains(ch))
+                    .trim_end_matches(|ch: char| "()[]{}\"“”,;!?.".contains(ch));
+                if is_reference(reference) {
+                    let start = token.find(reference).unwrap();
+                    result.push(&token[..start], style.clone());
+                    result.push(
+                        reference,
+                        InlineStyle {
+                            reference: true,
+                            ..style.clone()
+                        },
+                    );
+                    result.push(&token[start + reference.len()..], style.clone());
+                } else {
+                    result.push(token, style.clone());
+                }
+            }
+        }
+        result
+    }
+}
+
+fn is_reference(text: &str) -> bool {
+    if let Some(name) = text.strip_prefix('@') {
+        return !name.is_empty()
+            && name
+                .chars()
+                .all(|ch| ch.is_alphanumeric() || "_-/.:".contains(ch));
+    }
+    if text.contains("://") || text.contains('@') {
+        return false;
+    }
+    let path = text.split([':', '#']).next().unwrap_or(text);
+    if path.contains('/') {
+        let explicit_path = path.starts_with('/')
+            || path.starts_with("./")
+            || path.starts_with("../")
+            || path.starts_with("~/")
+            || path.ends_with('/');
+        let file_name = path.rsplit('/').next().unwrap_or_default();
+        return path.chars().any(char::is_alphabetic) && (explicit_path || is_reference(file_name));
+    }
+    if matches!(
+        path,
+        "Dockerfile" | "Makefile" | "Justfile" | "LICENSE" | "README"
+    ) || path.starts_with('.') && path.len() > 1
+    {
+        return true;
+    }
+    path.rsplit_once('.').is_some_and(|(stem, extension)| {
+        !stem.is_empty()
+            && matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "rs" | "toml"
+                    | "lock"
+                    | "md"
+                    | "txt"
+                    | "json"
+                    | "jsonl"
+                    | "yaml"
+                    | "yml"
+                    | "ts"
+                    | "tsx"
+                    | "js"
+                    | "jsx"
+                    | "html"
+                    | "css"
+                    | "scss"
+                    | "svg"
+                    | "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "webp"
+                    | "gif"
+                    | "py"
+                    | "go"
+                    | "java"
+                    | "kt"
+                    | "swift"
+                    | "c"
+                    | "h"
+                    | "cc"
+                    | "cpp"
+                    | "hpp"
+                    | "cs"
+                    | "sh"
+                    | "bash"
+                    | "zsh"
+                    | "sql"
+                    | "xml"
+                    | "csv"
+                    | "pdf"
+                    | "unity"
+                    | "prefab"
+                    | "asset"
+                    | "meta"
+            )
+    })
 }
 #[derive(Clone, Debug)]
 pub struct ListItem {
@@ -56,24 +244,9 @@ struct InlineBuilder {
 }
 impl InlineBuilder {
     fn push(&mut self, text: &str, code: bool) {
-        let start = self.content.text.len();
-        self.content.text.push_str(text);
-        if start == self.content.text.len() {
-            return;
-        }
         let mut style = self.styles.last().cloned().unwrap_or_default();
         style.code |= code;
-        if let Some(last) = self.content.spans.last_mut()
-            && last.style == style
-            && last.range.end == start
-        {
-            last.range.end = self.content.text.len();
-        } else {
-            self.content.spans.push(Span {
-                range: start..self.content.text.len(),
-                style,
-            });
-        }
+        self.content.push(text, style);
     }
     fn event(&mut self, event: Event<'_>) {
         match event {
@@ -114,7 +287,7 @@ impl InlineBuilder {
     }
     fn flush(&mut self, blocks: &mut Vec<Block>) {
         if !self.content.text.is_empty() {
-            blocks.push(Block::Text(std::mem::take(&mut self.content)));
+            blocks.push(Block::Text(std::mem::take(&mut self.content).formatted()));
         }
     }
 }
@@ -230,5 +403,5 @@ fn read_inline<'a>(events: &mut impl Iterator<Item = Event<'a>>, end: TagEnd) ->
         }
         inline.event(event);
     }
-    inline.content
+    inline.content.formatted()
 }

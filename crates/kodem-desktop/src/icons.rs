@@ -5,6 +5,9 @@ pub struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
         Ok(match path {
+            "wrap-text" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/icons/wrap-text.svg"
+            ))),
             "bell" => Some(Cow::Borrowed(include_bytes!(
                 "../../../assets/icons/bell.svg"
             ))),

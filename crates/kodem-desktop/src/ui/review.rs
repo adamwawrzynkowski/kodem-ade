@@ -205,6 +205,25 @@ impl Shell {
                                 .on_click(cx.listener(|s, _, _, _| s.refresh_diff())),
                         )
                         .child(
+                            self.icon_button(
+                                "diff-wrap",
+                                "wrap-text",
+                                if self.settings.wrap_diff {
+                                    "Disable word wrap"
+                                } else {
+                                    "Enable word wrap"
+                                },
+                            )
+                            .when(self.settings.wrap_diff, |button| {
+                                button.bg(t.selected).text_color(t.accent)
+                            })
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.settings.wrap_diff = !s.settings.wrap_diff;
+                                s.save_settings();
+                                cx.notify();
+                            })),
+                        )
+                        .child(
                             self.icon_button("close-diff", "close", "Close diff")
                                 .on_click(cx.listener(|s, _, window, cx| {
                                     s.reviewing_file = false;
@@ -245,6 +264,7 @@ impl Shell {
                             &snapshot,
                             self.file,
                             self.split,
+                            self.settings.wrap_diff,
                             t,
                             self.settings.light,
                             cx,
@@ -270,7 +290,13 @@ impl Shell {
                 }
                 if let Some(view) = &self.diff_view {
                     view.update(cx, |view, cx| {
-                        view.configure(self.split, t, self.settings.light, cx)
+                        view.configure(
+                            self.split,
+                            self.settings.wrap_diff,
+                            t,
+                            self.settings.light,
+                            cx,
+                        )
                     });
                     panel = panel.child(view.clone());
                 }

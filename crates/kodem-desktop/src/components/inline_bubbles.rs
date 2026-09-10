@@ -1,0 +1,202 @@
+//! Display-only inline padding with source byte coordinates preserved for selection and copying.
+use crate::theme::{INLINE_PADDING, INLINE_RADIUS, Theme};
+use gpui::*;
+use std::{
+    ops::{Deref, Range},
+    sync::Arc,
+};
+
+const SPACER: &str = "\u{a0}";
+
+#[derive(Default)]
+pub(super) struct PaddingMap {
+    insertions: Vec<(usize, Range<usize>)>,
+    bubbles: Vec<Range<usize>>,
+}
+impl PaddingMap {
+    /// Converts a displayed byte position to the original text, excluding inserted padding.
+    pub(super) fn source_index(&self, display: usize) -> usize {
+        let mut removed = 0;
+        for (source, range) in &self.insertions {
+            if display < range.start {
+                break;
+            }
+            if display < range.end {
+                return *source;
+            }
+            removed += range.len();
+        }
+        display - removed
+    }
+    fn display_index(&self, source: usize) -> usize {
+        source
+            + self
+                .insertions
+                .iter()
+                .take_while(|(index, _)| *index <= source)
+                .map(|(_, range)| range.len())
+                .sum::<usize>()
+    }
+}
+
+/// Inserts measured, nonbreaking padding without changing the text owned by the input.
+pub(super) fn pad_text(
+    text: &str,
+    runs: Vec<TextRun>,
+    bubbles: &[Range<usize>],
+    padding_run: TextRun,
+) -> (String, Vec<TextRun>, Arc<PaddingMap>) {
+    let mut events = bubbles
+        .iter()
+        .flat_map(|range| [(range.start, true), (range.end, false)])
+        .peekable();
+    let mut displayed = String::new();
+    let mut displayed_runs = Vec::new();
+    let mut map = PaddingMap::default();
+    let mut source = 0;
+    let mut bubble_start = 0;
+    for mut run in runs {
+        // CoreText inherits attributes when the next run is appended. An omitted
+        // value leaves the spacer's kerning on the following content.
+        run.letter_spacing = Some(run.letter_spacing.unwrap_or(px(0.)));
+        let end = source + run.len;
+        while let Some(&(index, opening)) = events.peek() {
+            if index > end {
+                break;
+            }
+            if index > source {
+                displayed.push_str(&text[source..index]);
+                displayed_runs.push(TextRun {
+                    len: index - source,
+                    ..run.clone()
+                });
+            }
+            let start = displayed.len();
+            displayed.push_str(SPACER);
+            map.insertions.push((index, start..displayed.len()));
+            displayed_runs.push(padding_run.clone());
+            if opening {
+                bubble_start = start;
+            } else {
+                map.bubbles.push(bubble_start..displayed.len());
+            }
+            source = index;
+            events.next();
+        }
+        if source < end {
+            displayed.push_str(&text[source..end]);
+            displayed_runs.push(TextRun {
+                len: end - source,
+                ..run
+            });
+        }
+        source = end;
+    }
+    (displayed, displayed_runs, Arc::new(map))
+}
+
+pub(super) struct TextLine {
+    line: WrappedLine,
+    map: Arc<PaddingMap>,
+    display_start: usize,
+    source_start: usize,
+}
+impl Deref for TextLine {
+    type Target = WrappedLine;
+    fn deref(&self) -> &Self::Target {
+        &self.line
+    }
+}
+impl TextLine {
+    /// Associates a shaped display line with the source bytes it represents.
+    pub(super) fn new(line: WrappedLine, map: Arc<PaddingMap>, display_start: usize) -> Self {
+        let source_start = map.source_index(display_start);
+        Self {
+            line,
+            map,
+            display_start,
+            source_start,
+        }
+    }
+    /// Returns this line's original byte length without visual padding.
+    pub(super) fn len(&self) -> usize {
+        self.map.source_index(self.display_start + self.line.len()) - self.source_start
+    }
+    /// Locates an original byte offset in the padded layout.
+    pub(super) fn position_for_index(
+        &self,
+        source: usize,
+        height: Pixels,
+    ) -> Option<Point<Pixels>> {
+        let display = self
+            .map
+            .display_index(self.source_start + source)
+            .saturating_sub(self.display_start)
+            .min(self.line.len());
+        self.line.position_for_index(display, height)
+    }
+    /// Maps pointer hits, including bubble padding, back to original byte offsets.
+    pub(super) fn closest_index_for_position(
+        &self,
+        position: Point<Pixels>,
+        height: Pixels,
+    ) -> Result<usize, usize> {
+        let source = |index| self.map.source_index(self.display_start + index) - self.source_start;
+        self.line
+            .closest_index_for_position(position, height)
+            .map(source)
+            .map_err(source)
+    }
+    /// Paints a padded, rounded background for each visible fragment of an inline bubble.
+    pub(super) fn paint_bubbles(
+        &self,
+        origin: Point<Pixels>,
+        height: Pixels,
+        theme: Theme,
+        window: &mut Window,
+    ) {
+        let layout = &self.line.unwrapped_layout;
+        let mut start = 0;
+        let ends = self
+            .line
+            .wrap_boundaries()
+            .iter()
+            .map(|boundary| layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index)
+            .chain([self.line.len()]);
+        for (row, end) in ends.enumerate() {
+            let row_x = layout.x_for_index(start);
+            let row_range = self.display_start + start..self.display_start + end;
+            for bubble in &self.map.bubbles {
+                let a = bubble.start.max(row_range.start);
+                let b = bubble.end.min(row_range.end);
+                if a >= b || self.map.source_index(a) == self.map.source_index(b) {
+                    continue;
+                }
+                let left = layout.x_for_index(a - self.display_start)
+                    - row_x
+                    - if a > bubble.start {
+                        px(INLINE_PADDING)
+                    } else {
+                        px(0.)
+                    };
+                let right = layout.x_for_index(b - self.display_start) - row_x
+                    + if b < bubble.end {
+                        px(INLINE_PADDING)
+                    } else {
+                        px(0.)
+                    };
+                let block_height = self.line.font_size();
+                let bounds = Bounds::new(
+                    origin + point(left, height * row + (height - block_height) / 2.),
+                    size(right - left, block_height),
+                );
+                let corners = Corners::all(px(INLINE_RADIUS));
+                let shadows = theme.elevation();
+                window.paint_drop_shadows(bounds, corners, &shadows);
+                window.paint_quad(fill(bounds, theme.raised).corner_radii(corners));
+                window.paint_inset_shadows(bounds, corners, &shadows);
+            }
+            start = end;
+        }
+    }
+}
