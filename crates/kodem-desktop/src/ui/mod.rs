@@ -7,6 +7,7 @@ mod chrome;
 mod composition;
 mod diff_view;
 mod effort_slider;
+mod image_preview;
 mod menus;
 mod model_picker;
 mod motion;
@@ -135,6 +136,7 @@ pub struct Shell {
     composer_spring: motion::ComposerSpring,
     settings_section: usize,
     effort_slider: Option<(String, Entity<effort_slider::EffortSlider>, Subscription)>,
+    image_preview: Option<image_preview::ImagePreview>,
 }
 impl Shell {
     /// Creates the workspace and begins asynchronous host synchronization.
@@ -306,6 +308,7 @@ impl Shell {
             composer_spring: motion::ComposerSpring::default(),
             settings_section: 0,
             effort_slider: None,
+            image_preview: None,
         };
         shell.send(core::Request::Hello);
         shell

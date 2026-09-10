@@ -146,6 +146,9 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_width = f32::from(window.viewport_size().width);
+        if let Some(preview) = self.render_image_preview(window, cx) {
+            return preview;
+        }
         let t = self.theme;
         let mut root = div()
             .id("workspace")

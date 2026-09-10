@@ -164,11 +164,26 @@ impl Shell {
             .min_w_0()
             .max_w(px(280.));
         card = card.child(if attachment.kind == AttachmentKind::Image {
-            img(attachment.path.clone())
-                .size(px(42.))
-                .object_fit(ObjectFit::Cover)
-                .rounded(px(5.))
-                .into_any_element()
+            let attachment = attachment.clone();
+            self.control((
+                ElementId::from("preview-attachment"),
+                SharedString::from(attachment.id.clone()),
+            ))
+            .size(px(42.))
+            .p_0()
+            .rounded(px(5.))
+            .overflow_hidden()
+            .accessibility_label(format!("Preview {}", attachment.name))
+            .hover(move |s| s.border_color(t.accent))
+            .child(
+                img(attachment.path.clone())
+                    .size_full()
+                    .object_fit(ObjectFit::Cover),
+            )
+            .on_click(cx.listener(move |s, _, window, cx| {
+                s.open_image_preview(&attachment, window, cx);
+            }))
+            .into_any_element()
         } else {
             div()
                 .size(px(32.))
