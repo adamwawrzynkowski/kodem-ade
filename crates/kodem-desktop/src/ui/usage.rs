@@ -16,10 +16,15 @@ impl Shell {
         let context = self
             .view
             .as_ref()
-            .and_then(|v| v.task.context_usage.as_ref());
-        let fraction = context.and_then(|u| u.window.map(|w| u.used as f32 / w.max(1) as f32));
-        let context_hint = context.map_or_else(|| "Context usage\nNot reported by the provider yet.".into(), |u| {
-            let limit = u.window.map_or_else(|| "Capacity unavailable".into(), |w| format!("{} of {} tokens · {:.1}% used", number(&u.used.to_string()), number(&w.to_string()), u.used as f64 / w.max(1) as f64 * 100.));
+            .and_then(|v| v.task.context_usage.as_ref())
+            .cloned();
+        let fraction = context.as_ref().and_then(|u| {
+            u.window
+                .filter(|w| *w > 0)
+                .map(|w| u.used as f32 / w as f32)
+        });
+        let context_hint = context.as_ref().map_or_else(|| "Context usage\nNot reported by the provider yet.".into(), |u| {
+            let limit = u.window.filter(|w| *w > 0).map_or_else(|| format!("{} tokens used · Capacity unavailable", number(&u.used.to_string())), |w| format!("{} of {} tokens · {:.1}% used", number(&u.used.to_string()), number(&w.to_string()), u.used as f64 / w as f64 * 100.));
             format!("Context usage\n{limit}\nUpdated {} ago. Last context size, not cumulative usage.", age(u.reported))
         });
         let usage = self.account_usage().cloned();
@@ -45,8 +50,8 @@ impl Shell {
                     })
                     .child(meter(fraction, rgb_to_hsla(rgb(0x55bdd7)), false))
                     .tooltip(move |_, cx| {
-                        cx.new(|_| Hint {
-                            text: context_hint.clone(),
+                        cx.new(|_| ContextHint {
+                            usage: context.clone(),
                             theme: t,
                         })
                         .into()
@@ -218,6 +223,116 @@ impl Shell {
             }
         }
         cx.notify();
+    }
+}
+
+struct ContextHint {
+    usage: Option<ContextUsage>,
+    theme: Theme,
+}
+impl Render for ContextHint {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme;
+        let capacity = self
+            .usage
+            .as_ref()
+            .and_then(|u| u.window)
+            .filter(|w| *w > 0);
+        let fraction = self
+            .usage
+            .as_ref()
+            .zip(capacity)
+            .map(|(u, w)| u.used as f64 / w as f64);
+        let color = rgb_to_hsla(rgb(0x55bdd7));
+        let mut details = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_1()
+            .text_size(px(12.))
+            .text_color(t.text)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Context usage"),
+                    )
+                    .when_some(fraction, |d, value| {
+                        d.child(
+                            div()
+                                .text_color(t.muted)
+                                .child(format!("{:.1}% used", value * 100.)),
+                        )
+                    }),
+            )
+            .when_some(fraction, |d, value| {
+                d.child(
+                    div()
+                        .h(px(4.))
+                        .w_full()
+                        .rounded(px(2.))
+                        .bg(color.opacity(0.15))
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(value.clamp(0., 1.) as f32))
+                                .rounded(px(2.))
+                                .bg(color),
+                        ),
+                )
+            });
+        if let Some(usage) = &self.usage {
+            details = details
+                .child(detail_row(
+                    "Tokens used",
+                    number(&usage.used.to_string()),
+                    t,
+                ))
+                .child(detail_row(
+                    "Context limit",
+                    capacity.map_or_else(|| "Not reported".into(), |w| number(&w.to_string())),
+                    t,
+                ))
+                .when_some(capacity, |d, w| {
+                    d.child(detail_row(
+                        "Tokens remaining",
+                        number(&w.saturating_sub(usage.used).to_string()),
+                        t,
+                    ))
+                })
+                .child(div().h(px(1.)).bg(t.border))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .text_size(px(11.))
+                        .text_color(t.muted)
+                        .child(format!("Updated {} ago", age(usage.reported)))
+                        .child("Last reported context size."),
+                );
+        } else {
+            details = details.child(
+                div()
+                    .text_color(t.muted)
+                    .child("Context usage has not been reported yet."),
+            );
+        }
+        div()
+            .w(px(304.))
+            .p_3()
+            .font_family("IBM Plex Sans")
+            .bg(t.raised)
+            .border_1()
+            .border_color(t.border)
+            .rounded(px(8.))
+            .shadow(t.elevation())
+            .child(details)
     }
 }
 
