@@ -376,8 +376,12 @@ impl Shell {
         } else {
             t.raised
         };
-        let title_color = t.text.opacity(0.94);
-        let metadata = t.muted;
+        let title_color = if selected && !self.settings.light {
+            rgb_to_hsla(rgb(0xffffff))
+        } else {
+            t.text.opacity(0.94)
+        };
+        let metadata = if selected { t.text } else { t.muted };
         let mut hover_surface = surface;
         hover_surface.lightness = (surface.lightness + 0.016).min(1.);
         let id = task.id.clone();
@@ -390,8 +394,8 @@ impl Shell {
                 RunState::Starting | RunState::Running => t.accent,
                 RunState::Waiting => t.accent,
                 RunState::Failed | RunState::DeliveryUnknown => t.removed,
-                RunState::Completed => t.muted,
-                _ => t.muted,
+                RunState::Completed => metadata,
+                _ => metadata,
             }
         };
         let status = if needs_input {
@@ -486,7 +490,7 @@ impl Shell {
                     ElementId::from("task-provider"),
                     SharedString::from(id.clone()),
                 ))
-                .child(icon("openai").size(px(14.)).text_color(t.muted))
+                .child(icon("openai").size(px(14.)).text_color(metadata))
                 .tooltip(move |_, cx| {
                     cx.new(|_| Hint {
                         text: "Codex · OpenAI".into(),
@@ -574,7 +578,7 @@ impl Shell {
                                 d.child(
                                     div()
                                         .flex_shrink_0()
-                                        .text_color(t.muted)
+                                        .text_color(metadata)
                                         .child(elapsed(task.updated)),
                                 )
                             })

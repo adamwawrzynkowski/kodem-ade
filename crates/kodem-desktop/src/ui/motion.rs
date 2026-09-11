@@ -251,7 +251,7 @@ fn rounded_project_dither(width: f32, height: f32, radius: f32) -> String {
     )
 }
 
-/// Covers the selected thread background with ordered grain, animated while its task runs.
+/// Fades selected-thread grain from left to right, animating while its task runs.
 pub(super) fn selection_dither(
     id: impl Into<ElementId>,
     color: Hsla,
@@ -288,10 +288,12 @@ fn selection_dither_frame(color: Hsla, radius: Pixels, phase: f32) -> impl IntoE
                 // Adjacent dots share a draw order and stay inside the rounded card's border.
                 window.paint_layer(bounds, |window| {
                     for x in 0..(width / 2.) as u32 {
-                        let wave = (std::f32::consts::TAU * (x as f32 * 2. / width - phase)).cos();
-                        let alpha = 0.16 + 0.07 * (wave + 1.);
+                        let position = x as f32 * 2. / width;
+                        let wave = (std::f32::consts::TAU * (position - phase)).cos();
+                        // Keep the animated grain subdued beneath text and fade out at the right edge.
+                        let alpha = (1. - position).powi(2) * (0.08 + 0.02 * (wave + 1.));
                         for y in 0..(height / 2.) as u32 {
-                            if BAYER[y as usize % 4][x as usize % 4] >= 9 {
+                            if BAYER[y as usize % 4][x as usize % 4] >= 6 {
                                 continue;
                             }
                             let left = x as f32 * 2.;
