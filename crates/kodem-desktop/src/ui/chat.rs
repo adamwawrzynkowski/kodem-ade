@@ -114,7 +114,7 @@ impl Shell {
                         .gap_3()
                         .text_size(px(12.))
                         .child(icon("shield").text_color(t.accent))
-                        .child(div().flex_1().child("Codex needs your permission"))
+                        .child(div().flex_1().child("Provider needs your permission"))
                         .child(self.primary("open-requests", "shield", "Respond").on_click(
                             cx.listener(|s, _, _, cx| {
                                 s.panel = Panel::Questions;
@@ -325,16 +325,33 @@ impl Shell {
             })
             .cloned();
         let preferences = self.composer_preferences();
+        let runtime = self.selected_runtime();
+        let selected_model = runtime
+            .models
+            .iter()
+            .find(|model| preferences.model.as_ref() == Some(&model.id));
+        let has_reasoning = selected_model.is_some_and(|model| !model.efforts.is_empty());
+        let access_label = if preferences.provider == Provider::Codex {
+            preferences.access.label().to_owned()
+        } else {
+            runtime
+                .access_modes
+                .iter()
+                .find(|mode| preferences.provider_access.as_ref() == Some(&mode.id))
+                .map(|mode| mode.name.clone())
+                .unwrap_or_else(|| "Provider default".into())
+        };
         let model = preferences
             .model
             .as_ref()
             .map(|id| {
-                self.workspace
-                    .as_ref()
-                    .and_then(|w| w.runtime.models.iter().find(|m| &m.id == id))
+                runtime
+                    .models
+                    .iter()
+                    .find(|m| &m.id == id)
                     .map_or_else(|| id.clone(), |m| m.name.clone())
             })
-            .unwrap_or_else(|| "Codex default".into());
+            .unwrap_or_else(|| format!("{} default", preferences.provider.label()));
         let effort = preferences
             .effort
             .clone()
@@ -539,6 +556,7 @@ impl Shell {
                     .on_click(cx.listener(|s, _, _, cx| {
                         s.panel = Panel::Resources;
                         s.send(core::Request::Resources {
+                            provider: s.composer_preferences().provider,
                             project_id: s.selected_project.clone().or_else(|| {
                                 s.workspace.as_ref()?.projects.first().map(|p| p.id.clone())
                             }),
@@ -550,23 +568,22 @@ impl Shell {
             .child(self.usage_meters(cx))
             .child(div().flex_1())
             .child(
-                self.ghost("composer-model", "bot", "")
+                self.ghost("composer-model", preferences.provider.icon(), "")
                     .child(div().max_w(px(150.)).min_w_0().text_ellipsis().child(model))
                     .text_size(px(11.))
                     .child(icon("chevron-down").size(px(11.)))
                     .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
                         s.menu_anchor = Some(bounds.top_right());
                         s.panel = Panel::Models;
-                        if s.workspace
-                            .as_ref()
-                            .is_none_or(|w| w.runtime.models.is_empty())
-                        {
-                            s.send(core::Request::ConnectRuntime);
+                        if s.selected_runtime().models.is_empty() {
+                            s.send(core::Request::ConnectRuntime {
+                                provider: s.composer_preferences().provider,
+                            });
                         }
                         cx.notify();
                     })),
             )
-            .map(|d| {
+            .when(has_reasoning, |d| {
                 d.child(div().w(px(1.)).h(px(14.)).mx_1().bg(t.border))
                     .child(
                         self.ghost("composer-effort", "settings-2", effort)
@@ -591,7 +608,7 @@ impl Shell {
                                 AccessMode::AutoReview => "bot",
                                 _ => "shield",
                             },
-                            preferences.access.label(),
+                            access_label,
                         )
                         .text_size(px(11.))
                         .child(icon("chevron-down").size(px(10.)))
@@ -604,7 +621,7 @@ impl Shell {
                         )),
                     )
             });
-        if active {
+        if active && runtime.steering {
             toolbar = toolbar.child(
                 self.ghost(
                     "active-send-mode",

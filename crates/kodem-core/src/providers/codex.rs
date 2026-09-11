@@ -11,7 +11,7 @@ use std::{
     sync::mpsc::{self, Receiver},
     time::{Duration, Instant},
 };
-const CODEX_MIN_VERSION: &str = include_str!("../../../codex-min-version");
+const CODEX_MIN_VERSION: &str = include_str!("../../../../codex-min-version");
 pub struct Codex {
     child: Child,
     stdin: ChildStdin,
@@ -428,4 +428,39 @@ pub fn composer_commands() -> Result<Vec<ComposerCommand>> {
     .collect();
     *cache = Some((runtime.executable, runtime.version, commands.clone()));
     Ok(commands)
+}
+
+impl AccessMode {
+    /// Returns the provider's thread sandbox mode.
+    pub fn sandbox(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::Workspace | Self::AutoReview => "workspace-write",
+            Self::FullAccess => "danger-full-access",
+        }
+    }
+    /// Returns the approval policy paired with the selected sandbox.
+    pub fn approval_policy(self) -> &'static str {
+        match self {
+            Self::Workspace | Self::AutoReview => "on-request",
+            Self::ReadOnly | Self::FullAccess => "never",
+        }
+    }
+    /// Routes permission escalation to the user or Codex's risk-based AI reviewer.
+    pub fn approvals_reviewer(self) -> &'static str {
+        match self {
+            Self::AutoReview => "auto_review",
+            _ => "user",
+        }
+    }
+    /// Returns the explicit per-turn policy, including restricted network defaults.
+    pub fn turn_policy(self, cwd: &std::path::Path) -> serde_json::Value {
+        match self {
+            Self::ReadOnly => serde_json::json!({"type":"readOnly","networkAccess":false}),
+            Self::Workspace | Self::AutoReview => {
+                serde_json::json!({"type":"workspaceWrite","networkAccess":false,"writableRoots":[cwd]})
+            }
+            Self::FullAccess => serde_json::json!({"type":"dangerFullAccess"}),
+        }
+    }
 }

@@ -6,6 +6,7 @@ license-file.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64 = "0.22"
 kodem-core = { path = "../kodem-core" }
 anyhow.workspace = true
 serde_json.workspace = true

@@ -4432,6 +4432,8 @@ atomic@0.5.3 | https://github.com/Amanieu/atomic-rs
 Upstream authors: Amanieu d'Antras <amanieu@gmail.com>
 backtrace@0.3.76 | https://github.com/rust-lang/backtrace-rs
 Upstream authors: The Rust Project Developers
+base64@0.22.1 | https://github.com/marshallpierce/rust-base64
+Upstream authors: Marshall Pierce <marshall@mpierce.org>
 base64@0.23.1 | https://github.com/marshallpierce/rust-base64
 Upstream authors: Marshall Pierce <marshall@mpierce.org>
 bitflags@2.13.1 | https://github.com/bitflags/bitflags
@@ -11111,7 +11113,7 @@ the following restrictions:
 ========================================================================
 Additional original upstream notices
 
-addr2line@0.25.1/LICENSE-APACHE; aligned@0.4.3/LICENSE-APACHE; arrayvec@0.7.8/LICENSE-APACHE; as-slice@0.2.1/LICENSE-APACHE; async-channel@2.5.0/LICENSE-APACHE; async-task@4.7.1/LICENSE-APACHE; atomic@0.5.3/LICENSE-APACHE; backtrace@0.3.76/LICENSE-APACHE; base64@0.23.1/LICENSE-APACHE; bitflags@2.13.1/LICENSE-APACHE; bitstream-io@4.10.0/LICENSE-APACHE; by_address@1.2.1/LICENSE-APACHE; cfg-if@1.0.4/LICENSE-APACHE; cgl@0.3.2/LICENSE-APACHE; cocoa-foundation@0.2.0/LICENSE-APACHE; cocoa@0.26.0/LICENSE-APACHE; concurrent-queue@2.5.0/LICENSE-APACHE; core-foundation-sys@0.8.7/LICENSE-APACHE; core-foundation@0.10.0/LICENSE-APACHE; core-graphics-types@0.2.0/LICENSE-APACHE; core-graphics2@0.5.2/LICENSE-APACHE; core-graphics@0.24.0/LICENSE-APACHE; core-text@21.0.0/LICENSE-APACHE; core-video@0.5.2/LICENSE-APACHE; crossbeam-deque@0.8.8/LICENSE-APACHE; crossbeam-epoch@0.9.21/LICENSE-APACHE; crossbeam-queue@0.3.14/LICENSE-APACHE; crossbeam-utils@0.8.23/LICENSE-APACHE; data-url@0.3.2/LICENSE-APACHE; displaydoc@0.2.7/LICENSE-APACHE; either@1.18.0/LICENSE-APACHE; equivalent@1.0.2/LICENSE-APACHE; errno@0.3.14/LICENSE-APACHE; euclid@0.22.14/LICENSE-APACHE; event-listener-strategy@0.5.4/LICENSE-APACHE; event-listener@5.4.2/LICENSE-APACHE; fastrand@2.5.0/LICENSE-APACHE; fixedbitset@0.5.7/LICENSE-APACHE; flate2@1.1.10/LICENSE-APACHE; fnv@1.0.7/LICENSE-APACHE; form_urlencoded@1.2.2/LICENSE-APACHE; futures-lite@2.6.1/LICENSE-APACHE; getopts@0.2.24/LICENSE-APACHE; gif@0.14.2/LICENSE-APACHE; gimli@0.32.3/LICENSE-APACHE; hash32@0.3.1/LICENSE-APACHE; hashbrown@0.16.1/LICENSE-APACHE; hashbrown@0.17.1/LICENSE-APACHE; heapless@0.9.3/LICENSE-APACHE; heck@0.5.0/LICENSE-APACHE; idna@1.1.0/LICENSE-APACHE; idna_adapter@1.2.2/LICENSE-APACHE; indexmap@2.14.2/LICENSE-APACHE; io-surface@0.16.1/LICENSE-APACHE; itertools@0.14.0/LICENSE-APACHE; lazy_static@1.5.0/LICENSE-APACHE; lock_api@0.4.14/LICENSE-APACHE; log@0.4.34/LICENSE-APACHE; metal@0.33.0/LICENSE-APACHE; num-bigint@0.4.8/LICENSE-APACHE; num-complex@0.4.6/LICENSE-APACHE; num-derive@0.4.2/LICENSE-APACHE; num-integer@0.1.47/LICENSE-APACHE; num-rational@0.4.2/LICENSE-APACHE; num-traits@0.2.19/LICENSE-APACHE; num_cpus@1.17.0/LICENSE-APACHE; object@0.37.3/LICENSE-APACHE; once_cell@1.21.4/LICENSE-APACHE; palette@0.7.7/LICENSE-APACHE; palette_derive@0.7.7/LICENSE-APACHE; palette_math@0.7.7/LICENSE-APACHE; parking@2.2.1/LICENSE-APACHE; parking_lot@0.12.5/LICENSE-APACHE; parking_lot_core@0.9.12/LICENSE-APACHE; percent-encoding@2.3.2/LICENSE-APACHE; png@0.18.1/LICENSE-APACHE; pollster@0.2.5/LICENSE-APACHE; pollster@0.4.0/LICENSE-APACHE; rayon-core@1.13.0/LICENSE-APACHE; rayon@1.12.0/LICENSE-APACHE; regex-automata@0.4.18/LICENSE-APACHE; regex-syntax@0.8.11/LICENSE-APACHE; regex@1.13.1/LICENSE-APACHE; roxmltree@0.21.1/LICENSE-APACHE; rustc-demangle@0.1.28/LICENSE-APACHE; rustix@1.1.4/LICENSE-APACHE; scopeguard@1.2.0/LICENSE-APACHE; serde_fmt@1.1.0/LICENSE-APACHE; simplecss@0.2.2/LICENSE-APACHE; smallvec@1.16.0/LICENSE-APACHE; smol_str@0.3.6/LICENSE-APACHE; stable_deref_trait@1.2.1/LICENSE-APACHE; stacker@0.1.25/LICENSE-APACHE; svgtypes@0.16.1/LICENSE-APACHE; tempfile@3.27.0/LICENSE-APACHE; unicase@2.9.0/LICENSE-APACHE; unicode-bidi@0.3.18/LICENSE-APACHE; unicode-segmentation@1.13.3/LICENSE-APACHE; unicode-vo@0.1.0/LICENSE-APACHE; unicode-width@0.2.2/LICENSE-APACHE; unicode-xid@0.2.6/LICENSE-APACHE; url@2.5.8/LICENSE-APACHE; uuid@1.26.0/LICENSE-APACHE; value-bag-serde1@1.14.1/LICENSE-APACHE; value-bag@1.14.1/LICENSE-APACHE; waker-fn@1.2.0/LICENSE-APACHE; weezl@0.1.12/LICENSE-APACHE; yaml-rust@0.4.5/LICENSE-APACHE; zed-font-kit@0.14.1-zed/LICENSE-APACHE
+addr2line@0.25.1/LICENSE-APACHE; aligned@0.4.3/LICENSE-APACHE; arrayvec@0.7.8/LICENSE-APACHE; as-slice@0.2.1/LICENSE-APACHE; async-channel@2.5.0/LICENSE-APACHE; async-task@4.7.1/LICENSE-APACHE; atomic@0.5.3/LICENSE-APACHE; backtrace@0.3.76/LICENSE-APACHE; base64@0.22.1/LICENSE-APACHE; base64@0.23.1/LICENSE-APACHE; bitflags@2.13.1/LICENSE-APACHE; bitstream-io@4.10.0/LICENSE-APACHE; by_address@1.2.1/LICENSE-APACHE; cfg-if@1.0.4/LICENSE-APACHE; cgl@0.3.2/LICENSE-APACHE; cocoa-foundation@0.2.0/LICENSE-APACHE; cocoa@0.26.0/LICENSE-APACHE; concurrent-queue@2.5.0/LICENSE-APACHE; core-foundation-sys@0.8.7/LICENSE-APACHE; core-foundation@0.10.0/LICENSE-APACHE; core-graphics-types@0.2.0/LICENSE-APACHE; core-graphics2@0.5.2/LICENSE-APACHE; core-graphics@0.24.0/LICENSE-APACHE; core-text@21.0.0/LICENSE-APACHE; core-video@0.5.2/LICENSE-APACHE; crossbeam-deque@0.8.8/LICENSE-APACHE; crossbeam-epoch@0.9.21/LICENSE-APACHE; crossbeam-queue@0.3.14/LICENSE-APACHE; crossbeam-utils@0.8.23/LICENSE-APACHE; data-url@0.3.2/LICENSE-APACHE; displaydoc@0.2.7/LICENSE-APACHE; either@1.18.0/LICENSE-APACHE; equivalent@1.0.2/LICENSE-APACHE; errno@0.3.14/LICENSE-APACHE; euclid@0.22.14/LICENSE-APACHE; event-listener-strategy@0.5.4/LICENSE-APACHE; event-listener@5.4.2/LICENSE-APACHE; fastrand@2.5.0/LICENSE-APACHE; fixedbitset@0.5.7/LICENSE-APACHE; flate2@1.1.10/LICENSE-APACHE; fnv@1.0.7/LICENSE-APACHE; form_urlencoded@1.2.2/LICENSE-APACHE; futures-lite@2.6.1/LICENSE-APACHE; getopts@0.2.24/LICENSE-APACHE; gif@0.14.2/LICENSE-APACHE; gimli@0.32.3/LICENSE-APACHE; hash32@0.3.1/LICENSE-APACHE; hashbrown@0.16.1/LICENSE-APACHE; hashbrown@0.17.1/LICENSE-APACHE; heapless@0.9.3/LICENSE-APACHE; heck@0.5.0/LICENSE-APACHE; idna@1.1.0/LICENSE-APACHE; idna_adapter@1.2.2/LICENSE-APACHE; indexmap@2.14.2/LICENSE-APACHE; io-surface@0.16.1/LICENSE-APACHE; itertools@0.14.0/LICENSE-APACHE; lazy_static@1.5.0/LICENSE-APACHE; lock_api@0.4.14/LICENSE-APACHE; log@0.4.34/LICENSE-APACHE; metal@0.33.0/LICENSE-APACHE; num-bigint@0.4.8/LICENSE-APACHE; num-complex@0.4.6/LICENSE-APACHE; num-derive@0.4.2/LICENSE-APACHE; num-integer@0.1.47/LICENSE-APACHE; num-rational@0.4.2/LICENSE-APACHE; num-traits@0.2.19/LICENSE-APACHE; num_cpus@1.17.0/LICENSE-APACHE; object@0.37.3/LICENSE-APACHE; once_cell@1.21.4/LICENSE-APACHE; palette@0.7.7/LICENSE-APACHE; palette_derive@0.7.7/LICENSE-APACHE; palette_math@0.7.7/LICENSE-APACHE; parking@2.2.1/LICENSE-APACHE; parking_lot@0.12.5/LICENSE-APACHE; parking_lot_core@0.9.12/LICENSE-APACHE; percent-encoding@2.3.2/LICENSE-APACHE; png@0.18.1/LICENSE-APACHE; pollster@0.2.5/LICENSE-APACHE; pollster@0.4.0/LICENSE-APACHE; rayon-core@1.13.0/LICENSE-APACHE; rayon@1.12.0/LICENSE-APACHE; regex-automata@0.4.18/LICENSE-APACHE; regex-syntax@0.8.11/LICENSE-APACHE; regex@1.13.1/LICENSE-APACHE; roxmltree@0.21.1/LICENSE-APACHE; rustc-demangle@0.1.28/LICENSE-APACHE; rustix@1.1.4/LICENSE-APACHE; scopeguard@1.2.0/LICENSE-APACHE; serde_fmt@1.1.0/LICENSE-APACHE; simplecss@0.2.2/LICENSE-APACHE; smallvec@1.16.0/LICENSE-APACHE; smol_str@0.3.6/LICENSE-APACHE; stable_deref_trait@1.2.1/LICENSE-APACHE; stacker@0.1.25/LICENSE-APACHE; svgtypes@0.16.1/LICENSE-APACHE; tempfile@3.27.0/LICENSE-APACHE; unicase@2.9.0/LICENSE-APACHE; unicode-bidi@0.3.18/LICENSE-APACHE; unicode-segmentation@1.13.3/LICENSE-APACHE; unicode-vo@0.1.0/LICENSE-APACHE; unicode-width@0.2.2/LICENSE-APACHE; unicode-xid@0.2.6/LICENSE-APACHE; url@2.5.8/LICENSE-APACHE; uuid@1.26.0/LICENSE-APACHE; value-bag-serde1@1.14.1/LICENSE-APACHE; value-bag@1.14.1/LICENSE-APACHE; waker-fn@1.2.0/LICENSE-APACHE; weezl@0.1.12/LICENSE-APACHE; yaml-rust@0.4.5/LICENSE-APACHE; zed-font-kit@0.14.1-zed/LICENSE-APACHE
 
 Apache License
                         Version 2.0, January 2004
@@ -12301,6 +12303,30 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+
+base64@0.22.1/LICENSE-MIT
+
+The MIT License (MIT)
+
+Copyright (c) 2015 Alice Maz
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 
 base64@0.23.1/LICENSE-MIT
 

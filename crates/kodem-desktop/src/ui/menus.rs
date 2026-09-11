@@ -326,6 +326,7 @@ impl Shell {
                                 .on_click(cx.listener(|s, _, _, cx| {
                                     s.panel = Panel::Resources;
                                     s.send(core::Request::Resources {
+                                        provider: s.composer_preferences().provider,
                                         project_id: s.selected_project.clone().or_else(|| {
                                             s.workspace
                                                 .as_ref()?
@@ -363,7 +364,11 @@ impl Shell {
                 }
             }
             Panel::Models | Panel::Reasoning | Panel::Access => {
-                width = 348.;
+                width = if self.panel == Panel::Models {
+                    460.
+                } else {
+                    348.
+                };
                 menu = menu.child(self.model_options(cx));
             }
             _ => {}

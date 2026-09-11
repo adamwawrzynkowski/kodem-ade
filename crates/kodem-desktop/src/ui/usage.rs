@@ -1,7 +1,7 @@
 //! Account usage details and provider-backed reset actions beside the composer.
 use super::*;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct UsageActions {
     pending: bool,
     // Retain this key after an uncertain response so retry cannot consume a second reset.
@@ -90,76 +90,106 @@ impl Shell {
     fn account_usage(&self) -> Option<&UsageLimits> {
         self.workspace
             .as_ref()
-            .and_then(|w| w.runtime.usage.as_ref())
+            .and_then(|w| w.runtimes.get(&self.composer_preferences().provider))
+            .and_then(|runtime| runtime.usage.as_ref())
     }
 
     /// Builds the account details and explicit refresh and reset actions.
     pub(super) fn usage_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
+        let provider = self.composer_preferences().provider;
+        let runtime = self.selected_runtime();
+        let actions = self
+            .usage_actions
+            .get(&provider)
+            .cloned()
+            .unwrap_or_default();
         let available = self
             .account_usage()
             .and_then(|u| u.banked_resets.as_ref())
             .is_some_and(|r| r.available_count > 0);
-        let retry = self.usage_actions.retry_key.is_some();
-        let pending = self.usage_actions.pending;
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
+        let retry = actions.retry_key.is_some();
+        let pending = actions.pending;
+        let mut panel = div().flex().flex_col().gap_2().child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(icon(provider.icon()).size(px(15.)))
+                .child(format!("{} usage", provider.label())),
+        );
+        if let Some(usage) = self
+            .view
+            .as_ref()
+            .and_then(|view| view.task.context_usage.as_ref())
+            && let Some(cost) = &usage.cost
+        {
+            panel = panel
+                .child(div().text_size(px(13.)).child(format!(
+                    "Session cost: {:.4} {}",
+                    cost.amount, cost.currency
+                )))
+                .child(div().text_size(px(11.)).text_color(t.muted).child(format!(
+                    "Reported by {} · updated {} ago",
+                    provider.label(),
+                    age(usage.reported)
+                )));
+        }
+        if !runtime.account_usage {
+            return panel.child(div().text_size(px(12.)).text_color(t.muted).child("Account quotas are unavailable through this provider's CLI. Session cost and context appear when the provider reports them.")).into_any_element();
+        }
+        panel = panel
             .child(usage_details(self.account_usage(), t))
-            .child(div().h(px(1.)).bg(t.border))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        self.ghost(
-                            "refresh-account-usage",
-                            "refresh",
-                            if pending { "Working…" } else { "Refresh" },
-                        )
-                        .disabled(pending)
-                        .on_click(cx.listener(|s, _, _, cx| {
-                            s.usage_actions.pending = true;
-                            s.usage_actions.message = None;
-                            s.send(core::Request::RefreshUsage);
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        self.control("consume-usage-reset")
-                            .child(if retry {
-                                "Retry reset"
-                            } else {
-                                "Use one reset"
-                            })
-                            .disabled(pending || (!available && !retry))
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                if s.usage_actions.pending {
-                                    return;
-                                }
-                                let key = s
-                                    .usage_actions
-                                    .retry_key
-                                    .get_or_insert_with(core::new_id)
-                                    .clone();
-                                s.usage_actions.pending = true;
-                                s.usage_actions.message = None;
-                                s.send(core::Request::ConsumeUsageReset {
-                                    idempotency_key: key,
-                                });
-                                cx.notify();
-                            })),
-                    ),
+            .child(div().h(px(1.)).bg(t.border));
+        let mut controls = div().flex().items_center().gap_2().child(
+            self.ghost(
+                "refresh-account-usage",
+                "refresh",
+                if pending { "Working…" } else { "Refresh" },
             )
-            .child(
+            .disabled(pending)
+            .on_click(cx.listener(move |s, _, _, cx| {
+                let actions = s.usage_actions.entry(provider).or_default();
+                actions.pending = true;
+                actions.message = None;
+                s.send(core::Request::RefreshUsage { provider });
+                cx.notify();
+            })),
+        );
+        if runtime.usage_resets {
+            controls = controls.child(
+                self.control("consume-usage-reset")
+                    .child(if retry {
+                        "Retry reset"
+                    } else {
+                        "Use one reset"
+                    })
+                    .disabled(pending || (!available && !retry))
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        let actions = s.usage_actions.entry(provider).or_default();
+                        if actions.pending {
+                            return;
+                        }
+                        let key = actions.retry_key.get_or_insert_with(core::new_id).clone();
+                        actions.pending = true;
+                        actions.message = None;
+                        s.send(core::Request::ConsumeUsageReset {
+                            provider,
+                            idempotency_key: key,
+                        });
+                        cx.notify();
+                    })),
+            );
+            panel = panel.child(
                 div()
                     .text_size(px(11.))
                     .text_color(t.muted)
                     .child("Uses one banked reset on eligible usage limits."),
-            )
-            .when_some(self.usage_actions.message.clone(), |d, message| {
+            );
+        }
+        panel
+            .child(controls)
+            .when_some(actions.message, |d, message| {
                 d.child(div().text_size(px(12.)).text_color(t.text).child(message))
             })
             .into_any_element()
@@ -168,23 +198,26 @@ impl Shell {
     /// Applies account responses while preserving the redemption key after uncertain failures.
     pub(super) fn apply_usage_reply(
         &mut self,
+        provider: Provider,
         result: Result<Response, String>,
         cx: &mut Context<Self>,
     ) {
-        self.usage_actions.pending = false;
+        let actions = self.usage_actions.entry(provider).or_default();
+        actions.pending = false;
         match result {
-            Ok(Response::Usage(usage)) => {
+            Ok(Response::Usage { usage, .. }) => {
                 if let Some(workspace) = &mut self.workspace {
-                    workspace.runtime.usage = Some(usage);
+                    workspace.runtimes.entry(provider).or_default().usage = Some(usage);
                 }
-                self.usage_actions.message = Some("Usage updated.".into());
+                actions.message = Some("Usage updated.".into());
             }
             Ok(Response::UsageReset {
                 outcome,
                 usage,
                 refresh_error,
+                ..
             }) => {
-                self.usage_actions.retry_key = None;
+                actions.retry_key = None;
                 let message = match outcome {
                     UsageResetOutcome::Reset => "One banked reset used.",
                     UsageResetOutcome::AlreadyRedeemed => "This reset was already applied.",
@@ -195,13 +228,15 @@ impl Shell {
                 };
                 if let Some(workspace) = &mut self.workspace {
                     if let Some(usage) = usage {
-                        workspace.runtime.usage = Some(usage);
-                    } else if let Some(usage) = &mut workspace.runtime.usage {
+                        workspace.runtimes.entry(provider).or_default().usage = Some(usage);
+                    } else if let Some(usage) =
+                        &mut workspace.runtimes.entry(provider).or_default().usage
+                    {
                         // The old inventory is no longer safe to use for another redemption.
                         usage.banked_resets = None;
                     }
                 }
-                self.usage_actions.message = Some(match refresh_error {
+                actions.message = Some(match refresh_error {
                     Some(error) => {
                         format!("{message} Could not refresh usage: {error}. Press Refresh.")
                     }
@@ -209,7 +244,7 @@ impl Shell {
                 });
             }
             Err(error) | Ok(Response::Error(error)) => {
-                self.usage_actions.message = Some(if self.usage_actions.retry_key.is_some() {
+                actions.message = Some(if actions.retry_key.is_some() {
                     format!(
                         "{error}\nRetry reset checks the same attempt without using a second reset."
                     )
@@ -218,7 +253,7 @@ impl Shell {
                 });
             }
             _ => {
-                self.usage_actions.message =
+                actions.message =
                     Some("Unexpected account response. Refresh to check usage.".into())
             }
         }

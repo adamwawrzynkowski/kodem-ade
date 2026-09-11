@@ -254,12 +254,34 @@ impl Store {
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
         let mut settings = s.clone();
         // Agent defaults are host-owned; an older layout snapshot must not overwrite them.
-        settings.agent_defaults = self.settings()?.agent_defaults;
+        let saved = self.settings()?;
+        settings.agent_defaults = saved.agent_defaults;
+        settings.provider_preferences = saved.provider_preferences;
+        self.write_settings(&settings)
+    }
+    /// Saves the last provider and that provider's model options before a task is created.
+    pub fn save_agent_preferences(&self, defaults: AgentPreferences) -> Result<()> {
+        let mut settings = self.settings()?;
+        settings
+            .provider_preferences
+            .entry(settings.agent_defaults.provider)
+            .or_insert_with(|| settings.agent_defaults.clone());
+        settings
+            .provider_preferences
+            .insert(defaults.provider, defaults.clone());
+        settings.agent_defaults = defaults;
         self.write_settings(&settings)
     }
     /// Atomically saves an accepted task preference change and the defaults for new tasks.
     pub fn save_task_preferences(&self, task: &Task, defaults: AgentPreferences) -> Result<()> {
         let mut settings = self.settings()?;
+        settings
+            .provider_preferences
+            .entry(settings.agent_defaults.provider)
+            .or_insert_with(|| settings.agent_defaults.clone());
+        settings
+            .provider_preferences
+            .insert(defaults.provider, defaults.clone());
         settings.agent_defaults = defaults;
         let transaction = self.db.unchecked_transaction()?;
         self.save_task(task)?;

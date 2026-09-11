@@ -1,7 +1,7 @@
 //! Background model-generated titles, independent of conversation delivery.
 use crate::Shared;
 use anyhow::Result;
-use kodem_core::runtime::Codex;
+use kodem_core::providers::codex::Codex;
 
 /// Generates a short title for a new task without delaying its first turn.
 pub(super) fn start(host: Shared, task_id: &str) -> Result<()> {
@@ -14,6 +14,20 @@ pub(super) fn start(host: Shared, task_id: &str) -> Result<()> {
         let Some(message) = h.store.outgoing(task_id)?.into_iter().next() else {
             return Ok(());
         };
+        if task.provider != kodem_core::Provider::Codex {
+            let mut task = task;
+            task.title = message
+                .text
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("New conversation")
+                .chars()
+                .take(80)
+                .collect();
+            task.title_pending = false;
+            h.store.save_task(&task)?;
+            return Ok(());
+        }
         let input = serde_json::json!({
             "request": message.text.chars().take(6000).collect::<String>(),
             "attachments": message.attachments.iter().take(20).map(|a| &a.name).collect::<Vec<_>>(),

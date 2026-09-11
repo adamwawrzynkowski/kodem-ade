@@ -6,6 +6,7 @@ use std::{ops::Range, time::Instant};
 #[derive(Clone, PartialEq, Eq)]
 enum Choice {
     Command(ComposerCommand),
+    ProviderCommand(ProviderCommand),
     Skill(ComposerSkill),
     Attach,
     Files,
@@ -15,27 +16,47 @@ enum Choice {
 impl Choice {
     fn labels(&self) -> (&str, &str, &'static str, &'static str) {
         match self {
+            Self::ProviderCommand(command) => (
+                &command.name,
+                &command.description,
+                "code",
+                "Provider command",
+            ),
             Self::Command(command) => match command {
-                ComposerCommand::New => ("new", "Start a new conversation", "plus", "Codex"),
-                ComposerCommand::Model => {
-                    ("model", "Choose model and reasoning effort", "bot", "Codex")
-                }
+                ComposerCommand::Provider => (
+                    "provider",
+                    "Choose a provider and model",
+                    "settings-2",
+                    "Provider",
+                ),
+                ComposerCommand::New => ("new", "Start a new conversation", "plus", "Provider"),
+                ComposerCommand::Model => (
+                    "model",
+                    "Choose model and reasoning effort",
+                    "bot",
+                    "Provider",
+                ),
                 ComposerCommand::Permissions => (
                     "permissions",
                     "Choose access and approval mode",
                     "shield",
-                    "Codex",
+                    "Provider",
                 ),
                 ComposerCommand::Skills => (
                     "skills",
                     "Browse skills, instructions and MCP",
                     "code",
-                    "Codex",
+                    "Provider",
                 ),
-                ComposerCommand::Mcp => ("mcp", "Inspect connected MCP servers", "code", "Codex"),
-                ComposerCommand::Status => {
-                    ("status", "View runtime and account status", "bot", "Codex")
+                ComposerCommand::Mcp => {
+                    ("mcp", "Inspect connected MCP servers", "code", "Provider")
                 }
+                ComposerCommand::Status => (
+                    "status",
+                    "View runtime and account status",
+                    "bot",
+                    "Provider",
+                ),
             },
             Self::Skill(skill) => (&skill.name, &skill.description, "code", "Skill"),
             Self::Attach => ("attach", "Add files or images", "paperclip", "Context"),
@@ -46,10 +67,18 @@ impl Choice {
     }
 }
 
+#[derive(PartialEq, Eq)]
+struct CatalogContext {
+    task_id: Option<String>,
+    project_id: Option<String>,
+    provider: Provider,
+    model: Option<String>,
+}
+
 #[derive(Default)]
 pub(super) struct SlashPicker {
     catalog: ComposerCatalog,
-    context: Option<(Option<String>, Option<String>)>,
+    context: Option<CatalogContext>,
     loading: bool,
     request_id: Option<String>,
     token: Option<(Range<usize>, String)>,
@@ -67,17 +96,19 @@ impl SlashPicker {
     }
 }
 impl Shell {
-    fn catalog_context(&self) -> (Option<String>, Option<String>) {
-        (
-            self.selected.clone(),
-            self.selected_project.clone().or_else(|| {
+    fn catalog_context(&self) -> CatalogContext {
+        CatalogContext {
+            task_id: self.selected.clone(),
+            project_id: self.selected_project.clone().or_else(|| {
                 self.workspace
                     .as_ref()?
                     .projects
                     .first()
                     .map(|p| p.id.clone())
             }),
-        )
+            provider: self.composer_preferences().provider,
+            model: self.composer_preferences().model,
+        }
     }
 
     /// Synchronizes completions with the caret without treating paths or IME text as commands.
@@ -115,7 +146,12 @@ impl Shell {
     }
 
     fn load_slash_catalog(&mut self) {
-        let (task_id, project_id) = self.catalog_context();
+        let CatalogContext {
+            task_id,
+            project_id,
+            provider,
+            model,
+        } = self.catalog_context();
         self.slash.loading = true;
         let request_id = new_id();
         self.slash.request_id = Some(request_id.clone());
@@ -123,6 +159,8 @@ impl Shell {
             request_id,
             task_id,
             project_id,
+            provider,
+            model,
         });
     }
 
@@ -136,9 +174,17 @@ impl Shell {
             request_id,
             task_id,
             project_id,
+            provider,
+            model,
         } = request
             && self.slash.request_id.as_ref() == Some(request_id)
-            && self.catalog_context() == (task_id.clone(), project_id.clone())
+            && self.catalog_context()
+                == (CatalogContext {
+                    task_id: task_id.clone(),
+                    project_id: project_id.clone(),
+                    provider: *provider,
+                    model: model.clone(),
+                })
         {
             self.slash.loading = false;
             self.slash.catalog = catalog;
@@ -161,7 +207,15 @@ impl Shell {
             .copied()
             .map(Choice::Command)
             .chain(self.slash.catalog.skills.iter().cloned().map(Choice::Skill))
-            .chain([Choice::Attach])
+            .chain(
+                self.slash
+                    .catalog
+                    .provider_commands
+                    .iter()
+                    .cloned()
+                    .map(Choice::ProviderCommand),
+            )
+            .chain(self.selected_runtime().files.then_some(Choice::Attach))
             .collect();
         if self.view.is_some() {
             choices.extend([Choice::Files, Choice::Diff]);
@@ -243,14 +297,20 @@ impl Shell {
             return;
         };
         self.close_slash(cx);
-        self.input
-            .update(cx, |input, cx| input.complete_slash(range, "", cx));
+        let replacement = match &choice {
+            Choice::ProviderCommand(command) => format!("/{} ", command.name),
+            _ => String::new(),
+        };
+        self.input.update(cx, |input, cx| {
+            input.complete_slash(range, &replacement, cx)
+        });
         self.menu_anchor = self
             .input
             .read(cx)
             .text_bounds()
             .map(|bounds| bounds.origin);
         match choice {
+            Choice::ProviderCommand(_) => {}
             Choice::Skill(skill) => self.attach_skill(skill.path, cx),
             Choice::Attach => self.choose_attachments(cx),
             Choice::Files => {
@@ -266,18 +326,20 @@ impl Shell {
             }
             Choice::Command(command) => match command {
                 ComposerCommand::New => self.open_empty_chat(cx),
-                ComposerCommand::Model => self.panel = Panel::Models,
+                ComposerCommand::Provider | ComposerCommand::Model => self.panel = Panel::Models,
                 ComposerCommand::Permissions => self.panel = Panel::Access,
                 ComposerCommand::Skills | ComposerCommand::Mcp => {
                     self.panel = Panel::Resources;
                     self.send(core::Request::Resources {
+                        provider: self.composer_preferences().provider,
                         task_id: self.selected.clone(),
-                        project_id: self.catalog_context().1,
+                        project_id: self.catalog_context().project_id,
                     });
                 }
                 ComposerCommand::Status => {
                     self.panel = Panel::Settings;
                     self.settings_section = 2;
+                    self.settings_provider = self.composer_preferences().provider;
                 }
             },
             Choice::Retry => unreachable!(),
@@ -416,7 +478,7 @@ impl Shell {
                     .text_size(px(10.))
                     .text_color(t.muted)
                     .child(if self.slash.loading {
-                        "Loading Codex commands and skills…"
+                        "Loading provider commands and skills…"
                     } else {
                         "↑ ↓ navigate · Enter / Tab select · Esc dismiss"
                     }),

@@ -7,10 +7,10 @@ mod settlement;
 mod terminal;
 mod titles;
 use anyhow::{Context, Result, ensure};
-use kodem_core::{git, ipc, runtime, storage::Store, *};
+use kodem_core::{git, ipc, providers::codex, storage::Store, *};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs,
     os::unix::{fs::PermissionsExt, io::AsRawFd, net::UnixListener},
     sync::{Arc, Mutex, mpsc},
@@ -20,7 +20,7 @@ use std::{
 struct Host {
     store: Store,
     notifications: notifications::Notifications,
-    runtime: RuntimeInfo,
+    runtimes: BTreeMap<Provider, RuntimeInfo>,
     sessions: HashMap<String, mpsc::Sender<provider::Control>>,
     requests: HashMap<String, Vec<InputRequest>>,
     activities: HashMap<String, Vec<Activity>>,
@@ -60,7 +60,7 @@ fn run() -> Result<()> {
     listener.set_nonblocking(true)?;
     let store = Store::open(&root)?;
     store.recover()?;
-    let version = runtime::version();
+    let version = codex::version();
     let info = RuntimeInfo {
         version: version.as_ref().ok().cloned(),
         error: version.err().map(|e| e.to_string()),
@@ -69,7 +69,10 @@ fn run() -> Result<()> {
     let host = Arc::new(Mutex::new(Host {
         store,
         notifications: notifications::Notifications::start(),
-        runtime: info,
+        runtimes: BTreeMap::from([
+            (Provider::Codex, info),
+            (Provider::Devin, RuntimeInfo::default()),
+        ]),
         sessions: HashMap::new(),
         requests: HashMap::new(),
         activities: HashMap::new(),
@@ -154,7 +157,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         "Host is restarting. Retry after reconnecting."
     );
     match request {
-        Request::RefreshUsage | Request::ConsumeUsageReset { .. } => {
+        Request::RefreshUsage { provider } | Request::ConsumeUsageReset { provider, .. } => {
             {
                 let mut h = host.lock().unwrap();
                 ensure!(
@@ -164,10 +167,12 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 h.usage_refreshing = true;
             }
             let key = match &request {
-                Request::ConsumeUsageReset { idempotency_key } => Some(idempotency_key.as_str()),
+                Request::ConsumeUsageReset {
+                    idempotency_key, ..
+                } => Some(idempotency_key.as_str()),
                 _ => None,
             };
-            let result = provider::account_usage(host, key);
+            let result = provider::account_usage(host, provider, key);
             let mut h = host.lock().unwrap();
             h.usage_refreshing = false;
             h.usage_refresh = Some(Instant::now());
@@ -212,7 +217,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 projects,
                 tasks,
                 settings: h.store.settings()?,
-                runtime: h.runtime.clone(),
+                runtimes: h.runtimes.clone(),
             }))
         }
         Request::TestNotification { sound } => {
@@ -223,8 +228,14 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             provider::reconcile(host, &task_id)?;
             Ok(Response::Ok)
         }
-        Request::ConnectRuntime => {
-            provider::discover(host.clone(), None)?;
+        Request::ConnectRuntime { provider } => {
+            provider::discover(host.clone(), provider, None)?;
+            Ok(Response::Ok)
+        }
+        Request::SetAgentPreferences(preferences) => {
+            let h = host.lock().unwrap();
+            provider::validate_saved_selection(&h, &preferences)?;
+            h.store.save_agent_preferences(preferences)?;
             Ok(Response::Ok)
         }
         Request::OpenProject { path } => {
@@ -295,6 +306,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             worktree,
             preferences: defaults,
         } => {
+            provider::validate_preferences(&host.lock().unwrap(), &defaults)?;
             let p = host
                 .lock()
                 .unwrap()
@@ -313,6 +325,8 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             let repository_baselines = git::repository_baselines(&cwd)?;
             let branch = git::branch(&cwd);
             let task = Task {
+                provider: defaults.provider,
+                provider_access: defaults.provider_access.clone(),
                 id,
                 project_id,
                 title: "New task".into(),
@@ -357,10 +371,50 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         Request::EditTask { task_id, edit } => {
             let h = host.lock().unwrap();
             let mut t = h.store.task(&task_id)?;
-            let preferences_changed = matches!(&edit, TaskEdit::Model { .. } | TaskEdit::Access(_));
-            let mut defaults = h.store.settings()?.agent_defaults;
+            let preferences_changed = matches!(
+                &edit,
+                TaskEdit::Model { .. }
+                    | TaskEdit::Access(_)
+                    | TaskEdit::Provider(_)
+                    | TaskEdit::ProviderAccess(_)
+            );
+            ensure!(
+                !preferences_changed
+                    || (t.state != RunState::DeliveryUnknown
+                        && !h.store.has_uncertain_submission(&task_id)?),
+                "Reconcile uncertain delivery before changing provider options"
+            );
+            let mut defaults = provider::preferences(&t);
             match edit {
+                TaskEdit::Provider(preferences) => {
+                    ensure!(
+                        t.provider_thread.is_none()
+                            && !h.sessions.contains_key(&task_id)
+                            && !t.state.active()
+                            && t.state != RunState::DeliveryUnknown
+                            && h.store.outgoing(&task_id)?.is_empty(),
+                        "Start a new conversation to change providers after this task has started"
+                    );
+                    provider::validate_saved_selection(&h, &preferences)?;
+                    t.provider = preferences.provider;
+                    t.provider_access = preferences.provider_access.clone();
+                    t.model = preferences.model.clone();
+                    t.effort = preferences.effort.clone();
+                    t.access = preferences.access;
+                    t.context_usage = None;
+                    defaults = preferences;
+                }
+                TaskEdit::ProviderAccess(access) => {
+                    ensure!(!t.state.active(), "Change access after this turn finishes");
+                    defaults.provider_access = Some(access.clone());
+                    provider::validate_preferences(&h, &defaults)?;
+                    t.provider_access = Some(access);
+                }
                 TaskEdit::Access(access) => {
+                    ensure!(
+                        t.provider == Provider::Codex,
+                        "Select one of this provider's advertised access modes"
+                    );
                     ensure!(!t.state.active(), "Change access after this turn finishes");
                     t.access = access;
                     defaults.access = access;
@@ -392,6 +446,8 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                     t.effort = effort;
                     defaults.model = t.model.clone();
                     defaults.effort = t.effort.clone();
+                    provider::validate_preferences(&h, &defaults)?;
+                    t.context_usage = None;
                 }
             }
             if preferences_changed {
@@ -462,6 +518,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             let registration = (|| {
                 let h = host.lock().unwrap();
                 let mut task = h.store.task(&task_id)?;
+                provider::validate_attachments(&h, &task, &imported)?;
                 ensure!(
                     task.attachments.len() + imported.len() <= 32,
                     "A prompt can contain up to 32 attachments"
@@ -648,17 +705,20 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             Ok(Response::Ok)
         }
         Request::ComposerCatalog {
+            provider,
+            model: _,
             request_id: _,
             task_id,
             project_id,
         } => Ok(Response::ComposerCatalog(provider::composer_catalog(
-            host, task_id, project_id,
+            host, provider, task_id, project_id,
         )?)),
         Request::Resources {
+            provider,
             task_id,
             project_id,
         } => Ok(Response::Resources(provider::resources(
-            host, task_id, project_id,
+            host, provider, task_id, project_id,
         )?)),
         Request::Files { task_id } => {
             let cwd = host.lock().unwrap().store.task(&task_id)?.cwd;
@@ -770,7 +830,8 @@ fn validate_answer(request: &InputRequest, response: &Value) -> Result<()> {
             .as_str()
             .context("Choose an approval decision")?;
         ensure!(
-            ["accept", "acceptForSession", "decline", "cancel"].contains(&decision),
+            ["accept", "acceptForSession", "decline", "cancel"].contains(&decision)
+                || (request.method == "devin/requestApproval" && decision == "declineAlways"),
             "Unsupported approval decision"
         );
         if let Some(available) = request.params["availableDecisions"].as_array() {

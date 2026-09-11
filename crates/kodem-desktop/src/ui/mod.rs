@@ -114,6 +114,7 @@ pub struct Shell {
     host_connected: bool,
     new_worktree_override: Option<bool>,
     new_preferences: Option<AgentPreferences>,
+    settings_provider: Provider,
     // Project chosen for the next task, independent of the currently viewed thread.
     selected_project: Option<String>,
     editing_project: Option<Project>,
@@ -181,7 +182,7 @@ pub struct Shell {
     settings_section: usize,
     effort_slider: Option<(String, Entity<effort_slider::EffortSlider>, Subscription)>,
     image_preview: Option<image_preview::ImagePreview>,
-    usage_actions: usage::UsageActions,
+    usage_actions: std::collections::BTreeMap<Provider, usage::UsageActions>,
 }
 impl Shell {
     /// Creates the workspace and begins asynchronous host synchronization.
@@ -349,7 +350,7 @@ impl Shell {
             theme: Theme::new(false),
             panel: Panel::None,
             menu_anchor: None,
-            usage_actions: usage::UsageActions::default(),
+            usage_actions: std::collections::BTreeMap::new(),
             thread_menu: None,
             deleting_task: None,
             error: None,
@@ -357,6 +358,7 @@ impl Shell {
             host_connected: false,
             new_worktree_override: None,
             new_preferences: None,
+            settings_provider: Provider::default(),
             selected_project: None,
             editing_project: None,
             greeting_name: user_first_name(),
@@ -455,9 +457,14 @@ impl Shell {
         self.host_connected = reply.connected;
         if matches!(
             reply.request,
-            core::Request::RefreshUsage | core::Request::ConsumeUsageReset { .. }
+            core::Request::RefreshUsage { .. } | core::Request::ConsumeUsageReset { .. }
         ) {
-            self.apply_usage_reply(reply.result, cx);
+            let provider = match reply.request {
+                core::Request::RefreshUsage { provider }
+                | core::Request::ConsumeUsageReset { provider, .. } => provider,
+                _ => unreachable!(),
+            };
+            self.apply_usage_reply(provider, reply.result, cx);
             return;
         }
         if !reply.connected {
@@ -480,6 +487,26 @@ impl Shell {
             return;
         }
 
+        if let core::Request::Resources {
+            provider,
+            task_id,
+            project_id,
+        } = &reply.request
+        {
+            let current_project = self.selected_project.clone().or_else(|| {
+                self.workspace
+                    .as_ref()?
+                    .projects
+                    .first()
+                    .map(|project| project.id.clone())
+            });
+            if *provider != self.composer_preferences().provider
+                || task_id != &self.selected
+                || (task_id.is_none() && project_id != &current_project)
+            {
+                return;
+            }
+        }
         let response = match reply.result {
             Ok(r) => r,
             Err(e) => {
@@ -493,6 +520,10 @@ impl Shell {
                     );
                     cx.notify();
                     return;
+                }
+                if matches!(reply.request, core::Request::SetAgentPreferences(_)) {
+                    self.new_preferences = None;
+                    self.send(core::Request::Hello);
                 }
                 self.answer_failed(&reply.request);
                 if matches!(reply.request, core::Request::DeleteTask { .. }) {
@@ -534,8 +565,14 @@ impl Shell {
             }
         };
         match response {
-            response @ (Response::Usage(_) | Response::UsageReset { .. }) => {
-                self.apply_usage_reply(Ok(response), cx);
+            response @ (Response::Usage { .. } | Response::UsageReset { .. }) => {
+                let provider = match &response {
+                    Response::Usage { provider, .. } | Response::UsageReset { provider, .. } => {
+                        *provider
+                    }
+                    _ => unreachable!(),
+                };
+                self.apply_usage_reply(provider, Ok(response), cx);
             }
             Response::Workspace(workspace) => {
                 self.sidebar_dirty = true;
@@ -571,12 +608,16 @@ impl Shell {
                     } else {
                         self.status = "Open a repository to start coding".into();
                     }
-                    if self
-                        .workspace
-                        .as_ref()
-                        .is_some_and(|w| w.runtime.models.is_empty())
+                    if self.selected.is_none()
+                        && self.workspace.as_ref().is_some_and(|w| {
+                            w.runtimes
+                                .get(&self.composer_preferences().provider)
+                                .is_none_or(|r| r.models.is_empty())
+                        })
                     {
-                        self.send(core::Request::ConnectRuntime);
+                        self.send(core::Request::ConnectRuntime {
+                            provider: self.composer_preferences().provider,
+                        });
                     }
                     cx.notify();
                     return;
@@ -639,6 +680,11 @@ impl Shell {
                 }
                 let initial = self.view.as_ref().is_none_or(|v| v.task.id != view.task.id);
                 if initial {
+                    if self.provider_runtime(view.task.provider).models.is_empty() {
+                        self.send(core::Request::ConnectRuntime {
+                            provider: view.task.provider,
+                        });
+                    }
                     self.observed_draft = view.task.draft.clone();
                     self.draft_revision += 1;
                     self.input
@@ -920,8 +966,13 @@ impl Shell {
                 core::Request::StageFile { .. } => self.refresh_diff(),
                 core::Request::EditTask {
                     task_id,
-                    edit: TaskEdit::Model { .. } | TaskEdit::Access(_),
+                    edit:
+                        TaskEdit::Model { .. }
+                        | TaskEdit::Access(_)
+                        | TaskEdit::Provider(_)
+                        | TaskEdit::ProviderAccess(_),
                 } => {
+                    self.new_preferences = None;
                     self.send(core::Request::Task {
                         task_id,
                         before: None,
@@ -937,6 +988,10 @@ impl Shell {
                 _ => self.send(core::Request::Hello),
             },
             Response::Error(e) => {
+                if matches!(reply.request, core::Request::SetAgentPreferences(_)) {
+                    self.new_preferences = None;
+                    self.send(core::Request::Hello);
+                }
                 self.answer_failed(&reply.request);
                 if let core::Request::Submit {
                     task_id,

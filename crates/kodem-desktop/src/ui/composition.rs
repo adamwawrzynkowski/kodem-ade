@@ -61,6 +61,11 @@ impl Shell {
         {
             return;
         }
+        let mode = if self.selected_runtime().steering {
+            self.settings.send_mode
+        } else {
+            SendMode::Queue
+        };
         let text = self.input.read(cx).text();
         let Some(view) = &self.view else {
             self.create_composer_task(cx);
@@ -102,7 +107,7 @@ impl Shell {
                             px(crate::theme::MESSAGE_PADDING),
                         )
                 }),
-            queued: view.task.state.active() && self.settings.send_mode == SendMode::Queue,
+            queued: view.task.state.active() && mode == SendMode::Queue,
         });
         self.send(core::Request::EditTask {
             task_id: view.task.id.clone(),
@@ -114,7 +119,7 @@ impl Shell {
             text,
             feedback_ids: view.task.feedback.iter().map(|f| f.id.clone()).collect(),
             attachment_ids: view.task.attachments.iter().map(|a| a.id.clone()).collect(),
-            mode: self.settings.send_mode,
+            mode,
         });
         cx.notify();
     }
@@ -161,8 +166,14 @@ impl Shell {
             self.attach_paths(pasted.paths.clone(), cx);
             return;
         }
+        if !self.accepts_images() {
+            self.error = Some("The selected provider and model do not support image attachments. Choose another model before pasting an image.".into());
+            cx.notify();
+            return;
+        }
         let pasted = pasted.clone();
         let selected = self.selected.clone();
+        let preferences = self.composer_preferences();
         self.pasting_images += 1;
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -173,8 +184,8 @@ impl Shell {
                 s.pasting_images -= 1;
                 match result {
                     Ok((mut paths, images)) => {
-                        if selected.is_none() && s.selected.is_some() {
-                            s.error = Some("Image paste cancelled because the task changed. Paste again in the intended task.".into());
+                        if selected.is_none() && (s.selected.is_some() || s.composer_preferences() != preferences) {
+                            s.error = Some("Image paste cancelled because the task, provider or model changed. Paste again in the intended conversation.".into());
                         } else {
                             for image in images {
                                 let path = image.to_path_buf();
@@ -205,6 +216,11 @@ impl Shell {
         if sources.is_empty() {
             return;
         }
+        if !self.selected_runtime().files {
+            self.error = Some("Attachments are unavailable for the selected provider. Refresh its connection or choose another provider.".into());
+            cx.notify();
+            return;
+        }
         if let Some(task_id) = self.selected.clone() {
             self.import_attachments(task_id, sources);
         } else {
@@ -233,6 +249,11 @@ impl Shell {
 
     /// Opens the native multiple-file picker used by the composer paperclip.
     pub(super) fn choose_attachments(&mut self, cx: &mut Context<Self>) {
+        if !self.selected_runtime().files {
+            self.error = Some("Attachments are unavailable for the selected provider. Refresh its connection or choose another provider.".into());
+            cx.notify();
+            return;
+        }
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -566,29 +587,33 @@ impl Shell {
                                     outgoing.text.clone()
                                 }),
                         )
-                        .when(outgoing.state == DeliveryState::Queued, |d| {
-                            d.child(
-                                self.icon_button(
-                                    ("steer-queued", index),
-                                    "arrow-right",
-                                    "Steer immediately",
+                        .when(
+                            outgoing.state == DeliveryState::Queued
+                                && self.selected_runtime().steering,
+                            |d| {
+                                d.child(
+                                    self.icon_button(
+                                        ("steer-queued", index),
+                                        "arrow-right",
+                                        "Steer immediately",
+                                    )
+                                    .size(px(22.))
+                                    .disabled(
+                                        !task.state.active()
+                                            || task.active_turn.is_none()
+                                            || outgoing.expected_turn.is_some(),
+                                    )
+                                    .on_click(cx.listener(
+                                        move |s, _, _, _| {
+                                            s.send(core::Request::SteerQueued {
+                                                task_id: steer_task.clone(),
+                                                id: steer_id.clone(),
+                                            });
+                                        },
+                                    )),
                                 )
-                                .size(px(22.))
-                                .disabled(
-                                    !task.state.active()
-                                        || task.active_turn.is_none()
-                                        || outgoing.expected_turn.is_some(),
-                                )
-                                .on_click(cx.listener(
-                                    move |s, _, _, _| {
-                                        s.send(core::Request::SteerQueued {
-                                            task_id: steer_task.clone(),
-                                            id: steer_id.clone(),
-                                        });
-                                    },
-                                )),
-                            )
-                        })
+                            },
+                        )
                         .when(
                             matches!(
                                 outgoing.state,

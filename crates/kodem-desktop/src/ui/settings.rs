@@ -17,7 +17,7 @@ impl Shell {
         for (i, (glyph, label)) in [
             ("sun", "Appearance"),
             ("folder", "Workspace"),
-            ("bot", "Codex"),
+            ("settings-2", "Providers"),
             ("bell", "Notifications"),
             ("keyboard", "Shortcuts"),
             ("folder", "Projects"),
@@ -34,6 +34,12 @@ impl Shell {
                     })
                     .on_click(cx.listener(move |s, _, _, cx| {
                         s.settings_section = i;
+                        if i == 2 {
+                            s.settings_provider = s.composer_preferences().provider;
+                            s.send(core::Request::ConnectRuntime {
+                                provider: s.settings_provider,
+                            });
+                        }
                         cx.notify();
                     })),
             );
@@ -345,76 +351,7 @@ impl Shell {
                 }
             }
             2 => {
-                let runtime = self
-                    .workspace
-                    .as_ref()
-                    .map(|w| w.runtime.clone())
-                    .unwrap_or_default();
-                body = body
-                    .child(self.section_title(
-                        "Codex",
-                        "The local runtime powers your task conversations.",
-                    ))
-                    .child(self.setting_row(
-                        "Messages during a turn",
-                        "Queue runs after completion. Steer adds instructions to the current turn.",
-                        self.button("default-send-mode", if self.settings.send_mode == SendMode::Queue { "arrow-down" } else { "arrow-right" },
-                            if self.settings.send_mode == SendMode::Queue { "Queue" } else { "Steer" })
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                s.settings.send_mode = if s.settings.send_mode == SendMode::Queue { SendMode::Steer } else { SendMode::Queue };
-                                s.save_settings();
-                                cx.notify();
-                            })).into_any_element()))
-                    .child(
-                        self.setting_row(
-                            "Runtime",
-                            &if self.host_connected {
-                                runtime.version.unwrap_or_else(|| "Runtime unavailable".into())
-                            } else {
-                                "Waiting for the local host…".into()
-                            },
-                            self.ghost("connect-codex", "refresh", "Refresh connection")
-                                .on_click(
-                                    cx.listener(|s, _, _, _| s.send(core::Request::ConnectRuntime)),
-                                )
-                                .into_any_element(),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_size(px(12.))
-                            .child(
-                                icon(if runtime.authenticated == Some(true) {
-                                    "circle-check"
-                                } else {
-                                    "shield"
-                                })
-                                .text_color(t.accent),
-                            )
-                            .child(match runtime.authenticated {
-                                Some(true) => "Signed in",
-                                Some(false) => "Sign in with codex login in Terminal",
-                                None if !self.host_connected => "Account details unavailable while reconnecting",
-                                None => "Connect to check your account",
-                            }),
-                    )
-                    .child(div().text_size(px(12.)).text_color(t.muted).child(
-                        "Choose a model and reasoning effort from the conversation composer.",
-                    ));
-                if let Some(error) = runtime.error {
-                    body = body.child(
-                        div()
-                            .p_3()
-                            .rounded(px(7.))
-                            .bg(t.removed_bg)
-                            .text_size(px(12.))
-                            .text_color(t.removed)
-                            .child(error),
-                    );
-                }
+                body = body.child(self.provider_settings(cx));
                 body = body.child(div().mt_4().border_t_1().border_color(t.border).pt_4().flex().flex_col().gap_3()
                     .child(div().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child("Background tasks"))
                     .child(div().text_size(px(12.)).text_color(t.muted).child("Tasks and terminals continue when you close the window. An idle host stops after five minutes when no task or shell is running."))
@@ -654,5 +591,318 @@ impl Shell {
             )
             .child(control)
             .into_any_element()
+    }
+    fn provider_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let provider = self.settings_provider;
+        let runtime = self.provider_runtime(provider);
+        let preferences = self.provider_preferences(provider);
+        let mut chooser = div().flex().gap_2();
+        for (index, candidate) in Provider::ALL.into_iter().enumerate() {
+            let connected = self.provider_runtime(candidate).authenticated == Some(true);
+            chooser = chooser.child(
+                self.ghost(
+                    ("settings-provider", index),
+                    candidate.icon(),
+                    candidate.label(),
+                )
+                .flex_1()
+                .h(px(48.))
+                .justify_start()
+                .border_1()
+                .border_color(if candidate == provider {
+                    t.accent
+                } else {
+                    t.border
+                })
+                .when(candidate == provider, |b| {
+                    b.bg(t.selected).text_color(t.text)
+                })
+                .child(div().flex_1())
+                .child(
+                    icon(if connected { "circle-check" } else { "shield" })
+                        .size(px(13.))
+                        .text_color(t.muted),
+                )
+                .on_click(cx.listener(move |s, _, _, cx| {
+                    s.settings_provider = candidate;
+                    s.send(core::Request::ConnectRuntime {
+                        provider: candidate,
+                    });
+                    cx.notify();
+                })),
+            );
+        }
+        let mut content = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(self.section_title(
+                "Providers",
+                "Connect a local CLI and choose the defaults for new conversations.",
+            ))
+            .child(chooser)
+            .child(
+                self.ghost(
+                    "provider-use-default",
+                    provider.icon(),
+                    "Use for new conversations",
+                )
+                .on_click(cx.listener(move |s, _, _, cx| {
+                    let preferences = s.provider_preferences(provider);
+                    s.save_agent_preferences(preferences);
+                    cx.notify();
+                })),
+            )
+            .child(
+                self.setting_row(
+                    "Runtime",
+                    &runtime
+                        .version
+                        .clone()
+                        .unwrap_or_else(|| "Not connected".into()),
+                    self.ghost("provider-refresh", "refresh", "Refresh")
+                        .on_click(cx.listener(move |s, _, _, _| {
+                            s.send(core::Request::ConnectRuntime { provider })
+                        }))
+                        .into_any_element(),
+                ),
+            )
+            .child(
+                self.setting_row(
+                    "Authentication",
+                    match runtime.authenticated {
+                        Some(true) => "Signed in through the provider CLI",
+                        Some(false) => "Sign in in Terminal, then refresh the connection",
+                        None => "Refresh the connection to check authentication",
+                    },
+                    self.ghost("provider-login", "copy", "Copy sign-in command")
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                provider.login_command().into(),
+                            ))
+                        }))
+                        .into_any_element(),
+                ),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .font_family("JetBrains Mono")
+                    .text_color(t.muted)
+                    .child(provider.login_command()),
+            )
+            .child(
+                self.setting_row(
+                    "Sign out",
+                    "Run the command in Terminal, then refresh the connection",
+                    self.ghost("provider-logout", "copy", "Copy sign-out command")
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let command = match provider {
+                                Provider::Codex => "codex logout",
+                                Provider::Devin => "devin auth logout",
+                            };
+                            cx.write_to_clipboard(ClipboardItem::new_string(command.into()));
+                        }))
+                        .into_any_element(),
+                ),
+            )
+            .when(
+                provider == Provider::Devin && runtime.version.is_none(),
+                |d| {
+                    d.child(
+                        self.ghost(
+                            "provider-install",
+                            "external-link",
+                            "Devin installation guide",
+                        )
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.open_url("https://docs.devin.ai/get-started/devin-intro")
+                        })),
+                    )
+                },
+            )
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Default model"),
+            );
+        let default_preferences = preferences.clone();
+        content = content.child(
+            self.ghost(
+                "settings-default-model",
+                provider.icon(),
+                format!("{} default", provider.label()),
+            )
+            .w_full()
+            .justify_start()
+            .when(preferences.model.is_none(), |b| b.bg(t.selected))
+            .on_click(cx.listener(move |s, _, _, cx| {
+                let mut preferences = default_preferences.clone();
+                preferences.model = None;
+                preferences.effort = None;
+                s.save_agent_preferences(preferences);
+                cx.notify();
+            })),
+        );
+        for (index, model) in runtime.models.iter().enumerate() {
+            let mut selected = preferences.clone();
+            selected.model = Some(model.id.clone());
+            selected.effort =
+                (!model.default_effort.is_empty()).then(|| model.default_effort.clone());
+            content = content.child(
+                self.ghost(
+                    ("settings-model", index),
+                    provider.icon(),
+                    model.name.clone(),
+                )
+                .w_full()
+                .justify_start()
+                .when(preferences.model.as_ref() == Some(&model.id), |b| {
+                    b.bg(t.selected)
+                })
+                .on_click(cx.listener(move |s, _, _, cx| {
+                    s.save_agent_preferences(selected.clone());
+                    cx.notify();
+                })),
+            );
+        }
+        if let Some(model) = runtime
+            .models
+            .iter()
+            .find(|model| preferences.model.as_ref() == Some(&model.id))
+        {
+            if !model.efforts.is_empty() {
+                let mut efforts = div().flex().flex_wrap().gap_1();
+                for (index, effort) in model.efforts.iter().enumerate() {
+                    let mut selected = preferences.clone();
+                    selected.effort = Some(effort.clone());
+                    let chosen = preferences
+                        .effort
+                        .as_deref()
+                        .unwrap_or(&model.default_effort)
+                        == effort;
+                    efforts = efforts.child(
+                        self.ghost(("settings-reasoning", index), "settings-2", effort.clone())
+                            .when(chosen, |b| b.bg(t.selected))
+                            .on_click(cx.listener(move |s, _, _, cx| {
+                                s.save_agent_preferences(selected.clone());
+                                cx.notify();
+                            })),
+                    );
+                }
+                content = content.child(self.setting_row(
+                    "Reasoning",
+                    "Levels reported by the selected model",
+                    efforts.into_any_element(),
+                ));
+            }
+            content = content.child(div().text_size(px(11.)).text_color(t.muted).child(
+                if model.images {
+                    "Supports image attachments"
+                } else {
+                    "Image attachments are unavailable for this model"
+                },
+            ));
+        }
+        content = content.child(
+            div()
+                .text_size(px(13.))
+                .font_weight(FontWeight::MEDIUM)
+                .child("Default access"),
+        );
+        if provider == Provider::Codex {
+            for (index, mode) in [
+                AccessMode::ReadOnly,
+                AccessMode::Workspace,
+                AccessMode::AutoReview,
+                AccessMode::FullAccess,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut selected = preferences.clone();
+                selected.access = mode;
+                content = content.child(
+                    self.ghost(("settings-access", index), "shield", mode.label())
+                        .w_full()
+                        .justify_start()
+                        .when(preferences.access == mode, |b| b.bg(t.selected))
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            s.save_agent_preferences(selected.clone());
+                            cx.notify();
+                        })),
+                );
+            }
+        } else {
+            for (index, mode) in runtime.access_modes.iter().enumerate() {
+                let mut selected = preferences.clone();
+                selected.provider_access = Some(mode.id.clone());
+                content = content.child(
+                    self.setting_row(
+                        &mode.name,
+                        &mode.description,
+                        self.ghost(
+                            ("settings-access", index),
+                            "shield",
+                            if preferences.provider_access.as_ref() == Some(&mode.id) {
+                                "Selected"
+                            } else {
+                                "Select"
+                            },
+                        )
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            s.save_agent_preferences(selected.clone());
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                    ),
+                );
+            }
+        }
+        if runtime.steering {
+            content = content.child(
+                self.setting_row(
+                    "Messages during a turn",
+                    "Queue waits for completion. Steer updates the current turn.",
+                    self.ghost(
+                        "provider-send-mode",
+                        "arrow-right",
+                        if self.settings.send_mode == SendMode::Queue {
+                            "Queue"
+                        } else {
+                            "Steer"
+                        },
+                    )
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.settings.send_mode = if s.settings.send_mode == SendMode::Queue {
+                            SendMode::Steer
+                        } else {
+                            SendMode::Queue
+                        };
+                        s.save_settings();
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+                ),
+            );
+        } else {
+            content = content.child(div().text_size(px(11.)).text_color(t.muted).child(
+                "Messages sent during a turn are queued. This provider does not support steering.",
+            ));
+        }
+        if let Some(error) = runtime.error {
+            content = content.child(
+                div()
+                    .p_3()
+                    .rounded(px(7.))
+                    .bg(t.removed_bg)
+                    .text_size(px(12.))
+                    .text_color(t.removed)
+                    .child(error),
+            );
+        }
+        content.into_any_element()
     }
 }

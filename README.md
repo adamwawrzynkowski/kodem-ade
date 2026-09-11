@@ -1,6 +1,6 @@
 # Kodem ADE
 
-A native Rust and GPUI coding workspace. This first implementation connects task conversations, Git review, captured feedback and a terminal through a durable local host. Codex is the supported provider. Kodem requires CLI 0.153.4 or newer, with no upper version limit.
+A native Rust and GPUI coding workspace. Task conversations, Git review, captured feedback and a terminal run through a durable local host. Providers include Codex through its app-server CLI and Devin through its ACP CLI. The Codex integration requires CLI 0.153.4 or newer.
 
 ## Build on macOS
 
@@ -36,7 +36,7 @@ The release repository is private. Users need GitHub CLI installed and signed in
 
 Open the app, choose a repository, then create a task. Tasks use the current checkout by default. Choose **Settings → Workspace → Default task location** to default to a new worktree instead; a repository needs an initial commit for that option. Each new task starts with the saved preference, and you can override it in the composer for that task. Selecting a task never checks out another branch in your original working directory.
 
-Kodem uses Codex's own authentication. If you have not signed in, run this in Terminal:
+Each provider uses its own CLI authentication. For Codex, run this in Terminal:
 
 ```sh
 codex login
@@ -44,11 +44,11 @@ codex login
 
 If Codex is installed only by Kodem's build setup, use `~/.local/share/kodem/runtimes/0.153.4/bin/codex login` instead.
 
-Use **Settings → Codex** to refresh the account connection. Choose the model, reasoning effort and access from their separate composer menus. The effort slider supports dragging and arrow keys. Access defaults to Workspace; AI auto-approve routes permission requests to Codex’s risk-based AI reviewer while retaining the workspace sandbox. Read only restricts execution, and Full access removes sandbox and approval prompts. These controls apply to the next turn and cannot change during active execution. Compose a prompt and press Return (or Command-Return); Shift-Return inserts a newline. Commands and file changes stream into the transcript. Approval requests wait for your response. Model questions appear inside the composer with selectable options, descriptions, and a custom-answer field. Answer every question and select **Send answers**; each new request triggers the configured attention notification. Async questions remain available after the model finishes or the app restarts; answers reach the active turn immediately or start the next turn. Stop interrupts the active turn. A transport failure with uncertain delivery requires explicit history reconciliation; Kodem does not silently resend your prompt.
+For Devin, install the [official CLI](https://docs.devin.ai/cli) and run `devin auth login`. Use **Settings → Providers** to select an integration, copy its sign-in command, refresh its connection and choose its default model and access mode. The model picker has a provider logo rail. Provider and model selections are saved immediately and remembered separately for each integration. A conversation stays bound to its provider after startup; start a new conversation to use another provider. Choose the model, reasoning effort and access from their separate composer menus. The effort slider supports dragging and arrow keys. Codex access defaults to Workspace; AI auto-approve routes permission requests to its risk-based AI reviewer while retaining the workspace sandbox. Devin uses the permission modes advertised by its ACP session. Unsupported reasoning, image input, steering and account quota actions are unavailable rather than mapped to another provider’s behavior. Read only restricts execution, and Full access removes sandbox and approval prompts. These controls apply to the next turn and cannot change during active execution. Compose a prompt and press Return (or Command-Return); Shift-Return inserts a newline. Commands and file changes stream into the transcript. Approval requests wait for your response. Model questions appear inside the composer with selectable options, descriptions, and a custom-answer field. Answer every question and select **Send answers**; each new request triggers the configured attention notification. Async questions remain available after the model finishes or the app restarts; answers reach the active turn immediately or start the next turn. Stop interrupts the active turn. A transport failure with uncertain delivery requires explicit history reconciliation; Kodem does not silently resend your prompt.
 
-The sidebar shows project icons, task status and elapsed time, the task branch and its provider logo. New threads receive a short model-generated title in the background; manual renames take precedence. Filter by project or search titles, projects and branches. Completed tasks collect under Settled. A task's +/− badge opens its saved completion snapshot; later checkout edits do not change it. Older tasks show no historical total until another turn completes.
+The sidebar shows project icons, task status and elapsed time, the task branch and its provider logo. Codex threads receive a short model-generated title in the background; Devin threads use the first prompt line. Manual renames take precedence. Filter by project or search titles, projects and branches. Completed tasks collect under Settled. A task's +/− badge opens its saved completion snapshot; later checkout edits do not change it. Older tasks show no historical total until another turn completes.
 
-Two small composer meters show context occupancy in cyan and account limits in an amber ring. Hover for token counts, usage windows, reset estimates and report age. They use provider-reported data and remain unknown until it is available.
+Two small composer meters show context occupancy in cyan and account limits in an amber ring. Hover for token counts, usage windows, reset estimates and report age. They use data from the selected provider and remain unknown until it is available. Devin ACP reports session context when available but does not expose Codex account quotas or banked resets. See [provider integration details](docs/implementation/providers.md) for protocol capabilities and validation limits.
 
 Chat supports headings, bold and italic text, inline code, strikethrough, nested bullet and numbered lists, task lists, quotes, dividers, tables and syntax-colored code blocks. Text remains selectable; Command-click a web link to open it. Tool groups expand into compact call rows. Open a call to inspect its command, status and output. Long output starts with a preview of up to 12 lines; **Show full output** expands it inside a scrollable block. Separate copy controls retain access to the full captured output and original tool transcript.
 
@@ -58,7 +58,7 @@ Changes also include initialized submodules, nested Git checkouts, symlinked rep
 
 Paste copied files or images with Command-V, drop them into the composer, or use the paperclip. Images show thumbnails; files show name and size. Click an image thumbnail in a draft, queued message or sent message to open a window-sized preview. The preview fits the whole image on opening and has icon-only zoom and close controls. Scroll to inspect an enlarged image, and press Escape to close it. Imports create stable private copies (up to 32 files, 32 MiB each, 128 MiB total). Submitted messages retain their attachment and code-context blocks.
 
-**Settings → Codex → Messages during a turn** selects Queue or Steer. Queue waits for successful completion; Steer adds input to the running turn without restarting it. The composer also exposes the current choice while work runs. The tray above it shows upcoming messages; expand an entry to inspect its content, cancel it, or restore it to an empty composer for editing. Failures and interruptions pause the queue until Resume. Unknown delivery requires Check history before resuming; uncertain messages are never replayed automatically.
+**Settings → Providers → Messages during a turn** selects Queue or Steer. Queue waits for successful completion; Steer adds input to the running turn without restarting it. The composer also exposes the current choice while work runs. The tray above it shows upcoming messages; expand an entry to inspect its content, cancel it, or restore it to an empty composer for editing. Failures and interruptions pause the queue until Resume. Unknown delivery requires Check history before resuming; uncertain messages are never replayed automatically.
 
 **Settings → Notifications** controls alerts for tasks that need input or attention, finish, fail, or are interrupted. Choose Chime, Bell, Glass, Pulse, or Ascend, turn sounds off, and use **Test notification** to send a preview. The host sends alerts after task state changes, including while the window is closed. Repeated events and stored history do not replay alerts. Settings reports submission or permission errors; macOS notification and Focus settings control presentation.
 
@@ -68,7 +68,7 @@ The Files dialog provides read-only text previews. The terminal starts a shell i
 
 The redesigned UI uses an integrated titlebar, project tree, floating composer with progressive backdrop blur and subtle spring motion, contextual review, tabbed preferences and a split file browser. It includes configurable sidebar widths, task search and sorting, pin/archive/rename actions, light and dark colors, density and font settings, paged chat history, Markdown blocks, code highlighting, unified/split diffs, a foldable Changes tree, compact context headers, a feedback queue and a PTY terminal screen. Fonts are bundled.
 
-This is an initial Codex implementation. The broader [product specification](docs/design/product-spec.md) remains the roadmap. Native file editing, other providers, PR delivery, MCP configuration editing, scheduling and remote access are not implemented. Diff context expansion, intraline highlighting, partial staging, full terminal emulation controls and accessibility acceptance also remain open.
+This implementation supports local CLI providers. The broader [product specification](docs/design/product-spec.md) remains the roadmap. Native file editing, providers beyond Codex and Devin, PR delivery, MCP configuration editing, scheduling and remote access are not implemented. Diff context expansion, intraline highlighting, partial staging, full terminal emulation controls and accessibility acceptance also remain open.
 
 The earlier redesign was inspected using actual native GPUI Metal frames and app-local input events in an isolated project. Dark/light themes, narrow windows, file browsing, task creation, search, focus restoration, feedback and staging were exercised. This does not establish a complete accessibility or IME pass, or a real authenticated provider turn. The later conversation workflow changes were checked without visual testing or a real authenticated provider turn. See [implementation and validation](docs/implementation/progress.md) for the evidence and remaining gates.
 
@@ -76,7 +76,7 @@ The earlier redesign was inspected using actual native GPUI Metal frames and app
 
 | Crate | Responsibility |
 | --- | --- |
-| `kodem-core` | Typed local protocol, SQLite storage, Git snapshots, Codex transport |
+| `kodem-core` | Typed local protocol, SQLite storage, Git snapshots, named CLI transports |
 | `kodem-host` | Task runtime ownership, delivery recovery, PTYs and check execution |
 | `kodem-desktop` | Native GPUI-CE workspace and shared controls |
 
@@ -105,3 +105,5 @@ Kodem uses HTTP streaming for its OpenAI sessions to avoid repeated WebSocket co
 ## License
 
 Kodem is proprietary software. See [LICENSE](LICENSE). Third-party components retain their own licenses; see [third-party notices](assets/THIRD_PARTY.md) and [licensing maintenance](licensing/README.md). Builds verify license notices and regenerate stale notices under `target/` using the existing license policy. The pinned scanner is installed when needed. Generated notices are bundled without changing tracked files; unresolved license review failures still stop the build.
+
+`KODEM_DEVIN_PATH` overrides the Devin CLI executable. Without an override, Kodem searches the standard CLI installation locations and PATH. Devin authentication and configuration remain managed by its own CLI.

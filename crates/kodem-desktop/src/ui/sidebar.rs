@@ -503,16 +503,17 @@ impl Shell {
                     }),
             );
         }
+        let provider = task.provider;
         meta = meta.child(
             div()
                 .id((
                     ElementId::from("task-provider"),
                     SharedString::from(id.clone()),
                 ))
-                .child(icon("openai").size(px(14.)).text_color(metadata))
+                .child(icon(provider.icon()).size(px(14.)).text_color(metadata))
                 .tooltip(move |_, cx| {
                     cx.new(|_| Hint {
-                        text: "Codex · OpenAI".into(),
+                        text: provider.label().into(),
                         theme: t,
                     })
                     .into()

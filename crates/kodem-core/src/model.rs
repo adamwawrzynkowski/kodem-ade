@@ -6,6 +6,46 @@ use std::{
 };
 use uuid::Uuid;
 
+/// Integration that owns a conversation and its remote session identity.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Provider {
+    #[default]
+    Codex,
+    Devin,
+}
+impl Provider {
+    pub const ALL: [Self; 2] = [Self::Codex, Self::Devin];
+    /// Returns the integration's display name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Codex => "Codex",
+            Self::Devin => "Devin",
+        }
+    }
+    /// Returns the bundled provider logo asset.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Codex => "openai",
+            Self::Devin => "devin",
+        }
+    }
+    /// Returns the CLI command used to authenticate this integration.
+    pub fn login_command(self) -> &'static str {
+        match self {
+            Self::Codex => "codex login",
+            Self::Devin => "devin auth login",
+        }
+    }
+}
+
+/// A permission mode advertised by a provider, preserved without remapping its semantics.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProviderAccess {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
 /// Returns wall-clock milliseconds for persisted observations.
 pub fn now() -> u64 {
     SystemTime::now()
@@ -242,38 +282,6 @@ impl AccessMode {
             Self::FullAccess => "Full access",
         }
     }
-    /// Returns the provider's thread sandbox mode.
-    pub fn sandbox(self) -> &'static str {
-        match self {
-            Self::ReadOnly => "read-only",
-            Self::Workspace | Self::AutoReview => "workspace-write",
-            Self::FullAccess => "danger-full-access",
-        }
-    }
-    /// Returns the approval policy paired with the selected sandbox.
-    pub fn approval_policy(self) -> &'static str {
-        match self {
-            Self::Workspace | Self::AutoReview => "on-request",
-            Self::ReadOnly | Self::FullAccess => "never",
-        }
-    }
-    /// Routes permission escalation to the user or Codex's risk-based AI reviewer.
-    pub fn approvals_reviewer(self) -> &'static str {
-        match self {
-            Self::AutoReview => "auto_review",
-            _ => "user",
-        }
-    }
-    /// Returns the explicit per-turn policy, including restricted network defaults.
-    pub fn turn_policy(self, cwd: &std::path::Path) -> serde_json::Value {
-        match self {
-            Self::ReadOnly => serde_json::json!({"type":"readOnly","networkAccess":false}),
-            Self::Workspace | Self::AutoReview => {
-                serde_json::json!({"type":"workspaceWrite","networkAccess":false,"writableRoots":[cwd]})
-            }
-            Self::FullAccess => serde_json::json!({"type":"dangerFullAccess"}),
-        }
-    }
 }
 /// Diff captured when the provider finished a turn, never refreshed from sidebar polling.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -291,6 +299,14 @@ pub struct ContextUsage {
     pub used: u64,
     pub window: Option<u64>,
     pub reported: u64,
+    #[serde(default)]
+    pub cost: Option<UsageCost>,
+}
+/// Session cost reported by the provider in its own currency or credit unit.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UsageCost {
+    pub amount: f64,
+    pub currency: String,
 }
 /// A provider account's measured usage window. Reset timestamps are Unix seconds.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -340,6 +356,10 @@ pub struct UsageLimits {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Task {
+    #[serde(default)]
+    pub provider: Provider,
+    #[serde(default)]
+    pub provider_access: Option<String>,
     pub id: String,
     pub project_id: String,
     pub title: String,
@@ -553,9 +573,28 @@ pub struct Model {
     pub name: String,
     pub efforts: Vec<String>,
     pub default_effort: String,
+    #[serde(default)]
+    pub images: bool,
+    /// Native model variants for providers that encode reasoning in the model identity.
+    #[serde(default)]
+    pub effort_models: std::collections::BTreeMap<String, String>,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RuntimeInfo {
+    #[serde(default)]
+    pub default_model: Option<String>,
+    #[serde(default)]
+    pub access_modes: Vec<ProviderAccess>,
+    #[serde(default)]
+    pub steering: bool,
+    #[serde(default)]
+    pub images: bool,
+    #[serde(default)]
+    pub files: bool,
+    #[serde(default)]
+    pub account_usage: bool,
+    #[serde(default)]
+    pub usage_resets: bool,
     pub version: Option<String>,
     pub authenticated: Option<bool>,
     #[serde(default)]
@@ -566,6 +605,10 @@ pub struct RuntimeInfo {
 /// Last explicitly chosen agent options, inherited by newly created tasks.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct AgentPreferences {
+    #[serde(default)]
+    pub provider: Provider,
+    #[serde(default)]
+    pub provider_access: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
     pub access: AccessMode,
@@ -573,6 +616,7 @@ pub struct AgentPreferences {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub provider_preferences: std::collections::BTreeMap<Provider, AgentPreferences>,
     pub notifications: NotificationSettings,
     pub sidebar_width: f32,
     pub review_width: f32,
@@ -614,6 +658,7 @@ impl Default for Settings {
             diff_placement: DiffPlacement::default(),
             send_mode: SendMode::default(),
             agent_defaults: AgentPreferences::default(),
+            provider_preferences: Default::default(),
             default_worktree: false,
             show_review: true,
             show_terminal: false,
@@ -777,7 +822,9 @@ pub struct Workspace {
     pub projects: Vec<Project>,
     pub tasks: Vec<Task>,
     pub settings: Settings,
-    pub runtime: RuntimeInfo,
+    // Older hosts must deserialize so connect_or_start can negotiate an idle upgrade.
+    #[serde(default)]
+    pub runtimes: std::collections::BTreeMap<Provider, RuntimeInfo>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Comparison {
@@ -923,9 +970,10 @@ pub struct Feedback {
     pub comment: String,
     pub digest: String,
 }
-/// Composer actions backed by operations advertised by the installed Codex runtime.
+/// Composer actions backed by operations advertised by the selected provider.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ComposerCommand {
+    Provider,
     New,
     Model,
     Permissions,
@@ -934,7 +982,7 @@ pub enum ComposerCommand {
     Status,
 }
 
-/// An enabled skill returned by Codex for the current working directory.
+/// An enabled skill returned by the provider for the current working directory.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ComposerSkill {
     pub name: String,
@@ -945,9 +993,19 @@ pub struct ComposerSkill {
 /// Runtime-backed composer choices, with partial discovery failures kept visible.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ComposerCatalog {
+    #[serde(default)]
+    pub provider_commands: Vec<ProviderCommand>,
     pub commands: Vec<ComposerCommand>,
     pub skills: Vec<ComposerSkill>,
     pub errors: Vec<String>,
+}
+
+/// A native slash command advertised by the current provider session.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderCommand {
+    pub name: String,
+    pub description: String,
+    pub input_hint: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -966,6 +1024,8 @@ pub struct TerminalView {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TaskEdit {
+    Provider(AgentPreferences),
+    ProviderAccess(String),
     Access(AccessMode),
     Rename(String),
     Pin(bool),
@@ -980,11 +1040,17 @@ pub enum TaskEdit {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Request {
     Hello,
-    RefreshUsage,
+    RefreshUsage {
+        provider: Provider,
+    },
     ConsumeUsageReset {
+        provider: Provider,
         idempotency_key: String,
     },
-    ConnectRuntime,
+    ConnectRuntime {
+        provider: Provider,
+    },
+    SetAgentPreferences(AgentPreferences),
     Reconcile {
         task_id: String,
     },
@@ -1100,11 +1166,14 @@ pub enum Request {
         file: usize,
     },
     ComposerCatalog {
+        provider: Provider,
+        model: Option<String>,
         request_id: String,
         task_id: Option<String>,
         project_id: Option<String>,
     },
     Resources {
+        provider: Provider,
         task_id: Option<String>,
         project_id: Option<String>,
     },
@@ -1135,8 +1204,12 @@ pub enum Request {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
-    Usage(UsageLimits),
+    Usage {
+        provider: Provider,
+        usage: UsageLimits,
+    },
     UsageReset {
+        provider: Provider,
         outcome: UsageResetOutcome,
         usage: Option<UsageLimits>,
         refresh_error: Option<String>,

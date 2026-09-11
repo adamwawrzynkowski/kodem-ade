@@ -29,6 +29,9 @@ impl AssetSource for Assets {
             "book" => Some(Cow::Borrowed(include_bytes!(
                 "../../../assets/icons/book.svg"
             ))),
+            "devin" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/icons/devin.svg"
+            ))),
             "openai" => Some(Cow::Borrowed(include_bytes!(
                 "../../../assets/icons/openai.svg"
             ))),

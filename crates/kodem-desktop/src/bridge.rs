@@ -178,7 +178,8 @@ fn start_at(
                 if matches!(
                     request,
                     Request::ComposerCatalog { .. }
-                        | Request::RefreshUsage
+                        | Request::ConnectRuntime { .. }
+                        | Request::RefreshUsage { .. }
                         | Request::ConsumeUsageReset { .. }
                 ) {
                     let root = root.clone();

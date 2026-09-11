@@ -13,7 +13,7 @@ impl Shell {
             Panel::Check => "Run a project check",
             Panel::Rename => "Rename task",
             Panel::DeleteTask => "Delete thread?",
-            Panel::Questions => "Codex needs your input",
+            Panel::Questions => "Provider needs your input",
             Panel::None
             | Panel::Usage
             | Panel::Models
@@ -134,6 +134,7 @@ impl Shell {
                             self.icon_button("refresh-resources", "refresh", "Refresh catalog")
                                 .on_click(cx.listener(|s, _, _, _| {
                                     s.send(core::Request::Resources {
+                                        provider: s.composer_preferences().provider,
                                         project_id: s.selected_project.clone().or_else(|| {
                                             s.workspace
                                                 .as_ref()?
@@ -272,7 +273,7 @@ impl Shell {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child("Permission requested"),
                         );
-                        content=content.child(request.params["reason"].as_str().unwrap_or("Codex requests permission for this operation").to_owned()).child(div().font_family("JetBrains Mono").text_size(px(12.)).child(request.params["command"].as_str().unwrap_or("File changes; inspect the corresponding file-change item in the transcript.").to_owned()));
+                        content=content.child(request.params["reason"].as_str().unwrap_or("Provider requests permission for this operation").to_owned()).child(div().font_family("JetBrains Mono").text_size(px(12.)).child(request.params["command"].as_str().unwrap_or("File changes; inspect the corresponding file-change item in the transcript.").to_owned()));
                         let decisions = request.params["availableDecisions"]
                             .as_array()
                             .cloned()
@@ -294,13 +295,15 @@ impl Shell {
                                     } else {
                                         "close"
                                     },
-                                    match decision.as_str() {
-                                        "accept" => "Allow once",
-                                        "acceptForSession" => "Allow for session",
-                                        "decline" => "Decline",
-                                        "cancel" => "Cancel turn",
-                                        _ => &decision,
-                                    },
+                                    request.params["decisionLabels"][&decision]
+                                        .as_str()
+                                        .unwrap_or(match decision.as_str() {
+                                            "accept" => "Allow once",
+                                            "acceptForSession" => "Allow for session",
+                                            "decline" => "Decline",
+                                            "cancel" => "Cancel turn",
+                                            _ => &decision,
+                                        }),
                                 )
                                 .on_click(cx.listener(
                                     move |s, _, _, cx| {
