@@ -505,6 +505,23 @@ pub struct TaskView {
     pub before: Option<u64>,
     pub requests: Vec<InputRequest>,
 }
+impl TaskView {
+    /// Returns accepted input already in chat while its idle provider session starts.
+    pub fn starting_submission(&self) -> Option<&OutgoingMessage> {
+        if !matches!(self.task.state, RunState::Idle | RunState::Completed) {
+            return None;
+        }
+        let outgoing = self
+            .outgoing
+            .iter()
+            .find(|message| message.state == DeliveryState::Queued)?;
+        let id = format!("submission-{}", outgoing.id);
+        self.messages
+            .iter()
+            .any(|message| message.id == id)
+            .then_some(outgoing)
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Model {
     pub id: String,

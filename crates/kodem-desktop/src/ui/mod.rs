@@ -429,6 +429,9 @@ impl Shell {
         let _ = self.tx.send(bridge::Command::Request(request));
     }
     fn apply(&mut self, reply: bridge::Reply, cx: &mut Context<Self>) {
+        if reply.poll_complete {
+            self.poll_pending = false;
+        }
         if matches!(reply.request, core::Request::TaskChanges { .. }) {
             self.changes_refresh.completed();
         }
@@ -467,7 +470,6 @@ impl Shell {
             return;
         }
 
-        self.poll_pending = false;
         let response = match reply.result {
             Ok(r) => r,
             Err(e) => {
@@ -814,10 +816,6 @@ impl Shell {
                         }
                     }
                 }
-                self.send(core::Request::Task {
-                    task_id,
-                    before: None,
-                });
             }
             Response::ComposerCatalog(catalog) => {
                 self.receive_slash_catalog(&reply.request, catalog)
@@ -831,6 +829,15 @@ impl Shell {
             }
             Response::Terminal(terminal) => self.terminal = Some(terminal),
             Response::Ok => match reply.request {
+                core::Request::RemoveAttachment { task_id, id } => {
+                    if let Some(view) = &mut self.view
+                        && view.task.id == task_id
+                    {
+                        view.task
+                            .attachments
+                            .retain(|attachment| attachment.id != id);
+                    }
+                }
                 core::Request::CustomizeProject { .. } => {
                     self.editing_project = None;
                     self.panel = Panel::None;

@@ -65,6 +65,18 @@ impl Store {
                 task.error=Some("The host stopped before completion was confirmed. History is retained. No prompt was resent. Review the provider history before starting another turn.".into());
                 task.active_turn = None;
                 self.save_task(&task)?;
+            } else if matches!(task.state, RunState::Idle | RunState::Completed)
+                && self
+                    .outgoing(&task.id)?
+                    .iter()
+                    .any(|message| message.state == DeliveryState::Queued)
+            {
+                task.state = RunState::Interrupted;
+                task.error = Some(
+                    "The host stopped before queued input was sent. Resume the queue to continue."
+                        .into(),
+                );
+                self.save_task(&task)?;
             }
         }
         self.db.execute(
@@ -427,6 +439,7 @@ impl Store {
         Ok(self.db.query_row("SELECT EXISTS(SELECT 1 FROM submissions WHERE task_id=?1 AND state IN ('pending','unknown'))", [task_id], |r| r.get(0))?)
     }
     /// Atomically records frozen input and consumes only its matching composer content.
+    /// Adds input starting an idle task to chat before provider startup.
     pub fn accept_outgoing(
         &self,
         task: &Task,
@@ -440,9 +453,18 @@ impl Store {
             "Outbox content exceeds 8 MiB; send or remove existing messages first"
         );
         let tx = self.db.unchecked_transaction()?;
+        let starts_turn = !task.state.active()
+            && !self.db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM submissions WHERE task_id=?1 AND state IN ('queued','pending','unknown'))",
+                [&task.id],
+                |row| row.get::<_, bool>(0),
+            )?;
         let feedback: Vec<_> = message.feedback.iter().map(|f| &f.id).collect();
         self.db.execute("INSERT INTO submissions(id,task_id,prompt,state,feedback,payload) VALUES(?1,?2,?3,'queued',?4,?5)", params![message.id,task.id,prompt,serde_json::to_string(&feedback)?,payload])?;
         self.save_task(task)?;
+        if starts_turn {
+            self.record_outgoing(&task.id, message)?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -506,20 +528,23 @@ impl Store {
         let tx = self.db.unchecked_transaction()?;
         ensure!(self.db.execute("UPDATE submissions SET state='pending' WHERE id=?1 AND task_id=?2 AND state='queued'", params![message.id,task.id])? == 1, "Message is no longer queued");
         self.save_task(task)?;
+        self.record_outgoing(&task.id, message)?;
+        tx.commit()?;
+        Ok(())
+    }
+    fn record_outgoing(&self, task_id: &str, message: &OutgoingMessage) -> Result<()> {
         self.message(&Message {
             seq: 0,
             id: format!("submission-{}", message.id),
-            task_id: task.id.clone(),
+            task_id: task_id.into(),
             kind: MessageKind::User,
             text: message.text.clone(),
             attachments: message.attachments.clone(),
             feedback: message.feedback.clone(),
             file_edits: Vec::new(),
             complete: true,
-            created: now(),
-        })?;
-        tx.commit()?;
-        Ok(())
+            created: message.created,
+        })
     }
     /// Keeps a failed or uncertain input recoverable without altering the active provider turn.
     pub fn fail_outgoing(&self, task_id: &str, id: &str, unknown: bool, error: &str) -> Result<()> {

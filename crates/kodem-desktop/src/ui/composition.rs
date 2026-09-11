@@ -354,10 +354,6 @@ impl Shell {
                         task_id: task_id.clone(),
                         id: id.clone(),
                     });
-                    s.send(core::Request::Task {
-                        task_id: task_id.clone(),
-                        before: None,
-                    });
                 })),
             );
         }
@@ -449,16 +445,27 @@ impl Shell {
 
     /// Displays durable queued work and recoverable delivery failures above the composer.
     pub(super) fn outgoing_tray(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(view) = self.view.clone().filter(|v| !v.outgoing.is_empty()) else {
+        let Some(view) = self.view.as_ref().filter(|v| !v.outgoing.is_empty()) else {
             return div().into_any_element();
         };
+        let starting = view.starting_submission().map(|message| message.id.clone());
+        let outgoing: Vec<_> = view
+            .outgoing
+            .iter()
+            .filter(|message| {
+                message.state != DeliveryState::Pending && starting.as_ref() != Some(&message.id)
+            })
+            .cloned()
+            .collect();
+        let task = view.task.clone();
+        if outgoing.is_empty() {
+            return div().into_any_element();
+        }
         let t = self.theme;
-        let paused = !view.task.state.active()
-            && view
-                .outgoing
-                .iter()
-                .any(|m| m.state == DeliveryState::Queued);
-        let task_id = view.task.id.clone();
+        let paused = !task.state.active()
+            && starting.is_none()
+            && outgoing.iter().any(|m| m.state == DeliveryState::Queued);
+        let task_id = task.id.clone();
         let mut tray = div()
             .id("outgoing-tray")
             .max_h(px(220.))
@@ -490,7 +497,7 @@ impl Shell {
                         d.child(
                             self.ghost("resume-queue", "arrow-right", "Resume")
                                 .h(px(24.))
-                                .disabled(view.task.state == RunState::DeliveryUnknown)
+                                .disabled(task.state == RunState::DeliveryUnknown)
                                 .on_click(cx.listener(move |s, _, _, _| {
                                     s.send(core::Request::ResumeQueue {
                                         task_id: task_id.clone(),
@@ -499,9 +506,9 @@ impl Shell {
                         )
                     }),
             );
-        for (index, outgoing) in view.outgoing.iter().enumerate() {
+        for (index, outgoing) in outgoing.into_iter().enumerate() {
             let id = outgoing.id.clone();
-            let task_id = view.task.id.clone();
+            let task_id = task.id.clone();
             let restore_task = task_id.clone();
             let restore_id = id.clone();
             let steer_task = task_id.clone();
@@ -568,8 +575,8 @@ impl Shell {
                                 )
                                 .size(px(22.))
                                 .disabled(
-                                    !view.task.state.active()
-                                        || view.task.active_turn.is_none()
+                                    !task.state.active()
+                                        || task.active_turn.is_none()
                                         || outgoing.expected_turn.is_some(),
                                 )
                                 .on_click(cx.listener(
@@ -597,8 +604,8 @@ impl Shell {
                                     .size(px(22.))
                                     .disabled(
                                         !self.input.read(cx).text().is_empty()
-                                            || !view.task.attachments.is_empty()
-                                            || !view.task.feedback.is_empty()
+                                            || !task.attachments.is_empty()
+                                            || !task.feedback.is_empty()
                                             || self.submitted_draft.is_some(),
                                     )
                                     .on_click(cx.listener(

@@ -115,11 +115,13 @@ fn run() -> Result<()> {
             if h.shutdown {
                 break;
             }
-            let active = h.store.tasks()?.iter().any(|t| t.state.active())
-                || !h.checks.is_empty()
-                || h.terminals.values().any(|t| t.running());
-            if !active && activity.elapsed() > Duration::from_secs(300) {
-                break;
+            if activity.elapsed() > Duration::from_secs(300) {
+                let active = !h.checks.is_empty()
+                    || h.terminals.values().any(|t| t.running())
+                    || h.store.tasks()?.iter().any(|t| t.state.active());
+                if !active {
+                    break;
+                }
             }
         }
         std::thread::sleep(Duration::from_millis(20));

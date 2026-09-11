@@ -22,9 +22,11 @@ fn presentation(kind: ActivityKind) -> (&'static str, &'static str, bool) {
 }
 impl Shell {
     fn has_activity_strip(&self) -> bool {
-        self.view
-            .as_ref()
-            .is_some_and(|view| view.task.state.active() || self.submitted_draft.is_some())
+        self.view.as_ref().is_some_and(|view| {
+            view.task.state.active()
+                || view.starting_submission().is_some()
+                || self.submitted_draft.is_some()
+        })
     }
 
     /// Shows every provider-reported activity, or the task's accurate fallback state.
@@ -50,7 +52,8 @@ impl Shell {
                 ("Waiting for your input", "shield", false)
             } else if self.submitted_draft.is_some() {
                 ("Recording message…", "loader", true)
-            } else if view.task.state == RunState::Starting {
+            } else if view.task.state == RunState::Starting || view.starting_submission().is_some()
+            {
                 ("Starting agent…", "loader", true)
             } else {
                 ("Agent working…", "loader", true)

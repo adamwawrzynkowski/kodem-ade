@@ -19,10 +19,11 @@ pub enum Command {
 }
 pub struct Reply {
     pub request: Request,
+    pub poll_complete: bool,
     pub connected: bool,
     pub result: Result<Response, String>,
 }
-/// Creates one ordered background transport owner for this window.
+/// Creates ordered interaction and repository workers for this window.
 pub fn start() -> (mpsc::Sender<Command>, mpsc::Receiver<Reply>) {
     start_at(ipc::data_dir().map_err(|e| format!("{e:#}")))
 }
@@ -31,9 +32,28 @@ fn start_at(
 ) -> (mpsc::Sender<Command>, mpsc::Receiver<Reply>) {
     let (tx, commands) = mpsc::channel();
     let (replies, rx) = mpsc::channel();
+    let (repository_tx, repository_rx) = mpsc::channel::<(std::path::PathBuf, Request)>();
+    let repository_replies = replies.clone();
+    std::thread::spawn(move || {
+        while let Ok((root, request)) = repository_rx.recv() {
+            let result = ipc::request(&root, &request).map_err(|e| format!("{e:#}"));
+            if repository_replies
+                .send(Reply {
+                    request,
+                    poll_complete: false,
+                    connected: true,
+                    result,
+                })
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
     std::thread::spawn(move || {
         let mut paused = false;
         while let Ok(command) = commands.recv() {
+            let poll = matches!(command, Command::Poll(..));
             // Keep clipboard files alive until the host has copied them, even if the window closes.
             let _clipboard_images;
             let requests = match command {
@@ -106,9 +126,11 @@ fn start_at(
                 }
             };
             if paused {
-                for request in requests {
+                let count = requests.len();
+                for (index, request) in requests.into_iter().enumerate() {
                     let _ = replies.send(Reply {
                         request,
+                        poll_complete: poll && index + 1 == count,
                         connected: false,
                         result: Err("Kodem is restarting to install an update".into()),
                     });
@@ -127,6 +149,7 @@ fn start_at(
                     if replies
                         .send(Reply {
                             request: requests.into_iter().next().unwrap(),
+                            poll_complete: poll,
                             connected: false,
                             result: Err(error),
                         })
@@ -137,7 +160,19 @@ fn start_at(
                     continue;
                 }
             };
-            for request in requests {
+            let request_count = requests.len();
+            for (index, request) in requests.into_iter().enumerate() {
+                // Preserve capture/reply order without making conversation actions wait for Git.
+                if matches!(
+                    request,
+                    Request::CaptureDiff { .. }
+                        | Request::TaskChanges { .. }
+                        | Request::Files { .. }
+                        | Request::ReadFile { .. }
+                ) {
+                    let _ = repository_tx.send((root.clone(), request));
+                    continue;
+                }
                 // Catalog discovery is read-only and can take longer than a turn update.
                 // Keep it off the ordered mutation lane so typing '/' cannot delay Send.
                 if matches!(request, Request::ComposerCatalog { .. }) {
@@ -147,6 +182,7 @@ fn start_at(
                         let result = ipc::request(&root, &request).map_err(|e| format!("{e:#}"));
                         let _ = replies.send(Reply {
                             request,
+                            poll_complete: false,
                             connected: true,
                             result,
                         });
@@ -158,6 +194,7 @@ fn start_at(
                 if replies
                     .send(Reply {
                         request,
+                        poll_complete: poll && (index + 1 == request_count || !connected),
                         connected,
                         result,
                     })
