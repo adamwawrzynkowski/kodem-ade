@@ -154,6 +154,25 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         "Host is restarting. Retry after reconnecting."
     );
     match request {
+        Request::RefreshUsage | Request::ConsumeUsageReset { .. } => {
+            {
+                let mut h = host.lock().unwrap();
+                ensure!(
+                    !h.usage_refreshing,
+                    "Account usage is refreshing. Try again shortly."
+                );
+                h.usage_refreshing = true;
+            }
+            let key = match &request {
+                Request::ConsumeUsageReset { idempotency_key } => Some(idempotency_key.as_str()),
+                _ => None,
+            };
+            let result = provider::account_usage(host, key);
+            let mut h = host.lock().unwrap();
+            h.usage_refreshing = false;
+            h.usage_refresh = Some(Instant::now());
+            result
+        }
         Request::Hello => {
             let mut h = host.lock().unwrap();
             if !h.settlement_refreshing

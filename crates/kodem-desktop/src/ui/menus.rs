@@ -18,6 +18,14 @@ impl Shell {
             .gap_1()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         match self.panel {
+            Panel::Usage => {
+                menu = menu
+                    .relative()
+                    .w(px(320.))
+                    .max_h(relative(0.8))
+                    .overflow_y_scroll()
+                    .child(self.usage_panel(cx));
+            }
             Panel::Projects | Panel::ChatProjects => {
                 let chat_picker = self.panel == Panel::ChatProjects;
                 menu = menu
@@ -429,7 +437,11 @@ impl Shell {
                 );
                 if matches!(
                     self.panel,
-                    Panel::Models | Panel::Reasoning | Panel::Access | Panel::ChatProjects
+                    Panel::Models
+                        | Panel::Reasoning
+                        | Panel::Access
+                        | Panel::ChatProjects
+                        | Panel::Usage
                 ) {
                     anchored()
                         .position(

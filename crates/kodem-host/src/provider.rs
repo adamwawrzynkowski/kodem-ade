@@ -1301,14 +1301,52 @@ pub(super) fn reconcile(host: &Shared, task_id: &str) -> Result<()> {
 /// Refreshes account limits without starting a model turn or changing authentication.
 pub(super) fn refresh_usage(host: &Shared) -> Result<()> {
     let mut catalog = Catalog::open(host, &std::env::current_dir()?)?;
+    read_usage(host, &mut catalog)?;
+    Ok(())
+}
+
+fn read_usage(host: &Shared, catalog: &mut Catalog) -> Result<UsageLimits> {
     let response = catalog.call("account/rateLimits/read", json!({}))?;
     let value = response["rateLimitsByLimitId"]
         .get("codex")
         .unwrap_or(&response["rateLimits"]);
     let mut usage: UsageLimits = serde_json::from_value(value.clone())?;
+    usage.banked_resets = serde_json::from_value(response["rateLimitResetCredits"].clone())?;
     usage.reported = now();
-    host.lock().unwrap().runtime.usage = Some(usage);
-    Ok(())
+    host.lock().unwrap().runtime.usage = Some(usage.clone());
+    Ok(usage)
+}
+
+/// Reads account usage or redeems one banked reset, then reads the authoritative balance.
+pub(super) fn account_usage(host: &Shared, idempotency_key: Option<&str>) -> Result<Response> {
+    let mut catalog = Catalog::open(host, &std::env::current_dir()?)?;
+    let Some(key) = idempotency_key else {
+        return Ok(Response::Usage(read_usage(host, &mut catalog)?));
+    };
+    ensure!(
+        !key.trim().is_empty(),
+        "A reset attempt needs an idempotency key"
+    );
+    let response = catalog.call(
+        "account/rateLimitResetCredit/consume",
+        json!({"idempotencyKey": key}),
+    )?;
+    let outcome = serde_json::from_value(response["outcome"].clone())?;
+    // A failed refresh must not turn a confirmed redemption into an ambiguous failure.
+    let (usage, refresh_error) = match read_usage(host, &mut catalog) {
+        Ok(usage) => (Some(usage), None),
+        Err(error) => {
+            if let Some(usage) = &mut host.lock().unwrap().runtime.usage {
+                usage.banked_resets = None;
+            }
+            (None, Some(format!("{error:#}")))
+        }
+    };
+    Ok(Response::UsageReset {
+        outcome,
+        usage,
+        refresh_error,
+    })
 }
 // Rolling notifications are sparse: omitted windows and nullable account metadata retain their last observation.
 fn merge_usage(current: &mut Option<UsageLimits>, value: &Value) {
@@ -1335,6 +1373,11 @@ fn merge_usage(current: &mut Option<UsageLimits>, value: &Value) {
         if incoming.limit_id.is_none() {
             incoming.limit_id = old.limit_id.clone();
         }
+        if incoming.credits.is_none() {
+            incoming.credits = old.credits.clone();
+        }
+        // Reset inventory only arrives on account/rateLimits/read, not rolling events.
+        incoming.banked_resets = old.banked_resets.clone();
     }
     *current = Some(incoming);
 }

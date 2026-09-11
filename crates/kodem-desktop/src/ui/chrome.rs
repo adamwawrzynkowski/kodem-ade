@@ -320,6 +320,7 @@ impl Render for Shell {
         if matches!(
             self.panel,
             Panel::Models
+                | Panel::Usage
                 | Panel::Reasoning
                 | Panel::Access
                 | Panel::Projects

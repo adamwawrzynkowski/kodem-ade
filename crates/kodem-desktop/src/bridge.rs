@@ -173,9 +173,14 @@ fn start_at(
                     let _ = repository_tx.send((root.clone(), request));
                     continue;
                 }
-                // Catalog discovery is read-only and can take longer than a turn update.
-                // Keep it off the ordered mutation lane so typing '/' cannot delay Send.
-                if matches!(request, Request::ComposerCatalog { .. }) {
+                // Account operations and catalog discovery do not depend on task mutations.
+                // Provider latency must not block Send, Stop, or conversation polling.
+                if matches!(
+                    request,
+                    Request::ComposerCatalog { .. }
+                        | Request::RefreshUsage
+                        | Request::ConsumeUsageReset { .. }
+                ) {
                     let root = root.clone();
                     let replies = replies.clone();
                     std::thread::spawn(move || {

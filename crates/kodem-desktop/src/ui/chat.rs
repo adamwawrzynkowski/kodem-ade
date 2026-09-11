@@ -542,7 +542,7 @@ impl Shell {
                         cx.notify();
                     })),
             )
-            .child(self.usage_meters())
+            .child(self.usage_meters(cx))
             .child(div().flex_1())
             .child(
                 self.ghost("composer-model", "bot", "")

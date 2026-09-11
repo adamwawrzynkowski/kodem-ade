@@ -15,6 +15,7 @@ impl Shell {
             Panel::DeleteTask => "Delete thread?",
             Panel::Questions => "Codex needs your input",
             Panel::None
+            | Panel::Usage
             | Panel::Models
             | Panel::Reasoning
             | Panel::Access
@@ -319,6 +320,7 @@ impl Shell {
                 }
             }
             Panel::None
+            | Panel::Usage
             | Panel::Models
             | Panel::Reasoning
             | Panel::Access

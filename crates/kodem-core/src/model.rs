@@ -300,6 +300,29 @@ pub struct UsageWindow {
     pub window_duration_mins: Option<u64>,
     pub resets_at: Option<u64>,
 }
+/// Provider-reported credits. The decimal balance is preserved without currency assumptions.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageCredits {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
+}
+/// Banked resets available to the account; the count may exceed the returned detail rows.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankedResets {
+    pub available_count: i64,
+}
+/// Result of one idempotent attempt to redeem a banked usage reset.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UsageResetOutcome {
+    Reset,
+    AlreadyRedeemed,
+    NothingToReset,
+    NoCredit,
+}
 /// Provider-reported account limits; missing windows are unavailable, not zero usage.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -308,6 +331,8 @@ pub struct UsageLimits {
     pub plan_type: Option<String>,
     pub primary: Option<UsageWindow>,
     pub secondary: Option<UsageWindow>,
+    pub credits: Option<UsageCredits>,
+    pub banked_resets: Option<BankedResets>,
     pub rate_limit_reached_type: Option<String>,
     pub spend_control_reached: Option<bool>,
     #[serde(default)]
@@ -955,6 +980,10 @@ pub enum TaskEdit {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Request {
     Hello,
+    RefreshUsage,
+    ConsumeUsageReset {
+        idempotency_key: String,
+    },
     ConnectRuntime,
     Reconcile {
         task_id: String,
@@ -1106,6 +1135,12 @@ pub enum Request {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
+    Usage(UsageLimits),
+    UsageReset {
+        outcome: UsageResetOutcome,
+        usage: Option<UsageLimits>,
+        refresh_error: Option<String>,
+    },
     Accepted {
         task_id: String,
         submission_id: String,

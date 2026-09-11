@@ -76,6 +76,7 @@ enum Panel {
     DeleteTask,
     Sort,
     Comparison,
+    Usage,
 }
 struct ThreadMenu {
     task_id: String,
@@ -180,6 +181,7 @@ pub struct Shell {
     settings_section: usize,
     effort_slider: Option<(String, Entity<effort_slider::EffortSlider>, Subscription)>,
     image_preview: Option<image_preview::ImagePreview>,
+    usage_actions: usage::UsageActions,
 }
 impl Shell {
     /// Creates the workspace and begins asynchronous host synchronization.
@@ -347,6 +349,7 @@ impl Shell {
             theme: Theme::new(false),
             panel: Panel::None,
             composer_menu_anchor: None,
+            usage_actions: usage::UsageActions::default(),
             thread_menu: None,
             deleting_task: None,
             error: None,
@@ -450,6 +453,13 @@ impl Shell {
             self.error = None;
         }
         self.host_connected = reply.connected;
+        if matches!(
+            reply.request,
+            core::Request::RefreshUsage | core::Request::ConsumeUsageReset { .. }
+        ) {
+            self.apply_usage_reply(reply.result, cx);
+            return;
+        }
         if !reply.connected {
             self.status = "Local host unavailable; reconnecting…".into();
         }
@@ -524,6 +534,9 @@ impl Shell {
             }
         };
         match response {
+            response @ (Response::Usage(_) | Response::UsageReset { .. }) => {
+                self.apply_usage_reply(Ok(response), cx);
+            }
             Response::Workspace(workspace) => {
                 self.sidebar_dirty = true;
                 if !workspace
