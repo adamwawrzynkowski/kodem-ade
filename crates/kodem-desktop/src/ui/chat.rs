@@ -779,24 +779,13 @@ impl Shell {
         let mut block = div().w_full();
         if user {
             outer = outer.flex().justify_end();
-            let line_width = message
-                .text
-                .lines()
-                .map(|line| line.chars().count())
-                .max()
-                .unwrap_or(1) as f32
-                * (self.settings.font_size - 1.)
-                * 0.55
-                + 24.;
             block = block
-                .w(px(line_width.max(
-                    if message.attachments.is_empty() && message.feedback.is_empty() {
-                        52.
-                    } else {
-                        380.
-                    },
-                )))
+                .w_auto()
+                .min_w_0()
                 .max_w(relative(0.86))
+                .flex()
+                .flex_col()
+                .gap_2()
                 .bg(t.raised)
                 .shadow(t.elevation())
                 .rounded(px(crate::theme::MESSAGE_RADIUS))
@@ -857,7 +846,11 @@ impl Shell {
             );
         }
         if !message.attachments.is_empty() {
-            let mut files = div().flex().flex_wrap().gap_2().mb_2();
+            let mut files = div()
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .when(!user, |files| files.mb_2());
             for attachment in &message.attachments {
                 files = files.child(self.attachment_card(attachment, None, cx));
             }
@@ -866,21 +859,23 @@ impl Shell {
         for feedback in &message.feedback {
             block = block.child(self.context_card(feedback, None, cx));
         }
-        block = block.child(
-            div().text_size(px(self.settings.font_size - 1.)).child(
-                self.message_blocks(
-                    &format!("message:{}", message.id),
-                    markdown::blocks(&message.text),
-                    message.kind == MessageKind::Assistant
-                        && !message.complete
-                        && self
-                            .view
-                            .as_ref()
-                            .is_some_and(|view| view.task.state == RunState::Running),
-                    cx,
+        if !user || !message.text.is_empty() {
+            block = block.child(
+                div().text_size(px(self.settings.font_size - 1.)).child(
+                    self.message_blocks(
+                        &format!("message:{}", message.id),
+                        markdown::blocks(&message.text),
+                        message.kind == MessageKind::Assistant
+                            && !message.complete
+                            && self
+                                .view
+                                .as_ref()
+                                .is_some_and(|view| view.task.state == RunState::Running),
+                        cx,
+                    ),
                 ),
-            ),
-        );
+            );
+        }
         if !user {
             block = block.child(
                 div()

@@ -1002,7 +1002,23 @@ impl Element for TextElement {
                     .map(|(_, l)| l.size(height).height)
                     .fold(px(0.), |a, b| a + b)
                     .max(height);
-                size(width.unwrap_or(px(400.)), measured)
+                let natural_width = || {
+                    lines
+                        .iter()
+                        .map(|(_, line)| line.size(height).width)
+                        .fold(px(0.), |a, b| a.max(b))
+                        + padding * 2.
+                };
+                size(
+                    width.unwrap_or_else(|| {
+                        if input.readonly {
+                            natural_width()
+                        } else {
+                            px(400.)
+                        }
+                    }),
+                    measured,
+                )
             }),
             (),
         )

@@ -162,7 +162,7 @@ impl Shell {
                         query: &query,
                         archived: self.show_archived,
                         settled_collapsed: self.settled_collapsed,
-                        settled_projects: &self.settled_projects_collapsed,
+                        expanded_settled_projects: &self.expanded_settled_projects,
                     },
                 );
                 let changed = rows.len() != self.sidebar_rows.len()
@@ -187,12 +187,16 @@ impl Shell {
         }
         let entity = cx.entity();
         let feed = list(self.sidebar_scroll.clone(), move |index, _, cx| {
-            entity.update(cx, |s, cx| s.sidebar_row(index, cx))
+            // List positions rows at its left edge; horizontal gutters belong inside each row.
+            div()
+                .w_full()
+                .px_2()
+                .child(entity.update(cx, |s, cx| s.sidebar_row(index, cx)))
+                .into_any_element()
         })
         .flex_1()
         .min_h_0()
         .w_full()
-        .px_2()
         .pb_2();
         panel = panel.child(feed).child(
             div()
@@ -265,7 +269,7 @@ impl Shell {
                 // List measures the root's height without its margins; keep the gap inside the row.
                 div()
                     .pb(px(6.))
-                    .when(self.settings.group_tasks_by_project, |row| row.pl_2())
+                    .when(self.settings.group_tasks_by_project, |row| row.px_2())
                     .child(card)
                     .into_any_element()
             }
@@ -317,7 +321,7 @@ impl Shell {
             }
             Row::Settled { project, count } => {
                 let collapsed = project.as_ref().map_or(self.settled_collapsed, |id| {
-                    self.settled_projects_collapsed.contains(id)
+                    !self.expanded_settled_projects.contains(id)
                 });
                 let project = project.clone();
                 self.ghost(
@@ -337,8 +341,8 @@ impl Shell {
                 .child(div().text_color(t.subtle).child(count.to_string()))
                 .on_click(cx.listener(move |s, _, _, cx| {
                     if let Some(id) = &project {
-                        if !s.settled_projects_collapsed.remove(id) {
-                            s.settled_projects_collapsed.insert(id.clone());
+                        if !s.expanded_settled_projects.remove(id) {
+                            s.expanded_settled_projects.insert(id.clone());
                         }
                     } else {
                         s.settled_collapsed = !s.settled_collapsed;

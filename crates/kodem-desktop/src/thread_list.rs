@@ -38,7 +38,7 @@ pub struct Filter<'a> {
     pub query: &'a str,
     pub archived: bool,
     pub settled_collapsed: bool,
-    pub settled_projects: &'a std::collections::HashSet<String>,
+    pub expanded_settled_projects: &'a std::collections::HashSet<String>,
 }
 
 /// Filters and sorts task identities without cloning drafts, questions or captured context.
@@ -116,7 +116,7 @@ pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> V
                 &mut rows,
                 tasks,
                 Some(project.id.clone()),
-                !filter.settled_projects.contains(&project.id) || !filter.query.is_empty(),
+                filter.expanded_settled_projects.contains(&project.id) || !filter.query.is_empty(),
             );
         }
     } else {
