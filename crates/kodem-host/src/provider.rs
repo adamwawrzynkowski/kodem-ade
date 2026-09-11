@@ -164,6 +164,7 @@ pub(super) fn submit(
             task.error = None;
         }
         task.updated = now();
+        task.last_started = Some(task.updated);
         h.store.accept_outgoing(&task, &message, &prompt)?;
     }
     ensure_owner(host, task_id);
@@ -360,6 +361,7 @@ fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result
                             text,
                             attachments: Vec::new(),
                             feedback: Vec::new(),
+                            file_edits: Vec::new(),
                             complete: true,
                             created: now(),
                         })?;
@@ -436,6 +438,7 @@ fn dispatch_next(
             task.active_turn = None;
             task.error = None;
             task.updated = now();
+            task.last_started = Some(task.updated);
         }
         h.store.claim_outgoing(&task, &message)?;
         message
@@ -669,6 +672,7 @@ fn ingest(
                 task_id: task_id.into(),
                 attachments: Vec::new(),
                 feedback: Vec::new(),
+                file_edits: Vec::new(),
                 kind: if method.contains("agentMessage") {
                     MessageKind::Assistant
                 } else {
@@ -749,10 +753,14 @@ fn ingest(
                 kind: message_kind,
                 attachments: Vec::new(),
                 feedback: Vec::new(),
+                file_edits: Vec::new(),
                 text: String::new(),
                 complete: method.ends_with("completed"),
                 created: now(),
             };
+            if kind == "fileChange" && item["status"] == "completed" {
+                message.file_edits = completed_file_edits(item);
+            }
             append_bounded(&mut message.text, &text);
             h.store.message(&message)?;
             if message.complete
@@ -790,6 +798,7 @@ fn ingest(
                 kind: MessageKind::Error,
                 attachments: Vec::new(),
                 feedback: Vec::new(),
+                file_edits: Vec::new(),
                 text: text.into(),
                 complete: true,
                 created: now(),
@@ -930,6 +939,45 @@ fn command_activity(actions: &Value) -> ActivityKind {
     } else {
         ActivityKind::Command
     }
+}
+
+// Preserve edit totals before the display transcript is truncated. Add/delete diffs contain
+// full file contents; update diffs contain unified hunks, including header-like source lines.
+fn completed_file_edits(item: &Value) -> Vec<FileEdit> {
+    item["changes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|change| {
+            let path = change["path"].as_str()?.to_owned();
+            let lines = change["diff"].as_str().and_then(|diff| {
+                let mut lines = EditedLines::default();
+                match change["kind"]["type"].as_str()? {
+                    "add" => lines.added = diff.lines().count(),
+                    "delete" => lines.removed = diff.lines().count(),
+                    "update" => {
+                        let mut in_hunk = false;
+                        for line in diff.lines() {
+                            if line.starts_with("@@ ") {
+                                in_hunk = true;
+                            } else if line.starts_with("diff --git ") {
+                                in_hunk = false;
+                            } else if in_hunk {
+                                match line.as_bytes().first() {
+                                    Some(b'+') => lines.added += 1,
+                                    Some(b'-') => lines.removed += 1,
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    _ => return None,
+                }
+                Some(lines)
+            });
+            Some(FileEdit { path, lines })
+        })
+        .collect()
 }
 
 fn append_bounded(target: &mut String, text: &str) {

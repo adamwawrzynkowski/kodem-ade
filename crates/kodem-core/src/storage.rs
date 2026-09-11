@@ -514,6 +514,7 @@ impl Store {
             text: message.text.clone(),
             attachments: message.attachments.clone(),
             feedback: message.feedback.clone(),
+            file_edits: Vec::new(),
             complete: true,
             created: now(),
         })?;

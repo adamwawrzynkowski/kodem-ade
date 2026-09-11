@@ -62,10 +62,6 @@ impl Shell {
                 self.settings.light,
                 self.theme.accent,
             ))
-            .on_hover(cx.listener(|s, hovered, _, cx| {
-                s.sidebar_hovered = *hovered;
-                cx.notify();
-            }))
             .child(
                 div()
                     .px_3()
@@ -142,7 +138,7 @@ impl Shell {
                             })),
                     )
                     .child(
-                        self.icon_button("sort-tasks", "settings-2", "Sort tasks")
+                        self.icon_button("sort-tasks", "settings-2", "Thread list settings")
                             .on_click(cx.listener(|s, _, _, cx| {
                                 s.panel = Panel::Sort;
                                 cx.notify();
@@ -156,116 +152,48 @@ impl Shell {
                     ),
             );
         let query = self.search.read(cx).text().to_lowercase();
-        let mut feed = div()
-            .id("task-feed")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .restrict_scroll_to_axis()
-            .px_2()
-            .pb_2();
-        if let Some(workspace) = self.workspace.clone() {
-            let mut tasks: Vec<_> = workspace
-                .tasks
-                .iter()
-                .filter(|task| {
-                    let project = workspace.projects.iter().find(|p| p.id == task.project_id);
-                    task.archived == self.show_archived
-                        && self
-                            .sidebar_project
-                            .as_ref()
-                            .is_none_or(|id| id == &task.project_id)
-                        && (query.is_empty()
-                            || task.title.to_lowercase().contains(&query)
-                            || task.branch.to_lowercase().contains(&query)
-                            || project.is_some_and(|p| p.name.to_lowercase().contains(&query)))
-                })
-                .collect();
-            tasks.sort_by(|a, b| {
-                if self.sidebar_hovered {
-                    return self
-                        .task_order
-                        .get(&a.id)
-                        .unwrap_or(&usize::MAX)
-                        .cmp(self.task_order.get(&b.id).unwrap_or(&usize::MAX))
-                        .then_with(|| a.id.cmp(&b.id));
-                }
-                b.pinned
-                    .cmp(&a.pinned)
-                    .then_with(|| match self.settings.sort {
-                        Sort::Recent => b.updated.cmp(&a.updated),
-                        Sort::Created => b.created.cmp(&a.created),
-                        Sort::Name => a.title.cmp(&b.title),
-                        Sort::Attention => rank(a).cmp(&rank(b)),
-                    })
-                    .then_with(|| a.id.cmp(&b.id))
-            });
-            if !self.sidebar_hovered {
-                for (i, task) in tasks.iter().enumerate() {
-                    self.task_order.insert(task.id.clone(), i);
-                }
-            }
-            let (open, settled): (Vec<_>, Vec<_>) = tasks.into_iter().partition(|task| {
-                !task.is_settled()
-                    || (task.settled.is_none()
-                        && (task.pinned || self.selected.as_deref() == Some(&task.id)))
-            });
-            let empty = open.is_empty() && settled.is_empty();
-            for task in open {
-                if let Some(project) = workspace.projects.iter().find(|p| p.id == task.project_id) {
-                    feed = feed.child(self.task_card(task, project, cx));
-                }
-            }
-            if !settled.is_empty() {
-                feed = feed.child(
-                    self.ghost(
-                        "settled-tasks",
-                        if self.settled_collapsed {
-                            "chevron-right"
-                        } else {
-                            "chevron-down"
-                        },
-                        "Settled",
-                    )
-                    .w_full()
-                    .justify_start()
-                    .mt_2()
-                    .mb_1()
-                    .text_size(px(11.))
-                    .child(div().flex_1())
-                    .child(div().text_color(t.subtle).child(settled.len().to_string()))
-                    .on_click(cx.listener(|s, _, _, cx| {
-                        s.settled_collapsed = !s.settled_collapsed;
-                        cx.notify();
-                    })),
+        if self.sidebar_dirty {
+            if let Some(workspace) = &self.workspace {
+                let rows = crate::thread_list::rows(
+                    workspace,
+                    &self.settings,
+                    crate::thread_list::Filter {
+                        project: self.sidebar_project.as_deref(),
+                        query: &query,
+                        archived: self.show_archived,
+                        settled_collapsed: self.settled_collapsed,
+                        settled_projects: &self.settled_projects_collapsed,
+                    },
                 );
-                if !self.settled_collapsed || !query.is_empty() {
-                    for task in settled {
-                        if let Some(project) =
-                            workspace.projects.iter().find(|p| p.id == task.project_id)
-                        {
-                            feed = feed.child(self.task_card(task, project, cx));
-                        }
+                let changed = rows.len() != self.sidebar_rows.len()
+                    || rows
+                        .iter()
+                        .zip(&self.sidebar_rows)
+                        .any(|(a, b)| !a.same_item(b));
+                if changed {
+                    let mut anchor = self.sidebar_scroll.logical_scroll_top();
+                    if let Some(previous) = self.sidebar_rows.get(anchor.item_ix) {
+                        anchor.item_ix = rows
+                            .iter()
+                            .position(|row| row.same_item(previous))
+                            .unwrap_or(anchor.item_ix.min(rows.len().saturating_sub(1)));
                     }
+                    self.sidebar_scroll.reset(rows.len());
+                    self.sidebar_scroll.scroll_to(anchor);
                 }
+                self.sidebar_rows = rows;
             }
-            if empty {
-                feed = feed.child(
-                    div()
-                        .px_3()
-                        .py_5()
-                        .text_size(px(12.))
-                        .text_color(t.muted)
-                        .child(if workspace.projects.is_empty() {
-                            "Open a repository to start a task."
-                        } else if !query.is_empty() {
-                            "No matching tasks."
-                        } else {
-                            "No tasks here yet. Start a new task above."
-                        }),
-                );
-            }
+            self.sidebar_dirty = false;
         }
+        let entity = cx.entity();
+        let feed = list(self.sidebar_scroll.clone(), move |index, _, cx| {
+            entity.update(cx, |s, cx| s.sidebar_row(index, cx))
+        })
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .px_2()
+        .pb_2();
         panel = panel.child(feed).child(
             div()
                 .px_3()
@@ -282,6 +210,7 @@ impl Shell {
                         })
                         .on_click(cx.listener(|s, _, _, cx| {
                             s.show_archived = !s.show_archived;
+                            s.sidebar_dirty = true;
                             cx.notify();
                         })),
                 )
@@ -320,6 +249,113 @@ impl Shell {
         );
         motion::reveal("sidebar-enter", panel)
     }
+    fn sidebar_row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        use crate::thread_list::Row;
+        let Some(row) = self.sidebar_rows.get(index) else {
+            return div().into_any_element();
+        };
+        let t = self.theme;
+        match row {
+            Row::Task { index, project, .. } => {
+                let Some(workspace) = &self.workspace else {
+                    return div().into_any_element();
+                };
+                let card =
+                    self.task_card(&workspace.tasks[*index], &workspace.projects[*project], cx);
+                if self.settings.group_tasks_by_project {
+                    div().pl_2().child(card).into_any_element()
+                } else {
+                    card
+                }
+            }
+            Row::Project { index, id, count } => {
+                let Some(project) = self.workspace.as_ref().and_then(|w| w.projects.get(*index))
+                else {
+                    return div().into_any_element();
+                };
+                let collapsed = self.settings.collapsed_projects.contains(id)
+                    && self.search.read(cx).text().is_empty();
+                let id = id.clone();
+                self.ghost(
+                    SharedString::from(format!("project-group:{id}")),
+                    if collapsed {
+                        "chevron-right"
+                    } else {
+                        "chevron-down"
+                    },
+                    "",
+                )
+                .w_full()
+                .h(px(34.))
+                .justify_start()
+                .min_w_0()
+                .accessibility_label(format!(
+                    "{} project {}",
+                    if collapsed { "Expand" } else { "Collapse" },
+                    project.name
+                ))
+                .child(project_icon(project, t))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_ellipsis()
+                        .text_color(t.text)
+                        .child(project.name.clone()),
+                )
+                .child(div().text_color(t.subtle).child(count.to_string()))
+                .on_click(cx.listener(move |s, _, _, cx| {
+                    if !s.settings.collapsed_projects.remove(&id) {
+                        s.settings.collapsed_projects.insert(id.clone());
+                    }
+                    s.sidebar_dirty = true;
+                    s.save_settings();
+                    cx.notify();
+                }))
+                .into_any_element()
+            }
+            Row::Settled { project, count } => {
+                let collapsed = project.as_ref().map_or(self.settled_collapsed, |id| {
+                    self.settled_projects_collapsed.contains(id)
+                });
+                let project = project.clone();
+                self.ghost(
+                    SharedString::from(format!("settled:{}", project.as_deref().unwrap_or("all"))),
+                    if collapsed && self.search.read(cx).text().is_empty() {
+                        "chevron-right"
+                    } else {
+                        "chevron-down"
+                    },
+                    "Settled",
+                )
+                .w_full()
+                .h(px(32.))
+                .justify_start()
+                .text_size(px(11.))
+                .child(div().flex_1())
+                .child(div().text_color(t.subtle).child(count.to_string()))
+                .on_click(cx.listener(move |s, _, _, cx| {
+                    if let Some(id) = &project {
+                        if !s.settled_projects_collapsed.remove(id) {
+                            s.settled_projects_collapsed.insert(id.clone());
+                        }
+                    } else {
+                        s.settled_collapsed = !s.settled_collapsed;
+                    }
+                    s.sidebar_dirty = true;
+                    cx.notify();
+                }))
+                .into_any_element()
+            }
+            Row::Empty(label) => div()
+                .px_3()
+                .py_5()
+                .text_size(px(12.))
+                .text_color(t.muted)
+                .child(*label)
+                .into_any_element(),
+        }
+    }
     fn task_card(
         &self,
         task: &core::Task,
@@ -336,7 +372,7 @@ impl Shell {
             t.raised
         };
         if selected {
-            surface.lightness = (surface.lightness + 0.045).min(1.);
+            surface = t.selected;
         }
         let title_color = t.text.opacity(0.94);
         let metadata = t.muted;
@@ -469,7 +505,11 @@ impl Shell {
             .rounded(radius)
             .bg(surface)
             .border_1()
-            .border_color(t.muted.opacity(0.12))
+            .border_color(if selected {
+                t.accent.opacity(0.7)
+            } else {
+                t.muted.opacity(0.12)
+            })
             .shadow(vec![
                 BoxShadow {
                     inset: true,
@@ -489,6 +529,18 @@ impl Shell {
             .cursor_pointer()
             .hover(move |d| d.bg(hover_surface))
             .child(motion::project_dither(tint, radius))
+            .when(selected, |row| {
+                row.child(motion::selection_dither(t.accent)).child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top(px(12.))
+                        .bottom(px(12.))
+                        .w(px(3.))
+                        .rounded(px(2.))
+                        .bg(t.accent),
+                )
+            })
             .child(
                 div()
                     .h(px(20.))
@@ -657,18 +709,6 @@ fn project_tint(project: &Project, theme: Theme) -> Hsla {
     })
 }
 
-fn rank(task: &core::Task) -> u8 {
-    if task.needs_input() {
-        return 0;
-    }
-    match task.state {
-        RunState::Waiting => 0,
-        RunState::Failed | RunState::DeliveryUnknown => 1,
-        RunState::Running | RunState::Starting => 2,
-        RunState::Idle => 3,
-        _ => 4,
-    }
-}
 fn elapsed(time: u64) -> String {
     let s = now().saturating_sub(time) / 1000;
     if s < 60 {

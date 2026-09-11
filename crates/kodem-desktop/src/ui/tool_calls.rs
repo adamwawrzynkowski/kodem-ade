@@ -28,11 +28,30 @@ impl Shell {
             && messages
                 .iter()
                 .any(|m| view.activities.iter().any(|a| a.id == m.id));
-        let label = if messages.len() == 1 {
+        let edits = tool_output::edit_summary(&messages);
+        let mut label = if messages.len() == 1 {
             "1 tool call".to_owned()
         } else {
             format!("{} tool calls", messages.len())
         };
+        if edits.files > 0 {
+            label.push_str(&format!(
+                " and edited {} {}",
+                edits.files,
+                if edits.files == 1 { "file" } else { "files" },
+            ));
+        }
+        let accessible_label = format!(
+            "{} {label}{}",
+            if expanded { "Collapse" } else { "Expand" },
+            edits
+                .lines
+                .filter(|_| edits.files > 0)
+                .map_or(String::new(), |lines| format!(
+                    ", {} lines added, {} lines removed",
+                    lines.added, lines.removed
+                ),),
+        );
         let mut group = div().w_full().min_w_0().px_5().py_1().child(
             self.ghost(
                 SharedString::from(format!("tool-group:{group_key}")),
@@ -45,10 +64,23 @@ impl Shell {
             )
             .w_full()
             .justify_start()
-            .accessibility_label(if expanded {
-                "Collapse tool calls"
-            } else {
-                "Expand tool calls"
+            .flex_wrap()
+            .h_auto()
+            .min_h(px(30.))
+            .accessibility_label(accessible_label)
+            .when_some(edits.lines.filter(|_| edits.files > 0), |button, lines| {
+                button.child(
+                    div()
+                        .flex()
+                        .gap_1()
+                        .flex_shrink_0()
+                        .child(div().text_color(t.added).child(format!("+{}", lines.added)))
+                        .child(
+                            div()
+                                .text_color(t.removed)
+                                .child(format!("−{}", lines.removed)),
+                        ),
+                )
             })
             .when(active, |button| {
                 button.child(motion::active_icon(

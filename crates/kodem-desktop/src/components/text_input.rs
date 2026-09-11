@@ -1123,10 +1123,17 @@ impl Element for TextElement {
                 bounds.size.height,
             ),
         );
+        let visible = window.content_mask().bounds;
         if let Some((_, theme)) = self.input.read(cx).prose.as_ref() {
             let theme = *theme;
             let mut y = px(0.);
             for (_, line) in &prepaint.lines {
+                let line_bounds =
+                    Bounds::new(point(bounds.left(), bounds.top() + y), line.size(height));
+                if !line_bounds.dilate(height).intersects(&visible) {
+                    y += line.size(height).height;
+                    continue;
+                }
                 line.paint_bubbles(
                     point(bounds.left(), bounds.top() + y),
                     height,
@@ -1140,7 +1147,14 @@ impl Element for TextElement {
             window.paint_quad(selection);
         }
         let mut y = px(0.);
+        let now = Instant::now();
         for (_, line) in &prepaint.lines {
+            let line_bounds =
+                Bounds::new(point(bounds.left(), bounds.top() + y), line.size(height));
+            if !line_bounds.dilate(height).intersects(&visible) {
+                y += line.size(height).height;
+                continue;
+            }
             let _ = line.paint(
                 point(bounds.left(), bounds.top() + y),
                 height,
@@ -1153,7 +1167,8 @@ impl Element for TextElement {
                 point(bounds.left(), bounds.top() + y),
                 height,
                 &self.input.read(cx).streaming,
-                Instant::now(),
+                now,
+                visible,
             );
             super::streaming_text::paint_glyphs(glyphs, window);
             y += line.size(height).height;

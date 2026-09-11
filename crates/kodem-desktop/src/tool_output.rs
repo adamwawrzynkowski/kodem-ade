@@ -1,4 +1,46 @@
 //! Presentation of the host's saved tool transcripts, without changing their source text.
+use kodem_core::{EditedLines, Message};
+use std::collections::HashSet;
+
+#[derive(Default)]
+pub struct EditSummary {
+    pub files: usize,
+    pub lines: Option<EditedLines>,
+}
+
+/// Counts distinct edited paths and sums recorded changes across successful calls in a group.
+pub fn edit_summary(messages: &[Message]) -> EditSummary {
+    let mut paths = HashSet::new();
+    let mut lines = Some(EditedLines::default());
+    for message in messages {
+        let output = parse(&message.text, message.complete);
+        if !message.complete || output.kind != ToolKind::Files || output.status != Some("completed")
+        {
+            continue;
+        }
+        if message.file_edits.is_empty() {
+            // Older transcripts saved only paths. Show their file count without inventing line totals.
+            for path in output.body.lines().filter(|path| !path.is_empty()) {
+                paths.insert(path);
+                lines = None;
+            }
+        } else {
+            for edit in &message.file_edits {
+                paths.insert(&edit.path);
+                lines = lines.zip(edit.lines).map(|(mut total, edit)| {
+                    total.added += edit.added;
+                    total.removed += edit.removed;
+                    total
+                });
+            }
+        }
+    }
+    EditSummary {
+        files: paths.len(),
+        lines,
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum ToolKind {
     Command,

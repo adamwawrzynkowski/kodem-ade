@@ -296,6 +296,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 archived: false,
                 created: now(),
                 updated: now(),
+                last_started: None,
                 feedback: Vec::new(),
                 attachments: Vec::new(),
                 error: None,

@@ -113,6 +113,7 @@ pub struct Shell {
     host_connected: bool,
     new_worktree_override: Option<bool>,
     new_preferences: Option<AgentPreferences>,
+    // Project chosen for the next task, independent of the currently viewed thread.
     selected_project: Option<String>,
     editing_project: Option<Project>,
     greeting_name: String,
@@ -164,10 +165,12 @@ pub struct Shell {
     clipboard_images: HashMap<std::path::PathBuf, tempfile::TempPath>,
     pasting_images: usize,
     diff_view: Option<Entity<diff_view::DiffView>>,
-    sidebar_hovered: bool,
-    task_order: HashMap<String, usize>,
+    sidebar_rows: Vec<crate::thread_list::Row>,
+    sidebar_scroll: ListState,
+    sidebar_dirty: bool,
     sidebar_project: Option<String>,
     settled_collapsed: bool,
+    settled_projects_collapsed: HashSet<String>,
     empty_draft: String,
     creating_task: bool,
     auto_submit_task: Option<String>,
@@ -243,7 +246,10 @@ impl Shell {
                 }
                 cx.notify();
             }),
-            cx.observe(&search, |_, _, cx| cx.notify()),
+            cx.observe(&search, |s, _, cx| {
+                s.sidebar_dirty = true;
+                cx.notify();
+            }),
             cx.observe(&aux, |_, _, cx| cx.notify()),
         ];
         cx.spawn(async move |this, cx| {
@@ -399,10 +405,12 @@ impl Shell {
             clipboard_images: HashMap::new(),
             pasting_images: 0,
             diff_view: None,
-            sidebar_hovered: false,
-            task_order: HashMap::new(),
+            sidebar_rows: Vec::new(),
+            sidebar_scroll: ListState::new(0, ListAlignment::Top, px(100.)),
+            sidebar_dirty: true,
             sidebar_project: None,
             settled_collapsed: false,
+            settled_projects_collapsed: HashSet::new(),
             empty_draft: String::new(),
             creating_task: false,
             auto_submit_task: None,
@@ -515,6 +523,7 @@ impl Shell {
         };
         match response {
             Response::Workspace(workspace) => {
+                self.sidebar_dirty = true;
                 if !workspace
                     .projects
                     .iter()
@@ -634,7 +643,10 @@ impl Shell {
                 let changed = self.view.as_ref().is_none_or(|v| {
                     v.messages.len() != view.messages.len()
                         || v.messages.iter().zip(&view.messages).any(|(a, b)| {
-                            a.id != b.id || a.text != b.text || a.complete != b.complete
+                            a.id != b.id
+                                || a.text != b.text
+                                || a.complete != b.complete
+                                || a.file_edits != b.file_edits
                         })
                 });
                 if changed {
@@ -647,7 +659,50 @@ impl Shell {
                     {
                         anchor.item_ix = index;
                     }
-                    self.chat_scroll.reset(view.messages.len());
+                    if let Some(current) = &self.view
+                        && current.messages.len() <= view.messages.len()
+                        && current
+                            .messages
+                            .iter()
+                            .zip(&view.messages)
+                            .all(|(a, b)| a.id == b.id)
+                    {
+                        let previous_count = current.messages.len();
+                        if previous_count < view.messages.len() {
+                            self.chat_scroll.splice(
+                                previous_count..previous_count,
+                                view.messages.len() - previous_count,
+                            );
+                            // A new tool item extends the summary rendered at the group's first row.
+                            if view.messages[previous_count].kind == MessageKind::Tool {
+                                let mut row = previous_count;
+                                while row > 0 && view.messages[row - 1].kind == MessageKind::Tool {
+                                    row -= 1;
+                                }
+                                self.chat_scroll.remeasure_items(row..previous_count + 1);
+                            }
+                        }
+                        for (index, (a, b)) in
+                            current.messages.iter().zip(&view.messages).enumerate()
+                        {
+                            if a.text != b.text
+                                || a.complete != b.complete
+                                || a.file_edits != b.file_edits
+                            {
+                                let mut row = index;
+                                if b.kind == MessageKind::Tool {
+                                    while row > 0
+                                        && view.messages[row - 1].kind == MessageKind::Tool
+                                    {
+                                        row -= 1;
+                                    }
+                                }
+                                self.chat_scroll.remeasure_items(row..index + 1);
+                            }
+                        }
+                    } else {
+                        self.chat_scroll.reset(view.messages.len());
+                    }
                     if self.follow {
                         self.chat_scroll.scroll_to_end();
                     } else {
@@ -782,6 +837,7 @@ impl Shell {
                     self.send(core::Request::Hello);
                 }
                 core::Request::RemoveProject { project_id } => {
+                    self.sidebar_dirty = true;
                     self.editing_project = None;
                     self.panel = Panel::None;
                     if self.selected_project.as_ref() == Some(&project_id) {
@@ -793,6 +849,7 @@ impl Shell {
                     self.send(core::Request::Hello);
                 }
                 core::Request::DeleteTask { task_id } => {
+                    self.sidebar_dirty = true;
                     self.deleting_task = None;
                     self.thread_menu = None;
                     self.panel = Panel::None;
@@ -1010,7 +1067,6 @@ impl Shell {
         }
         self.new_worktree_override = None;
         if let Some(view) = &self.view {
-            self.selected_project = Some(view.task.project_id.clone());
             if self.submitted_draft.is_none() {
                 self.send(core::Request::EditTask {
                     task_id: view.task.id.clone(),

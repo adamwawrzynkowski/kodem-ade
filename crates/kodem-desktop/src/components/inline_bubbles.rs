@@ -132,6 +132,7 @@ impl TextLine {
         height: Pixels,
         streaming: &super::streaming_text::StreamingText,
         now: std::time::Instant,
+        visible: Bounds<Pixels>,
     ) -> Vec<super::streaming_text::RevealingGlyph> {
         let Some(start) = streaming.start() else {
             return Vec::new();
@@ -155,6 +156,19 @@ impl TextLine {
                     row += 1;
                     row_x = glyph.position.x;
                 }
+                let position = origin
+                    + point(
+                        glyph.position.x - row_x,
+                        height * row + baseline + glyph.position.y,
+                    );
+                if !Bounds::new(
+                    position - point(layout.font_size, layout.font_size * 1.5),
+                    size(layout.font_size * 3., layout.font_size * 3.),
+                )
+                .intersects(&visible)
+                {
+                    continue;
+                }
                 let source = self.map.source_index(self.display_start + glyph.index);
                 // GPUI paints color emoji independently of the text foreground alpha.
                 if glyph.is_emoji {
@@ -171,11 +185,7 @@ impl TextLine {
                     continue;
                 };
                 glyphs.push(super::streaming_text::RevealingGlyph {
-                    origin: origin
-                        + point(
-                            glyph.position.x - row_x,
-                            height * row + baseline + glyph.position.y,
-                        ),
+                    origin: position,
                     font: run.font_id,
                     id: glyph.id,
                     font_size: layout.font_size,

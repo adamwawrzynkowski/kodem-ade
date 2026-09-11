@@ -20,7 +20,7 @@ impl Shell {
                 self.theme.accent,
             ))
             .child(motion::chat_dither(self.settings.light, cx.reduce_motion()));
-        if let Some(view) = self.view.clone() {
+        if let Some(view) = &self.view {
             self.chat_selection.update(cx, |doc, _| {
                 doc.set_viewport(
                     self.chat_scroll.clone(),
@@ -304,11 +304,11 @@ impl Shell {
     }
     fn composer(&mut self, empty: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let view = self.view.clone();
-        let active = view.as_ref().is_some_and(|v| v.task.state.active());
-        let unknown = view
+        let task = self.view.as_ref().map(|view| view.task.clone());
+        let active = task.as_ref().is_some_and(|v| v.state.active());
+        let unknown = task
             .as_ref()
-            .is_some_and(|v| v.task.state == RunState::DeliveryUnknown);
+            .is_some_and(|v| v.state == RunState::DeliveryUnknown);
         let project = self
             .workspace
             .as_ref()
@@ -351,18 +351,18 @@ impl Shell {
             .flex()
             .flex_col()
             .gap_2();
-        if let Some(view) = &view {
-            for feedback in &view.task.feedback {
+        if let Some(task) = &task {
+            for feedback in &task.feedback {
                 attachments = attachments.child(motion::context_reveal(
-                    self.context_card(feedback, Some(&view.task.id), cx),
+                    self.context_card(feedback, Some(&task.id), cx),
                     self.context_arrivals.get(&feedback.id).copied().flatten(),
                     cx.reduce_motion(),
                 ));
             }
             let mut files = div().flex().flex_wrap().flex_shrink_0().gap_2();
-            for attachment in &view.task.attachments {
+            for attachment in &task.attachments {
                 files = files.child(motion::context_reveal(
-                    self.attachment_card(attachment, Some(&view.task.id), cx),
+                    self.attachment_card(attachment, Some(&task.id), cx),
                     self.context_arrivals.get(&attachment.id).copied().flatten(),
                     cx.reduce_motion(),
                 ));
@@ -447,9 +447,9 @@ impl Shell {
             );
         }
         let has_context = importing
-            || view.as_ref().map_or_else(
+            || task.as_ref().map_or_else(
                 || !self.pending_attachments.is_empty(),
-                |v| !v.task.feedback.is_empty() || !v.task.attachments.is_empty(),
+                |v| !v.feedback.is_empty() || !v.attachments.is_empty(),
             );
         let mut editor = div()
             .id("composer-drop-target")
@@ -720,7 +720,7 @@ impl Shell {
                     .text_size(px(10.))
                     .text_color(t.subtle)
                     .child(icon("branch").size(px(12.)))
-                    .child(if view.as_ref().is_some_and(|v| v.task.owns_worktree) {
+                    .child(if task.as_ref().is_some_and(|v| v.owns_worktree) {
                         "Isolated worktree"
                     } else {
                         "Current checkout"

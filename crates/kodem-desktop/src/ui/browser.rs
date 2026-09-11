@@ -3,58 +3,52 @@ impl Shell {
     /// Builds a persistent file list beside a selectable, read-only source preview.
     pub(super) fn file_browser(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let mut files = div()
-            .id("project-files")
-            .w(px(248.))
-            .flex_shrink_0()
-            .h_full()
-            .overflow_y_scroll()
-            .py_2()
-            .bg(t.sidebar)
-            .border_r_1()
-            .border_color(t.border);
-        for (i, path) in self.files.iter().take(5000).cloned().enumerate() {
-            let label = String::from_utf8_lossy(&path).into_owned();
-            let selected = self.file_text.as_ref().is_some_and(|(p, _)| *p == label);
-            let task = self.selected.clone();
-            files = files.child(
-                div()
-                    .id(("file", i))
-                    .h(px(29.))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .cursor_pointer()
-                    .when(selected, |d| d.bg(t.selected))
-                    .hover(move |d| d.bg(t.raised))
-                    .child(icon("file").size(px(13.)).text_color(t.muted))
-                    .child(
+        let entity = cx.entity();
+        let files = uniform_list("project-files", self.files.len(), move |range, _, cx| {
+            entity.update(cx, |s, cx| {
+                range
+                    .map(|i| {
+                        let path = s.files[i].clone();
+                        let label = String::from_utf8_lossy(&path).into_owned();
+                        let selected = s.file_text.as_ref().is_some_and(|(p, _)| *p == label);
+                        let task = s.selected.clone();
                         div()
-                            .min_w_0()
-                            .text_ellipsis()
-                            .text_size(px(11.))
-                            .child(label),
-                    )
-                    .on_click(cx.listener(move |s, _, _, _| {
-                        if let Some(task_id) = &task {
-                            s.send(core::Request::ReadFile {
-                                task_id: task_id.clone(),
-                                path: path.clone(),
-                            });
-                        }
-                    })),
-            );
-        }
-        if self.files.len() > 5000 {
-            files = files.child(
-                div()
-                    .p_3()
-                    .text_size(px(11.))
-                    .text_color(t.muted)
-                    .child("Showing the first 5,000 paths."),
-            );
-        }
+                            .id(("file", i))
+                            .h(px(29.))
+                            .px_3()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .cursor_pointer()
+                            .when(selected, |d| d.bg(t.selected))
+                            .hover(move |d| d.bg(t.raised))
+                            .child(icon("file").size(px(13.)).text_color(t.muted))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .text_ellipsis()
+                                    .text_size(px(11.))
+                                    .child(label),
+                            )
+                            .on_click(cx.listener(move |s, _, _, _| {
+                                if let Some(task_id) = &task {
+                                    s.send(core::Request::ReadFile {
+                                        task_id: task_id.clone(),
+                                        path: path.clone(),
+                                    });
+                                }
+                            }))
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .w(px(248.))
+        .flex_shrink_0()
+        .h_full()
+        .py_2()
+        .bg(t.sidebar)
+        .border_r_1()
+        .border_color(t.border);
         let mut preview = div()
             .flex_1()
             .min_w_0()

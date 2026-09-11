@@ -6,6 +6,7 @@ mod icons;
 mod markdown;
 mod syntax;
 mod theme;
+mod thread_list;
 mod tool_output;
 mod ui;
 mod updater;

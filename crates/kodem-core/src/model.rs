@@ -342,6 +342,9 @@ pub struct Task {
     pub archived: bool,
     pub created: u64,
     pub updated: u64,
+    /// Last submitted or started run; viewing and completing a task do not change its recent order.
+    #[serde(default)]
+    pub last_started: Option<u64>,
     pub feedback: Vec<Feedback>,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
@@ -372,6 +375,16 @@ pub enum MessageKind {
     Check,
     Notice,
 }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FileEdit {
+    pub path: String,
+    pub lines: Option<EditedLines>,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct EditedLines {
+    pub added: usize,
+    pub removed: usize,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     pub seq: u64,
@@ -382,6 +395,8 @@ pub struct Message {
     pub attachments: Vec<Attachment>,
     #[serde(default)]
     pub feedback: Vec<Feedback>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_edits: Vec<FileEdit>,
     pub text: String,
     pub complete: bool,
     pub created: u64,
@@ -519,6 +534,8 @@ pub struct Settings {
     pub light: bool,
     pub accent: AccentColor,
     pub sort: Sort,
+    pub group_tasks_by_project: bool,
+    pub collapsed_projects: std::collections::HashSet<String>,
     pub selected_task: Option<String>,
     #[serde(default)]
     pub diff_placement: DiffPlacement,
@@ -543,6 +560,8 @@ impl Default for Settings {
             light: false,
             accent: AccentColor::default(),
             sort: Sort::Recent,
+            group_tasks_by_project: false,
+            collapsed_projects: Default::default(),
             selected_task: None,
             diff_placement: DiffPlacement::default(),
             send_mode: SendMode::default(),

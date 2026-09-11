@@ -251,6 +251,37 @@ fn rounded_project_dither(width: f32, height: f32, radius: f32) -> String {
     )
 }
 
+/// Marks the selected thread with static accent grain, fading across the row beneath its text.
+pub(super) fn selection_dither(color: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let width = f32::from(bounds.size.width);
+            let height = f32::from(bounds.size.height);
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                window.paint_layer(bounds, |window| {
+                    for y in (8..(height as u32).saturating_sub(8)).step_by(4) {
+                        for x in (8..(width as u32).saturating_sub(8)).step_by(4) {
+                            if dot_seed(x, y).is_multiple_of(3) {
+                                continue;
+                            }
+                            window.paint_quad(gpui::fill(
+                                Bounds::new(
+                                    bounds.origin + point(px(x as f32), px(y as f32)),
+                                    size(px(1.), px(1.)),
+                                ),
+                                color.opacity(0.04 + 0.14 * (1. - x as f32 / width)),
+                            ));
+                        }
+                    }
+                });
+            });
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
 /// Paints fine light and dark grain along the button bevel without covering its icon.
 pub(super) fn button_dither() -> impl IntoElement {
     canvas(

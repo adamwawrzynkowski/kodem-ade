@@ -111,7 +111,7 @@ impl Shell {
                     ),
             );
         }
-        if let Some(snapshot) = self.diff.clone() {
+        if let Some(snapshot) = &self.diff {
             if snapshot.files.is_empty() {
                 return motion::reveal(
                     "review-enter",

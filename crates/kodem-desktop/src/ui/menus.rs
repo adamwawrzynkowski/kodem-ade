@@ -34,6 +34,7 @@ impl Shell {
                             })
                             .on_click(cx.listener(|s, _, _, cx| {
                                 s.sidebar_project = None;
+                                s.sidebar_dirty = true;
                                 s.panel = Panel::None;
                                 cx.notify();
                             })),
@@ -75,6 +76,7 @@ impl Shell {
                                 move |s, _, _, cx| {
                                     if !chat_picker {
                                         s.sidebar_project = Some(id.clone());
+                                        s.sidebar_dirty = true;
                                     }
                                     s.selected_project = Some(id.clone());
                                     s.panel = Panel::None;
@@ -157,7 +159,7 @@ impl Shell {
                             .py_1()
                             .text_size(px(11.))
                             .text_color(t.subtle)
-                            .child("SORT TASKS"),
+                            .child("THREAD LIST"),
                     );
                 for (i, (sort, label)) in [
                     (Sort::Recent, "Recent activity"),
@@ -180,12 +182,40 @@ impl Shell {
                         .when(chosen, |b| b.bg(t.selected).text_color(t.text))
                         .on_click(cx.listener(move |s, _, _, cx| {
                             s.settings.sort = sort;
+                            s.sidebar_dirty = true;
                             s.panel = Panel::None;
                             s.save_settings();
                             cx.notify();
                         })),
                     );
                 }
+                menu = menu.child(div().h(px(1.)).my_1().bg(t.border)).child(
+                    self.ghost(
+                        "group-projects",
+                        if self.settings.group_tasks_by_project {
+                            "check"
+                        } else {
+                            "folder-closed"
+                        },
+                        "Group by project",
+                    )
+                    .w_full()
+                    .justify_start()
+                    .accessibility_label(if self.settings.group_tasks_by_project {
+                        "Disable project grouping"
+                    } else {
+                        "Enable project grouping"
+                    })
+                    .when(self.settings.group_tasks_by_project, |b| {
+                        b.bg(t.selected).text_color(t.text)
+                    })
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.settings.group_tasks_by_project = !s.settings.group_tasks_by_project;
+                        s.sidebar_dirty = true;
+                        s.save_settings();
+                        cx.notify();
+                    })),
+                );
             }
             Panel::ThreadMenu => {
                 if let Some(context) = &self.thread_menu {
