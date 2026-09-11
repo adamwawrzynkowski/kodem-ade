@@ -46,6 +46,12 @@ fn prompt_for(message: &OutgoingMessage) -> Result<String> {
     if !message.feedback.is_empty() {
         prompt.push_str("\n\nReview context refers to captured content. Check current files before applying it:\n");
         for feedback in &message.feedback {
+            if let Some(root) = &feedback.repository {
+                prompt.push_str(&format!(
+                    "\nRepository checkout: {}\n",
+                    serde_json::to_string(root)?
+                ));
+            }
             let coordinates = if feedback.first_row.is_some() {
                 format!(
                     "Displayed diff rows {:?}–{:?}; old source {:?}, new source {:?}",

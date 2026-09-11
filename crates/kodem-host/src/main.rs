@@ -289,6 +289,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 p.path
             };
             let baseline = git::head(&cwd);
+            let repository_baselines = git::repository_baselines(&cwd)?;
             let branch = git::branch(&cwd);
             let task = Task {
                 id,
@@ -298,6 +299,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 cwd,
                 owns_worktree: worktree,
                 baseline,
+                repository_baselines,
                 branch,
                 provider_thread: None,
                 active_turn: None,

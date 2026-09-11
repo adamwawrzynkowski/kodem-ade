@@ -14,6 +14,8 @@ use std::{
     process::{Command, Stdio},
 };
 const MAX_FILE: u64 = 2 * 1024 * 1024;
+mod repositories;
+pub use repositories::{repositories, repository_baselines};
 
 /// Executes a Git machine-format query without shell interpretation or external diff drivers.
 pub fn command(cwd: &Path, args: &[&OsStr]) -> Result<Vec<u8>> {
@@ -170,7 +172,9 @@ fn path_digest(cwd: &Path, path: &[u8]) -> Result<String> {
             Ok(digest(fs::read_link(path)?.as_os_str().as_bytes()))
         }
         Ok(meta) if meta.is_dir() => {
-            Ok(digest(&query(&path, &["status", "--porcelain=v1", "-z"])?))
+            let mut state = query(&path, &["status", "--porcelain=v1", "-z"])?;
+            state.extend_from_slice(head(&path).unwrap_or_default().as_bytes());
+            Ok(digest(&state))
         }
         Ok(meta) => {
             use std::os::unix::fs::PermissionsExt;
@@ -332,8 +336,44 @@ fn parse_patch(bytes: &[u8]) -> (Vec<DiffLine>, Option<String>) {
     }
     (lines, notice)
 }
-/// Captures stable observed content, retrying boundedly when external writes race the capture.
+/// Captures each related checkout independently, retrying boundedly when its files change.
 pub fn capture(task: &Task, comparison: Comparison) -> Result<DiffSnapshot> {
+    let roots = repositories(&task.cwd)?;
+    let mut snapshot = capture_repository(task, comparison.clone())?;
+    for root in roots.iter().skip(1) {
+        let mut linked = task.clone();
+        linked.cwd = root.clone();
+        linked.baseline = task
+            .repository_baselines
+            .iter()
+            .find(|base| &base.root == root)
+            .and_then(|base| base.head.clone());
+        let missing_baseline = comparison == Comparison::Baseline && linked.baseline.is_none();
+        let mut captured = capture_repository(
+            &linked,
+            if missing_baseline {
+                Comparison::WorkingTree
+            } else {
+                comparison.clone()
+            },
+        )
+        .with_context(|| format!("Capture repository {}", root.display()))?;
+        if missing_baseline {
+            captured.repositories[0].notice = Some(
+                "No task baseline for this repository. Showing current uncommitted changes.".into(),
+            );
+        }
+        snapshot.files.extend(captured.files);
+        snapshot.repositories.extend(captured.repositories);
+    }
+    for repo in &mut snapshot.repositories {
+        repo.label = repositories::label(&repo.root, &roots[0]);
+    }
+    Ok(snapshot)
+}
+
+fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapshot> {
+    let root = task.cwd.canonicalize()?;
     for _ in 0..3 {
         let before = index_digest(&task.cwd)?;
         let observed_head = head(&task.cwd);
@@ -380,7 +420,7 @@ pub fn capture(task: &Task, comparison: Comparison) -> Result<DiffSnapshot> {
             } else if meta.as_ref().is_some_and(|m| m.is_dir()) {
                 (
                     Vec::new(),
-                    Some("Submodule or directory change. Inspect with Git.".into()),
+                    Some("Repository reference or directory change. Nested files appear under their own repository.".into()),
                 )
             } else if meta.as_ref().is_some_and(|m| m.len() > MAX_FILE) {
                 (
@@ -434,6 +474,7 @@ pub fn capture(task: &Task, comparison: Comparison) -> Result<DiffSnapshot> {
             };
             stable &= observed == path_digest(&task.cwd, &path)?;
             entries.push(FileDelta {
+                repository: Some(root.clone()),
                 label: OsStr::from_bytes(&path).to_string_lossy().into(),
                 path,
                 old_path: old,
@@ -452,10 +493,17 @@ pub fn capture(task: &Task, comparison: Comparison) -> Result<DiffSnapshot> {
                 id: String::new(),
                 task_id: task.id.clone(),
                 comparison,
-                baseline: comparison_base,
+                baseline: comparison_base.clone(),
                 captured: now(),
-                index_digest: before,
+                index_digest: before.clone(),
                 files: entries,
+                repositories: vec![RepositorySnapshot {
+                    root: root.clone(),
+                    label: String::new(),
+                    baseline: comparison_base.clone(),
+                    index_digest: before.clone(),
+                    notice: None,
+                }],
             });
         }
     }
@@ -500,6 +548,7 @@ pub fn feedback(
         "Selected context exceeds 512 KiB"
     );
     Ok(Feedback {
+        repository: file.repository.clone(),
         old_range: if side == Side::Old {
             Some((start, end))
         } else {
@@ -515,7 +564,7 @@ pub fn feedback(
         id: new_id(),
         snapshot_id: snapshot.id.clone(),
         path: file.path.clone(),
-        label: file.label.clone(),
+        label: feedback_label(snapshot, file),
         side,
         start,
         end,
@@ -580,6 +629,7 @@ pub fn feedback_rows(
         "Selected context exceeds 512 KiB"
     );
     Ok(Feedback {
+        repository: file.repository.clone(),
         old_range: rows
             .iter()
             .filter_map(|l| l.old)
@@ -595,7 +645,7 @@ pub fn feedback_rows(
         id: new_id(),
         snapshot_id: snapshot.id.clone(),
         path: file.path.clone(),
-        label: file.label.clone(),
+        label: feedback_label(snapshot, file),
         side,
         start: *numbers.first().context("No source lines")?,
         end: *numbers.last().context("No source lines")?,
@@ -604,6 +654,16 @@ pub fn feedback_rows(
         digest: file.digest.clone(),
     })
 }
+fn feedback_label(snapshot: &DiffSnapshot, file: &FileDelta) -> String {
+    snapshot
+        .repositories
+        .iter()
+        .find(|repo| Some(&repo.root) == file.repository.as_ref())
+        .map_or_else(
+            || file.label.clone(),
+            |repo| format!("{}: {}", repo.label, file.label),
+        )
+}
 /// Stages one captured whole file after validating both content and index identity.
 pub fn stage(task: &Task, snapshot: &DiffSnapshot, file: usize) -> Result<()> {
     ensure!(
@@ -611,16 +671,30 @@ pub fn stage(task: &Task, snapshot: &DiffSnapshot, file: usize) -> Result<()> {
         "Snapshot belongs to another task"
     );
     let f = snapshot.files.get(file).context("Unknown file")?;
+    let cwd = f.repository.as_deref().unwrap_or(&task.cwd);
+    let expected_index = if f.repository.is_some() {
+        ensure!(
+            repositories(&task.cwd)?.iter().any(|root| root == cwd),
+            "Repository is no longer linked to this task. Refresh before staging."
+        );
+        &snapshot
+            .repositories
+            .iter()
+            .find(|repo| repo.root == cwd)
+            .context("Snapshot is missing the owning repository")?
+            .index_digest
+    } else {
+        &snapshot.index_digest
+    };
     ensure!(
         !f.status.contains('U') && f.status != "AA" && f.status != "DD",
         "Resolve this conflict before staging"
     );
     ensure!(
-        snapshot.index_digest == index_digest(&task.cwd)?
-            && f.digest == path_digest(&task.cwd, &f.path)?,
+        *expected_index == index_digest(cwd)? && f.digest == path_digest(cwd, &f.path)?,
         "Review is stale. Refresh before staging."
     );
-    let index = index_path(&task.cwd)?;
+    let index = index_path(cwd)?;
     let lock = index.with_file_name("index.lock");
     let mut guard = fs::OpenOptions::new()
         .write(true)
@@ -631,14 +705,14 @@ pub fn stage(task: &Task, snapshot: &DiffSnapshot, file: usize) -> Result<()> {
     let temp = index.with_file_name(format!("kodem-index-{}", new_id()));
     let result = (|| -> Result<()> {
         ensure!(
-            snapshot.index_digest == index_digest(&task.cwd)?,
+            *expected_index == index_digest(cwd)?,
             "Index changed before staging"
         );
         if index.exists() {
             fs::copy(&index, &temp)?;
         }
         let mut cmd = Command::new("git");
-        cmd.current_dir(&task.cwd)
+        cmd.current_dir(cwd)
             .env("GIT_INDEX_FILE", &temp)
             .args(["add", "-A", "--"])
             .arg(OsStr::from_bytes(&f.path));
@@ -652,7 +726,7 @@ pub fn stage(task: &Task, snapshot: &DiffSnapshot, file: usize) -> Result<()> {
             String::from_utf8_lossy(&out.stderr)
         );
         ensure!(
-            f.digest == path_digest(&task.cwd, &f.path)?,
+            f.digest == path_digest(cwd, &f.path)?,
             "File changed while staging; index was left unchanged"
         );
         guard.write_all(&fs::read(&temp)?)?;

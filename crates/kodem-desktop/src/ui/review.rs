@@ -112,6 +112,18 @@ impl Shell {
             );
         }
         if let Some(snapshot) = &self.diff {
+            for repo in &snapshot.repositories {
+                if let Some(notice) = &repo.notice {
+                    panel = panel.child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .text_size(px(11.))
+                            .text_color(t.muted)
+                            .child(format!("{}: {notice}", repo.label)),
+                    );
+                }
+            }
             if snapshot.files.is_empty() {
                 return motion::reveal(
                     "review-enter",
@@ -172,6 +184,32 @@ impl Shell {
             }
             if let Some(file) = snapshot.files.get(self.file) {
                 let file_index = self.file;
+                if let Some(root) = &file.repository {
+                    let label = format!("Repository: {}", root.display());
+                    let hint = label.clone();
+                    panel = panel.child(
+                        div()
+                            .id("diff-repository")
+                            .h(px(26.))
+                            .flex_shrink_0()
+                            .px_3()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .bg(t.sidebar)
+                            .text_size(px(11.))
+                            .text_color(t.muted)
+                            .child(icon("branch").size(px(12.)))
+                            .child(div().min_w_0().text_ellipsis().child(label))
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| Hint {
+                                    text: hint.clone(),
+                                    theme: t,
+                                })
+                                .into()
+                            }),
+                    );
+                }
                 panel = panel.child(
                     div()
                         .h(px(34.))

@@ -86,12 +86,12 @@ impl Shell {
             .diff
             .as_ref()
             .and_then(|old| old.files.get(self.file))
-            .map(|file| &file.path);
+            .map(|file| (&file.repository, &file.path));
         if self.reviewing_file {
             if let Some(index) = diff
                 .files
                 .iter()
-                .position(|file| Some(&file.path) == selected_path)
+                .position(|file| Some((&file.repository, &file.path)) == selected_path)
             {
                 self.file = index;
             } else {

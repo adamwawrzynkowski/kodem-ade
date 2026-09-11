@@ -323,6 +323,9 @@ pub struct Task {
     pub cwd: PathBuf,
     pub owns_worktree: bool,
     pub baseline: Option<String>,
+    /// Linked checkout commits observed when the task was created.
+    #[serde(default)]
+    pub repository_baselines: Vec<RepositoryBaseline>,
     pub branch: String,
     pub provider_thread: Option<String>,
     pub active_turn: Option<String>,
@@ -773,6 +776,9 @@ pub struct DiffLine {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct FileDelta {
+    /// Owning checkout; absent only in snapshots written before multi-repository support.
+    #[serde(default)]
+    pub repository: Option<PathBuf>,
     pub path: Vec<u8>,
     pub old_path: Option<Vec<u8>>,
     pub label: String,
@@ -780,6 +786,21 @@ pub struct FileDelta {
     pub lines: Vec<DiffLine>,
     pub notice: Option<String>,
     pub digest: String,
+}
+/// A task's starting commit in one linked checkout, including an unborn repository.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RepositoryBaseline {
+    pub root: PathBuf,
+    pub head: Option<String>,
+}
+/// Repository identity and index state captured alongside its file deltas.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RepositorySnapshot {
+    pub root: PathBuf,
+    pub label: String,
+    pub baseline: Option<String>,
+    pub index_digest: String,
+    pub notice: Option<String>,
 }
 /// Current task-baseline totals; omitted files have no inline line counts.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -798,6 +819,8 @@ pub struct DiffSnapshot {
     pub captured: u64,
     pub index_digest: String,
     pub files: Vec<FileDelta>,
+    #[serde(default)]
+    pub repositories: Vec<RepositorySnapshot>,
 }
 impl DiffSnapshot {
     /// Counts changed files and available added/removed lines in this capture.
@@ -830,11 +853,15 @@ impl DiffSnapshot {
             && self.comparison == other.comparison
             && self.baseline == other.baseline
             && self.index_digest == other.index_digest
+            && self.repositories == other.repositories
             && self.files == other.files
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Feedback {
+    /// Owning checkout for repository-relative source paths.
+    #[serde(default)]
+    pub repository: Option<PathBuf>,
     #[serde(default)]
     pub first_row: Option<usize>,
     #[serde(default)]

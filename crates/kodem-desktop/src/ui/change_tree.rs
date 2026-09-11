@@ -29,6 +29,7 @@ impl Folder {
                 depth,
                 file: None,
                 count: folder.count,
+                repository: None,
             });
             if !collapsed.contains(&path) {
                 folder.rows(&path, depth + 1, collapsed, rows);
@@ -43,6 +44,7 @@ impl Folder {
                 depth,
                 file: Some(*index),
                 count: 0,
+                repository: None,
             });
         }
     }
@@ -54,20 +56,46 @@ struct TreeRow {
     depth: usize,
     file: Option<usize>,
     count: usize,
+    repository: Option<std::path::PathBuf>,
 }
 impl Shell {
-    /// Renders foldable folders with file-type glyphs and per-file change totals.
+    /// Groups changes by owning checkout, then renders foldable folders and file totals.
     pub(super) fn changes_tree(
         &self,
         snapshot: &DiffSnapshot,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let mut root = Folder::default();
+        let mut groups = BTreeMap::<_, Folder>::new();
         for (i, file) in snapshot.files.iter().enumerate() {
-            root.insert(&file.label, i);
+            groups
+                .entry(file.repository.clone())
+                .or_default()
+                .insert(&file.label, i);
         }
         let mut rows = Vec::new();
-        root.rows("", 0, &self.collapsed_changes, &mut rows);
+        for (repository, folder) in groups {
+            if let Some(root) = repository {
+                let name = snapshot
+                    .repositories
+                    .iter()
+                    .find(|repo| repo.root == root)
+                    .map_or_else(|| root.display().to_string(), |repo| repo.label.clone());
+                let path = format!("repo:{root:?}/");
+                rows.push(TreeRow {
+                    name,
+                    path: path.clone(),
+                    depth: 0,
+                    file: None,
+                    count: folder.count,
+                    repository: Some(root),
+                });
+                if !self.collapsed_changes.contains(&path) {
+                    folder.rows(&path, 1, &self.collapsed_changes, &mut rows);
+                }
+            } else {
+                folder.rows("", 0, &self.collapsed_changes, &mut rows);
+            }
+        }
         let entity = cx.entity();
         uniform_list("changed-files", rows.len(), move |range, _, cx| {
             entity.update(cx, |s, cx| {
@@ -173,6 +201,16 @@ impl Shell {
                 }));
         } else {
             let collapsed = self.collapsed_changes.contains(&row.path);
+            if let Some(root) = &row.repository {
+                let hint = format!("Repository: {}", root.display());
+                entry = entry.tooltip(move |_, cx| {
+                    cx.new(|_| Hint {
+                        text: hint.clone(),
+                        theme: t,
+                    })
+                    .into()
+                });
+            }
             entry = entry
                 .text_color(t.muted)
                 .child(
@@ -184,7 +222,9 @@ impl Shell {
                     .size(px(12.)),
                 )
                 .child(
-                    icon(if collapsed {
+                    icon(if row.repository.is_some() {
+                        "branch"
+                    } else if collapsed {
                         "folder-closed"
                     } else {
                         "folder-open"
