@@ -260,7 +260,12 @@ impl Shell {
         };
         let t = self.theme;
         match row {
-            Row::Task { index, project, .. } => {
+            Row::Task {
+                index,
+                project,
+                settled,
+                ..
+            } => {
                 let Some(workspace) = &self.workspace else {
                     return div().into_any_element();
                 };
@@ -270,6 +275,13 @@ impl Shell {
                 div()
                     .pb(px(6.))
                     .when(self.settings.group_tasks_by_project, |row| row.px_2())
+                    .when(*settled, |row| {
+                        row.pl(px(if self.settings.group_tasks_by_project {
+                            32.
+                        } else {
+                            16.
+                        }))
+                    })
                     .child(card)
                     .into_any_element()
             }
@@ -336,6 +348,7 @@ impl Shell {
                 .w_full()
                 .h(px(32.))
                 .justify_start()
+                .when(project.is_some(), |row| row.pl(px(24.)))
                 .text_size(px(11.))
                 .child(div().flex_1())
                 .child(div().text_color(t.subtle).child(count.to_string()))

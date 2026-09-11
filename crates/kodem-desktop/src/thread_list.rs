@@ -13,6 +13,7 @@ pub enum Row {
         index: usize,
         project: usize,
         id: String,
+        settled: bool,
     },
     Settled {
         project: Option<String>,
@@ -161,19 +162,20 @@ fn append_tasks(
     let (open, settled): (Vec<_>, Vec<_>) = tasks
         .into_iter()
         .partition(|(_, _, task)| !task.is_settled() || (task.settled.is_none() && task.pinned));
-    let row = |(index, project, task): (usize, usize, &Task)| Row::Task {
+    let row = |(index, project, task): (usize, usize, &Task), settled: bool| Row::Task {
         index,
         project,
         id: task.id.clone(),
+        settled,
     };
-    rows.extend(open.into_iter().map(row));
+    rows.extend(open.into_iter().map(|task| row(task, false)));
     if !settled.is_empty() {
         rows.push(Row::Settled {
             project,
             count: settled.len(),
         });
         if show_settled {
-            rows.extend(settled.into_iter().map(row));
+            rows.extend(settled.into_iter().map(|task| row(task, true)));
         }
     }
 }
