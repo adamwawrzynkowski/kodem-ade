@@ -97,7 +97,7 @@ impl Shell {
             if view
                 .requests
                 .iter()
-                .any(|r| r.method.ends_with("requestApproval"))
+                .any(|r| self.request_in_current_thread(r) && r.method.ends_with("requestApproval"))
             {
                 panel = panel.child(
                     div()
@@ -494,7 +494,8 @@ impl Shell {
             .overflow_hidden()
             .child(motion::composer_backdrop(t))
             .when(!empty, |d| {
-                d.child(self.activity_strip(cx))
+                d.child(self.subagents_strip(cx))
+                    .child(self.activity_strip(cx))
                     .child(self.changed_files_strip(cx))
                     .child(self.question_panel(cx))
             })
@@ -621,7 +622,10 @@ impl Shell {
                         )),
                     )
             });
-        if active && runtime.steering {
+        if active
+            && runtime.steering
+            && task.as_ref().is_none_or(|t| t.pending_completion.is_none())
+        {
             toolbar = toolbar.child(
                 self.ghost(
                     "active-send-mode",
@@ -759,7 +763,11 @@ impl Shell {
                     })
                     .child(div().flex_1())
                     .child(if active {
-                        if self.settings.send_mode == SendMode::Queue {
+                        if self.settings.send_mode == SendMode::Queue
+                            || task
+                                .as_ref()
+                                .is_some_and(|t| t.pending_completion.is_some())
+                        {
                             "Enter to queue · Shift+Enter for newline"
                         } else {
                             "Enter to steer · Shift+Enter for newline"
@@ -798,6 +806,13 @@ impl Shell {
         else {
             return div().into_any_element();
         };
+        if message.kind == MessageKind::Subagent {
+            return div()
+                .px_5()
+                .py_2()
+                .child(self.agent_link(&message.text, cx))
+                .into_any_element();
+        }
         let t = self.theme;
         let user = message.kind == MessageKind::User;
         if message.kind == MessageKind::Tool {

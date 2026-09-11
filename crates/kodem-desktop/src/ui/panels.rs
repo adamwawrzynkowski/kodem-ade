@@ -265,7 +265,10 @@ impl Shell {
                     for (i, request) in view
                         .requests
                         .into_iter()
-                        .filter(|r| r.method.ends_with("requestApproval"))
+                        .filter(|r| {
+                            self.request_in_current_thread(r)
+                                && r.method.ends_with("requestApproval")
+                        })
                         .enumerate()
                     {
                         content = content.child(

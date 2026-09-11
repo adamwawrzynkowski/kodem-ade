@@ -172,6 +172,9 @@ impl Render for Shell {
         if let Some(preview) = self.render_image_preview(window, cx) {
             return preview;
         }
+        if let Some(popup) = self.render_agent_popup(cx) {
+            return popup;
+        }
         let t = self.theme;
         let mut root = div()
             .id("workspace")

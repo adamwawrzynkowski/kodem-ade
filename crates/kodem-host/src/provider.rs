@@ -261,6 +261,7 @@ fn ensure_owner(host: Shared, task_id: String) {
             let h = host.lock().unwrap();
             if let Ok(mut task) = h.store.task(&task_id) {
                 let unknown = task.active_turn.is_some()
+                    || task.subagents.iter().any(|a| a.state.active())
                     || h.store.has_uncertain_submission(&task_id).unwrap_or(true);
                 if unknown || task.state.active() || task.state == RunState::Idle {
                     task.state = if unknown {
@@ -270,6 +271,13 @@ fn ensure_owner(host: Shared, task_id: String) {
                     };
                     let _ = h.store.settle_pending(&task_id, unknown);
                 }
+                for agent in &mut task.subagents {
+                    if agent.state.active() {
+                        agent.state = RunState::DeliveryUnknown;
+                        agent.active_turn = None;
+                    }
+                }
+                task.pending_completion = None;
                 task.error = Some(format!(
                     "{error:#}. Queued messages are retained; no uncertain input was resent."
                 ));
@@ -332,6 +340,7 @@ pub(crate) fn claim_next(host: &Shared, task_id: &str) -> Result<Option<Outgoing
         task.state = RunState::Starting;
         task.branch_merged = false;
         task.active_turn = None;
+        task.pending_completion = None;
         task.error = None;
         task.updated = now();
         task.last_started = Some(task.updated);
@@ -589,6 +598,8 @@ pub(crate) fn complete_turn(
     if let Some(branch) = branch {
         task.branch = branch;
     }
+    h.store.release_completion_messages(task_id)?;
+    task.pending_completion = None;
     task.active_turn = None;
     task.state = state;
     task.error = error;

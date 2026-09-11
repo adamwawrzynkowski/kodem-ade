@@ -46,7 +46,7 @@ impl Store {
                 "ALTER TABLE submissions ADD COLUMN payload TEXT; PRAGMA user_version=3;",
             )?;
         }
-        db.execute_batch("COMMIT;")?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS agent_message_order(transcript TEXT NOT NULL, id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(transcript,id)); COMMIT;")?;
         fs::set_permissions(
             root.join("workspace.sqlite"),
             fs::Permissions::from_mode(0o600),
@@ -64,6 +64,13 @@ impl Store {
                 task.state = RunState::DeliveryUnknown;
                 task.error=Some("The host stopped before completion was confirmed. History is retained. No prompt was resent. Review the provider history before starting another turn.".into());
                 task.active_turn = None;
+                task.pending_completion = None;
+                for agent in &mut task.subagents {
+                    if agent.state.active() {
+                        agent.state = RunState::DeliveryUnknown;
+                        agent.active_turn = None;
+                    }
+                }
                 self.save_task(&task)?;
             } else if matches!(task.state, RunState::Idle | RunState::Completed)
                 && self
@@ -223,6 +230,20 @@ impl Store {
         }
         let transaction = self.db.transaction()?;
         transaction.execute("DELETE FROM messages WHERE task_id=?1", [id])?;
+        transaction.execute(
+            "DELETE FROM messages WHERE task_id=?1",
+            [format!("{id}/completion")],
+        )?;
+        for agent in &task.subagents {
+            transaction.execute(
+                "DELETE FROM messages WHERE task_id=?1",
+                [agent.transcript_id(id)],
+            )?;
+            transaction.execute(
+                "DELETE FROM agent_message_order WHERE transcript=?1",
+                [agent.transcript_id(id)],
+            )?;
+        }
         transaction.execute("DELETE FROM submissions WHERE task_id=?1", [id])?;
         transaction.execute("DELETE FROM tasks WHERE id=?1", [id])?;
         transaction.execute(
@@ -317,11 +338,66 @@ impl Store {
         self.db.execute("INSERT INTO messages(id,task_id,json) VALUES(?1,?2,?3) ON CONFLICT(task_id,id) DO UPDATE SET json=excluded.json",params![m.id,m.task_id,serde_json::to_string(m)?])?;
         Ok(())
     }
+    /// Checks a transcript item before filling gaps from provider history.
+    pub fn has_message(&self, task_id: &str, id: &str) -> Result<bool> {
+        Ok(self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE task_id=?1 AND id=?2)",
+            params![task_id, id],
+            |row| row.get(0),
+        )?)
+    }
+    /// Removes a staged item when the provider identifies it as commentary.
+    pub fn remove_message(&self, task_id: &str, id: &str) -> Result<()> {
+        self.db.execute(
+            "DELETE FROM messages WHERE task_id=?1 AND id=?2",
+            params![task_id, id],
+        )?;
+        Ok(())
+    }
+    /// Publishes the main final answer only after the entire agent tree settles.
+    pub fn release_completion_messages(&self, task_id: &str) -> Result<()> {
+        let source = format!("{task_id}/completion");
+        let mut statement = self
+            .db
+            .prepare("SELECT json FROM messages WHERE task_id=?1 ORDER BY seq")?;
+        let rows = statement.query_map([&source], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            let mut message: Message = serde_json::from_str(&row?)?;
+            message.task_id = task_id.into();
+            self.message(&message)?;
+        }
+        self.db
+            .execute("DELETE FROM messages WHERE task_id=?1", [&source])?;
+        Ok(())
+    }
+    /// Records authoritative child item order independently of notification arrival time.
+    pub fn order_agent_message(&self, transcript: &str, id: &str, position: u64) -> Result<()> {
+        self.db.execute("INSERT INTO agent_message_order(transcript,id,position) VALUES(?1,?2,?3) ON CONFLICT(transcript,id) DO NOTHING", params![transcript, id, i64::try_from(position)?])?;
+        Ok(())
+    }
+    /// Reads a bounded child page in provider order, keeping new live items at the tail.
+    pub fn agent_messages(
+        &self,
+        task: &str,
+        before: Option<u64>,
+    ) -> Result<(Vec<Message>, Option<u64>)> {
+        self.transcript_page(task, before, true)
+    }
     /// Reads a bounded transcript page in chronological order.
     pub fn messages(&self, task: &str, before: Option<u64>) -> Result<(Vec<Message>, Option<u64>)> {
-        let mut stmt = self.db.prepare(
-            "SELECT seq,json FROM messages WHERE task_id=?1 AND seq<?2 ORDER BY seq DESC LIMIT 101",
-        )?;
+        self.transcript_page(task, before, false)
+    }
+    fn transcript_page(
+        &self,
+        task: &str,
+        before: Option<u64>,
+        agent: bool,
+    ) -> Result<(Vec<Message>, Option<u64>)> {
+        let mut stmt = self.db.prepare(if agent {
+            "SELECT COALESCE(o.position,1099511627776+m.seq) AS ordinal,m.json FROM messages m LEFT JOIN agent_message_order o ON o.transcript=m.task_id AND o.id=m.id WHERE m.task_id=?1 AND ordinal<?2 ORDER BY ordinal DESC LIMIT 101"
+        } else {
+            "SELECT seq,json FROM messages WHERE task_id=?1 AND seq<?2 ORDER BY seq DESC LIMIT 101"
+        })?;
         let mut rows = stmt.query(params![
             task,
             before

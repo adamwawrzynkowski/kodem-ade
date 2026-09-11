@@ -15,7 +15,7 @@ pub enum Command {
         sources: Vec<kodem_core::AttachmentSource>,
         images: Vec<tempfile::TempPath>,
     },
-    Poll(Option<String>, bool),
+    Poll(Option<String>, bool, Option<String>),
 }
 pub struct Reply {
     pub request: Request,
@@ -111,13 +111,20 @@ fn start_at(
                     _clipboard_images = images;
                     vec![Request::ImportAttachments { task_id, sources }]
                 }
-                Command::Poll(task, terminal) => {
+                Command::Poll(task, terminal, agent) => {
                     let mut r = vec![Request::Hello];
                     if let Some(task_id) = task {
                         r.push(Request::Task {
                             task_id: task_id.clone(),
                             before: None,
                         });
+                        if let Some(thread_id) = agent {
+                            r.push(Request::SubagentThread {
+                                task_id: task_id.clone(),
+                                thread_id,
+                                before: None,
+                            });
+                        }
                         if terminal {
                             r.push(Request::Terminal { task_id });
                         }

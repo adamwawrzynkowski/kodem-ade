@@ -24,6 +24,7 @@ impl Shell {
             .map(|v| {
                 v.requests
                     .iter()
+                    .filter(|r| self.request_in_current_thread(r))
                     .filter(|r| r.method == "item/tool/requestUserInput" || r.is_async())
                     .cloned()
                     .collect()

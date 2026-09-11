@@ -157,6 +157,28 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         "Host is restarting. Retry after reconnecting."
     );
     match request {
+        Request::SubagentThread {
+            task_id,
+            thread_id,
+            before,
+        } => {
+            let h = host.lock().unwrap();
+            let task = h.store.task(&task_id)?;
+            let agent = task
+                .subagents
+                .into_iter()
+                .find(|a| a.thread_id == thread_id)
+                .context("Subagent does not belong to this task")?;
+            let (messages, before) = h
+                .store
+                .agent_messages(&agent.transcript_id(&task_id), before)?;
+            Ok(Response::SubagentThread(SubagentView {
+                task_id,
+                agent,
+                messages,
+                before,
+            }))
+        }
         Request::RefreshUsage { provider } | Request::ConsumeUsageReset { provider, .. } => {
             {
                 let mut h = host.lock().unwrap();
@@ -325,6 +347,8 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             let repository_baselines = git::repository_baselines(&cwd)?;
             let branch = git::branch(&cwd);
             let task = Task {
+                subagents: Vec::new(),
+                pending_completion: None,
                 provider: defaults.provider,
                 provider_access: defaults.provider_access.clone(),
                 id,

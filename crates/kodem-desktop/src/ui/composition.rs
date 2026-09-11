@@ -54,14 +54,20 @@ impl Shell {
 
     /// Sends the same composition for keyboard and pointer submission.
     pub(super) fn submit_current(&mut self, cx: &mut Context<Self>) {
-        if self.panel != Panel::None
+        if self.agent_popup.is_some()
+            || self.panel != Panel::None
             || self.pasting_images > 0
             || self.submitted_draft.is_some()
             || !self.has_composer_content(cx)
         {
             return;
         }
-        let mode = if self.selected_runtime().steering {
+        let mode = if self.selected_runtime().steering
+            && self
+                .view
+                .as_ref()
+                .is_none_or(|v| v.task.pending_completion.is_none())
+        {
             self.settings.send_mode
         } else {
             SendMode::Queue

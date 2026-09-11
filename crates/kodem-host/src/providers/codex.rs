@@ -1,6 +1,8 @@
 //! Codex integration: app-server sessions, discovery and protocol events.
 use super::*;
 use kodem_core::providers::codex::Codex;
+#[path = "codex_subagents.rs"]
+mod subagents;
 pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result<()> {
     let cwd = host.lock().unwrap().store.task(task_id)?.cwd;
     let mut items: HashMap<String, Message> = HashMap::new();
@@ -16,7 +18,7 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
     };
     let mut codex = Codex::start(&cwd, &mut event)?;
     let task = host.lock().unwrap().store.task(task_id)?;
-    let mut params = json!({"cwd":cwd,"approvalPolicy":task.access.approval_policy(),"approvalsReviewer":task.access.approvals_reviewer(),"sandbox":task.access.sandbox()});
+    let mut params = json!({"cwd":cwd,"approvalPolicy":task.access.approval_policy(),"approvalsReviewer":task.access.approvals_reviewer(),"sandbox":task.access.sandbox(),"config":{"features.multi_agent":true}});
     if let Some(model) = selected_model(&host, &task) {
         params["model"] = json!(model);
     }
@@ -41,6 +43,9 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
     }
     crate::titles::start(host.clone(), task_id)?;
     let mut branch_refresh = Instant::now();
+    let mut children = subagents::Subscriptions::default();
+    let mut stopping = false;
+    let mut interrupted = std::collections::HashSet::new();
     loop {
         if branch_refresh.elapsed() >= Duration::from_secs(5) {
             branch_refresh = Instant::now();
@@ -72,13 +77,13 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
                     let _ = reply.send(result);
                 }
                 Control::Interrupt => {
-                    let task = host.lock().unwrap().store.task(task_id)?;
-                    if let Some(turn) = task.active_turn {
-                        codex.call(
-                            "turn/interrupt",
-                            json!({"threadId":thread,"turnId":turn}),
-                            &mut event,
-                        )?;
+                    stopping = true;
+                    interrupted.clear();
+                    let h = host.lock().unwrap();
+                    let mut task = h.store.task(task_id)?;
+                    if let Some(outcome) = &mut task.pending_completion {
+                        outcome.state = RunState::Interrupted;
+                        h.store.save_task(&task)?;
                     }
                 }
                 Control::Answer { id, response } => {
@@ -110,7 +115,16 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
                                 task.active_turn.as_deref().unwrap_or("unknown"),
                                 request.answer_submission_id()
                             ),
-                            task_id: task_id.into(),
+                            task_id: task
+                                .subagents
+                                .iter()
+                                .find(|agent| {
+                                    request.params["threadId"].as_str() == Some(&agent.thread_id)
+                                })
+                                .map_or_else(
+                                    || task_id.to_owned(),
+                                    |agent| agent.transcript_id(task_id),
+                                ),
                             kind: MessageKind::User,
                             text,
                             attachments: Vec::new(),
@@ -120,8 +134,19 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
                             created: now(),
                         })?;
                     }
+                    if let Some(agent) = task
+                        .subagents
+                        .iter_mut()
+                        .find(|agent| request.params["threadId"].as_str() == Some(&agent.thread_id))
+                    {
+                        if agent.state == RunState::Waiting {
+                            agent.state = RunState::Running;
+                        }
+                        h.store.save_task(&task)?;
+                    }
                     if task.state == RunState::Waiting
-                        && task.active_turn.is_some()
+                        && (task.active_turn.is_some()
+                            || task.subagents.iter().any(|a| a.state.active()))
                         && h.requests.get(task_id).is_none_or(|r| r.is_empty())
                     {
                         task.state = RunState::Running;
@@ -132,6 +157,40 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
         }
         if let Some(error) = persistence_error.lock().unwrap().take() {
             anyhow::bail!(error);
+        }
+        children.poll(&host, task_id, &mut codex, &mut event)?;
+        if stopping {
+            let task = host.lock().unwrap().store.task(task_id)?;
+            if !task.state.active() {
+                stopping = false;
+                interrupted.clear();
+            } else {
+                let targets = task
+                    .subagents
+                    .iter()
+                    .filter(|agent| agent.state.active())
+                    .filter_map(|agent| {
+                        agent
+                            .active_turn
+                            .clone()
+                            .map(|turn| (agent.thread_id.clone(), turn))
+                    })
+                    .chain(task.active_turn.clone().map(|turn| (thread.clone(), turn)));
+                for (thread_id, turn_id) in targets {
+                    if interrupted.insert((thread_id.clone(), turn_id.clone())) {
+                        if let Err(error) = codex.call(
+                            "turn/interrupt",
+                            json!({"threadId":thread_id,"turnId":turn_id}),
+                            &mut event,
+                        ) {
+                            let h = host.lock().unwrap();
+                            let mut task = h.store.task(task_id)?;
+                            task.error = Some(format!("Could not stop agent turn: {error}"));
+                            h.store.save_task(&task)?;
+                        }
+                    }
+                }
+            }
         }
         dispatch_next(&host, task_id, &thread, &mut codex, &mut event)?;
         codex.poll(Duration::from_millis(40), &mut event)?;
@@ -223,20 +282,57 @@ fn ingest(
 ) -> Result<()> {
     let method = value["method"].as_str().unwrap_or_default();
     let p = &value["params"];
+    if subagents::observe(host, task_id, method, p)? {
+        return Ok(());
+    }
+    let task = host.lock().unwrap().store.task(task_id)?;
+    let event_thread = p["threadId"].as_str();
+    let child = task
+        .subagents
+        .iter()
+        .find(|agent| Some(agent.thread_id.as_str()) == event_thread);
+    // Unknown threads must never mutate this task's lifecycle or transcript.
+    if event_thread.is_some() && event_thread != task.provider_thread.as_deref() && child.is_none()
+    {
+        return Ok(());
+    }
+    let transcript_id =
+        child.map_or_else(|| task_id.to_owned(), |agent| agent.transcript_id(task_id));
+    let child_thread = child.map(|agent| agent.thread_id.clone());
+    if child_thread.is_some()
+        && matches!(
+            method,
+            "turn/started" | "turn/completed" | "thread/status/changed"
+        )
+    {
+        subagents::transition(host, task_id, event_thread.unwrap(), method, p)?;
+        return Ok(());
+    }
     // Complete the checkout capture before another queued turn becomes eligible.
     if method == "turn/completed" {
+        if task
+            .active_turn
+            .as_deref()
+            .is_some_and(|turn| p["turn"]["id"].as_str() != Some(turn))
+        {
+            return Ok(());
+        }
         let state = match p["turn"]["status"].as_str() {
             Some("completed") => RunState::Completed,
             Some("interrupted") => RunState::Interrupted,
             _ => RunState::Failed,
         };
-        complete_turn(
+        subagents::complete_main(
             host,
             task_id,
-            state,
-            p["turn"]["error"]["message"].as_str().map(str::to_owned),
+            TurnOutcome {
+                state,
+                error: p["turn"]["error"]["message"].as_str().map(str::to_owned),
+            },
         )?;
-        items.clear();
+        items.retain(|_, message| {
+            message.task_id != task_id && message.task_id != format!("{task_id}/completion")
+        });
         return Ok(());
     }
     let observed_branch = if method == "turn/started" {
@@ -265,6 +361,15 @@ fn ingest(
                 method: method.into(),
                 params: p.clone(),
             });
+        if let Some(thread) = &child_thread {
+            if let Some(agent) = task
+                .subagents
+                .iter_mut()
+                .find(|agent| &agent.thread_id == thread)
+            {
+                agent.state = RunState::Waiting;
+            }
+        }
         task.state = RunState::Waiting;
         h.store.save_task(&task)?;
         h.notify_task_state(&task);
@@ -273,7 +378,9 @@ fn ingest(
     if let Some(branch) = observed_branch {
         task.branch = branch;
     }
-    update_activities(h.activities.entry(task_id.into()).or_default(), method, p);
+    if child_thread.is_none() {
+        update_activities(h.activities.entry(task_id.into()).or_default(), method, p);
+    }
     match method {
         "thread/tokenUsage/updated" => {
             if task
@@ -325,10 +432,15 @@ fn ingest(
                 .context("Missing item identity")?
                 .to_owned();
             let key = format!("{}:{id}", p["turnId"].as_str().unwrap_or("unknown"));
-            let item = items.entry(key.clone()).or_insert(Message {
+            let cache_key = format!("{transcript_id}:{key}");
+            let item = items.entry(cache_key).or_insert(Message {
                 seq: 0,
                 id: key,
-                task_id: task_id.into(),
+                task_id: if child_thread.is_none() && method.contains("agentMessage") {
+                    format!("{task_id}/completion")
+                } else {
+                    transcript_id.clone()
+                },
                 attachments: Vec::new(),
                 feedback: Vec::new(),
                 file_edits: Vec::new(),
@@ -351,11 +463,37 @@ fn ingest(
                 return Ok(());
             };
             let kind = item["type"].as_str().unwrap_or_default();
-            if kind == "userMessage" || kind == "reasoning" {
+            if child_thread.is_none() && (kind == "userMessage" || kind == "reasoning") {
                 return Ok(());
             }
             let key = format!("{}:{id}", p["turnId"].as_str().unwrap_or("unknown"));
             let (message_kind, text) = match kind {
+                "userMessage" => (
+                    MessageKind::User,
+                    item["content"]
+                        .as_array()
+                        .map(|parts| {
+                            parts
+                                .iter()
+                                .filter_map(|part| part["text"].as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                        .unwrap_or_default(),
+                ),
+                "reasoning" => (
+                    MessageKind::Notice,
+                    item["summary"]
+                        .as_array()
+                        .map(|parts| {
+                            parts
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                        .unwrap_or_default(),
+                ),
                 "agentMessage" => (
                     MessageKind::Assistant,
                     item["text"].as_str().unwrap_or_default().to_owned(),
@@ -391,6 +529,9 @@ fn ingest(
                             .unwrap_or_default()
                     ),
                 ),
+                _ if child_thread.is_some() => {
+                    (MessageKind::Tool, serde_json::to_string_pretty(item)?)
+                }
                 _ => (
                     MessageKind::Tool,
                     format!(
@@ -405,10 +546,18 @@ fn ingest(
                     ),
                 ),
             };
+            let destination = if child_thread.is_none()
+                && kind == "agentMessage"
+                && item["phase"] != "commentary"
+            {
+                format!("{task_id}/completion")
+            } else {
+                transcript_id.clone()
+            };
             let mut message = Message {
                 seq: 0,
                 id: key.clone(),
-                task_id: task_id.into(),
+                task_id: destination,
                 kind: message_kind,
                 attachments: Vec::new(),
                 feedback: Vec::new(),
@@ -421,8 +570,13 @@ fn ingest(
                 message.file_edits = completed_file_edits(item);
             }
             append_bounded(&mut message.text, &text);
+            if child_thread.is_none() && kind == "agentMessage" && item["phase"] == "commentary" {
+                h.store
+                    .remove_message(&format!("{task_id}/completion"), &message.id)?;
+            }
             h.store.message(&message)?;
-            if message.complete
+            if child_thread.is_none()
+                && message.complete
                 && let Some(request) = InputRequest::from_async_message(
                     task_id,
                     p["turnId"].as_str().unwrap_or("unknown"),
@@ -440,10 +594,11 @@ fn ingest(
                 h.store.save_task(&task)?;
                 h.notify_input_needed(&task);
             }
+            let cache_key = format!("{transcript_id}:{key}");
             if message.complete {
-                items.remove(&key);
+                items.remove(&cache_key);
             } else {
-                items.insert(key, message);
+                items.insert(cache_key, message);
             }
         }
         "error" if p["willRetry"].as_bool() != Some(true) => {
@@ -453,7 +608,7 @@ fn ingest(
             h.store.message(&Message {
                 seq: 0,
                 id: new_id(),
-                task_id: task_id.into(),
+                task_id: transcript_id.clone(),
                 kind: MessageKind::Error,
                 attachments: Vec::new(),
                 feedback: Vec::new(),
@@ -875,6 +1030,37 @@ pub(crate) fn reconcile(host: &Shared, task_id: &str) -> Result<()> {
     };
     let thread=task.provider_thread.as_ref().context("The provider never returned a thread identity. No prompt can be reconciled automatically; retain this task and create a new one.")?;
     let mut codex = Codex::start(&task.cwd, |_| {})?;
+    for agent in &task.subagents {
+        let child = codex.call(
+            "thread/read",
+            json!({"threadId":agent.thread_id,"includeTurns":false}),
+            &mut |_| {},
+        )?;
+        ensure!(
+            child["thread"]["status"]["type"] != "active",
+            "A subagent is still working. Reconcile after it settles."
+        );
+        let latest = codex.call("thread/turns/list", json!({"threadId":agent.thread_id,"limit":1,"sortDirection":"desc","itemsView":"notLoaded"}), &mut |_| {})?;
+        if let Some(turn) = latest["data"].as_array().and_then(|turns| turns.first()) {
+            ensure!(
+                turn["status"] != "inProgress",
+                "A subagent turn is still active"
+            );
+            subagents::transition(
+                host,
+                task_id,
+                &agent.thread_id,
+                "turn/completed",
+                &json!({"turn":turn}),
+            )?;
+        } else {
+            ensure!(
+                !agent.state.active() && agent.state != RunState::DeliveryUnknown,
+                "Subagent outcome is unavailable; delivery remains unknown"
+            );
+        }
+    }
+
     let resumed=codex.call("thread/resume",json!({"threadId":thread,"excludeTurns":true,"initialTurnsPage":{"limit":20,"sortDirection":"desc","itemsView":"notLoaded"}}),&mut |_|{})?;
     let mut page = resumed["initialTurnsPage"].clone();
     let mut identified: Option<(Value, Vec<Value>)> = None;

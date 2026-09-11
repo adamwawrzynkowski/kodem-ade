@@ -50,6 +50,8 @@ impl Shell {
         if waiting || view.activities.is_empty() {
             let (label, glyph, spin) = if waiting {
                 ("Waiting for your input", "shield", false)
+            } else if view.task.pending_completion.is_some() {
+                ("Subagents working…", "loader", true)
             } else if self.submitted_draft.is_some() {
                 ("Recording message…", "loader", true)
             } else if view.task.state == RunState::Starting || view.starting_submission().is_some()
@@ -82,10 +84,10 @@ impl Shell {
                     .child(motion::gleam("agent-state-label", label, t))
                     .when(
                         waiting
-                            && view
-                                .requests
-                                .iter()
-                                .any(|r| r.method.ends_with("requestApproval")),
+                            && view.requests.iter().any(|r| {
+                                self.request_in_current_thread(r)
+                                    && r.method.ends_with("requestApproval")
+                            }),
                         |d| {
                             d.child(div().flex_1()).child(
                                 self.icon_button(

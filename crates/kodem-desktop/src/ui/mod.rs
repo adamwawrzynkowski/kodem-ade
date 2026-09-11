@@ -20,6 +20,7 @@ mod review;
 mod settings;
 mod sidebar;
 mod slash;
+mod subagents;
 mod tool_calls;
 mod updates;
 mod usage;
@@ -98,6 +99,7 @@ pub struct Shell {
     focus: FocusHandle,
     workspace: Option<Workspace>,
     view: Option<TaskView>,
+    agent_popup: Option<subagents::AgentPopup>,
     selected: Option<String>,
     input: Entity<TextInput>,
     aux: Entity<TextInput>,
@@ -310,9 +312,11 @@ impl Shell {
                         }
                         if !s.poll_pending {
                             s.poll_pending = true;
-                            let _ = s
-                                .tx
-                                .send(bridge::Command::Poll(s.selected.clone(), s.show_terminal));
+                            let _ = s.tx.send(bridge::Command::Poll(
+                                s.selected.clone(),
+                                s.show_terminal,
+                                s.agent_popup.as_ref().map(|p| p.thread_id.clone()),
+                            ));
                         }
                         if s.host_connected && s.selected.is_some() && s.changes_refresh.due() {
                             s.refresh_task_changes();
@@ -341,6 +345,7 @@ impl Shell {
             focus,
             workspace: None,
             view: None,
+            agent_popup: None,
             selected: None,
             input,
             aux,
@@ -510,6 +515,22 @@ impl Shell {
         let response = match reply.result {
             Ok(r) => r,
             Err(e) => {
+                if let core::Request::SubagentThread {
+                    task_id, thread_id, ..
+                } = &reply.request
+                {
+                    if self.selected.as_ref() == Some(task_id) {
+                        if let Some(popup) = self
+                            .agent_popup
+                            .as_mut()
+                            .filter(|p| &p.thread_id == thread_id)
+                        {
+                            popup.error = Some(e);
+                            cx.notify();
+                        }
+                    }
+                    return;
+                }
                 if matches!(reply.request, core::Request::ComposerCatalog { .. }) {
                     self.receive_slash_catalog(
                         &reply.request,
@@ -663,6 +684,18 @@ impl Shell {
                 self.select_task(task.id, cx);
                 self.panel = Panel::None;
                 self.send(core::Request::Hello);
+            }
+            Response::SubagentThread(view) => {
+                self.update_agent_popup(
+                    view,
+                    matches!(
+                        reply.request,
+                        core::Request::SubagentThread {
+                            before: Some(_),
+                            ..
+                        }
+                    ),
+                );
             }
             Response::Task(mut view) => {
                 if self.selected.as_deref() != Some(&view.task.id) {
@@ -1044,6 +1077,7 @@ impl Shell {
         self.new_submission_origin = None;
     }
     fn select_task(&mut self, id: String, cx: &mut Context<Self>) {
+        self.agent_popup = None;
         if self.creating_task {
             return;
         }

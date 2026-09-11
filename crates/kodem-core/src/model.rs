@@ -357,6 +357,11 @@ pub struct UsageLimits {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Task {
     #[serde(default)]
+    pub subagents: Vec<Subagent>,
+    /// Main turn outcome held until its descendants have stopped working.
+    #[serde(default)]
+    pub pending_completion: Option<TurnOutcome>,
+    #[serde(default)]
     pub provider: Provider,
     #[serde(default)]
     pub provider_access: Option<String>,
@@ -425,6 +430,41 @@ pub enum MessageKind {
     Error,
     Check,
     Notice,
+    Subagent,
+}
+
+/// A provider child thread, owned by a task but excluded from task navigation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Subagent {
+    #[serde(default)]
+    pub history_loaded: bool,
+    pub thread_id: String,
+    pub parent_thread_id: String,
+    pub name: String,
+    pub state: RunState,
+    pub active_turn: Option<String>,
+}
+impl Subagent {
+    /// Returns the transcript storage identity without creating a sidebar task.
+    pub fn transcript_id(&self, task_id: &str) -> String {
+        format!("{task_id}/agent/{}", self.thread_id)
+    }
+}
+
+/// Provider outcome awaiting completion of the task's whole agent tree.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TurnOutcome {
+    pub state: RunState,
+    pub error: Option<String>,
+}
+
+/// One bounded page of an independently stored child transcript.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubagentView {
+    pub task_id: String,
+    pub agent: Subagent,
+    pub messages: Vec<Message>,
+    pub before: Option<u64>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FileEdit {
@@ -1039,6 +1079,11 @@ pub enum TaskEdit {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Request {
+    SubagentThread {
+        task_id: String,
+        thread_id: String,
+        before: Option<u64>,
+    },
     Hello,
     RefreshUsage {
         provider: Provider,
@@ -1224,6 +1269,7 @@ pub enum Response {
     },
     Workspace(Workspace),
     Task(TaskView),
+    SubagentThread(SubagentView),
     Project(Project),
     Created(Task),
     Diff(DiffSnapshot),
