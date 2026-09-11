@@ -18,6 +18,11 @@ sha2 = "0.10"
 gpui = { package = "gpui-ce", version = "=0.2.2", default-features = false, features = ["font-kit"] }
 gpui_platform = { package = "gpui_ce_platform", version = "=0.1.0", features = ["font-kit"] }
 
+# SVG rasterization runs on the UI thread and needs optimized pixel operations.
+# Keep Kodem itself unoptimized with Debug assertions and symbols.
+[profile.dev.package.tiny-skia]
+opt-level = 3
+
 [profile.release]
 opt-level = 3
 lto = "thin"

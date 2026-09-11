@@ -82,7 +82,7 @@ The earlier redesign was inspected using actual native GPUI Metal frames and app
 
 The host starts on demand. Closing the window keeps active tasks and terminals alive. Settings includes an explicit host shutdown action. An unused host with no active task, check or terminal exits after five minutes.
 
-Data lives in `~/Library/Application Support/Kodem/`. Debug and release use the same store by default. `KODEM_DATA_DIR` selects an isolated store. Database upgrades reject newer schemas, back up existing older schemas and apply changes transactionally.
+Nightly and Production data lives in `~/Library/Application Support/Kodem/`. Debug uses `~/Library/Application Support/Kodem Debug/` with its own database, host socket, logs and window placement, so it can run alongside either release channel without upgrading their host. Debug starts with a separate workspace; existing data stays in the release directory. `KODEM_DATA_DIR` overrides the directory for any build. Database upgrades reject newer schemas, back up existing older schemas and apply changes transactionally.
 
 `KODEM_CODEX_PATH` overrides the runtime path and must point into a complete Codex package meeting the minimum in `codex-min-version`. Otherwise Kodem selects the newest valid package from PATH, common installation locations and `~/.local/share/kodem/runtimes/*/`. Selection happens at runtime, so upgrading Codex does not require rebuilding Kodem. The installer and application share the same minimum requirement. Future incompatible app-server protocol changes may still require adapter updates.
 

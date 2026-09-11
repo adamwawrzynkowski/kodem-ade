@@ -655,81 +655,89 @@ impl Shell {
                 || (empty && project.is_none())
                 || self.submitted_draft.is_some()
                 || !self.has_composer_content(cx));
+        let submit_label = if active {
+            "Stop current turn"
+        } else if empty {
+            "Create task and send message · Enter"
+        } else {
+            "Send message · Enter"
+        };
         toolbar = toolbar.child(
-            self.icon_button(
-                "composer-submit",
-                if active {
+            // This control owns its hover style; icon_button already installs one.
+            self.control("composer-submit")
+                .px_0()
+                .child(icon(if active {
                     "stop"
                 } else if empty {
                     "plus"
                 } else {
                     "arrow-up"
-                },
-                if active {
-                    "Stop current turn"
-                } else if empty {
-                    "Create task and send message · Enter"
-                } else {
-                    "Send message · Enter"
-                },
-            )
-            .relative()
-            .overflow_hidden()
-            .h(px(32.))
-            .w(px(34.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(if disabled {
-                t.border
-            } else {
-                t.text.opacity(0.18)
-            })
-            .shadow(vec![
-                BoxShadow {
-                    inset: true,
-                    color: rgb_to_hsla(rgb(0xffffff)).opacity(0.22),
-                    offset: point(px(0.), px(1.)),
-                    blur_radius: px(0.),
-                    spread_radius: px(0.),
-                },
-                BoxShadow {
-                    inset: true,
-                    color: t.shadow.opacity(0.35),
-                    offset: point(px(0.), px(-2.)),
-                    blur_radius: px(1.),
-                    spread_radius: px(0.),
-                },
-                BoxShadow {
-                    inset: false,
-                    color: t.shadow,
-                    offset: point(px(0.), px(2.)),
-                    blur_radius: px(3.),
-                    spread_radius: px(-1.),
-                },
-            ])
-            .child(motion::button_dither())
-            .hover(move |b| {
-                b.bg(if disabled {
-                    t.raised
-                } else {
-                    t.accent.opacity(0.88)
+                }))
+                .accessibility_label(submit_label)
+                .tooltip(move |_, cx| {
+                    cx.new(|_| Hint {
+                        text: submit_label.into(),
+                        theme: t,
+                    })
+                    .into()
                 })
-                .text_color(if disabled { t.subtle } else { t.inset })
-            })
-            .active(move |b| b.bg(t.accent).shadow(Vec::new()))
-            .bg(if disabled { t.raised } else { t.accent })
-            .text_color(if disabled { t.subtle } else { t.inset })
-            .disabled(disabled)
-            .when(disabled, |b| b.cursor_default())
-            .on_click(cx.listener(move |s, _, w, cx| {
-                if let Some(view) = s.view.as_ref().filter(|v| v.task.state.active()) {
-                    s.send(core::Request::Interrupt {
-                        task_id: view.task.id.clone(),
-                    });
+                .relative()
+                .overflow_hidden()
+                .h(px(32.))
+                .w(px(34.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(if disabled {
+                    t.border
                 } else {
-                    s.submit(&SendPrompt, w, cx);
-                }
-            })),
+                    t.text.opacity(0.18)
+                })
+                .shadow(vec![
+                    BoxShadow {
+                        inset: true,
+                        color: rgb_to_hsla(rgb(0xffffff)).opacity(0.22),
+                        offset: point(px(0.), px(1.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(0.),
+                    },
+                    BoxShadow {
+                        inset: true,
+                        color: t.shadow.opacity(0.35),
+                        offset: point(px(0.), px(-2.)),
+                        blur_radius: px(1.),
+                        spread_radius: px(0.),
+                    },
+                    BoxShadow {
+                        inset: false,
+                        color: t.shadow,
+                        offset: point(px(0.), px(2.)),
+                        blur_radius: px(3.),
+                        spread_radius: px(-1.),
+                    },
+                ])
+                .child(motion::button_dither())
+                .hover(move |b| {
+                    b.bg(if disabled {
+                        t.raised
+                    } else {
+                        t.accent.opacity(0.88)
+                    })
+                    .text_color(if disabled { t.subtle } else { t.inset })
+                })
+                .active(move |b| b.bg(t.accent).shadow(Vec::new()))
+                .bg(if disabled { t.raised } else { t.accent })
+                .text_color(if disabled { t.subtle } else { t.inset })
+                .disabled(disabled)
+                .when(disabled, |b| b.cursor_default())
+                .on_click(cx.listener(move |s, _, w, cx| {
+                    if let Some(view) = s.view.as_ref().filter(|v| v.task.state.active()) {
+                        s.send(core::Request::Interrupt {
+                            task_id: view.task.id.clone(),
+                        });
+                    } else {
+                        s.submit(&SendPrompt, w, cx);
+                    }
+                })),
         );
         editor = editor.child(toolbar);
         wrapper = wrapper.child(editor);

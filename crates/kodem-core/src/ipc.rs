@@ -14,14 +14,20 @@ use std::{
 };
 pub const PROTOCOL: u32 = 22;
 pub const MAX_PACKET: u64 = 32 * 1024 * 1024;
-/// Resolves the user's data directory, with an explicit override for isolated installations.
+/// Resolves the data directory, isolating Debug's host and store unless explicitly overridden.
 pub fn data_dir() -> Result<PathBuf> {
     if let Some(path) = env::var_os("KODEM_DATA_DIR") {
         return Ok(path.into());
     }
+    let directory = if cfg!(debug_assertions) {
+        "Kodem Debug"
+    } else {
+        "Kodem"
+    };
     Ok(
         PathBuf::from(env::var_os("HOME").context("HOME is unavailable")?)
-            .join("Library/Application Support/Kodem"),
+            .join("Library/Application Support")
+            .join(directory),
     )
 }
 /// Returns the private local host endpoint.
