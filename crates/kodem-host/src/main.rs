@@ -3,6 +3,7 @@ mod attachments;
 mod notifications;
 mod project_icons;
 mod provider;
+mod settlement;
 mod terminal;
 mod titles;
 use anyhow::{Context, Result, ensure};
@@ -28,6 +29,8 @@ struct Host {
     shutdown: bool,
     usage_refresh: Option<Instant>,
     usage_refreshing: bool,
+    settlement_refresh: Option<Instant>,
+    settlement_refreshing: bool,
 }
 type Shared = Arc<Mutex<Host>>;
 fn main() {
@@ -75,6 +78,8 @@ fn run() -> Result<()> {
         shutdown: false,
         usage_refresh: None,
         usage_refreshing: false,
+        settlement_refresh: None,
+        settlement_refreshing: false,
     }));
     let mut activity = Instant::now();
     loop {
@@ -149,6 +154,18 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
     match request {
         Request::Hello => {
             let mut h = host.lock().unwrap();
+            if !h.settlement_refreshing
+                && h.settlement_refresh
+                    .is_none_or(|last| last.elapsed() >= Duration::from_secs(30))
+            {
+                h.settlement_refresh = Some(Instant::now());
+                h.settlement_refreshing = true;
+                let settlement_host = host.clone();
+                std::thread::spawn(move || {
+                    let _ = settlement::refresh(&settlement_host);
+                    settlement_host.lock().unwrap().settlement_refreshing = false;
+                });
+            }
             if !h.usage_refreshing
                 && h.usage_refresh
                     .is_none_or(|last| last.elapsed() >= Duration::from_secs(120))
@@ -293,6 +310,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 context_usage: None,
                 pinned: false,
                 settled: None,
+                branch_merged: false,
                 archived: false,
                 created: now(),
                 updated: now(),

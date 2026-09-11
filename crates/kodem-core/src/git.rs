@@ -60,6 +60,63 @@ pub fn branch(cwd: &Path) -> String {
         .map(|v| String::from_utf8_lossy(&v).trim().to_owned())
         .unwrap_or_else(|| "detached HEAD".into())
 }
+/// Detects committed task work merged into a locally known default branch without fetching.
+/// Unchanged branches, default-branch tasks and dirty checkouts are never considered merged.
+pub fn branch_merged(project: &Path, task: &Task) -> bool {
+    let Some(baseline) = &task.baseline else {
+        return false;
+    };
+    let resolve = |reference: &str| -> Option<String> {
+        query(
+            project,
+            &[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{reference}^{{commit}}"),
+            ],
+        )
+        .ok()
+        .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned())
+    };
+    let remote = query(project, &["symbolic-ref", "refs/remotes/origin/HEAD"])
+        .ok()
+        .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned());
+    let default = remote
+        .as_deref()
+        .and_then(|reference| reference.strip_prefix("refs/remotes/origin/"))
+        .map(str::to_owned)
+        .or_else(|| {
+            ["main", "master"]
+                .into_iter()
+                .find(|name| resolve(&format!("refs/heads/{name}")).is_some())
+                .map(str::to_owned)
+        });
+    let Some(default) = default else {
+        return false;
+    };
+    if task.branch == default || task.branch == "detached HEAD" {
+        return false;
+    }
+    let Some(tip) = resolve(&format!("refs/heads/{}", task.branch)) else {
+        return false;
+    };
+    if &tip == baseline
+        || query(project, &["merge-base", "--is-ancestor", baseline, &tip]).is_err()
+        || !query(
+            &task.cwd,
+            &["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+        )
+        .is_ok_and(|status| status.is_empty())
+    {
+        return false;
+    }
+    [Some(format!("refs/heads/{default}")), remote]
+        .into_iter()
+        .flatten()
+        .filter_map(|reference| resolve(&reference))
+        .any(|target| query(project, &["merge-base", "--is-ancestor", &tip, &target]).is_ok())
+}
 /// Creates an isolated task worktree on a new branch, preserving the original checkout.
 pub fn worktree(project: &Path, root: &Path, id: &str) -> Result<PathBuf> {
     ensure!(

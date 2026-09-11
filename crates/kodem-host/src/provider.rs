@@ -435,6 +435,7 @@ fn dispatch_next(
             }
             h.activities.remove(task_id);
             task.state = RunState::Starting;
+            task.branch_merged = false;
             task.active_turn = None;
             task.error = None;
             task.updated = now();

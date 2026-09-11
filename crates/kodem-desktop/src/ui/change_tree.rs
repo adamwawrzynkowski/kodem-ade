@@ -76,6 +76,7 @@ impl Shell {
                     .collect::<Vec<_>>()
             })
         })
+        .w_full()
         .flex_1()
         .min_h_0()
         .py_1()
@@ -95,6 +96,8 @@ impl Shell {
         };
         let mut entry = div()
             .id(("change-tree-row", row_index))
+            .w_full()
+            .min_w_0()
             .h(px(28.))
             .flex_shrink_0()
             .pl(px(8. + row.depth as f32 * 14.))

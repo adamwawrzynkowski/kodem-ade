@@ -339,6 +339,9 @@ pub struct Task {
     pub pinned: bool,
     #[serde(default)]
     pub settled: Option<bool>,
+    /// Last background observation that this task's branch is merged into the default branch.
+    #[serde(default)]
+    pub branch_merged: bool,
     pub archived: bool,
     pub created: u64,
     pub updated: u64,
@@ -358,12 +361,12 @@ impl Task {
     pub fn needs_input(&self) -> bool {
         self.state == RunState::Waiting || !self.questions.is_empty()
     }
-    /// Resolves manual settlement while keeping active or uncertain work visible.
+    /// Resolves manual or merge-based settlement while keeping active or uncertain work visible.
     pub fn is_settled(&self) -> bool {
         !self.state.active()
             && !self.needs_input()
             && self.state != RunState::DeliveryUnknown
-            && self.settled.unwrap_or(self.state == RunState::Completed)
+            && self.settled.unwrap_or(self.branch_merged)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
