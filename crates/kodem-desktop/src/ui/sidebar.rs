@@ -132,17 +132,23 @@ impl Shell {
                                     .child(project_label),
                             )
                             .child(icon("chevron-down").size(px(12.)))
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                s.panel = Panel::Projects;
-                                cx.notify();
-                            })),
+                            .on_click_with_bounds(cx.listener(
+                                |s, bounds: &Bounds<Pixels>, _, cx| {
+                                    s.menu_anchor = Some(bounds.top_right());
+                                    s.panel = Panel::Projects;
+                                    cx.notify();
+                                },
+                            )),
                     )
                     .child(
                         self.icon_button("sort-tasks", "settings-2", "Thread list settings")
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                s.panel = Panel::Sort;
-                                cx.notify();
-                            })),
+                            .on_click_with_bounds(cx.listener(
+                                |s, bounds: &Bounds<Pixels>, _, cx| {
+                                    s.menu_anchor = Some(bounds.top_right());
+                                    s.panel = Panel::Sort;
+                                    cx.notify();
+                                },
+                            )),
                     )
                     .child(
                         self.icon_button("add-project", "plus", "Open repository · ⌘O")

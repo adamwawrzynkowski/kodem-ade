@@ -19,11 +19,7 @@ impl Shell {
                 .is_some_and(|view| view.task.state.active());
         if self.panel == Panel::Models {
             let default_task_id = task_id.clone();
-            let mut models = div()
-                .id("model-list")
-                .max_h(px(220.))
-                .overflow_y_scroll()
-                .restrict_scroll_to_axis();
+            let mut models = div().id("model-list");
             models = models.child(
                 self.ghost("default-model", "bot", "Codex default")
                     .w_full()
@@ -154,7 +150,9 @@ impl Shell {
                         "",
                     )
                     .w_full()
-                    .h(px(50.))
+                    .h_auto()
+                    .min_h(px(50.))
+                    .py_2()
                     .justify_start()
                     .disabled(disabled)
                     .when(chosen, |b| b.bg(t.selected).text_color(t.text))

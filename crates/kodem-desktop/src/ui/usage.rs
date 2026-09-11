@@ -78,9 +78,9 @@ impl Shell {
                         })
                         .into()
                     })
-                    .on_click(cx.listener(|s, event: &ClickEvent, _, cx| {
+                    .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
                         s.panel = Panel::Usage;
-                        s.composer_menu_anchor = Some(event.position());
+                        s.menu_anchor = Some(bounds.top_right());
                         cx.notify();
                     })),
             )

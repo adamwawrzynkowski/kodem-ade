@@ -1,37 +1,22 @@
 use super::*;
 impl Shell {
     /// Builds contextual task, sort, and model menus without replacing the workspace.
-    pub(super) fn menu(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let mut menu = div()
-            .id("context-menu")
-            .absolute()
-            .w(px(284.))
-            .p_2()
-            .rounded(px(10.))
-            .bg(t.raised)
-            .border_1()
-            .border_color(t.border)
-            .shadow(t.elevation())
-            .flex()
-            .flex_col()
-            .gap_1()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        let mut width = 284.;
+        let mut menu = div().flex().flex_col().flex_shrink_0().gap_1();
         match self.panel {
             Panel::Usage => {
-                menu = menu
-                    .relative()
-                    .w(px(320.))
-                    .max_h(relative(0.8))
-                    .overflow_y_scroll()
-                    .child(self.usage_panel(cx));
+                width = 320.;
+                menu = menu.child(self.usage_panel(cx));
             }
             Panel::Projects | Panel::ChatProjects => {
                 let chat_picker = self.panel == Panel::ChatProjects;
-                menu = menu
-                    .left(px(12.))
-                    .top(px(if self.search_visible { 158. } else { 112. }))
-                    .w(px((self.settings.sidebar_width - 24.).max(220.)));
+                width = if chat_picker {
+                    320.
+                } else {
+                    (self.settings.sidebar_width - 24.).max(220.)
+                };
                 if !chat_picker {
                     menu = menu.child(
                         self.ghost("all-projects", "folder-open", "All projects")
@@ -48,14 +33,8 @@ impl Shell {
                             })),
                     );
                 }
-                if chat_picker {
-                    menu = menu.relative().left_auto().top_auto().w(px(320.));
-                }
                 if let Some(workspace) = self.workspace.clone() {
-                    let mut projects = div()
-                        .id("project-choices")
-                        .max_h(px(360.))
-                        .overflow_y_scroll();
+                    let mut projects = div().id("project-choices");
                     for project in workspace.projects {
                         let selected = if chat_picker {
                             self.selected_project.as_ref() == Some(&project.id)
@@ -116,21 +95,7 @@ impl Shell {
             }
 
             Panel::Comparison => {
-                let review_width = if self.window_width <= 1100. {
-                    self.window_width
-                        - if self.settings.collapsed {
-                            54.
-                        } else {
-                            self.settings.sidebar_width
-                        }
-                        - 2.
-                } else {
-                    self.settings.review_width.min(self.window_width * 0.55)
-                };
-                menu = menu
-                    .top(px(72.))
-                    .right(px((review_width - 224.).max(8.)))
-                    .w(px(212.));
+                width = 212.;
                 for (i, (comparison, label, glyph)) in review::COMPARISONS.into_iter().enumerate() {
                     let selected = self.comparison == comparison;
                     menu = menu.child(
@@ -157,18 +122,15 @@ impl Shell {
                 }
             }
             Panel::Sort => {
-                menu = menu
-                    .top(px(177.))
-                    .left(px((self.settings.sidebar_width - 210.).max(12.)))
-                    .w(px(210.))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_size(px(11.))
-                            .text_color(t.subtle)
-                            .child("THREAD LIST"),
-                    );
+                width = 210.;
+                menu = menu.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_size(px(11.))
+                        .text_color(t.subtle)
+                        .child("THREAD LIST"),
+                );
                 for (i, (sort, label)) in [
                     (Sort::Recent, "Recent activity"),
                     (Sort::Attention, "Needs attention"),
@@ -227,10 +189,7 @@ impl Shell {
             }
             Panel::ThreadMenu => {
                 if let Some(context) = &self.thread_menu {
-                    menu = menu
-                        .left(context.position.x)
-                        .top(context.position.y)
-                        .w(px(236.));
+                    width = 236.;
                     if let Some(task) = self
                         .workspace
                         .as_ref()
@@ -315,12 +274,7 @@ impl Shell {
                 }
             }
             Panel::TaskMenu => {
-                let right = if self.show_review && self.window_width > 1100. {
-                    self.settings.review_width + 14.
-                } else {
-                    14.
-                };
-                menu = menu.top(px(87.)).right(px(right)).w(px(236.));
+                width = 236.;
                 if let Some(view) = self.view.clone() {
                     let id = view.task.id.clone();
                     let title = view.task.title.clone();
@@ -409,15 +363,39 @@ impl Shell {
                 }
             }
             Panel::Models | Panel::Reasoning | Panel::Access => {
-                menu = menu
-                    .relative()
-                    .w(px(348.))
-                    .max_h(relative(0.8))
-                    .overflow_y_scroll()
-                    .child(self.model_options(cx));
+                width = 348.;
+                menu = menu.child(self.model_options(cx));
             }
             _ => {}
         }
+        let viewport = window.viewport_size();
+        // Measure content at its natural height. Only the window limits scrolling;
+        // percentage caps inside the anchored layout can clip even short menus.
+        let menu = div()
+            .id("context-menu")
+            .w(px(width).min((viewport.width - px(16.)).max(px(0.))))
+            .max_h((viewport.height - px(16.)).max(px(0.)))
+            .overflow_y_scroll()
+            .p_2()
+            .rounded(px(10.))
+            .bg(t.raised)
+            .border_1()
+            .border_color(t.border)
+            .shadow(t.elevation())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(menu)
+            .with_animation(
+                ("menu-enter", self.panel.clone() as usize),
+                Animation::new(Duration::from_millis(130)),
+                |d, p| d.opacity(p),
+            );
+        let thread_context = (self.panel == Panel::ThreadMenu)
+            .then_some(self.thread_menu.as_ref())
+            .flatten();
+        let position = thread_context
+            .map(|context| context.position)
+            .or(self.menu_anchor)
+            .unwrap_or(point(px(24.), px(120.)));
         div()
             .absolute()
             .inset_0()
@@ -429,34 +407,21 @@ impl Shell {
                     cx.notify();
                 }),
             )
-            .child({
-                let menu = menu.with_animation(
-                    ("menu-enter", self.panel.clone() as usize),
-                    Animation::new(Duration::from_millis(130)),
-                    |d, p| d.opacity(p),
-                );
-                if matches!(
-                    self.panel,
-                    Panel::Models
-                        | Panel::Reasoning
-                        | Panel::Access
-                        | Panel::ChatProjects
-                        | Panel::Usage
-                ) {
-                    anchored()
-                        .position(
-                            self.composer_menu_anchor
-                                .unwrap_or(point(px(24.), px(120.))),
-                        )
-                        .anchor(Anchor::TopRight)
-                        .offset(point(px(0.), px(16.)))
-                        .snap_to_window_with_margin(px(8.))
-                        .child(menu)
-                        .into_any_element()
-                } else {
-                    menu.into_any_element()
-                }
-            })
+            .child(
+                anchored()
+                    .position(position)
+                    .anchor(if thread_context.is_some() {
+                        Anchor::TopLeft
+                    } else {
+                        Anchor::BottomRight
+                    })
+                    .offset(point(
+                        px(0.),
+                        px(if thread_context.is_some() { 0. } else { -8. }),
+                    ))
+                    .snap_to_window_with_margin(px(8.))
+                    .child(menu),
+            )
             .into_any_element()
     }
 }

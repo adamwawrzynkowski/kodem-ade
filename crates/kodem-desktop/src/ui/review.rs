@@ -72,14 +72,17 @@ impl Shell {
                             .text_color(t.text)
                             .accessibility_label("Choose changes comparison")
                             .child(icon("chevron-down").size(px(11.)))
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                s.panel = if s.panel == Panel::Comparison {
-                                    Panel::None
-                                } else {
-                                    Panel::Comparison
-                                };
-                                cx.notify();
-                            })),
+                            .on_click_with_bounds(cx.listener(
+                                |s, bounds: &Bounds<Pixels>, _, cx| {
+                                    s.menu_anchor = Some(bounds.top_right());
+                                    s.panel = if s.panel == Panel::Comparison {
+                                        Panel::None
+                                    } else {
+                                        Panel::Comparison
+                                    };
+                                    cx.notify();
+                                },
+                            )),
                         )
                         .child(
                             div()

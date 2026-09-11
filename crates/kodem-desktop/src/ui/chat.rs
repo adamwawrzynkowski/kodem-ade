@@ -44,10 +44,13 @@ impl Shell {
                         .child(div().flex_1())
                         .child(
                             self.icon_button("task-menu", "ellipsis", "Task actions")
-                                .on_click(cx.listener(|s, _, _, cx| {
-                                    s.panel = Panel::TaskMenu;
-                                    cx.notify();
-                                })),
+                                .on_click_with_bounds(cx.listener(
+                                    |s, bounds: &Bounds<Pixels>, _, cx| {
+                                        s.menu_anchor = Some(bounds.top_right());
+                                        s.panel = Panel::TaskMenu;
+                                        cx.notify();
+                                    },
+                                )),
                         ),
                 );
             }
@@ -290,13 +293,15 @@ impl Shell {
                             .cursor_pointer()
                             .accessibility_label("Choose project")
                             .child(name)
-                            .on_click(cx.listener(|s, event: &ClickEvent, _, cx| {
-                                if !s.creating_task {
-                                    s.composer_menu_anchor = Some(event.position());
-                                    s.panel = Panel::ChatProjects;
-                                    cx.notify();
-                                }
-                            })),
+                            .on_click_with_bounds(cx.listener(
+                                |s, bounds: &Bounds<Pixels>, _, cx| {
+                                    if !s.creating_task {
+                                        s.menu_anchor = Some(bounds.top_right());
+                                        s.panel = Panel::ChatProjects;
+                                        cx.notify();
+                                    }
+                                },
+                            )),
                     )
                     .child("?"),
             )
@@ -549,8 +554,8 @@ impl Shell {
                     .child(div().max_w(px(150.)).min_w_0().text_ellipsis().child(model))
                     .text_size(px(11.))
                     .child(icon("chevron-down").size(px(11.)))
-                    .on_click(cx.listener(|s, event: &ClickEvent, _, cx| {
-                        s.composer_menu_anchor = Some(event.position());
+                    .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
+                        s.menu_anchor = Some(bounds.top_right());
                         s.panel = Panel::Models;
                         if s.workspace
                             .as_ref()
@@ -567,11 +572,13 @@ impl Shell {
                         self.ghost("composer-effort", "settings-2", effort)
                             .text_size(px(11.))
                             .child(icon("chevron-down").size(px(10.)))
-                            .on_click(cx.listener(|s, event: &ClickEvent, _, cx| {
-                                s.composer_menu_anchor = Some(event.position());
-                                s.panel = Panel::Reasoning;
-                                cx.notify();
-                            })),
+                            .on_click_with_bounds(cx.listener(
+                                |s, bounds: &Bounds<Pixels>, _, cx| {
+                                    s.menu_anchor = Some(bounds.top_right());
+                                    s.panel = Panel::Reasoning;
+                                    cx.notify();
+                                },
+                            )),
                     )
             })
             .map(|d| {
@@ -588,9 +595,9 @@ impl Shell {
                         )
                         .text_size(px(11.))
                         .child(icon("chevron-down").size(px(10.)))
-                        .on_click(cx.listener(
-                            |s, event: &ClickEvent, _, cx| {
-                                s.composer_menu_anchor = Some(event.position());
+                        .on_click_with_bounds(cx.listener(
+                            |s, bounds: &Bounds<Pixels>, _, cx| {
+                                s.menu_anchor = Some(bounds.top_right());
                                 s.panel = Panel::Access;
                                 cx.notify();
                             },

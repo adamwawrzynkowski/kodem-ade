@@ -1,11 +1,11 @@
 // Adapted from GPUI Kit gpui-base 0.6.0. Apache-2.0; see assets/licenses.
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, FocusHandle, InteractiveElement, Interactivity,
-    IntoElement, MouseButton, ParentElement, Refineable as _, RenderOnce, Role, SharedString,
-    Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
-    prelude::FluentBuilder as _, relative,
+    AnyElement, App, Bounds, ClickEvent, Div, ElementId, FocusHandle, InteractiveElement,
+    Interactivity, IntoElement, MouseButton, ParentElement, Pixels, Refineable as _, RenderOnce,
+    Role, SharedString, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window,
+    canvas, div, prelude::FluentBuilder as _, relative,
 };
 
 use super::{RoleOverride, Selectable, StateStyle, StyledExt as _};
@@ -104,6 +104,25 @@ impl Button {
     ) -> Self {
         self.on_click = Some(Rc::new(handler));
         self
+    }
+
+    /// Supplies the button's laid-out bounds when activated by pointer or keyboard.
+    pub fn on_click_with_bounds(
+        self,
+        handler: impl Fn(&Bounds<Pixels>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        let bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
+        let measured_bounds = bounds.clone();
+        self.relative()
+            .child(
+                canvas(
+                    move |bounds, _, _| measured_bounds.set(bounds),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .on_click(move |_, window, cx| handler(&bounds.get(), window, cx))
     }
 
     /// Sets the focus traversal index. The default is `0`.

@@ -245,7 +245,7 @@ impl Shell {
         self.close_slash(cx);
         self.input
             .update(cx, |input, cx| input.complete_slash(range, "", cx));
-        self.composer_menu_anchor = self
+        self.menu_anchor = self
             .input
             .read(cx)
             .text_bounds()

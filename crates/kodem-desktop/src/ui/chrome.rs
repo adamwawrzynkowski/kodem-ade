@@ -330,7 +330,7 @@ impl Render for Shell {
                 | Panel::Sort
                 | Panel::Comparison
         ) {
-            root = root.child(self.menu(cx));
+            root = root.child(self.menu(window, cx));
         } else if self.panel != Panel::None {
             root = root.child(self.panel(window, cx));
         }
