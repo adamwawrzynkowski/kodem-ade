@@ -139,7 +139,7 @@ impl StreamingText {
         inserted: usize,
         now: Instant,
     ) {
-        self.settle = SETTLE / 2;
+        self.settle = SETTLE / 4;
         self.prune(now);
         let delta = inserted as isize - replaced.len() as isize;
         self.letters.retain_mut(|(range, _)| {
@@ -159,7 +159,7 @@ impl StreamingText {
             .filter(|(start, letter)| *start < end && start + letter.len() > replaced.start)
             .take(MAX_LETTERS)
             .collect();
-        let step = Duration::from_secs_f32(0.004_f32.min(0.06 / letters.len().max(1) as f32));
+        let step = Duration::from_secs_f32(0.002_f32.min(0.03 / letters.len().max(1) as f32));
         for (index, (start, letter)) in letters.into_iter().enumerate() {
             let range = start..start + letter.len();
             self.letters

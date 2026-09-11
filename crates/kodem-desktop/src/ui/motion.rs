@@ -251,26 +251,67 @@ fn rounded_project_dither(width: f32, height: f32, radius: f32) -> String {
     )
 }
 
-/// Marks the selected thread with static accent grain, fading across the row beneath its text.
-pub(super) fn selection_dither(color: Hsla) -> impl IntoElement {
+/// Covers the selected thread background with ordered grain, animated while its task runs.
+pub(super) fn selection_dither(
+    id: impl Into<ElementId>,
+    color: Hsla,
+    radius: Pixels,
+    active: bool,
+    reduce_motion: bool,
+) -> AnyElement {
+    if !active || reduce_motion {
+        return selection_dither_frame(color, radius, 0.).into_any_element();
+    }
+    div()
+        .absolute()
+        .inset_0()
+        .with_animation(
+            id,
+            Animation::new(Duration::from_secs(4))
+                .with_easing(|phase| phase)
+                .repeat(),
+            move |layer, phase| layer.child(selection_dither_frame(color, radius, phase)),
+        )
+        .into_any_element()
+}
+
+fn selection_dither_frame(color: Hsla, radius: Pixels, phase: f32) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
             let width = f32::from(bounds.size.width);
             let height = f32::from(bounds.size.height);
+            let radius = f32::from(radius).min(width / 2.).min(height / 2.);
+            const BAYER: [[u32; 4]; 4] =
+                [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                // Adjacent dots share a draw order and stay inside the rounded card's border.
                 window.paint_layer(bounds, |window| {
-                    for y in (8..(height as u32).saturating_sub(8)).step_by(4) {
-                        for x in (8..(width as u32).saturating_sub(8)).step_by(4) {
-                            if dot_seed(x, y).is_multiple_of(3) {
+                    for x in 0..(width / 2.) as u32 {
+                        let wave = (std::f32::consts::TAU * (x as f32 * 2. / width - phase)).cos();
+                        let alpha = 0.16 + 0.07 * (wave + 1.);
+                        for y in 0..(height / 2.) as u32 {
+                            if BAYER[y as usize % 4][x as usize % 4] >= 9 {
+                                continue;
+                            }
+                            let left = x as f32 * 2.;
+                            let top = y as f32 * 2.;
+                            let dx = (radius - left.min(width - left - 2.)).max(0.);
+                            let dy = (radius - top.min(height - top - 2.)).max(0.);
+                            if left < 1.
+                                || top < 1.
+                                || left + 2. > width - 1.
+                                || top + 2. > height - 1.
+                                || dx * dx + dy * dy > (radius - 1.).max(0.).powi(2)
+                            {
                                 continue;
                             }
                             window.paint_quad(gpui::fill(
                                 Bounds::new(
-                                    bounds.origin + point(px(x as f32), px(y as f32)),
-                                    size(px(1.), px(1.)),
+                                    bounds.origin + point(px(left), px(top)),
+                                    size(px(2.), px(2.)),
                                 ),
-                                color.opacity(0.04 + 0.14 * (1. - x as f32 / width)),
+                                color.opacity(alpha),
                             ));
                         }
                     }

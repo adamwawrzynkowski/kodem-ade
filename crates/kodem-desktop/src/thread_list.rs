@@ -80,12 +80,27 @@ pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> V
     });
     let mut rows = Vec::new();
     if settings.group_tasks_by_project {
-        // Keep project sections in workspace order so starting a task only moves it within its project.
         let mut groups: HashMap<usize, Vec<_>> = HashMap::new();
         for task in tasks {
             groups.entry(task.1).or_default().push(task);
         }
-        for (index, project) in workspace.projects.iter().enumerate() {
+        // Running projects lead the feed; the latest start wins without selection affecting order.
+        let mut project_order: Vec<_> = groups
+            .iter()
+            .map(|(&index, tasks)| {
+                let started = tasks
+                    .iter()
+                    .filter(|(_, _, task)| task.state.active())
+                    .map(|(_, _, task)| task.last_started.unwrap_or(task.updated))
+                    .max();
+                (index, started)
+            })
+            .collect();
+        project_order.sort_by(|(a, started_a), (b, started_b)| {
+            started_b.cmp(started_a).then_with(|| a.cmp(b))
+        });
+        for (index, _) in project_order {
+            let project = &workspace.projects[index];
             let Some(tasks) = groups.remove(&index) else {
                 continue;
             };

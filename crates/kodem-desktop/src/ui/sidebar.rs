@@ -262,11 +262,12 @@ impl Shell {
                 };
                 let card =
                     self.task_card(&workspace.tasks[*index], &workspace.projects[*project], cx);
-                if self.settings.group_tasks_by_project {
-                    div().pl_2().child(card).into_any_element()
-                } else {
-                    card
-                }
+                // List measures the root's height without its margins; keep the gap inside the row.
+                div()
+                    .pb(px(6.))
+                    .when(self.settings.group_tasks_by_project, |row| row.pl_2())
+                    .child(card)
+                    .into_any_element()
             }
             Row::Project { index, id, count } => {
                 let Some(project) = self.workspace.as_ref().and_then(|w| w.projects.get(*index))
@@ -366,14 +367,11 @@ impl Shell {
         let selected = self.selected.as_deref() == Some(&task.id);
         let tint = project_tint(project, self.theme);
         let radius = px(9.);
-        let mut surface = if self.settings.light {
+        let surface = if self.settings.light {
             t.inset
         } else {
             t.raised
         };
-        if selected {
-            surface = t.selected;
-        }
         let title_color = t.text.opacity(0.94);
         let metadata = t.muted;
         let mut hover_surface = surface;
@@ -498,18 +496,13 @@ impl Shell {
             .relative()
             .overflow_hidden()
             .w_full()
-            .mb(px(6.))
             .px(px(10.))
             .py(px(5.))
             .line_height(relative(1.25))
             .rounded(radius)
             .bg(surface)
             .border_1()
-            .border_color(if selected {
-                t.accent.opacity(0.7)
-            } else {
-                t.muted.opacity(0.12)
-            })
+            .border_color(t.muted.opacity(0.12))
             .shadow(vec![
                 BoxShadow {
                     inset: true,
@@ -530,16 +523,13 @@ impl Shell {
             .hover(move |d| d.bg(hover_surface))
             .child(motion::project_dither(tint, radius))
             .when(selected, |row| {
-                row.child(motion::selection_dither(t.accent)).child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top(px(12.))
-                        .bottom(px(12.))
-                        .w(px(3.))
-                        .rounded(px(2.))
-                        .bg(t.accent),
-                )
+                row.child(motion::selection_dither(
+                    SharedString::from(format!("thread-selection:{id}")),
+                    t.text,
+                    radius,
+                    task.state.active(),
+                    cx.reduce_motion(),
+                ))
             })
             .child(
                 div()
