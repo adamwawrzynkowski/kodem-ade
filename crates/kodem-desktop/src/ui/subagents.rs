@@ -4,8 +4,9 @@ use super::*;
 pub(super) struct AgentPopup {
     pub(super) thread_id: String,
     pub(super) error: Option<String>,
-    view: Option<SubagentView>,
-    scroll: ListState,
+    pub(super) view: Option<SubagentView>,
+    pub(super) scroll: ListState,
+    pub(super) selection: Entity<crate::components::text_document::TextDocument>,
     focus: FocusHandle,
 }
 
@@ -70,6 +71,7 @@ impl Shell {
             error: None,
             view: None,
             scroll: ListState::new(0, ListAlignment::Bottom, px(600.)),
+            selection: cx.new(|_| Default::default()),
             focus,
         });
         cx.notify();
@@ -173,7 +175,12 @@ impl Shell {
     }
 
     /// Merges tail updates and earlier pages without changing the main conversation scroll.
-    pub(super) fn update_agent_popup(&mut self, mut view: SubagentView, older: bool) {
+    pub(super) fn update_agent_popup(
+        &mut self,
+        mut view: SubagentView,
+        older: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(popup) = &mut self.agent_popup else {
             return;
         };
@@ -188,6 +195,7 @@ impl Shell {
             .view
             .as_ref()
             .is_some_and(|old| !old.agent.history_loaded && view.agent.history_loaded);
+        let mut reordered = history_completed;
         if let Some(previous) = popup.view.as_ref().filter(|_| !history_completed) {
             let anchor_id = previous.messages.get(anchor.item_ix).map(|m| &m.id);
             let mut messages: HashMap<String, Message> = previous
@@ -196,6 +204,11 @@ impl Shell {
                 .cloned()
                 .map(|m| (m.id.clone(), m))
                 .collect();
+            reordered |= view.messages.iter().any(|message| {
+                messages
+                    .get(&message.id)
+                    .is_some_and(|previous| previous.seq != message.seq)
+            });
             messages.extend(view.messages.into_iter().map(|m| (m.id.clone(), m)));
             view.messages = messages.into_values().collect();
             view.messages.sort_by_key(|m| m.seq);
@@ -211,9 +224,16 @@ impl Shell {
         let changed = popup.view.as_ref().is_none_or(|old| {
             old.messages.len() != view.messages.len()
                 || old.messages.iter().zip(&view.messages).any(|(a, b)| {
-                    a.id != b.id || a.seq != b.seq || a.text != b.text || a.complete != b.complete
+                    a.id != b.id
+                        || a.seq != b.seq
+                        || a.text != b.text
+                        || a.complete != b.complete
+                        || a.file_edits != b.file_edits
                 })
         });
+        if reordered {
+            popup.selection = cx.new(|_| Default::default());
+        }
         if changed {
             popup.scroll.reset(view.messages.len());
             if follow || history_completed {
@@ -226,69 +246,25 @@ impl Shell {
         popup.view = Some(view);
     }
 
-    fn agent_message(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(message) = self
-            .agent_popup
-            .as_ref()
-            .and_then(|p| p.view.as_ref())
-            .and_then(|view| view.messages.get(index))
-            .cloned()
-        else {
-            return div().into_any_element();
-        };
-        if message.kind == MessageKind::Subagent {
-            return div()
-                .px_5()
-                .py_2()
-                .child(self.agent_link(&message.text, cx))
-                .into_any_element();
-        }
-        let label = match message.kind {
-            MessageKind::User => "Prompt",
-            MessageKind::Assistant => "Agent",
-            MessageKind::Tool => "Tool output",
-            MessageKind::Error => "Error",
-            _ => "Activity",
-        };
-        let key = format!("agent:{}:{}", message.task_id, message.id);
-        let content = if message.kind == MessageKind::Tool {
-            div()
-                .child(self.readonly(key, message.text, cx))
-                .into_any_element()
-        } else {
-            self.message_blocks(
-                &key,
-                crate::markdown::blocks(&message.text),
-                !message.complete
-                    && self
-                        .agent_popup
-                        .as_ref()
-                        .and_then(|p| p.view.as_ref())
-                        .is_some_and(|view| view.agent.state.active()),
-                cx,
-            )
-        };
-        div()
-            .px_5()
-            .py_3()
-            .w_full()
-            .child(
-                div()
-                    .mb_1()
-                    .text_size(px(11.))
-                    .text_color(self.theme.muted)
-                    .child(label),
-            )
-            .child(content)
-            .into_any_element()
-    }
-
     /// Renders an almost fullscreen child thread with isolated focus and the task stop control.
     pub(super) fn render_agent_popup(&mut self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let popup = self.agent_popup.as_ref()?;
         let thread_id = popup.thread_id.clone();
         let focus = popup.focus.clone();
         let scroll = popup.scroll.clone();
+        let selection = popup.selection.clone();
+        selection.update(cx, |doc, _| {
+            doc.set_viewport(
+                scroll.clone(),
+                popup
+                    .view
+                    .as_ref()
+                    .map(|view| view.messages.iter().map(|message| message.seq).collect())
+                    .unwrap_or_default(),
+                px(0.),
+            )
+        });
+        let conversation = Conversation::Subagent(thread_id.clone());
         let before = popup.view.as_ref().and_then(|view| view.before);
         let loaded = popup.view.is_some();
         let load_error = popup.error.clone();
@@ -349,7 +325,13 @@ impl Shell {
                 .on_click(cx.listener(|s, _, window, cx| s.close_agent(window, cx))),
         );
         let entity = cx.entity();
-        let mut body = div().flex_1().min_h_0().flex().flex_col();
+        let mut body = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(selection);
         if let Some(error) = load_error {
             body = body.child(div().p_3().text_color(t.removed).child(error));
         }
@@ -367,10 +349,24 @@ impl Shell {
         }
         body = if loaded {
             body.child(
-                list(scroll, move |index, _, cx| {
-                    entity.update(cx, |s, cx| s.agent_message(index, cx))
-                })
-                .size_full(),
+                div()
+                    .w_full()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        list(scroll, move |index, _, cx| {
+                            entity.update(cx, |s, cx| {
+                                s.conversation_message(&conversation, index, cx)
+                            })
+                        })
+                        .w_full()
+                        .max_w(px(940.))
+                        .min_w_0()
+                        .h_full()
+                        .py_3(),
+                    ),
             )
         } else {
             body.child(
@@ -471,7 +467,7 @@ impl Shell {
                         .border_1()
                         .border_color(t.border)
                         .shadow(t.elevation())
-                        .bg(t.inset)
+                        .bg(t.canvas)
                         .overflow_hidden()
                         .child(header)
                         .child(body),

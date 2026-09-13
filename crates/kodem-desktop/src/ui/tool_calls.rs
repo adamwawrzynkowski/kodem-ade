@@ -4,15 +4,19 @@ use crate::tool_output::{self, ToolKind};
 
 impl Shell {
     /// Renders one tool group's summary and individually expandable calls at its first transcript row.
-    pub(super) fn tool_calls(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(view) = &self.view else {
+    pub(super) fn tool_calls(
+        &mut self,
+        conversation: &Conversation,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(transcript) = self.conversation_messages(conversation) else {
             return div().into_any_element();
         };
-        if index > 0 && view.messages[index - 1].kind == MessageKind::Tool {
+        if index > 0 && transcript[index - 1].kind == MessageKind::Tool {
             return div().into_any_element();
         }
-        let messages: Vec<_> = view
-            .messages
+        let messages: Vec<_> = transcript
             .iter()
             .skip(index)
             .take_while(|m| m.kind == MessageKind::Tool)
@@ -22,12 +26,11 @@ impl Shell {
             return div().into_any_element();
         };
         let t = self.theme;
-        let group_key = first.id.clone();
+        let group_key = format!("tool-group:{}:{}", first.task_id, first.id);
         let expanded = self.folded.contains(&group_key);
-        let active = view.task.state == RunState::Running
-            && messages
-                .iter()
-                .any(|m| view.activities.iter().any(|a| a.id == m.id));
+        let active = messages
+            .iter()
+            .any(|message| self.conversation_message_active(conversation, message));
         let edits = tool_output::edit_summary(&messages);
         let mut label = if messages.len() == 1 {
             "1 tool call".to_owned()
@@ -52,9 +55,10 @@ impl Shell {
                     lines.added, lines.removed
                 ),),
         );
+        let group_conversation = conversation.clone();
         let mut group = div().w_full().min_w_0().px_5().py_1().child(
             self.ghost(
-                SharedString::from(format!("tool-group:{group_key}")),
+                SharedString::from(group_key.clone()),
                 if expanded {
                     "chevron-down"
                 } else {
@@ -91,7 +95,9 @@ impl Shell {
                     cx.reduce_motion(),
                 ))
             })
-            .on_click(cx.listener(move |s, _, _, cx| s.toggle_tool_detail(&group_key, index, cx))),
+            .on_click(cx.listener(move |s, _, _, cx| {
+                s.toggle_tool_detail(&group_conversation, &group_key, index, cx)
+            })),
         );
         if expanded {
             let mut calls = div()
@@ -103,34 +109,43 @@ impl Shell {
                 .flex_col()
                 .gap_2();
             for message in &messages {
-                calls = calls.child(self.tool_call(message, index, cx));
+                calls = calls.child(self.tool_call(conversation, message, index, cx));
             }
             group = group.child(calls);
         }
         group.into_any_element()
     }
 
-    fn toggle_tool_detail(&mut self, key: &str, index: usize, cx: &mut Context<Self>) {
+    fn toggle_tool_detail(
+        &mut self,
+        conversation: &Conversation,
+        key: &str,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
         if !self.folded.remove(key) {
             self.folded.insert(key.to_owned());
         }
-        self.chat_scroll.remeasure_items(index..index + 1);
+        if let Some(scroll) = self.conversation_scroll(conversation) {
+            scroll.remeasure_items(index..index + 1);
+        }
         cx.notify();
     }
 
     fn tool_call(
         &mut self,
+        conversation: &Conversation,
         message: &Message,
         group_index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
-        let output = tool_output::parse(&message.text, message.complete);
-        let key = format!("tool-detail:{}", message.id);
+        let record = tool_output::display_record(&message.text, message.complete);
+        let output = tool_output::parse(&record, message.complete);
+        let message_key = format!("{}:{}", message.task_id, message.id);
+        let key = format!("tool-detail:{message_key}");
         let expanded = self.folded.contains(&key);
-        let active = self.view.as_ref().is_some_and(|v| {
-            v.task.state == RunState::Running && v.activities.iter().any(|a| a.id == message.id)
-        });
+        let active = self.conversation_message_active(conversation, message);
         let failed = output.exit.is_some_and(|code| code != 0)
             || output
                 .status
@@ -178,6 +193,7 @@ impl Shell {
             (_, title) => title,
         };
         let title: String = title.chars().take(160).collect();
+        let detail_conversation = conversation.clone();
         let mut card = div()
             .w_full()
             .min_w_0()
@@ -224,9 +240,9 @@ impl Shell {
                         .text_color(color)
                         .child(status),
                 )
-                .on_click(
-                    cx.listener(move |s, _, _, cx| s.toggle_tool_detail(&key, group_index, cx)),
-                ),
+                .on_click(cx.listener(move |s, _, _, cx| {
+                    s.toggle_tool_detail(&detail_conversation, &key, group_index, cx)
+                })),
             );
         if expanded {
             let mut details = div()
@@ -238,7 +254,7 @@ impl Shell {
                 .gap_2();
             if output.kind == ToolKind::Command {
                 details = details.child(self.message_code(
-                    &format!("tool-command:{}", message.id),
+                    &format!("tool-command:{message_key}"),
                     "sh",
                     output.title,
                     Some(140.),
@@ -258,7 +274,7 @@ impl Shell {
                     language = "json";
                 }
                 let (excerpt, truncated) = tool_output::preview(&body);
-                let full_key = format!("tool-full:{}", message.id);
+                let full_key = format!("tool-full:{message_key}");
                 let full = self.folded.contains(&full_key);
                 let copied = output.body.to_owned();
                 details = details.child(
@@ -276,7 +292,7 @@ impl Shell {
                         .child(div().flex_1())
                         .child(
                             self.icon_button(
-                                SharedString::from(format!("copy-output:{}", message.id)),
+                                SharedString::from(format!("copy-output:{message_key}")),
                                 "copy",
                                 "Copy full output",
                             )
@@ -286,7 +302,7 @@ impl Shell {
                         ),
                 );
                 details = details.child(self.message_code(
-                    &format!("tool-output:{}", message.id),
+                    &format!("tool-output:{message_key}"),
                     language,
                     if full { &body } else { &excerpt },
                     Some(280.),
@@ -294,6 +310,7 @@ impl Shell {
                     cx,
                 ));
                 if truncated {
+                    let full_conversation = conversation.clone();
                     details = details.child(
                         self.ghost(
                             SharedString::from(full_key.clone()),
@@ -306,7 +323,7 @@ impl Shell {
                         )
                         .justify_start()
                         .on_click(cx.listener(move |s, _, _, cx| {
-                            s.toggle_tool_detail(&full_key, group_index, cx)
+                            s.toggle_tool_detail(&full_conversation, &full_key, group_index, cx)
                         })),
                     );
                 }
@@ -322,7 +339,7 @@ impl Shell {
             let copied = message.text.clone();
             details = details.child(
                 self.ghost(
-                    SharedString::from(format!("copy-tool:{}", message.id)),
+                    SharedString::from(format!("copy-tool:{message_key}")),
                     "copy",
                     "Copy tool call",
                 )

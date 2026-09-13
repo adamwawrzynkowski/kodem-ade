@@ -55,6 +55,31 @@ pub struct ToolOutput<'a> {
     pub status: Option<&'a str>,
     pub exit: Option<i64>,
 }
+/// Gives saved structured provider items the same heading and body as regular tool records.
+pub fn display_record(text: &str, complete: bool) -> std::borrow::Cow<'_, str> {
+    #[derive(serde::Deserialize)]
+    struct Record {
+        #[serde(rename = "type")]
+        kind: String,
+        status: Option<String>,
+    }
+    if text.trim_start().starts_with('{')
+        && let Ok(record) = serde_json::from_str::<Record>(text)
+        && !record.kind.is_empty()
+    {
+        return format!(
+            "{} · {}\n{text}",
+            record.kind,
+            record
+                .status
+                .as_deref()
+                .unwrap_or(if complete { "completed" } else { "in progress" })
+        )
+        .into();
+    }
+    text.into()
+}
+
 /// Separates the host's command, file-change and generic activity records for display.
 pub fn parse(text: &str, complete: bool) -> ToolOutput<'_> {
     let (first, rest) = text.split_once('\n').unwrap_or((text, ""));

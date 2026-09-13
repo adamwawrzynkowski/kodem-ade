@@ -5,6 +5,7 @@ mod change_tree;
 mod chat;
 mod chrome;
 mod composition;
+mod conversation;
 mod diff_refresh;
 mod diff_view;
 mod effort_slider;
@@ -33,6 +34,7 @@ use crate::{
     },
     theme::Theme,
 };
+use conversation::Conversation;
 use gpui::{prelude::*, *};
 use kodem_core::{self as core, *};
 use std::{
@@ -695,6 +697,7 @@ impl Shell {
                             ..
                         }
                     ),
+                    cx,
                 );
             }
             Response::Task(mut view) => {
