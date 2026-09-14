@@ -834,6 +834,23 @@ impl Shell {
                 }
                 let historical = matches!(reply.request, core::Request::LoadSnapshot { .. });
                 if !historical
+                    && self.comparison == Comparison::Branch
+                    && diff
+                        .repositories
+                        .first()
+                        .is_none_or(|repo| repo.branch_base.is_none())
+                {
+                    self.comparison = Comparison::WorkingTree;
+                    self.diff = None;
+                    self.new_diff = None;
+                    self.diff_view = None;
+                    self.diff_subscription = None;
+                    self.reviewing_file = false;
+                    self.refresh_diff();
+                    cx.notify();
+                    return;
+                }
+                if !historical
                     && self
                         .diff
                         .as_ref()

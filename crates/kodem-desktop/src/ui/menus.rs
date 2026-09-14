@@ -97,6 +97,16 @@ impl Shell {
             Panel::Comparison => {
                 width = 212.;
                 for (i, (comparison, label, glyph)) in review::COMPARISONS.into_iter().enumerate() {
+                    if comparison == Comparison::Branch
+                        && !self
+                            .new_diff
+                            .as_ref()
+                            .or(self.diff.as_ref())
+                            .and_then(|diff| diff.repositories.first())
+                            .is_some_and(|repo| repo.branch_base.is_some())
+                    {
+                        continue;
+                    }
                     let selected = self.comparison == comparison;
                     menu = menu.child(
                         self.ghost(("comparison-option", i), glyph, label)

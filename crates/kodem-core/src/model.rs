@@ -872,6 +872,7 @@ pub enum Comparison {
     Staged,
     Unstaged,
     Baseline,
+    Branch,
 }
 impl Comparison {
     /// Returns the comparison label displayed above the diff.
@@ -881,6 +882,7 @@ impl Comparison {
             Self::Staged => "Staged",
             Self::Unstaged => "Unstaged",
             Self::Baseline => "Task baseline",
+            Self::Branch => "All branch changes",
         }
     }
 }
@@ -928,6 +930,9 @@ pub struct RepositorySnapshot {
     pub root: PathBuf,
     pub label: String,
     pub baseline: Option<String>,
+    /// Merge base with the default branch; absent on that branch or when unavailable.
+    #[serde(default)]
+    pub branch_base: Option<String>,
     pub index_digest: String,
     pub notice: Option<String>,
 }

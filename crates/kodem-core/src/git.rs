@@ -62,45 +62,60 @@ pub fn branch(cwd: &Path) -> String {
         .map(|v| String::from_utf8_lossy(&v).trim().to_owned())
         .unwrap_or_else(|| "detached HEAD".into())
 }
-/// Detects committed task work merged into a locally known default branch without fetching.
-/// Unchanged branches, default-branch tasks and dirty checkouts are never considered merged.
-pub fn branch_merged(project: &Path, task: &Task) -> bool {
-    let Some(baseline) = &task.baseline else {
-        return false;
-    };
-    let resolve = |reference: &str| -> Option<String> {
-        query(
-            project,
-            &[
-                "rev-parse",
-                "--verify",
-                "--end-of-options",
-                &format!("{reference}^{{commit}}"),
-            ],
-        )
-        .ok()
-        .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned())
-    };
-    let remote = query(project, &["symbolic-ref", "refs/remotes/origin/HEAD"])
+fn resolve_commit(cwd: &Path, reference: &str) -> Option<String> {
+    query(
+        cwd,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{reference}^{{commit}}"),
+        ],
+    )
+    .ok()
+    .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned())
+}
+fn default_branch(cwd: &Path) -> Option<(String, Option<String>)> {
+    let remote = query(cwd, &["symbolic-ref", "refs/remotes/origin/HEAD"])
         .ok()
         .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned());
-    let default = remote
+    let name = remote
         .as_deref()
         .and_then(|reference| reference.strip_prefix("refs/remotes/origin/"))
         .map(str::to_owned)
         .or_else(|| {
             ["main", "master"]
                 .into_iter()
-                .find(|name| resolve(&format!("refs/heads/{name}")).is_some())
+                .find(|name| resolve_commit(cwd, &format!("refs/heads/{name}")).is_some())
                 .map(str::to_owned)
-        });
-    let Some(default) = default else {
+        })?;
+    Some((name, remote))
+}
+fn branch_base(cwd: &Path, observed_head: Option<&str>) -> Option<String> {
+    let (default, remote) = default_branch(cwd)?;
+    let current = branch(cwd);
+    if current == default || current == "detached HEAD" {
+        return None;
+    }
+    let target = resolve_commit(cwd, &format!("refs/heads/{default}"))
+        .or_else(|| remote.and_then(|reference| resolve_commit(cwd, &reference)))?;
+    query(cwd, &["merge-base", observed_head?, &target])
+        .ok()
+        .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned())
+}
+/// Detects committed task work merged into a locally known default branch without fetching.
+/// Unchanged branches, default-branch tasks and dirty checkouts are never considered merged.
+pub fn branch_merged(project: &Path, task: &Task) -> bool {
+    let Some(baseline) = &task.baseline else {
+        return false;
+    };
+    let Some((default, remote)) = default_branch(project) else {
         return false;
     };
     if task.branch == default || task.branch == "detached HEAD" {
         return false;
     }
-    let Some(tip) = resolve(&format!("refs/heads/{}", task.branch)) else {
+    let Some(tip) = resolve_commit(project, &format!("refs/heads/{}", task.branch)) else {
         return false;
     };
     if &tip == baseline
@@ -116,7 +131,7 @@ pub fn branch_merged(project: &Path, task: &Task) -> bool {
     [Some(format!("refs/heads/{default}")), remote]
         .into_iter()
         .flatten()
-        .filter_map(|reference| resolve(&reference))
+        .filter_map(|reference| resolve_commit(project, &reference))
         .any(|target| query(project, &["merge-base", "--is-ancestor", &tip, &target]).is_ok())
 }
 /// Creates an isolated task worktree on a new branch, preserving the original checkout.
@@ -243,6 +258,11 @@ fn patch(
         }
         Comparison::Baseline => {
             args.push(base.context("This task has no baseline commit")?.into());
+        }
+        Comparison::Branch => {
+            if let Some(base) = base {
+                args.push(base.into());
+            }
         }
     }
     args.push("--".into());
@@ -377,32 +397,53 @@ fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapsho
     for _ in 0..3 {
         let before = index_digest(&task.cwd)?;
         let observed_head = head(&task.cwd);
-        let comparison_base = if comparison == Comparison::Baseline {
-            task.baseline.clone()
-        } else {
-            observed_head.clone()
+        let branch_base = branch_base(&task.cwd, observed_head.as_deref());
+        let comparison_base = match comparison {
+            Comparison::Baseline => task.baseline.clone(),
+            Comparison::Branch => branch_base.clone().or_else(|| observed_head.clone()),
+            _ => observed_head.clone(),
         };
         let files = status(&task.cwd)?;
         let status_before = serde_json::to_vec(&files)?;
         let mut entries = Vec::new();
-        // Baseline may include committed paths absent from current status.
+        // Task and branch comparisons include committed paths absent from current status.
         let mut paths = files.clone();
-        if comparison == Comparison::Baseline {
-            let base = task
-                .baseline
+        if matches!(comparison, Comparison::Baseline | Comparison::Branch)
+            && (comparison == Comparison::Baseline || comparison_base.is_some())
+        {
+            let base = comparison_base
                 .as_deref()
                 .context("No task baseline exists yet")?;
-            for p in query(&task.cwd, &["diff", "--name-only", "-z", base, "--"])?
+            let mut args = vec!["diff", "--name-only", "-z"];
+            if comparison == Comparison::Branch {
+                args.push("--no-renames");
+            }
+            args.extend([base, "--"]);
+            for p in query(&task.cwd, &args)?
                 .split(|b| *b == 0)
                 .filter(|p| !p.is_empty())
             {
                 if !paths.iter().any(|f| f.0 == p) {
-                    paths.push((p.to_vec(), None, "baseline".into()));
+                    paths.push((
+                        p.to_vec(),
+                        None,
+                        if comparison == Comparison::Branch {
+                            "branch".into()
+                        } else {
+                            "baseline".into()
+                        },
+                    ));
                 }
             }
         }
         let mut stable = true;
         for (path, old, kind) in paths {
+            // Branch paths list both sides of renames, so each patch owns one path.
+            let old = if comparison == Comparison::Branch {
+                None
+            } else {
+                old
+            };
             if comparison == Comparison::Staged && (kind.starts_with(' ') || kind == "??") {
                 continue;
             }
@@ -428,7 +469,7 @@ fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapsho
                     Some("File exceeds the 2 MiB inline review limit.".into()),
                 )
             } else if kind == "??"
-                || (comparison == Comparison::WorkingTree
+                || (matches!(comparison, Comparison::WorkingTree | Comparison::Branch)
                     && observed_head.is_none()
                     && meta.is_some())
             {
@@ -463,6 +504,10 @@ fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapsho
                     &comparison,
                     comparison_base.as_deref(),
                 )?;
+                if comparison == Comparison::Branch && bytes.is_empty() {
+                    stable &= observed == path_digest(&task.cwd, &path)?;
+                    continue;
+                }
                 if bytes.len() > MAX_FILE as usize {
                     (
                         Vec::new(),
@@ -492,7 +537,7 @@ fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapsho
             return Ok(DiffSnapshot {
                 id: String::new(),
                 task_id: task.id.clone(),
-                comparison,
+                comparison: comparison.clone(),
                 baseline: comparison_base.clone(),
                 captured: now(),
                 index_digest: before.clone(),
@@ -501,8 +546,14 @@ fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapsho
                     root: root.clone(),
                     label: String::new(),
                     baseline: comparison_base.clone(),
+                    branch_base: branch_base.clone(),
                     index_digest: before.clone(),
-                    notice: None,
+                    notice: (comparison == Comparison::Branch && branch_base.is_none()).then(
+                        || {
+                            "No branch comparison available. Showing current uncommitted changes."
+                                .into()
+                        },
+                    ),
                 }],
             });
         }

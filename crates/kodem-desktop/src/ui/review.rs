@@ -1,10 +1,11 @@
 use super::*;
 
-pub(super) const COMPARISONS: [(Comparison, &str, &str); 4] = [
+pub(super) const COMPARISONS: [(Comparison, &str, &str); 5] = [
     (Comparison::WorkingTree, "All changes", "file"),
     (Comparison::Staged, "Staged", "check"),
     (Comparison::Unstaged, "Unstaged", "edit"),
     (Comparison::Baseline, "Since task", "branch"),
+    (Comparison::Branch, "All branch changes", "branch"),
 ];
 impl Shell {
     /// Builds the file browser, snapshot diff and contextual feedback editor.
