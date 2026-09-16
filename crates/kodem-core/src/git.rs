@@ -17,16 +17,49 @@ const MAX_FILE: u64 = 2 * 1024 * 1024;
 mod repositories;
 pub use repositories::{repositories, repository_baselines};
 
-/// Executes a Git machine-format query without shell interpretation or external diff drivers.
-pub fn command(cwd: &Path, args: &[&OsStr]) -> Result<Vec<u8>> {
-    let out = Command::new("git")
+fn git_process(cwd: &Path) -> Result<Command> {
+    let mut paths: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    let mut fallbacks = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        fallbacks.push(PathBuf::from(home).join(".local/bin"));
+    }
+    fallbacks.extend(
+        [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+        .map(PathBuf::from),
+    );
+    for path in fallbacks {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    // Finder's PATH can omit installed tools. Git's filters and credential helpers
+    // need the augmented PATH too, even when Git itself is already discoverable.
+    let mut command = Command::new("git");
+    command
         .current_dir(cwd)
+        .env(
+            "PATH",
+            std::env::join_paths(paths).context("Build Git PATH")?,
+        )
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .args(["--no-pager", "-c", "core.quotepath=false"])
-        .args(args)
-        .stdin(Stdio::null())
-        .output()?;
+        .stdin(Stdio::null());
+    Ok(command)
+}
+
+/// Executes a Git machine-format query without shell interpretation or external diff drivers.
+pub fn command(cwd: &Path, args: &[&OsStr]) -> Result<Vec<u8>> {
+    let out = git_process(cwd)?.args(args).output()?;
     ensure!(
         out.status.success(),
         "Git: {}",
@@ -762,9 +795,8 @@ pub fn stage(task: &Task, snapshot: &DiffSnapshot, file: usize) -> Result<()> {
         if index.exists() {
             fs::copy(&index, &temp)?;
         }
-        let mut cmd = Command::new("git");
-        cmd.current_dir(cwd)
-            .env("GIT_INDEX_FILE", &temp)
+        let mut cmd = git_process(cwd)?;
+        cmd.env("GIT_INDEX_FILE", &temp)
             .args(["add", "-A", "--"])
             .arg(OsStr::from_bytes(&f.path));
         if let Some(old) = &f.old_path {
