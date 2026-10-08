@@ -4,7 +4,7 @@ impl Shell {
     pub(super) fn menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let mut width = 284.;
-        let mut menu = div().flex().flex_col().flex_shrink_0().gap_1();
+        let mut menu = div().flex().flex_col().flex_shrink_0().gap(px(1.));
         match self.panel {
             Panel::Usage => {
                 width = 320.;
@@ -75,7 +75,7 @@ impl Shell {
                     menu = menu.child(projects);
                 }
                 menu = menu
-                    .child(div().h(px(1.)).my_1().bg(t.border))
+                    .child(div().h(px(1.)).my(px(3.)).mx(px(4.)).bg(t.border))
                     .child(
                         self.ghost("picker-add-project", "plus", "Add project…")
                             .justify_start()
@@ -133,14 +133,7 @@ impl Shell {
             }
             Panel::Sort => {
                 width = 210.;
-                menu = menu.child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .text_size(px(11.))
-                        .text_color(t.subtle)
-                        .child("THREAD LIST"),
-                );
+                menu = menu.child(caps("Thread list", t).px(px(8.)).pt(px(6.)).pb(px(4.)));
                 for (i, (sort, label)) in [
                     (Sort::Recent, "Recent activity"),
                     (Sort::Attention, "Needs attention"),
@@ -169,33 +162,35 @@ impl Shell {
                         })),
                     );
                 }
-                menu = menu.child(div().h(px(1.)).my_1().bg(t.border)).child(
-                    self.ghost(
-                        "group-projects",
-                        if self.settings.group_tasks_by_project {
-                            "check"
+                menu = menu
+                    .child(div().h(px(1.)).my(px(3.)).mx(px(4.)).bg(t.border))
+                    .child(
+                        self.ghost(
+                            "group-projects",
+                            if self.settings.group_tasks_by_project {
+                                "check"
+                            } else {
+                                "folder-closed"
+                            },
+                            "Group by project",
+                        )
+                        .w_full()
+                        .justify_start()
+                        .accessibility_label(if self.settings.group_tasks_by_project {
+                            "Disable project grouping"
                         } else {
-                            "folder-closed"
-                        },
-                        "Group by project",
-                    )
-                    .w_full()
-                    .justify_start()
-                    .accessibility_label(if self.settings.group_tasks_by_project {
-                        "Disable project grouping"
-                    } else {
-                        "Enable project grouping"
-                    })
-                    .when(self.settings.group_tasks_by_project, |b| {
-                        b.bg(t.selected).text_color(t.text)
-                    })
-                    .on_click(cx.listener(|s, _, _, cx| {
-                        s.settings.group_tasks_by_project = !s.settings.group_tasks_by_project;
-                        s.sidebar_dirty = true;
-                        s.save_settings();
-                        cx.notify();
-                    })),
-                );
+                            "Enable project grouping"
+                        })
+                        .when(self.settings.group_tasks_by_project, |b| {
+                            b.bg(t.selected).text_color(t.text)
+                        })
+                        .on_click(cx.listener(|s, _, _, cx| {
+                            s.settings.group_tasks_by_project = !s.settings.group_tasks_by_project;
+                            s.sidebar_dirty = true;
+                            s.save_settings();
+                            cx.notify();
+                        })),
+                    );
             }
             Panel::ThreadMenu => {
                 if let Some(context) = &self.thread_menu {
@@ -268,18 +263,20 @@ impl Shell {
                                 },
                             )),
                         );
-                        menu = menu.child(div().h(px(1.)).my_1().bg(t.border)).child(
-                            self.ghost("thread-delete", "close", "Delete…")
-                                .w_full()
-                                .justify_start()
-                                .text_color(t.removed)
-                                .disabled(busy)
-                                .on_click(cx.listener(|s, _, _, cx| {
-                                    s.error = None;
-                                    s.panel = Panel::DeleteTask;
-                                    cx.notify();
-                                })),
-                        );
+                        menu = menu
+                            .child(div().h(px(1.)).my(px(3.)).mx(px(4.)).bg(t.border))
+                            .child(
+                                self.ghost("thread-delete", "close", "Delete…")
+                                    .w_full()
+                                    .justify_start()
+                                    .text_color(t.removed)
+                                    .disabled(busy)
+                                    .on_click(cx.listener(|s, _, _, cx| {
+                                        s.error = None;
+                                        s.panel = Panel::DeleteTask;
+                                        cx.notify();
+                                    })),
+                            );
                     }
                 }
             }
@@ -318,7 +315,7 @@ impl Shell {
                         })),
                     );
                     menu = menu
-                        .child(div().h(px(1.)).my_1().bg(t.border))
+                        .child(div().h(px(1.)).my(px(3.)).mx(px(4.)).bg(t.border))
                         .child(
                             self.ghost("menu-check", "check-square", "Run a check")
                                 .w_full()
@@ -350,27 +347,31 @@ impl Shell {
                                 })),
                         );
                     let archived = view.task.archived;
-                    menu = menu.child(div().h(px(1.)).my_1().bg(t.border)).child(
-                        self.ghost(
-                            "menu-archive",
-                            "archive",
-                            if archived {
-                                "Restore task"
-                            } else {
-                                "Archive task"
-                            },
-                        )
-                        .w_full()
-                        .justify_start()
-                        .on_click(cx.listener(move |s, _, _, cx| {
-                            s.send(core::Request::EditTask {
-                                task_id: id.clone(),
-                                edit: TaskEdit::Archive(!archived),
-                            });
-                            s.panel = Panel::None;
-                            cx.notify();
-                        })),
-                    );
+                    menu = menu
+                        .child(div().h(px(1.)).my(px(3.)).mx(px(4.)).bg(t.border))
+                        .child(
+                            self.ghost(
+                                "menu-archive",
+                                "archive",
+                                if archived {
+                                    "Restore task"
+                                } else {
+                                    "Archive task"
+                                },
+                            )
+                            .w_full()
+                            .justify_start()
+                            .on_click(cx.listener(
+                                move |s, _, _, cx| {
+                                    s.send(core::Request::EditTask {
+                                        task_id: id.clone(),
+                                        edit: TaskEdit::Archive(!archived),
+                                    });
+                                    s.panel = Panel::None;
+                                    cx.notify();
+                                },
+                            )),
+                        );
                 }
             }
             Panel::Models | Panel::Reasoning | Panel::Access => {
@@ -386,27 +387,32 @@ impl Shell {
         let viewport = window.viewport_size();
         // Measure content at its natural height. Only the window limits scrolling;
         // percentage caps inside the anchored layout can clip even short menus.
-        let menu = div()
-            .id("context-menu")
-            .w(px(width).min((viewport.width - px(16.)).max(px(0.))))
-            .max_h((viewport.height - px(16.)).max(px(0.)))
-            .overflow_y_scroll()
-            .p_2()
-            .rounded(px(10.))
-            .bg(t.raised)
-            .border_1()
-            .border_color(t.border)
-            .shadow(t.elevation())
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(menu)
-            .with_animation(
-                ("menu-enter", self.panel.clone() as usize),
-                Animation::new(Duration::from_millis(130)),
-                |d, p| d.opacity(p),
-            );
         let thread_context = (self.panel == Panel::ThreadMenu)
             .then_some(self.thread_menu.as_ref())
             .flatten();
+        let menu = dither::unroll(
+            ("menu-enter", self.panel.clone() as usize),
+            div()
+                .relative()
+                .child(dither::shadow(t, crate::theme::RADIUS_FLOATING, 5.))
+                .child(
+                    div()
+                        .id("context-menu")
+                        .w(px(width).min((viewport.width - px(16.)).max(px(0.))))
+                        .max_h((viewport.height - px(16.)).max(px(0.)))
+                        .overflow_y_scroll()
+                        .p(px(4.))
+                        .rounded(px(crate::theme::RADIUS_FLOATING))
+                        .bg(t.raised)
+                        .border_1()
+                        .border_color(t.edge)
+                        .shadow(t.floating())
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(menu),
+                ),
+            t,
+            thread_context.is_none(),
+        );
         let position = thread_context
             .map(|context| context.position)
             .or(self.menu_anchor)

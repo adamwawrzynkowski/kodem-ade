@@ -302,11 +302,11 @@ impl Shell {
         let mut card = div()
             .flex()
             .items_center()
-            .gap_2()
-            .p_2()
-            .rounded(px(8.))
-            .bg(t.sidebar)
-            .shadow(t.elevation())
+            .gap(px(8.))
+            .p(px(4.))
+            .pr(px(6.))
+            .rounded(px(crate::theme::RADIUS_CONTROL))
+            .bg(t.inset)
             .border_1()
             .border_color(t.border)
             .flex_shrink_0()
@@ -318,9 +318,9 @@ impl Shell {
                 ElementId::from("preview-attachment"),
                 SharedString::from(attachment.id.clone()),
             ))
-            .size(px(42.))
+            .size(px(36.))
             .p_0()
-            .rounded(px(5.))
+            .rounded(px(crate::theme::RADIUS_SMALL))
             .overflow_hidden()
             .accessibility_label(format!("Preview {}", attachment.name))
             .hover(move |s| s.border_color(t.accent))
@@ -335,12 +335,16 @@ impl Shell {
             .into_any_element()
         } else {
             div()
-                .size(px(32.))
+                .size(px(28.))
                 .flex()
                 .items_center()
                 .justify_center()
+                .rounded(px(crate::theme::RADIUS_SMALL))
+                .bg(t.raised)
                 .child(
-                    icon(if skill_name.is_some() { "code" } else { "file" }).text_color(t.accent),
+                    icon(if skill_name.is_some() { "code" } else { "file" })
+                        .size(px(14.))
+                        .text_color(t.accent),
                 )
                 .into_any_element()
         });
@@ -349,18 +353,19 @@ impl Shell {
                 .flex_1()
                 .min_w_0()
                 .child(
-                    div().text_size(px(11.)).text_ellipsis().child(
+                    div().text_size(px(12.)).text_ellipsis().child(
                         skill_name
                             .clone()
                             .unwrap_or_else(|| attachment.name.clone()),
                     ),
                 )
-                .child(div().text_size(px(10.)).text_color(t.muted).child(
+                .child(caps(
                     if skill_name.is_some() {
                         "Skill".into()
                     } else {
                         file_size(attachment.bytes)
                     },
+                    t,
                 )),
         );
         if let Some(task_id) = task_id {
@@ -417,19 +422,21 @@ impl Shell {
         let mut title = div()
             .flex()
             .items_center()
-            .gap_2()
-            .px_3()
-            .h(px(34.))
-            .text_size(px(11.))
+            .gap(px(8.))
+            .pl(px(10.))
+            .pr(px(4.))
+            .h(px(32.))
             .child(icon("code").size(px(13.)).text_color(t.accent))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_ellipsis()
+                    .text_ellipsis_start()
+                    .font_family(crate::theme::MONO)
+                    .text_size(px(11.))
                     .child(feedback.label.clone()),
             )
-            .child(div().flex_shrink_0().text_color(t.muted).child(range));
+            .child(figure(range, t.subtle));
         if let Some(task_id) = task_id {
             let task_id = task_id.to_owned();
             let id = feedback.id.clone();
@@ -458,13 +465,12 @@ impl Shell {
         div()
             .w_full()
             .min_w_0()
-            .h(px(36.))
+            .h(px(34.))
             .flex_shrink_0()
-            .rounded(px(9.))
+            .rounded(px(crate::theme::RADIUS_CONTROL))
             .border_1()
             .border_color(t.border)
-            .bg(t.sidebar)
-            .shadow(t.elevation())
+            .bg(t.inset)
             .overflow_hidden()
             .child(title)
             .into_any_element()
@@ -497,28 +503,34 @@ impl Shell {
             .id("outgoing-tray")
             .max_h(px(220.))
             .overflow_y_scroll()
-            .mb_2()
-            .rounded(px(9.))
+            .mb(px(8.))
+            .rounded(px(crate::theme::RADIUS_SURFACE))
             .border_1()
             .border_color(t.border)
             .bg(t.sidebar)
-            .p_2()
+            .p(px(6.))
             .flex()
             .flex_col()
-            .gap_1()
+            .gap(px(4.))
             .child(
                 div()
+                    .h(px(24.))
+                    .px(px(6.))
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .text_size(px(11.))
-                    .text_color(t.muted)
-                    .child(icon("arrow-down").size(px(13.)))
-                    .child(if paused {
-                        "Queue paused"
-                    } else {
-                        "Next messages"
-                    })
+                    .gap(px(8.))
+                    .child(icon("arrow-down").size(px(12.)).text_color(t.subtle))
+                    .child(
+                        caps(
+                            if paused {
+                                "Queue paused"
+                            } else {
+                                "Next messages"
+                            },
+                            t,
+                        )
+                        .when(paused, |d| d.text_color(t.accent)),
+                    )
                     .child(div().flex_1())
                     .when(paused, |d| {
                         d.child(
@@ -549,12 +561,14 @@ impl Shell {
                 DeliveryState::Unknown => "Delivery unknown",
             };
             let mut row = div()
-                .p_2()
-                .rounded(px(6.))
+                .p(px(4.))
+                .rounded(px(crate::theme::RADIUS_CONTROL))
                 .bg(t.raised)
+                .border_1()
+                .border_color(t.border)
                 .flex()
                 .flex_col()
-                .gap_1()
+                .gap(px(4.))
                 .child(
                     div()
                         .flex()
@@ -570,8 +584,9 @@ impl Shell {
                                 },
                                 format!("{} · {label}", index + 1),
                             )
-                            .h(px(23.))
-                            .text_size(px(10.))
+                            .h(px(22.))
+                            .font_family(crate::theme::MONO)
+                            .text_size(px(10.5))
                             .on_click(cx.listener(
                                 move |s, _, _, cx| {
                                     if !s.folded.remove(&expanded_key) {

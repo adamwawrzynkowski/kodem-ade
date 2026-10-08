@@ -542,7 +542,7 @@ impl DiffView {
             .when(column == 0, |d| d.w_full())
             .flex_1()
             .min_w_0()
-            .font_family("JetBrains Mono")
+            .font_family(crate::theme::MONO)
             .text_size(px(12.))
             .bg(if selected {
                 t.selected
@@ -563,8 +563,24 @@ impl DiffView {
                     .flex_shrink_0()
                     .pl_2()
                     .border_l_2()
-                    .border_color(if selected { t.accent } else { t.border })
-                    .text_color(if selected { t.accent } else { t.muted })
+                    .border_color(if selected {
+                        t.accent
+                    } else {
+                        match line.kind {
+                            LineKind::Added => t.added.opacity(0.7),
+                            LineKind::Removed => t.removed.opacity(0.7),
+                            _ => hsla(0., 0., 0., 0.),
+                        }
+                    })
+                    .text_color(if selected {
+                        t.accent
+                    } else {
+                        match line.kind {
+                            LineKind::Added => t.added.opacity(0.8),
+                            LineKind::Removed => t.removed.opacity(0.8),
+                            _ => t.subtle,
+                        }
+                    })
                     .cursor_crosshair()
                     .whitespace_nowrap()
                     .child(numbers)
@@ -615,23 +631,30 @@ impl DiffView {
             .w(self.bounds.map_or(px(360.), |bounds| bounds.size.width))
             .ml(-self.horizontal.offset().x)
             .h(px(164.))
-            .p_3()
-            .bg(t.selected)
+            .px(px(12.))
+            .py(px(10.))
+            .bg(t.sidebar)
+            .border_t_2()
+            .border_b_1()
+            .border_color(t.accent)
             .flex()
             .flex_col()
-            .gap_2()
-            .child(div().text_size(px(11.)).text_color(t.muted).child(label))
+            .gap(px(8.))
+            .child(super::caps(format!("Comment · {label}"), t).text_color(t.accent))
             .child(
                 div()
                     .id("diff-comment-input")
-                    .p_2()
+                    .px(px(10.))
+                    .py(px(7.))
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .rounded(px(7.))
+                    .rounded(px(crate::theme::RADIUS_CONTROL))
                     .border_1()
-                    .border_color(t.border)
-                    .bg(t.inset)
+                    .border_color(t.edge)
+                    .bg(t.canvas)
+                    .font_family(crate::theme::SANS)
+                    .text_size(px(13.))
                     .child(self.comment.clone()),
             )
             .child(
@@ -642,9 +665,15 @@ impl DiffView {
                     .child(
                         Button::new("cancel-diff-comment")
                             .disabled(self.pending_comment)
-                            .h(px(28.))
-                            .px_2()
-                            .child(icon("close"))
+                            .h(px(26.))
+                            .px(px(9.))
+                            .gap(px(6.))
+                            .rounded(px(crate::theme::RADIUS_CONTROL))
+                            .text_size(px(12.))
+                            .text_color(t.muted)
+                            .hover(move |b| b.bg(t.selected).text_color(t.text))
+                            .cursor_pointer()
+                            .child(icon("close").size(px(14.)))
                             .child("Cancel")
                             .on_click(cx.listener(|view, _, _, cx| {
                                 view.gutter = None;
@@ -656,13 +685,16 @@ impl DiffView {
                     .child(
                         Button::new("attach-diff-comment")
                             .disabled(self.pending_comment)
-                            .h(px(28.))
-                            .px_2()
-                            .gap_1()
-                            .rounded(px(6.))
+                            .h(px(26.))
+                            .px(px(9.))
+                            .gap(px(6.))
+                            .rounded(px(crate::theme::RADIUS_CONTROL))
                             .bg(t.accent)
-                            .text_color(t.canvas)
-                            .child(icon("plus"))
+                            .text_color(t.on_accent)
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .cursor_pointer()
+                            .child(icon("plus").size(px(14.)))
                             .child("Add context")
                             .on_click(cx.listener(|view, _, _, cx| {
                                 if !view.pending_comment

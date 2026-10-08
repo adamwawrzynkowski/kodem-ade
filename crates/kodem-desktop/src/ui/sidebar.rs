@@ -13,15 +13,15 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .items_center()
-                .py_3()
-                .gap_2()
-                .child(motion::window_texture(
-                    self.settings.light,
-                    self.theme.accent,
-                ))
+                .py(px(10.))
+                .gap(px(4.))
                 .child(
                     self.icon_button("rail-new", "edit", "New task · ⌘N")
                         .on_click(cx.listener(|s, _, w, cx| s.new_task(&NewTask, w, cx))),
+                )
+                .child(
+                    self.icon_button("rail-search", "search", "Search tasks · ⌘F")
+                        .on_click(cx.listener(|s, _, w, cx| s.open_search(w, cx))),
                 )
                 .child(
                     self.icon_button("rail-open", "folder-open", "Open repository · ⌘O")
@@ -47,6 +47,51 @@ impl Shell {
                     .find(|p| Some(&p.id) == self.sidebar_project.as_ref())
             })
             .map_or_else(|| "All projects".to_owned(), |p| p.name.clone());
+        let search = if self.search_visible {
+            div()
+                .flex_1()
+                .min_w_0()
+                .h(px(28.))
+                .pl(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .rounded(px(crate::theme::RADIUS_CONTROL))
+                .bg(t.inset)
+                .border_1()
+                .border_color(t.edge)
+                .child(icon("search").size(px(13.)).text_color(t.muted))
+                .child(div().flex_1().min_w_0().child(self.search.clone()))
+                .child(
+                    self.icon_button("close-search", "close", "Close search · Esc")
+                        .h(px(24.))
+                        .w(px(24.))
+                        .on_click(cx.listener(|s, _, w, cx| {
+                            s.search_visible = false;
+                            s.search.update(cx, |i, cx| i.set_text(String::new(), cx));
+                            s.sidebar_dirty = true;
+                            w.focus(&s.focus, cx);
+                            cx.notify();
+                        })),
+                )
+                .into_any_element()
+        } else {
+            self.control("search-tasks")
+                .flex_1()
+                .min_w_0()
+                .h(px(28.))
+                .justify_start()
+                .px(px(8.))
+                .bg(t.inset)
+                .shadow(Vec::new())
+                .text_color(t.subtle)
+                .hover(move |b| b.border_color(t.edge).text_color(t.muted))
+                .child(icon("search").size(px(13.)))
+                .child(div().flex_1().child("Search"))
+                .child(caps("⌘F", t))
+                .on_click(cx.listener(|s, _, w, cx| s.open_search(w, cx)))
+                .into_any_element()
+        };
         let mut panel = div()
             .id("sidebar")
             .relative()
@@ -58,72 +103,35 @@ impl Shell {
             .flex_col()
             .overflow_hidden()
             .text_size(px(12.))
-            .child(motion::window_texture(
-                self.settings.light,
-                self.theme.accent,
-            ))
             .child(
                 div()
-                    .px_3()
-                    .pt_2()
-                    .pb_1()
+                    .px(px(10.))
+                    .pt(px(10.))
+                    .pb(px(6.))
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .child(
-                        self.ghost("search-tasks", "search", "Search")
-                            .flex_1()
-                            .justify_start()
-                            .h(px(32.))
-                            .on_click(cx.listener(|s, _, w, cx| {
-                                s.search_visible = true;
-                                w.focus(&s.search.read(cx).focus_handle(cx), cx);
-                                cx.notify();
-                            })),
-                    )
+                    .gap(px(6.))
+                    .child(search)
                     .child(
                         self.icon_button("new-task", "edit", "New task · ⌘N")
+                            .h(px(28.))
+                            .w(px(28.))
                             .on_click(cx.listener(|s, _, w, cx| s.new_task(&NewTask, w, cx))),
                     ),
             )
-            .when(self.search_visible, |d| {
-                d.child(
-                    div()
-                        .mx_3()
-                        .mb_2()
-                        .px_2()
-                        .py_1()
-                        .flex()
-                        .items_center()
-                        .rounded(px(7.))
-                        .bg(t.inset)
-                        .border_1()
-                        .border_color(t.border)
-                        .child(div().flex_1().min_w_0().child(self.search.clone()))
-                        .child(
-                            self.icon_button("close-search", "close", "Close search")
-                                .on_click(cx.listener(|s, _, w, cx| {
-                                    s.search_visible = false;
-                                    s.search.update(cx, |i, cx| i.set_text(String::new(), cx));
-                                    w.focus(&s.focus, cx);
-                                    cx.notify();
-                                })),
-                        ),
-                )
-            })
             .child(
                 div()
-                    .px_3()
-                    .pb_2()
+                    .px(px(10.))
+                    .pb(px(6.))
                     .flex()
                     .items_center()
-                    .gap_1()
+                    .gap(px(2.))
                     .child(
                         self.ghost("project-filter", "folder-closed", "")
                             .flex_1()
                             .min_w_0()
                             .justify_start()
-                            .h(px(32.))
+                            .px(px(6.))
                             .child(
                                 div()
                                     .flex_1()
@@ -131,7 +139,7 @@ impl Shell {
                                     .text_ellipsis()
                                     .child(project_label),
                             )
-                            .child(icon("chevron-down").size(px(12.)))
+                            .child(icon("chevrons-up-down").size(px(12.)))
                             .on_click_with_bounds(cx.listener(
                                 |s, bounds: &Bounds<Pixels>, _, cx| {
                                     s.menu_anchor = Some(bounds.top_right());
@@ -156,7 +164,8 @@ impl Shell {
                                 cx.listener(|s, _, w, cx| s.open_project(&OpenProject, w, cx)),
                             ),
                     ),
-            );
+            )
+            .child(div().mx(px(10.)).h(px(1.)).bg(t.border));
         let query = self.search.read(cx).text().to_lowercase();
         if self.sidebar_dirty {
             if let Some(workspace) = &self.workspace {
@@ -196,34 +205,26 @@ impl Shell {
             // List positions rows at its left edge; horizontal gutters belong inside each row.
             div()
                 .w_full()
-                .px_2()
+                .px(px(6.))
                 .child(entity.update(cx, |s, cx| s.sidebar_row(index, cx)))
                 .into_any_element()
         })
         .flex_1()
         .min_h_0()
         .w_full()
+        .pt(px(6.))
         .pb_2();
+        let connected = self.host_connected && self.workspace.is_some();
         panel = panel.child(feed).child(
             div()
-                .px_3()
-                .py_2()
+                .h(px(40.))
+                .flex_shrink_0()
+                .px(px(10.))
                 .border_t_1()
                 .border_color(t.border)
                 .flex()
                 .items_center()
-                .gap_2()
-                .child(
-                    self.icon_button("archive-view", "archive", "Toggle archived tasks")
-                        .when(self.show_archived, |b| {
-                            b.bg(t.selected).text_color(t.accent)
-                        })
-                        .on_click(cx.listener(|s, _, _, cx| {
-                            s.show_archived = !s.show_archived;
-                            s.sidebar_dirty = true;
-                            cx.notify();
-                        })),
-                )
+                .gap(px(2.))
                 .child(
                     self.ghost(
                         "settings",
@@ -239,25 +240,58 @@ impl Shell {
                             "Settings"
                         },
                     )
+                    .px(px(6.))
                     .on_click(cx.listener(|s, _, _, cx| {
                         s.panel = Panel::Settings;
                         cx.notify();
                     })),
                 )
+                .child(
+                    self.icon_button("archive-view", "archive", "Toggle archived tasks")
+                        .when(self.show_archived, |b| {
+                            b.bg(t.selected).text_color(t.accent)
+                        })
+                        .on_click(cx.listener(|s, _, _, cx| {
+                            s.show_archived = !s.show_archived;
+                            s.sidebar_dirty = true;
+                            cx.notify();
+                        })),
+                )
                 .child(div().flex_1())
                 .child(self.update_control(false, cx))
                 .child(
                     div()
-                        .size(px(5.))
-                        .rounded_full()
-                        .bg(if self.workspace.is_some() {
-                            t.added
-                        } else {
-                            t.subtle
+                        .id("host-status")
+                        .flex()
+                        .items_center()
+                        .gap(px(5.))
+                        .pl(px(6.))
+                        .child(
+                            div()
+                                .size(px(5.))
+                                .bg(if connected { t.added } else { t.subtle }),
+                        )
+                        .child(caps(if connected { "Host" } else { "Offline" }, t))
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| Hint {
+                                text: if connected {
+                                    "Local host connected".into()
+                                } else {
+                                    "Local host unavailable; reconnecting".into()
+                                },
+                                theme: t,
+                            })
+                            .into()
                         }),
                 ),
         );
         motion::reveal("sidebar-enter", panel)
+    }
+    fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.collapsed = false;
+        self.search_visible = true;
+        window.focus(&self.search.read(cx).focus_handle(cx), cx);
+        cx.notify();
     }
     fn sidebar_row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         use crate::thread_list::Row;
@@ -279,13 +313,12 @@ impl Shell {
                     self.task_card(&workspace.tasks[*index], &workspace.projects[*project], cx);
                 // List measures the root's height without its margins; keep the gap inside the row.
                 div()
-                    .pb(px(6.))
-                    .when(self.settings.group_tasks_by_project, |row| row.px_2())
+                    .pb(px(2.))
                     .when(*settled, |row| {
                         row.pl(px(if self.settings.group_tasks_by_project {
-                            32.
+                            22.
                         } else {
-                            16.
+                            12.
                         }))
                     })
                     .child(card)
@@ -299,65 +332,81 @@ impl Shell {
                 let collapsed = self.settings.collapsed_projects.contains(id)
                     && self.search.read(cx).text().is_empty();
                 let id = id.clone();
-                self.ghost(
-                    SharedString::from(format!("project-group:{id}")),
-                    if collapsed {
-                        "chevron-right"
-                    } else {
-                        "chevron-down"
-                    },
-                    "",
-                )
-                .w_full()
-                .h(px(34.))
-                .justify_start()
-                .min_w_0()
-                .accessibility_label(format!(
-                    "{} project {}",
-                    if collapsed { "Expand" } else { "Collapse" },
-                    project.name
-                ))
-                .child(project_icon(project, t))
-                .child(
-                    div()
-                        .flex_1()
+                div()
+                    .pt(px(4.))
+                    .child(
+                        self.ghost(
+                            SharedString::from(format!("project-group:{id}")),
+                            if collapsed {
+                                "chevron-right"
+                            } else {
+                                "chevron-down"
+                            },
+                            "",
+                        )
+                        .w_full()
+                        .h(px(28.))
+                        .px(px(6.))
+                        .justify_start()
                         .min_w_0()
-                        .text_ellipsis()
-                        .text_color(t.text)
-                        .child(project.name.clone()),
-                )
-                .child(div().text_color(t.subtle).child(count.to_string()))
-                .on_click(cx.listener(move |s, _, _, cx| {
-                    if !s.settings.collapsed_projects.remove(&id) {
-                        s.settings.collapsed_projects.insert(id.clone());
-                    }
-                    s.sidebar_dirty = true;
-                    s.save_settings();
-                    cx.notify();
-                }))
-                .into_any_element()
+                        .accessibility_label(format!(
+                            "{} project {}",
+                            if collapsed { "Expand" } else { "Collapse" },
+                            project.name
+                        ))
+                        .child(project_icon(project, t))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(t.text)
+                                .child(project.name.clone()),
+                        )
+                        .child(figure(count.to_string(), t.subtle))
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            if !s.settings.collapsed_projects.remove(&id) {
+                                s.settings.collapsed_projects.insert(id.clone());
+                            }
+                            s.sidebar_dirty = true;
+                            s.save_settings();
+                            cx.notify();
+                        })),
+                    )
+                    .into_any_element()
             }
             Row::Settled { project, count } => {
                 let collapsed = project.as_ref().map_or(self.settled_collapsed, |id| {
                     !self.expanded_settled_projects.contains(id)
                 });
                 let project = project.clone();
-                self.ghost(
-                    SharedString::from(format!("settled:{}", project.as_deref().unwrap_or("all"))),
-                    if collapsed && self.search.read(cx).text().is_empty() {
+                self.control(SharedString::from(format!(
+                    "settled:{}",
+                    project.as_deref().unwrap_or("all")
+                )))
+                .border_0()
+                .shadow(Vec::new())
+                .bg(hsla(0., 0., 0., 0.))
+                .hover(move |b| b.bg(t.selected))
+                .w_full()
+                .h(px(26.))
+                .px(px(6.))
+                .mt(px(4.))
+                .justify_start()
+                .text_color(t.subtle)
+                .when(project.is_some(), |row| row.pl(px(18.)))
+                .child(
+                    icon(if collapsed && self.search.read(cx).text().is_empty() {
                         "chevron-right"
                     } else {
                         "chevron-down"
-                    },
-                    "Settled",
+                    })
+                    .size(px(12.)),
                 )
-                .w_full()
-                .h(px(32.))
-                .justify_start()
-                .when(project.is_some(), |row| row.pl(px(24.)))
-                .text_size(px(11.))
-                .child(div().flex_1())
-                .child(div().text_color(t.subtle).child(count.to_string()))
+                .child(caps("Settled", t))
+                .child(div().flex_1().h(px(1.)).mx(px(4.)).bg(t.border))
+                .child(figure(count.to_string(), t.subtle))
                 .on_click(cx.listener(move |s, _, _, cx| {
                     if let Some(id) = &project {
                         if !s.expanded_settled_projects.remove(id) {
@@ -372,11 +421,13 @@ impl Shell {
                 .into_any_element()
             }
             Row::Empty(label) => div()
-                .px_3()
-                .py_5()
-                .text_size(px(12.))
-                .text_color(t.muted)
-                .child(*label)
+                .px(px(10.))
+                .py(px(18.))
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(caps("Nothing here", t))
+                .child(div().text_size(px(12.)).text_color(t.muted).child(*label))
                 .into_any_element(),
         }
     }
@@ -388,48 +439,79 @@ impl Shell {
     ) -> AnyElement {
         let t = self.theme;
         let selected = self.selected.as_deref() == Some(&task.id);
-        let tint = project_tint(project, self.theme);
-        let radius = px(9.);
-        let surface = if self.settings.light {
-            t.inset
-        } else {
-            t.raised
-        };
-        let title_color = if selected && !self.settings.light {
-            rgb_to_hsla(rgb(0xffffff))
-        } else {
-            t.text.opacity(0.94)
-        };
-        let metadata = if selected { t.text } else { t.muted };
-        let mut hover_surface = surface;
-        hover_surface.lightness = (surface.lightness + 0.016).min(1.);
+        let radius = crate::theme::RADIUS_CONTROL;
         let id = task.id.clone();
         let menu_id = id.clone();
         let needs_input = task.needs_input();
-        let status_color = if needs_input {
-            t.accent
+        let active = task.state.active() && !needs_input;
+        let failed = matches!(task.state, RunState::Failed | RunState::DeliveryUnknown);
+        let leading = if needs_input {
+            motion::active_icon(
+                (
+                    ElementId::from("sidebar-status"),
+                    SharedString::from(id.clone()),
+                ),
+                "shield",
+                t.accent,
+                false,
+                cx.reduce_motion(),
+            )
+        } else if active {
+            dither::pulse(
+                (
+                    ElementId::from("sidebar-status"),
+                    SharedString::from(id.clone()),
+                ),
+                t.accent,
+                cx.reduce_motion(),
+            )
+        } else if failed {
+            icon("circle-x")
+                .size(px(13.))
+                .text_color(t.removed)
+                .into_any_element()
         } else {
-            match task.state {
-                RunState::Starting | RunState::Running => t.accent,
-                RunState::Waiting => t.accent,
-                RunState::Failed | RunState::DeliveryUnknown => t.removed,
-                RunState::Completed => metadata,
-                _ => metadata,
-            }
+            project_icon(project, t)
         };
         let status = if needs_input {
-            "Needs input"
+            motion::gleam(
+                (
+                    ElementId::from("sidebar-status-label"),
+                    SharedString::from(id.clone()),
+                ),
+                "Input",
+                t,
+            )
+        } else if active {
+            figure(elapsed(task.updated), t.accent).into_any_element()
+        } else if failed {
+            caps(task.state.label(), t)
+                .text_color(t.removed)
+                .into_any_element()
         } else {
-            task.state.label()
+            figure(elapsed(task.updated), t.subtle).into_any_element()
         };
+        let review_hint = task.review.as_ref().map_or_else(|| "No saved task diff. A snapshot will be recorded when the next turn finishes.".to_owned(), |r| {
+            if let Some(error) = &r.error { format!("Could not capture task diff: {error}") }
+            else { format!("Saved task diff · {} ago\n+{} added · −{} removed\n{} files omitted from inline counts. Later checkout changes do not affect these totals.", elapsed(r.captured),r.added,r.removed,r.omitted_files) }
+        });
         let mut meta = div()
-            .h(px(20.))
+            .h(px(16.))
+            .pl(px(21.))
             .flex()
             .items_center()
-            .gap_2()
-            .text_size(px(11.))
-            .text_color(metadata)
-            .child(icon("branch").size(px(11.)))
+            .gap(px(6.))
+            .font_family(crate::theme::MONO)
+            .text_size(px(10.5))
+            .text_color(if selected { t.muted } else { t.subtle })
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .max_w(relative(0.45))
+                    .text_ellipsis()
+                    .child(project.name.clone()),
+            )
+            .child(div().flex_shrink_0().child("/"))
             .child(
                 div()
                     .flex_1()
@@ -437,53 +519,40 @@ impl Shell {
                     .text_ellipsis()
                     .child(task.branch.clone()),
             );
-        let review_hint = task.review.as_ref().map_or_else(|| "No saved task diff. A snapshot will be recorded when the next turn finishes.".to_owned(), |r| {
-            if let Some(error) = &r.error { format!("Could not capture task diff: {error}") }
-            else { format!("Saved task diff · {} ago\n+{} added · −{} removed\n{} files omitted from inline counts. Later checkout changes do not affect these totals.", elapsed(r.captured),r.added,r.removed,r.omitted_files) }
-        });
         if let Some(review) = task.review.as_ref().filter(|r| r.error.is_none()) {
             let snapshot = review.snapshot_id.clone();
             let task_id = id.clone();
             meta = meta.child(
-                self.ghost(
-                    (ElementId::from("task-diff"), SharedString::from(id.clone())),
-                    "code",
-                    "",
-                )
-                .h(px(20.))
-                .px_1()
-                .gap_1()
-                .disabled(snapshot.is_none())
-                .accessibility_label("Open saved task diff")
-                .when(review.omitted_files > 0, |b| b.child("~"))
-                .child(
-                    div()
-                        .text_color(t.added)
-                        .child(format!("+{}", review.added)),
-                )
-                .child(
-                    div()
-                        .text_color(t.removed)
-                        .child(format!("−{}", review.removed)),
-                )
-                .on_click(cx.listener(move |s, _, _, cx| {
-                    cx.stop_propagation();
-                    s.select_task(task_id.clone(), cx);
-                    s.show_review = true;
-                    s.save_settings();
-                    if let Some(id) = &snapshot {
-                        s.historical_diff = true;
-                        s.new_diff = None;
-                        s.send(core::Request::LoadSnapshot { id: id.clone() });
-                    }
-                }))
-                .tooltip(move |_, cx| {
-                    cx.new(|_| Hint {
-                        text: review_hint.clone(),
-                        theme: t,
-                    })
-                    .into()
-                }),
+                self.control((ElementId::from("task-diff"), SharedString::from(id.clone())))
+                    .border_0()
+                    .shadow(Vec::new())
+                    .bg(hsla(0., 0., 0., 0.))
+                    .hover(move |b| b.bg(t.raised))
+                    .h(px(16.))
+                    .px(px(3.))
+                    .rounded(px(crate::theme::RADIUS_SMALL))
+                    .disabled(snapshot.is_none())
+                    .accessibility_label("Open saved task diff")
+                    .when(review.omitted_files > 0, |b| b.child(figure("~", t.subtle)))
+                    .child(line_totals(review.added, review.removed, t))
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        cx.stop_propagation();
+                        s.select_task(task_id.clone(), cx);
+                        s.show_review = true;
+                        s.save_settings();
+                        if let Some(id) = &snapshot {
+                            s.historical_diff = true;
+                            s.new_diff = None;
+                            s.send(core::Request::LoadSnapshot { id: id.clone() });
+                        }
+                    }))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| Hint {
+                            text: review_hint.clone(),
+                            theme: t,
+                        })
+                        .into()
+                    }),
             );
         } else {
             meta = meta.child(
@@ -492,7 +561,7 @@ impl Shell {
                         ElementId::from("missing-task-diff"),
                         SharedString::from(id.clone()),
                     ))
-                    .px_1()
+                    .px(px(3.))
                     .child("—")
                     .tooltip(move |_, cx| {
                         cx.new(|_| Hint {
@@ -510,7 +579,7 @@ impl Shell {
                     ElementId::from("task-provider"),
                     SharedString::from(id.clone()),
                 ))
-                .child(icon(provider.icon()).size(px(14.)).text_color(metadata))
+                .child(icon(provider.icon()).size(px(12.)))
                 .tooltip(move |_, cx| {
                     cx.new(|_| Hint {
                         text: provider.label().into(),
@@ -519,43 +588,35 @@ impl Shell {
                     .into()
                 }),
         );
+        let mut hover = t.selected;
+        hover.alpha *= 0.6;
         div()
             .id((ElementId::from("task"), SharedString::from(id.clone())))
             .relative()
             .overflow_hidden()
             .w_full()
-            .px(px(10.))
-            .py(px(5.))
-            .line_height(relative(1.25))
-            .rounded(radius)
-            .bg(surface)
+            .px(px(8.))
+            .py(px(if self.settings.comfortable { 9. } else { 6. }))
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .rounded(px(radius))
             .border_1()
-            .border_color(t.muted.opacity(0.12))
-            .shadow(vec![
-                BoxShadow {
-                    inset: true,
-                    color: t.text.opacity(0.035),
-                    offset: point(px(0.), px(1.)),
-                    blur_radius: px(0.),
-                    spread_radius: px(0.),
-                },
-                BoxShadow {
-                    inset: false,
-                    color: t.shadow,
-                    offset: point(px(0.), px(2.)),
-                    blur_radius: px(2.),
-                    spread_radius: px(-1.),
-                },
-            ])
+            .border_color(if selected {
+                t.border
+            } else {
+                hsla(0., 0., 0., 0.)
+            })
+            .when(selected, |row| row.bg(t.selected))
             .cursor_pointer()
-            .hover(move |d| d.bg(hover_surface))
-            .child(motion::project_dither(tint, radius))
-            .when(selected, |row| {
-                row.child(motion::selection_dither(
-                    SharedString::from(format!("thread-selection:{id}")),
-                    t.text,
+            .when(!selected, |row| row.hover(move |d| d.bg(hover)))
+            .when(selected || active, |row| {
+                row.child(dither::row_wash(
+                    SharedString::from(format!("thread-wash:{id}")),
+                    if active { t.accent } else { t.text },
                     radius,
-                    task.state.active(),
+                    selected,
+                    active,
                     cx.reduce_motion(),
                 ))
             })
@@ -564,73 +625,44 @@ impl Shell {
                     .h(px(20.))
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .text_size(px(11.))
-                    .text_color(metadata)
-                    .child(project_icon(project, self.theme))
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .size(px(14.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(leading),
+                    )
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
+                            .text_size(px(13.))
+                            .font_weight(if selected {
+                                FontWeight::MEDIUM
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .text_color(if selected || active || needs_input {
+                                t.text
+                            } else {
+                                t.text.opacity(0.88)
+                            })
                             .text_ellipsis()
-                            .child(project.name.clone()),
+                            .child(task.title.clone()),
                     )
                     .when(task.pinned, |d| {
-                        d.child(icon("pin").size(px(10.)).text_color(t.accent))
+                        d.child(icon("pin").size(px(11.)).text_color(t.accent))
                     })
-                    .child(if task.state.active() || needs_input {
+                    .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .text_color(status_color)
-                            .when(needs_input, |d| {
-                                d.child(motion::gleam(
-                                    (
-                                        ElementId::from("sidebar-status-label"),
-                                        SharedString::from(id.clone()),
-                                    ),
-                                    status,
-                                    t,
-                                ))
-                            })
-                            .when(task.state.active() && !needs_input, |d| {
-                                d.child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .text_color(metadata)
-                                        .child(elapsed(task.updated)),
-                                )
-                            })
-                            .child(motion::active_icon(
-                                (
-                                    ElementId::from("sidebar-status"),
-                                    SharedString::from(id.clone()),
-                                ),
-                                if needs_input { "shield" } else { "loader" },
-                                status_color,
-                                task.state.active() && !needs_input,
-                                cx.reduce_motion(),
-                            ))
-                            .into_any_element()
-                    } else {
-                        div()
+                            .flex_shrink_0()
                             .text_size(px(11.))
-                            .text_color(status_color)
-                            .child(format!("{} · {}", status, ago(task.updated)))
-                            .into_any_element()
-                    }),
-            )
-            .child(
-                div().h(px(25.)).flex().items_center().child(
-                    div()
-                        .min_w_0()
-                        .text_size(px(13.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(title_color)
-                        .text_ellipsis()
-                        .child(task.title.clone()),
-                ),
+                            .text_color(t.accent)
+                            .child(status),
+                    ),
             )
             .child(meta)
             .on_mouse_down(
@@ -664,13 +696,13 @@ impl Shell {
 pub(super) fn project_icon(project: &Project, theme: Theme) -> AnyElement {
     if let ProjectIcon::Image(path) = &project.icon {
         return img(path.clone())
-            .size(px(18.))
-            .rounded(px(4.))
+            .size(px(16.))
+            .rounded(px(crate::theme::RADIUS_SMALL))
             .flex_shrink_0()
             .object_fit(ObjectFit::Contain)
             .with_fallback(move || {
                 icon("file")
-                    .size(px(18.))
+                    .size(px(16.))
                     .text_color(theme.accent)
                     .into_any_element()
             })
@@ -705,25 +737,27 @@ pub(super) fn project_icon(project: &Project, theme: Theme) -> AnyElement {
     let glyph = project.icon.glyph().unwrap_or(glyph);
     let tint = project_tint(project, theme);
     div()
-        .size(px(18.))
-        .rounded(px(4.))
+        .size(px(16.))
+        .rounded(px(crate::theme::RADIUS_SMALL))
         .flex_shrink_0()
         .flex()
         .items_center()
         .justify_center()
-        .bg(tint.opacity(0.08))
-        .child(icon(glyph).size(px(15.)).text_color(tint))
+        .bg(tint.opacity(0.12))
+        .child(icon(glyph).size(px(12.)).text_color(tint))
         .into_any_element()
 }
 
-// Use readable theme variants for named colors and preserve legacy custom RGB colors.
-fn project_tint(project: &Project, theme: Theme) -> Hsla {
+/// Returns readable theme variants for named colors and preserves legacy custom RGB colors.
+pub(super) fn project_tint(project: &Project, theme: Theme) -> Hsla {
     project.color.map_or(theme.accent, |color| {
-        let color = AccentColor::ALL
+        AccentColor::ALL
             .into_iter()
             .find(|accent| accent.rgb(false) == color)
-            .map_or(color, |accent| accent.rgb(theme.canvas.lightness > 0.5));
-        rgb_to_hsla(rgb(color))
+            .map_or_else(
+                || rgb_to_hsla(rgb(color)),
+                |accent| crate::theme::accent_color(accent, theme.light),
+            )
     })
 }
 
@@ -738,7 +772,4 @@ fn elapsed(time: u64) -> String {
     } else {
         format!("{}d", s / 86400)
     }
-}
-fn ago(time: u64) -> String {
-    elapsed(time)
 }

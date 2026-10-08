@@ -2,11 +2,11 @@
 use std::{ops::Range, time::Instant};
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style,
-    TextRun, UTF16Selection, Window, actions, div, fill, hsla, point, prelude::*, px, relative,
-    rgb, rgba, size,
+    App, Bounds, ClipboardItem, ColorExt, Context, CursorStyle, ElementId, ElementInputHandler,
+    Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
+    SharedString, Style, TextRun, UTF16Selection, Window, actions, div, fill, hsla, point,
+    prelude::*, px, relative, rgb, size,
 };
 
 use unicode_segmentation::*;
@@ -1032,6 +1032,11 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> PrepaintState {
+        // Caret and selection follow the app accent published by the workspace.
+        let accent = cx.try_global::<crate::theme::Theme>().map_or_else(
+            || crate::theme::Theme::new(false).accent,
+            |theme| theme.accent,
+        );
         let input = self.input.read(cx);
         let style = window.text_style();
         let padding = input.bubble_padding();
@@ -1080,7 +1085,7 @@ impl Element for TextElement {
                             point(bounds.left() + left, bounds.top() + y + row),
                             point(bounds.left() + right, bounds.top() + y + row + height),
                         ),
-                        rgba(0xd9905940),
+                        accent.opacity(0.28),
                     ));
                     row += height;
                 }
@@ -1095,9 +1100,9 @@ impl Element for TextElement {
                 cursor = Some(fill(
                     Bounds::new(
                         point(bounds.left() + p.x, bounds.top() + y + p.y),
-                        size(px(1.5), height),
+                        size(px(2.), height),
                     ),
-                    rgb(0xd99059),
+                    accent,
                 ));
             }
             y += line.size(height).height;
@@ -1381,7 +1386,7 @@ fn shape(
                     styled.font.style = gpui::FontStyle::Italic;
                 }
                 if span.style.code {
-                    styled.font.family = "JetBrains Mono".into();
+                    styled.font.family = crate::theme::MONO.into();
                 }
                 if span.style.code || span.style.reference {
                     styled.color = theme.accent;

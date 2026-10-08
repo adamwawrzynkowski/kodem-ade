@@ -269,10 +269,12 @@ impl TextLine {
                     size(right - left, block_height),
                 );
                 let corners = Corners::all(px(INLINE_RADIUS));
-                let shadows = theme.elevation();
-                window.paint_drop_shadows(bounds, corners, &shadows);
-                window.paint_quad(fill(bounds, theme.raised).corner_radii(corners));
-                window.paint_inset_shadows(bounds, corners, &shadows);
+                window.paint_quad(
+                    fill(bounds, theme.raised)
+                        .corner_radii(corners)
+                        .border_widths(px(1.))
+                        .border_color(theme.border),
+                );
             }
             start = end;
         }

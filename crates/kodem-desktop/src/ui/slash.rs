@@ -394,47 +394,54 @@ impl Shell {
             .p_1();
         for (index, choice) in self.slash.choices.iter().enumerate() {
             let (name, detail, glyph, category) = choice.labels();
-            rows = rows.child(
-                div()
-                    .id(("slash-choice", index))
-                    .flex_shrink_0()
-                    .h(px(48.))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .rounded(px(6.))
-                    .cursor_pointer()
-                    .when(index == self.slash.selected, |d| d.bg(t.accent_bg))
-                    .hover(|d| d.bg(t.accent_bg))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |s, _, _, cx| {
-                            cx.stop_propagation();
-                            s.accept_slash(index, cx);
-                        }),
-                    )
-                    .child(icon(glyph).size(px(16.)).text_color(t.accent))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(div().text_size(px(12.)).child(format!("/{name}")))
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(t.muted)
-                                    .text_ellipsis()
-                                    .child(detail.to_owned()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(t.subtle)
-                            .child(category),
-                    ),
-            );
+            rows =
+                rows.child(
+                    div()
+                        .id(("slash-choice", index))
+                        .flex_shrink_0()
+                        .h(px(44.))
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .px(px(10.))
+                        .rounded(px(crate::theme::RADIUS_CONTROL))
+                        .cursor_pointer()
+                        .when(index == self.slash.selected, |d| d.bg(t.selected))
+                        .hover(move |d| d.bg(t.selected))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |s, _, _, cx| {
+                                cx.stop_propagation();
+                                s.accept_slash(index, cx);
+                            }),
+                        )
+                        .child(icon(glyph).size(px(14.)).text_color(
+                            if index == self.slash.selected {
+                                t.accent
+                            } else {
+                                t.muted
+                            },
+                        ))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .font_family(crate::theme::MONO)
+                                        .text_size(px(12.))
+                                        .child(format!("/{name}")),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(t.muted)
+                                        .text_ellipsis()
+                                        .child(detail.to_owned()),
+                                ),
+                        )
+                        .child(caps(category, t)),
+                );
         }
         if self.slash.choices.is_empty() {
             rows = rows.child(
@@ -447,11 +454,11 @@ impl Shell {
         let menu = div()
             .id("slash-picker")
             .occlude()
-            .rounded(px(10.))
+            .rounded(px(crate::theme::RADIUS_FLOATING))
             .border_1()
-            .border_color(t.border)
+            .border_color(t.edge)
             .bg(t.raised)
-            .shadow(t.elevation())
+            .shadow(t.floating())
             .text_color(t.text)
             .overflow_hidden()
             .on_mouse_down_out(cx.listener(|s, _, _, cx| {
@@ -473,15 +480,19 @@ impl Shell {
             })
             .child(
                 div()
-                    .px_3()
-                    .py_2()
-                    .text_size(px(10.))
-                    .text_color(t.muted)
-                    .child(if self.slash.loading {
-                        "Loading provider commands and skills…"
-                    } else {
-                        "↑ ↓ navigate · Enter / Tab select · Esc dismiss"
-                    }),
+                    .px(px(12.))
+                    .py(px(7.))
+                    .border_t_1()
+                    .border_color(t.border)
+                    .bg(t.sidebar)
+                    .child(caps(
+                        if self.slash.loading {
+                            "Loading commands and skills…"
+                        } else {
+                            "↑↓ navigate · ⏎ select · esc dismiss"
+                        },
+                        t,
+                    )),
             );
         let p = if cx.reduce_motion() {
             1.
@@ -494,9 +505,13 @@ impl Shell {
             .right(px(if empty { 0. } else { 20. }))
             .when(empty, |d| d.top_full().mt(px(8. + (1. - p) * 6.)))
             .when(!empty, |d| d.bottom_full().mb(px(8. - (1. - p) * 6.)))
-            .opacity(p)
-            .filter(vec![Filter::Blur(px(2.4 * (1. - p).powi(2)))])
-            .child(menu)
+            .opacity(crate::components::streaming_text::reveal_opacity(p))
+            .child(
+                div()
+                    .relative()
+                    .child(dither::shadow(t, crate::theme::RADIUS_FLOATING, 5.))
+                    .child(menu),
+            )
             .into_any_element()
     }
 }

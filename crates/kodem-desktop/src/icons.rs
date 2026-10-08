@@ -14,15 +14,6 @@ impl AssetSource for Assets {
             "bell" => Some(Cow::Borrowed(include_bytes!(
                 "../../../assets/icons/bell.svg"
             ))),
-            "chat-dither" => Some(Cow::Borrowed(include_bytes!(
-                "../../../assets/app/chat-dither.svg"
-            ))),
-            "corner-warm" => Some(Cow::Borrowed(include_bytes!(
-                "../../../assets/app/corner-warm.svg"
-            ))),
-            "corner-cool" => Some(Cow::Borrowed(include_bytes!(
-                "../../../assets/app/corner-cool.svg"
-            ))),
             "cube" => Some(Cow::Borrowed(include_bytes!(
                 "../../../assets/icons/cube.svg"
             ))),

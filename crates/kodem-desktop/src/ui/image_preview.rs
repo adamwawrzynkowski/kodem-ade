@@ -76,9 +76,9 @@ impl Shell {
                 .p(px(16.))
                 // Leave the native window controls accessible above the preview.
                 .pt(px(44.))
-                .bg(t.canvas)
+                .bg(t.sidebar)
                 .text_color(t.text)
-                .font_family("IBM Plex Sans")
+                .font_family(crate::theme::SANS)
                 .text_size(px(12.))
                 .on_action(cx.listener(|s, _: &Cancel, window, cx| {
                     s.close_image_preview(window, cx);
@@ -90,20 +90,21 @@ impl Shell {
                         .min_h_0()
                         .flex()
                         .flex_col()
-                        .rounded(px(12.))
+                        .rounded(px(crate::theme::RADIUS_FLOATING))
                         .border_1()
-                        .border_color(t.border)
+                        .border_color(t.edge)
                         .bg(t.inset)
-                        .shadow(t.elevation())
+                        .shadow(t.floating())
                         .overflow_hidden()
                         .child(
                             div()
-                                .h(px(48.))
+                                .h(px(42.))
                                 .flex_shrink_0()
-                                .px_3()
+                                .pl(px(16.))
+                                .pr(px(8.))
                                 .flex()
                                 .items_center()
-                                .gap_2()
+                                .gap(px(4.))
                                 .bg(t.sidebar)
                                 .border_b_1()
                                 .border_color(t.border)
@@ -112,6 +113,8 @@ impl Shell {
                                         .flex_1()
                                         .min_w_0()
                                         .text_ellipsis()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_size(px(13.))
                                         .child(preview.name.clone()),
                                 )
                                 .child(
@@ -122,11 +125,10 @@ impl Shell {
                                         })),
                                 )
                                 .child(
-                                    div()
-                                        .w(px(72.))
-                                        .text_center()
-                                        .text_color(t.muted)
-                                        .child(format!("{:.0}% of fit", preview.zoom * 100.)),
+                                    div().w(px(84.)).flex().justify_center().child(caps(
+                                        format!("{:.0}% of fit", preview.zoom * 100.),
+                                        t,
+                                    )),
                                 )
                                 .child(
                                     self.icon_button("image-zoom-in", "plus", "Zoom in")

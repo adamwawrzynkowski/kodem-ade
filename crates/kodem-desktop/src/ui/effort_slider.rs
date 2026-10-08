@@ -173,10 +173,17 @@ impl Render for EffortSlider {
                     .justify_center()
                     .child(
                         div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_family(crate::theme::MONO)
+                            .text_size(px(12.))
+                            .letter_spacing(px(crate::theme::LABEL_TRACKING))
                             .text_color(t.text)
-                            .child(self.options.get(self.selected).cloned().unwrap_or_default()),
+                            .child(
+                                self.options
+                                    .get(self.selected)
+                                    .cloned()
+                                    .unwrap_or_default()
+                                    .to_uppercase(),
+                            ),
                     ),
             )
             .child(
@@ -229,41 +236,67 @@ impl Render for EffortSlider {
                             move |bounds, _, window, _| {
                                 let center = bounds.left()
                                     + px(slider_center(f32::from(bounds.size.width), progress));
+                                // An instrument fader: dithered empty track, solid level, machined cap.
                                 let track = Bounds::new(
-                                    point(bounds.left(), bounds.center().y - px(14.)),
-                                    size(bounds.size.width, px(28.)),
+                                    point(bounds.left(), bounds.center().y - px(5.)),
+                                    size(bounds.size.width, px(10.)),
                                 );
-                                window.paint_quad(fill(track, t.selected).corner_radii(px(14.)));
-                                // Fill extends under the thumb. Both use the same center, including at endpoints.
+                                window.paint_quad(
+                                    fill(track, t.inset)
+                                        .corner_radii(px(2.))
+                                        .border_widths(px(1.))
+                                        .border_color(t.border),
+                                );
+                                super::dither::paint_flat(
+                                    window,
+                                    track.inset(px(2.)),
+                                    1.,
+                                    t.text.opacity(0.22),
+                                    0.5,
+                                );
+                                // Fill ends at the cap's center, including at endpoints.
                                 let filled = Bounds::new(
                                     track.origin,
-                                    size(center - track.left() + px(14.), track.size.height),
+                                    size(center - track.left(), track.size.height),
                                 );
-                                window.paint_quad(fill(filled, accent).corner_radii(px(14.)));
+                                window.paint_quad(fill(filled, accent).corner_radii(px(2.)));
                                 for i in 0..stop_count {
                                     let x = bounds.left()
                                         + px(slider_center(
                                             f32::from(bounds.size.width),
                                             i as f32 / count,
                                         ));
-                                    let dot = Bounds::new(
-                                        point(x - px(1.5), bounds.center().y - px(1.5)),
-                                        size(px(3.), px(3.)),
+                                    let tick = Bounds::new(
+                                        point(x - px(0.5), bounds.center().y + px(8.)),
+                                        size(px(1.), px(5.)),
                                     );
-                                    window.paint_quad(
-                                        fill(dot, t.text.opacity(0.45)).corner_radii(px(1.5)),
-                                    );
+                                    window.paint_quad(fill(tick, t.subtle));
                                 }
-                                let shadow = Bounds::new(
-                                    point(center - px(13.), bounds.center().y - px(11.)),
-                                    size(px(26.), px(26.)),
-                                );
-                                window.paint_quad(fill(shadow, t.shadow).corner_radii(px(13.)));
                                 let thumb = Bounds::new(
-                                    point(center - px(12.), bounds.center().y - px(12.)),
-                                    size(px(24.), px(24.)),
+                                    point(center - px(4.), bounds.center().y - px(11.)),
+                                    size(px(8.), px(22.)),
                                 );
-                                window.paint_quad(fill(thumb, rgb(0xffffff)).corner_radii(px(12.)));
+                                window.paint_quad(
+                                    fill(
+                                        Bounds::new(
+                                            thumb.origin + point(px(1.), px(2.)),
+                                            thumb.size,
+                                        ),
+                                        t.ink,
+                                    )
+                                    .corner_radii(px(2.)),
+                                );
+                                window.paint_quad(
+                                    fill(thumb, t.text)
+                                        .corner_radii(px(2.))
+                                        .border_widths(px(1.))
+                                        .border_color(t.canvas),
+                                );
+                                let grip = Bounds::new(
+                                    point(center - px(2.), bounds.center().y - px(0.5)),
+                                    size(px(4.), px(1.)),
+                                );
+                                window.paint_quad(fill(grip, t.canvas));
                             },
                         )
                         .size_full(),
@@ -273,10 +306,14 @@ impl Render for EffortSlider {
                 div()
                     .flex()
                     .justify_between()
-                    .text_size(px(11.))
-                    .text_color(t.subtle)
-                    .child(self.options.first().cloned().unwrap_or_default())
-                    .child(self.options.last().cloned().unwrap_or_default()),
+                    .child(super::caps(
+                        self.options.first().cloned().unwrap_or_default(),
+                        t,
+                    ))
+                    .child(super::caps(
+                        self.options.last().cloned().unwrap_or_default(),
+                        t,
+                    )),
             )
     }
 }

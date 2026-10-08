@@ -33,8 +33,8 @@ impl Shell {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap_3()
-            .p_4();
+            .gap(px(12.))
+            .p(px(18.));
         match self.panel {
             Panel::DeleteTask => {
                 if let Some(task) = self
@@ -49,7 +49,7 @@ impl Shell {
                     })
                     .cloned()
                 {
-                    content = content.child(div().font_weight(FontWeight::SEMIBOLD).child(task.title.clone()))
+                    content = content.child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child(task.title.clone()))
                         .child(div().text_size(px(13.)).text_color(theme.muted).child("Delete this thread and its local conversation history? This cannot be undone. Project files and the worktree stay on disk."));
                     if let Some(error) = &self.error {
                         content = content.child(
@@ -86,7 +86,9 @@ impl Shell {
                                     },
                                 )
                                 .bg(theme.removed)
-                                .text_color(theme.canvas)
+                                .border_color(theme.removed)
+                                .text_color(theme.on_accent)
+                                .hover(move |b| b.bg(theme.removed.opacity(0.88)))
                                 .disabled(deleting)
                                 .on_click(cx.listener(
                                     move |s, _, _, cx| {
@@ -125,10 +127,7 @@ impl Shell {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(12.))
-                        .text_color(theme.muted)
-                        .child(icon("code"))
-                        .child("Context available to this task")
+                        .child(caps("Context available to this task", theme))
                         .child(div().flex_1())
                         .child(
                             self.icon_button("refresh-resources", "refresh", "Refresh catalog")
@@ -161,13 +160,16 @@ impl Shell {
                             .gap_3()
                             .child(
                                 div()
-                                    .size(px(30.))
-                                    .rounded(px(7.))
+                                    .size(px(28.))
+                                    .flex_shrink_0()
+                                    .rounded(px(crate::theme::RADIUS_CONTROL))
                                     .bg(theme.raised)
+                                    .border_1()
+                                    .border_color(theme.border)
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .child(icon("code").text_color(theme.accent)),
+                                    .child(icon("code").size(px(14.)).text_color(theme.accent)),
                             )
                             .child(
                                 div()
@@ -189,12 +191,12 @@ impl Shell {
                                             )
                                             .child(
                                                 div()
-                                                    .px_2()
-                                                    .rounded(px(4.))
-                                                    .bg(theme.raised)
-                                                    .text_size(px(10.))
-                                                    .text_color(theme.muted)
-                                                    .child(resource.scope),
+                                                    .px(px(5.))
+                                                    .py(px(1.))
+                                                    .rounded(px(crate::theme::RADIUS_SMALL))
+                                                    .border_1()
+                                                    .border_color(theme.border)
+                                                    .child(caps(resource.scope, theme)),
                                             ),
                                     )
                                     .child(
@@ -204,9 +206,15 @@ impl Shell {
                                             .child(resource.detail),
                                     )
                                     .child(
-                                        div().text_size(px(10.)).text_color(theme.subtle).child(
-                                            format!("{} · {}", resource.status, resource.source),
-                                        ),
+                                        div()
+                                            .font_family(crate::theme::MONO)
+                                            .text_size(px(10.5))
+                                            .text_color(theme.subtle)
+                                            .text_ellipsis_start()
+                                            .child(format!(
+                                                "{} · {}",
+                                                resource.status, resource.source
+                                            )),
                                     ),
                             )
                             .when(source.ends_with("SKILL.md"), |d| {
@@ -232,18 +240,56 @@ impl Shell {
                 content = content.p_0().gap_0().child(self.file_browser(cx));
             }
             Panel::Check => {
-                content=content.child("Runs in this task's checkout. The transcript records the command, revision and exit status.").child(div().p_2().min_h(px(48.)).bg(theme.inset).border_1().border_color(theme.border).rounded(px(7.)).child(self.aux.clone())).child(self.primary("run-check","check-square","Run check").on_click(cx.listener(|s,_,_,cx|{if let Some(task_id)=&s.selected{s.send(core::Request::RunCheck{task_id:task_id.clone(),command:s.aux.read(cx).text()});s.panel=Panel::None;cx.notify();}})));
+                content = content
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(theme.muted)
+                            .child("Runs in this task's checkout. The transcript records the command, revision and exit status."),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap(px(8.))
+                            .px(px(10.))
+                            .py(px(8.))
+                            .min_h(px(44.))
+                            .bg(theme.inset)
+                            .border_1()
+                            .border_color(theme.edge)
+                            .rounded(px(crate::theme::RADIUS_CONTROL))
+                            .font_family(crate::theme::MONO)
+                            .child(div().text_color(theme.accent).child("$"))
+                            .child(div().flex_1().min_w_0().child(self.aux.clone())),
+                    )
+                    .child(
+                        div().flex().justify_end().child(
+                            self.primary("run-check", "check-square", "Run check").on_click(
+                                cx.listener(|s, _, _, cx| {
+                                    if let Some(task_id) = &s.selected {
+                                        s.send(core::Request::RunCheck {
+                                            task_id: task_id.clone(),
+                                            command: s.aux.read(cx).text(),
+                                        });
+                                        s.panel = Panel::None;
+                                        cx.notify();
+                                    }
+                                }),
+                            ),
+                        ),
+                    );
             }
             Panel::Rename => {
                 content = content
                     .child(
                         div()
-                            .p_2()
-                            .min_h(px(48.))
+                            .px(px(10.))
+                            .py(px(8.))
                             .bg(theme.inset)
                             .border_1()
-                            .border_color(theme.border)
-                            .rounded(px(7.))
+                            .border_color(theme.edge)
+                            .rounded(px(crate::theme::RADIUS_CONTROL))
                             .child(self.aux.clone()),
                     )
                     .child(
@@ -271,12 +317,32 @@ impl Shell {
                         })
                         .enumerate()
                     {
-                        content = content.child(
-                            div()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child("Permission requested"),
-                        );
-                        content=content.child(request.params["reason"].as_str().unwrap_or("Provider requests permission for this operation").to_owned()).child(div().font_family("JetBrains Mono").text_size(px(12.)).child(request.params["command"].as_str().unwrap_or("File changes; inspect the corresponding file-change item in the transcript.").to_owned()));
+                        content = content
+                            .child(caps("Permission requested", theme).text_color(theme.accent));
+                        content = content
+                            .child(
+                                request.params["reason"]
+                                    .as_str()
+                                    .unwrap_or("Provider requests permission for this operation")
+                                    .to_owned(),
+                            )
+                            .child(
+                                div()
+                                    .px(px(10.))
+                                    .py(px(8.))
+                                    .rounded(px(crate::theme::RADIUS_CONTROL))
+                                    .bg(theme.inset)
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .font_family(crate::theme::MONO)
+                                    .text_size(px(12.))
+                                    .child(
+                                        request.params["command"]
+                                            .as_str()
+                                            .unwrap_or("File changes; inspect the corresponding file-change item in the transcript.")
+                                            .to_owned(),
+                                    ),
+                            );
                         let decisions = request.params["availableDecisions"]
                             .as_array()
                             .cloned()
@@ -337,50 +403,60 @@ impl Shell {
             | Panel::Sort
             | Panel::Comparison => {}
         }
-        div()
-            .absolute()
-            .inset_0()
-            // Dialogs must block clicks, hover, and scroll in the workspace behind them.
-            .occlude()
-            .bg(rgba(0x00000090))
+        let width = if self.panel == Panel::Files {
+            1000.
+        } else if self.panel == Panel::Settings {
+            780.
+        } else {
+            600.
+        };
+        let dialog = div()
+            .relative()
+            .w(px(width))
+            .max_w_full()
+            .max_h_full()
             .flex()
-            .items_center()
-            .justify_center()
+            .flex_col()
+            .child(dither::shadow(theme, crate::theme::RADIUS_FLOATING, 7.))
             .child(
                 div()
-                    .w(px(if self.panel == Panel::Files {
-                        1000.
-                    } else if self.panel == Panel::Settings {
-                        760.
-                    } else {
-                        620.
-                    }))
-                    .max_w_full()
-                    .max_h_full()
+                    .w_full()
+                    .min_h_0()
                     .flex()
                     .flex_col()
                     .bg(theme.canvas)
                     .border_1()
-                    .border_color(theme.border)
-                    .rounded(px(12.))
-                    .shadow(theme.elevation())
+                    .border_color(theme.edge)
+                    .rounded(px(crate::theme::RADIUS_FLOATING))
+                    .shadow(theme.floating())
                     .overflow_hidden()
                     .child(
                         div()
-                            .h(px(48.))
+                            .h(px(42.))
                             .flex_shrink_0()
-                            .px_4()
+                            .pl(px(16.))
+                            .pr(px(8.))
                             .flex()
                             .items_center()
-                            .justify_between()
+                            .gap(px(10.))
+                            .bg(theme.sidebar)
                             .border_b_1()
                             .border_color(theme.border)
+                            .child(div().size(px(6.)).bg(
+                                if matches!(self.panel, Panel::DeleteTask | Panel::RemoveProject) {
+                                    theme.removed
+                                } else {
+                                    theme.accent
+                                },
+                            ))
                             .child(
                                 div()
-                                    .text_size(px(14.))
+                                    .flex_1()
+                                    .text_size(px(13.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(title),
                             )
+                            .child(caps("Esc", theme))
                             .child(
                                 self.icon_button("close-panel", "close", "Close · Esc")
                                     .on_click(cx.listener(|s, _, _, cx| {
@@ -389,13 +465,24 @@ impl Shell {
                                     })),
                             ),
                     )
-                    .child(content)
-                    .with_animation(
-                        ("dialog-enter", self.panel.clone() as usize),
-                        Animation::new(Duration::from_millis(170)),
-                        |d, p| d.opacity(p).mt(px((1. - p) * 8.)),
-                    ),
-            )
+                    .child(content),
+            );
+        div()
+            .absolute()
+            .inset_0()
+            // Dialogs must block clicks, hover, and scroll in the workspace behind them.
+            .occlude()
+            .child(dither::scrim(theme))
+            .flex()
+            .items_center()
+            .justify_center()
+            .p(px(24.))
+            .child(dither::unroll(
+                ("dialog-enter", self.panel.clone() as usize),
+                dialog,
+                theme,
+                false,
+            ))
             .into_any_element()
     }
     /// Builds the task terminal surface and forwards explicit keyboard input.
@@ -422,10 +509,11 @@ impl Shell {
             .h(px(230.))
             .w_full()
             .overflow_hidden()
-            .font_family("JetBrains Mono")
+            .font_family(crate::theme::MONO)
             .text_size(px(12.))
             .line_height(px(17.))
-            .p_2()
+            .px(px(14.))
+            .py(px(8.))
             .on_mouse_down(MouseButton::Left, move |_, w, cx| w.focus(&focus, cx))
             .on_key_down(move |event, w, cx| {
                 let Some(task_id) = &selected else { return };
@@ -474,21 +562,19 @@ impl Shell {
             .bg(theme.inset)
             .child(
                 div()
-                    .h(px(36.))
-                    .px_3()
+                    .h(px(32.))
+                    .pl(px(14.))
+                    .pr(px(6.))
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .text_size(px(11.))
-                    .child(
-                        icon("square-terminal")
-                            .size(px(14.))
-                            .text_color(theme.muted),
-                    )
-                    .child(if running {
-                        "Terminal · running"
-                    } else {
-                        "Terminal"
+                    .gap(px(8.))
+                    .bg(theme.sidebar)
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(caps("Terminal", theme))
+                    .when(running, |d| {
+                        d.child(div().size(px(5.)).bg(theme.added))
+                            .child(caps("Running", theme).text_color(theme.added))
                     })
                     .child(div().flex_1())
                     .child(

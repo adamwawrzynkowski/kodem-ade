@@ -16,7 +16,12 @@ impl Shell {
             });
         if self.panel == Panel::Models {
             let default_task_id = task_id.clone();
-            let mut models = div().id("model-list");
+            let mut models = div()
+                .id("model-list")
+                .flex()
+                .flex_col()
+                .gap(px(1.))
+                .child(caps("Model", t).px(px(8.)).pt(px(6.)).pb(px(4.)));
             models = models.child(
                 self.ghost(
                     "default-model",
@@ -24,11 +29,15 @@ impl Shell {
                     format!("{} default", preferences.provider.label()),
                 )
                 .w_full()
-                .h(px(32.))
+                .h(px(30.))
                 .justify_start()
                 .disabled(disabled)
                 .when(preferences.model.is_none(), |b| {
                     b.bg(t.selected).text_color(t.text)
+                })
+                .child(div().flex_1())
+                .when(preferences.model.is_none(), |b| {
+                    b.child(icon("check").size(px(13.)).text_color(t.accent))
                 })
                 .on_click(cx.listener(move |s, _, _, cx| {
                     s.choose_model(default_task_id.clone(), None, None, cx);
@@ -46,7 +55,7 @@ impl Shell {
                         model.name.clone(),
                     )
                     .w_full()
-                    .h(px(32.))
+                    .h(px(30.))
                     .justify_start()
                     .disabled(disabled)
                     .when(chosen, |b| b.bg(t.selected).text_color(t.text))
@@ -114,7 +123,9 @@ impl Shell {
                 }
                 let slider = &self.effort_slider.as_ref().unwrap().1;
                 slider.update(cx, |s, cx| s.configure(selected, t, disabled, cx));
-                content = content.child(div().px_2().py_1().child(slider.clone()));
+                content = content
+                    .child(caps("Reasoning effort", t).px(px(8.)).pt(px(6.)))
+                    .child(div().px(px(8.)).py(px(6.)).child(slider.clone()));
             } else {
                 content = content.child(
                     div()
@@ -157,8 +168,9 @@ impl Shell {
                     )
                     .w_full()
                     .h_auto()
-                    .min_h(px(50.))
-                    .py_2()
+                    .min_h(px(48.))
+                    .py(px(7.))
+                    .items_start()
                     .justify_start()
                     .disabled(disabled)
                     .when(chosen, |b| b.bg(t.selected).text_color(t.text))
@@ -169,10 +181,11 @@ impl Shell {
                             .flex()
                             .flex_col()
                             .items_start()
-                            .gap_0()
+                            .gap(px(3.))
                             .child(
                                 div()
                                     .text_size(px(12.))
+                                    .line_height(relative(1.2))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(access.label()),
                             )
@@ -285,19 +298,20 @@ impl Shell {
                 .as_ref()
                 .is_some_and(|view| view.task.provider_thread.is_some());
             let mut rail = div()
-                .w(px(104.))
+                .w(px(112.))
                 .flex_shrink_0()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .pr_2()
+                .gap(px(1.))
+                .pr(px(4.))
                 .border_r_1()
-                .border_color(t.border);
+                .border_color(t.border)
+                .child(caps("Provider", t).px(px(8.)).pt(px(6.)).pb(px(4.)));
             for (index, provider) in Provider::ALL.into_iter().enumerate() {
                 rail = rail.child(
                     self.ghost(("model-provider", index), provider.icon(), provider.label())
                         .w_full()
-                        .h(px(38.))
+                        .h(px(30.))
                         .justify_start()
                         .selected(preferences.provider == provider)
                         .when(preferences.provider == provider, |b| {
@@ -326,7 +340,7 @@ impl Shell {
             return div()
                 .flex()
                 .items_start()
-                .gap_2()
+                .gap(px(4.))
                 .child(rail)
                 .child(content.flex_1().min_w_0())
                 .into_any_element();

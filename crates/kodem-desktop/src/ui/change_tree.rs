@@ -126,17 +126,17 @@ impl Shell {
             .id(("change-tree-row", row_index))
             .w_full()
             .min_w_0()
-            .h(px(28.))
+            .h(px(26.))
             .flex_shrink_0()
             .pl(px(8. + row.depth as f32 * 14.))
-            .pr_2()
-            .rounded(px(5.))
+            .pr(px(8.))
+            .rounded(px(crate::theme::RADIUS_CONTROL))
             .flex()
             .items_center()
-            .gap_2()
+            .gap(px(7.))
             .cursor_pointer()
-            .text_size(px(11.))
-            .hover(move |d| d.bg(t.raised));
+            .text_size(px(12.))
+            .hover(move |d| d.bg(t.selected.opacity(0.6)));
         if let Some(i) = row.file {
             let file = &snapshot.files[i];
             let added = file
@@ -150,8 +150,8 @@ impl Shell {
                 .filter(|l| l.kind == LineKind::Removed)
                 .count();
             let (glyph, color) = match row.name.rsplit('.').next().unwrap_or("") {
-                "rs" | "swift" | "ts" | "tsx" | "js" | "cs" | "cpp" | "h" => ("code", t.accent),
-                "sh" | "command" => ("square-terminal", t.added),
+                "rs" | "swift" | "ts" | "tsx" | "js" | "cs" | "cpp" | "h" => ("code", t.muted),
+                "sh" | "command" => ("square-terminal", t.muted),
                 "toml" | "json" | "yaml" | "yml" => ("settings", t.muted),
                 _ => ("file", t.muted),
             };
@@ -169,28 +169,25 @@ impl Shell {
             };
             entry = entry
                 .when(self.reviewing_file && self.file == i, |d| {
-                    d.bg(t.selected).shadow(t.elevation())
+                    d.bg(t.selected).text_color(t.text)
                 })
                 .child(div().w(px(12.)).flex_shrink_0())
-                .child(icon(glyph).size(px(14.)).text_color(color))
+                .child(icon(glyph).size(px(13.)).text_color(color))
                 .child(div().flex_1().min_w_0().text_ellipsis().child(row.name))
+                .child(line_totals(added, removed, t))
                 .child(
                     div()
+                        .w(px(16.))
+                        .h(px(16.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(crate::theme::RADIUS_SMALL))
+                        .bg(status_color.opacity(0.12))
+                        .font_family(crate::theme::MONO)
                         .text_size(px(10.))
-                        .text_color(t.added)
-                        .child(format!("+{added}")),
-                )
-                .child(
-                    div()
-                        .text_size(px(10.))
-                        .text_color(t.removed)
-                        .child(format!("−{removed}")),
-                )
-                .child(
-                    div()
-                        .w(px(18.))
-                        .text_center()
-                        .text_size(px(10.))
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(status_color)
                         .child(status),
                 )
@@ -229,19 +226,11 @@ impl Shell {
                     } else {
                         "folder-open"
                     })
-                    .size(px(14.))
-                    .text_color(t.accent),
+                    .size(px(13.))
+                    .text_color(t.subtle),
                 )
                 .child(div().flex_1().min_w_0().text_ellipsis().child(row.name))
-                .child(
-                    div()
-                        .rounded(px(4.))
-                        .px_1()
-                        .bg(t.sidebar)
-                        .text_size(px(10.))
-                        .text_color(t.subtle)
-                        .child(row.count.to_string()),
-                )
+                .child(figure(row.count.to_string(), t.subtle))
                 .on_click(cx.listener(move |s, _, _, cx| {
                     if !s.collapsed_changes.remove(&row.path) {
                         s.collapsed_changes.insert(row.path.clone());

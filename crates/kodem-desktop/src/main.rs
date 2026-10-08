@@ -32,9 +32,6 @@ fn main() {
                     "../../../assets/fonts/IBMPlexSans-SemiBold.ttf"
                 )),
                 Cow::Borrowed(include_bytes!("../../../assets/fonts/JetBrainsMono.ttf")),
-                Cow::Borrowed(include_bytes!(
-                    "../../../assets/fonts/Manrope-ExtraBold.ttf"
-                )),
             ]) {
                 eprintln!("Could not load bundled fonts: {error}");
             }

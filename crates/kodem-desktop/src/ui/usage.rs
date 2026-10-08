@@ -37,7 +37,8 @@ impl Shell {
             .child(
                 div()
                     .id("context-meter")
-                    .size(px(18.))
+                    .w(px(14.))
+                    .h(px(24.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -48,7 +49,7 @@ impl Shell {
                             .aria_min_numeric_value(0.)
                             .aria_max_numeric_value(100.)
                     })
-                    .child(meter(fraction, rgb_to_hsla(rgb(0x55bdd7)), false))
+                    .child(meter(fraction, rgb_to_hsla(rgb(0x55bdd7))))
                     .tooltip(move |_, cx| {
                         cx.new(|_| ContextHint {
                             usage: context.clone(),
@@ -59,7 +60,8 @@ impl Shell {
             )
             .child(
                 Button::new("limit-meter")
-                    .size(px(24.))
+                    .w(px(16.))
+                    .h(px(24.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -70,7 +72,7 @@ impl Shell {
                     .active(move |s| s.bg(t.inset))
                     .accessibility_label("Account usage, credits and banked resets")
                     .selected(self.panel == Panel::Usage)
-                    .child(meter(highest, usage_color(highest.unwrap_or(0.), t), true))
+                    .child(meter(highest, usage_color(highest.unwrap_or(0.), t)))
                     .tooltip(move |_, cx| {
                         cx.new(|_| UsageHint {
                             usage: usage.clone(),
@@ -310,13 +312,13 @@ impl Render for ContextHint {
                     div()
                         .h(px(4.))
                         .w_full()
-                        .rounded(px(2.))
+                        .rounded(px(1.))
                         .bg(color.opacity(0.15))
                         .child(
                             div()
                                 .h_full()
                                 .w(relative(value.clamp(0., 1.) as f32))
-                                .rounded(px(2.))
+                                .rounded(px(1.))
                                 .bg(color),
                         ),
                 )
@@ -361,12 +363,12 @@ impl Render for ContextHint {
         div()
             .w(px(304.))
             .p_3()
-            .font_family("IBM Plex Sans")
+            .font_family(crate::theme::SANS)
             .bg(t.raised)
             .border_1()
-            .border_color(t.border)
-            .rounded(px(8.))
-            .shadow(t.elevation())
+            .border_color(t.edge)
+            .rounded(px(crate::theme::RADIUS_SURFACE))
+            .shadow(t.floating())
             .child(details)
     }
 }
@@ -380,12 +382,12 @@ impl Render for UsageHint {
         div()
             .w(px(304.))
             .p_3()
-            .font_family("IBM Plex Sans")
+            .font_family(crate::theme::SANS)
             .bg(self.theme.raised)
             .border_1()
-            .border_color(self.theme.border)
-            .rounded(px(8.))
-            .shadow(self.theme.elevation())
+            .border_color(self.theme.edge)
+            .rounded(px(crate::theme::RADIUS_SURFACE))
+            .shadow(self.theme.floating())
             .child(usage_details(self.usage.as_ref(), self.theme))
             .child(
                 div()
@@ -451,13 +453,13 @@ fn usage_details(usage: Option<&UsageLimits>, t: Theme) -> AnyElement {
                         div()
                             .h(px(4.))
                             .w_full()
-                            .rounded(px(2.))
+                            .rounded(px(1.))
                             .bg(color.opacity(0.15))
                             .child(
                                 div()
                                     .h_full()
                                     .w(relative(progress))
-                                    .rounded(px(2.))
+                                    .rounded(px(1.))
                                     .bg(color),
                             ),
                     )
@@ -643,64 +645,33 @@ fn number(value: &str) -> String {
     result
 }
 
-fn meter(value: Option<f32>, color: Hsla, ring: bool) -> AnyElement {
+// A segmented pixel level meter, filled from the bottom; unknown values show only the frame.
+fn meter(value: Option<f32>, color: Hsla) -> AnyElement {
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            let center = bounds.center();
-            let radius = px(5.3);
-            if let Some(path) = radial_path(center, radius, 1., ring) {
-                window.paint_path(path, color.opacity(0.18));
-            }
-            if let Some(progress) = value {
-                if let Some(path) = radial_path(center, radius, progress, ring) {
-                    window.paint_path(path, color);
-                }
-            } else {
-                let dot = Bounds::new(center - point(px(0.8), px(0.8)), size(px(1.6), px(1.6)));
-                window.paint_quad(fill(dot, color.opacity(0.5)).corner_radii(px(0.8)));
+            const SEGMENTS: usize = 6;
+            let width = px(6.);
+            let height = f32::from(bounds.size.height);
+            let pitch = height / SEGMENTS as f32;
+            let left = bounds.center().x - width / 2.;
+            for segment in 0..SEGMENTS {
+                // Segment zero is the bottom of the meter.
+                let lit = value
+                    .is_some_and(|v| v.clamp(0., 1.) * SEGMENTS as f32 > segment as f32 + 0.25);
+                let top = bounds.top() + px(height - (segment + 1) as f32 * pitch);
+                window.paint_quad(fill(
+                    Bounds::new(point(left, top), size(width, px(pitch - 0.75))),
+                    if lit {
+                        color
+                    } else {
+                        color.opacity(if value.is_some() { 0.2 } else { 0.12 })
+                    },
+                ));
             }
         },
     )
-    .size(px(14.))
+    .w(px(8.))
+    .h(px(14.))
     .into_any_element()
-}
-
-// Clockwise from twelve o'clock. Two half arcs also make a full circle well-defined.
-fn radial_path(
-    center: Point<Pixels>,
-    radius: Pixels,
-    progress: f32,
-    ring: bool,
-) -> Option<gpui::Path<Pixels>> {
-    let progress = progress.clamp(0., 1.);
-    if progress <= 0. {
-        return None;
-    }
-    let mut path = if ring {
-        PathBuilder::stroke(px(1.8))
-    } else {
-        PathBuilder::fill()
-    };
-    let start = point(center.x, center.y - radius);
-    if ring {
-        path.move_to(start);
-    } else {
-        path.move_to(center);
-        path.line_to(start);
-    }
-    let pieces = (progress * 2.).ceil() as usize;
-    for part in 1..=pieces {
-        let angle = -std::f32::consts::FRAC_PI_2
-            + std::f32::consts::TAU * progress * part as f32 / pieces as f32;
-        let end = point(
-            center.x + radius * angle.cos(),
-            center.y + radius * angle.sin(),
-        );
-        path.arc_to(point(radius, radius), px(0.), false, true, end);
-    }
-    if !ring || progress == 1. {
-        path.close();
-    }
-    path.build().ok()
 }

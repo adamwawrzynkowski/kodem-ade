@@ -40,12 +40,13 @@ impl Shell {
         let t = self.theme;
         let mut rows = div()
             .w_full()
-            .px_4()
-            .py_2()
+            .px(px(14.))
+            .pt(px(9.))
+            .pb(px(7.))
             .flex()
             .flex_col()
-            .gap_1()
-            .text_size(px(11.));
+            .gap(px(2.))
+            .text_size(px(12.));
         let waiting = view.task.state == RunState::Waiting;
         if waiting || view.activities.is_empty() {
             let (label, glyph, spin) = if waiting {
@@ -147,30 +148,42 @@ impl Shell {
                                 .flex_1()
                                 .min_w_0()
                                 .text_ellipsis()
+                                .font_family(crate::theme::MONO)
+                                .text_size(px(11.))
                                 .text_color(t.subtle)
                                 .child(activity.detail.clone()),
                         )
-                        .child(div().text_size(px(10.)).text_color(t.subtle).child(format!(
-                            "{}:{:02}",
-                            seconds / 60,
-                            seconds % 60
-                        ))),
+                        .child(figure(
+                            format!("{}:{:02}", seconds / 60, seconds % 60),
+                            t.subtle,
+                        )),
                 );
             }
         }
         div()
+            .relative()
             .w_full()
-            .max_h(px(104.))
-            .id("agent-activities")
-            .rounded_t(px(motion::COMPOSER_RADIUS - 1.))
-            .bg(t.raised)
+            .flex_shrink_0()
+            .bg(t.inset)
             .border_b_1()
             .border_color(t.border)
-            .overflow_y_scroll()
-            .flex_shrink_0()
-            .flex()
-            .justify_center()
-            .child(rows)
+            .when(!waiting, |d| {
+                d.child(dither::scanner(
+                    "agent-scanner",
+                    t.accent,
+                    cx.reduce_motion(),
+                ))
+            })
+            .child(
+                div()
+                    .w_full()
+                    .max_h(px(104.))
+                    .id("agent-activities")
+                    .overflow_y_scroll()
+                    .flex()
+                    .justify_center()
+                    .child(rows),
+            )
             .into_any_element()
     }
     /// Shows live task-baseline totals as a connected section of the prompt.
@@ -202,14 +215,11 @@ impl Shell {
         };
         div()
             .w_full()
-            .when(!self.has_activity_strip(), |d| {
-                d.rounded_t(px(motion::COMPOSER_RADIUS - 1.))
-            })
-            .bg(t.raised)
+            .bg(t.inset)
             .border_b_1()
             .border_color(t.border)
-            .px_4()
-            .py_2()
+            .px(px(8.))
+            .py(px(4.))
             .child(
                 self.ghost(
                     "composer-changes",
@@ -221,23 +231,16 @@ impl Shell {
                     ),
                 )
                 .w_full()
-                .h(px(20.))
-                .px_0()
-                .gap_2()
+                .px(px(6.))
+                .gap(px(8.))
                 .justify_start()
-                .text_size(px(11.))
-                .when(summary.omitted_files > 0, |button| button.child("~"))
-                .child(
-                    div()
-                        .text_color(t.added)
-                        .child(format!("+{}", summary.added)),
-                )
-                .child(
-                    div()
-                        .text_color(t.removed)
-                        .child(format!("−{}", summary.removed)),
-                )
+                .text_size(px(12.))
+                .when(summary.omitted_files > 0, |button| {
+                    button.child(figure("~", t.subtle))
+                })
+                .child(line_totals(summary.added, summary.removed, t))
                 .child(div().flex_1())
+                .child(caps("Review", t))
                 .child(icon("chevron-right").size(px(12.)))
                 .tooltip(move |_, cx| {
                     cx.new(|_| Hint {

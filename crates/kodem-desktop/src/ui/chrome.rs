@@ -2,11 +2,6 @@ use super::*;
 impl Shell {
     fn titlebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let sidebar_width = if self.settings.collapsed {
-            96.
-        } else {
-            self.settings.sidebar_width.max(300.) + 1.
-        };
         let project = self.workspace.as_ref().and_then(|w| {
             let id = self
                 .view
@@ -18,6 +13,20 @@ impl Shell {
         let name = project
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "Workspace".into());
+        let (running, waiting) = self.workspace.as_ref().map_or((0, 0), |w| {
+            w.tasks
+                .iter()
+                .filter(|task| !task.archived)
+                .fold((0, 0), |(running, waiting), task| {
+                    if task.needs_input() {
+                        (running, waiting + 1)
+                    } else if task.state.active() {
+                        (running + 1, waiting)
+                    } else {
+                        (running, waiting)
+                    }
+                })
+        });
         let mut header = div()
             .relative()
             .h(px(38.))
@@ -28,39 +37,27 @@ impl Shell {
             .bg(t.sidebar)
             .border_b_1()
             .border_color(t.border)
-            .child(motion::window_texture(
-                self.settings.light,
-                self.theme.accent,
-            ))
-            .child(
-                div()
-                    .w(px(sidebar_width))
-                    .h_full()
-                    .flex_shrink_0()
-                    .pl(px(82.))
-                    .pr_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .when(!self.settings.collapsed, |d| {
-                        d.child(
-                            div()
-                                .font_family("Manrope ExtraBold")
-                                .text_size(px(16.))
-                                .font_weight(FontWeight::EXTRA_BOLD)
-                                .child("Kodem"),
-                        )
+            .when(!self.settings.collapsed, |d| {
+                d.child(
+                    div()
+                        .w(px(self.settings.sidebar_width))
+                        .h_full()
+                        .flex_shrink_0()
+                        .pl(px(80.))
+                        .pr(px(8.))
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(div().id("wordmark").flex_shrink_0().child(dither::wordmark(
+                            t,
+                            running > 0,
+                            cx.reduce_motion(),
+                        )))
                         .child(
                             div()
                                 .min_w_0()
-                                .px_2()
-                                .py(px(2.))
-                                .rounded(px(6.))
-                                .bg(t.selected.opacity(0.55))
-                                .text_color(t.muted)
-                                .text_size(px(11.))
-                                .text_ellipsis()
-                                .child(crate::updater::version_label()),
+                                .overflow_hidden()
+                                .child(caps(crate::updater::version_label(), t).text_ellipsis()),
                         )
                         .child(div().flex_1())
                         .child(
@@ -70,19 +67,19 @@ impl Shell {
                                     s.save_settings();
                                     cx.notify();
                                 })),
-                        )
-                    }),
-            )
-            .child(div().w(px(1.)).h_full().bg(t.border));
+                        ),
+                )
+                .child(div().w(px(1.)).h_full().bg(t.border))
+            });
         let mut project_path = div()
             .flex()
             .items_center()
-            .gap_2()
+            .gap(px(8.))
             .min_w_0()
             .flex_1()
-            .px_4()
+            .px(px(14.))
             .when(self.settings.collapsed, |d| {
-                d.child(
+                d.pl(px(80.)).child(
                     self.icon_button("expand-sidebar", "panel-left", "Show sidebar · ⌘B")
                         .on_click(cx.listener(|s, _, _, cx| {
                             s.settings.collapsed = false;
@@ -96,12 +93,15 @@ impl Shell {
                     .map(|project| sidebar::project_icon(project, t))
                     .unwrap_or_else(|| {
                         icon("folder-closed")
+                            .size(px(14.))
                             .text_color(t.accent)
                             .into_any_element()
                     }),
             )
             .child(
                 div()
+                    .flex_shrink_0()
+                    .max_w(px(220.))
                     .text_size(px(13.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_ellipsis()
@@ -109,23 +109,70 @@ impl Shell {
             );
         if let Some(view) = &self.view {
             project_path = project_path
-                .child(icon("chevron-right").size(px(12.)).text_color(t.subtle))
-                .child(icon("branch").size(px(13.)).text_color(t.muted))
+                .child(div().text_color(t.subtle).text_size(px(13.)).child("/"))
+                .child(icon("branch").size(px(12.)).text_color(t.subtle))
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .min_w_0()
+                        .font_family(crate::theme::MONO)
+                        .text_size(px(11.))
                         .text_color(t.muted)
                         .text_ellipsis()
                         .child(view.task.branch.clone()),
                 );
         }
         let enabled = self.selected.is_some();
-        header = header.child(project_path).child(
+        let readout = div()
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .px(px(6.))
+            .when(waiting > 0, |d| {
+                d.child(
+                    div()
+                        .id("titlebar-waiting")
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(div().size(px(6.)).bg(t.accent))
+                        .child(caps(format!("{waiting} waiting"), t).text_color(t.accent))
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| Hint {
+                                text: "Tasks waiting for your input or approval".into(),
+                                theme: t,
+                            })
+                            .into()
+                        }),
+                )
+            })
+            .when(running > 0, |d| {
+                d.child(
+                    div()
+                        .id("titlebar-running")
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(dither::pulse(
+                            "titlebar-pulse",
+                            t.accent,
+                            cx.reduce_motion(),
+                        ))
+                        .child(caps(format!("{running} running"), t).text_color(t.muted))
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| Hint {
+                                text: "Tasks with an active agent turn".into(),
+                                theme: t,
+                            })
+                            .into()
+                        }),
+                )
+            });
+        header = header.child(project_path).child(readout).child(
             div()
                 .flex()
                 .items_center()
-                .gap_1()
-                .px_3()
+                .gap(px(2.))
+                .px(px(10.))
                 .child(
                     self.icon_button("header-files", "file-text", "Browse project files")
                         .disabled(!enabled)
@@ -149,7 +196,7 @@ impl Shell {
                             cx.notify();
                         })),
                 )
-                .child(div().w(px(1.)).h(px(16.)).mx_2().bg(t.border))
+                .child(div().w(px(1.)).h(px(14.)).mx(px(6.)).bg(t.border))
                 .child(
                     self.icon_button("header-review", "panel-right", "Toggle changes · ⌘D")
                         .disabled(!enabled)
@@ -175,6 +222,9 @@ impl Render for Shell {
         if let Some(popup) = self.render_agent_popup(cx) {
             return popup;
         }
+        if cx.try_global::<Theme>() != Some(&self.theme) {
+            cx.set_global(self.theme);
+        }
         let t = self.theme;
         let mut root = div()
             .id("workspace")
@@ -186,7 +236,7 @@ impl Render for Shell {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .font_family("IBM Plex Sans")
+            .font_family(crate::theme::SANS)
             .text_size(px(self.settings.font_size - 1.))
             .line_height(relative(1.5))
             .font_weight(FontWeight::NORMAL)
@@ -253,13 +303,16 @@ impl Render for Shell {
                 div()
                     .flex()
                     .items_center()
-                    .gap_3()
-                    .px_4()
-                    .py_2()
+                    .gap(px(10.))
+                    .pl(px(14.))
+                    .pr(px(8.))
+                    .py(px(6.))
                     .bg(t.removed_bg)
+                    .border_b_1()
+                    .border_color(t.removed.opacity(0.35))
                     .text_size(px(12.))
-                    .child(icon("circle-x").text_color(t.removed))
-                    .child(div().flex_1().child(error.clone()))
+                    .child(caps("Error", t).text_color(t.removed))
+                    .child(div().flex_1().min_w_0().child(error.clone()))
                     .child(
                         self.icon_button("dismiss-error", "close", "Dismiss error")
                             .on_click(cx.listener(|s, _, _, cx| {
@@ -288,8 +341,12 @@ impl Render for Shell {
                     .flex_shrink_0()
                     .h_full()
                     .cursor_col_resize()
-                    .bg(t.border)
-                    .hover(move |d| d.bg(t.accent))
+                    .bg(if self.dragging_sidebar {
+                        t.accent
+                    } else {
+                        t.border
+                    })
+                    .hover(move |d| d.bg(t.edge))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|s, _, _, _| s.dragging_sidebar = true),
@@ -308,8 +365,12 @@ impl Render for Shell {
                         .flex_shrink_0()
                         .h_full()
                         .cursor_col_resize()
-                        .bg(t.border)
-                        .hover(move |d| d.bg(t.accent))
+                        .bg(if self.dragging_review {
+                            t.accent
+                        } else {
+                            t.border
+                        })
+                        .hover(move |d| d.bg(t.edge))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|s, _, _, _| s.dragging_review = s.window_width > 1100.),
@@ -317,9 +378,7 @@ impl Render for Shell {
                 )
                 .child(self.review(cx, false));
         }
-        root = root
-            .child(body)
-            .child(motion::cool_corner(self.settings.light));
+        root = root.child(body);
         if matches!(
             self.panel,
             Panel::Models

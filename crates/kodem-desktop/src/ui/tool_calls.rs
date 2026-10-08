@@ -56,7 +56,7 @@ impl Shell {
                 ),),
         );
         let group_conversation = conversation.clone();
-        let mut group = div().w_full().min_w_0().px_5().py_1().child(
+        let mut group = div().w_full().min_w_0().px_5().py(px(2.)).child(
             self.ghost(
                 SharedString::from(group_key.clone()),
                 if expanded {
@@ -70,21 +70,12 @@ impl Shell {
             .justify_start()
             .flex_wrap()
             .h_auto()
-            .min_h(px(30.))
+            .min_h(px(28.))
+            .px(px(6.))
+            .gap(px(8.))
             .accessibility_label(accessible_label)
             .when_some(edits.lines.filter(|_| edits.files > 0), |button, lines| {
-                button.child(
-                    div()
-                        .flex()
-                        .gap_1()
-                        .flex_shrink_0()
-                        .child(div().text_color(t.added).child(format!("+{}", lines.added)))
-                        .child(
-                            div()
-                                .text_color(t.removed)
-                                .child(format!("−{}", lines.removed)),
-                        ),
-                )
+                button.child(line_totals(lines.added, lines.removed, t))
             })
             .when(active, |button| {
                 button.child(motion::active_icon(
@@ -101,13 +92,15 @@ impl Shell {
         );
         if expanded {
             let mut calls = div()
-                .ml_3()
-                .pl_3()
+                .ml(px(12.))
+                .pl(px(12.))
+                .pt(px(2.))
+                .pb(px(4.))
                 .border_l_1()
                 .border_color(t.border)
                 .flex()
                 .flex_col()
-                .gap_2();
+                .gap(px(4.));
             for message in &messages {
                 calls = calls.child(self.tool_call(conversation, message, index, cx));
             }
@@ -199,7 +192,7 @@ impl Shell {
             .min_w_0()
             .border_1()
             .border_color(t.border)
-            .rounded(px(8.))
+            .rounded(px(crate::theme::RADIUS_CONTROL))
             .overflow_hidden()
             .bg(t.inset)
             .child(
@@ -213,15 +206,16 @@ impl Shell {
                     "",
                 )
                 .w_full()
-                .h(px(36.))
+                .h(px(32.))
+                .rounded_none()
                 .justify_start()
-                .gap_2()
-                .px_2()
+                .gap(px(8.))
+                .px(px(8.))
                 .accessibility_label(format!(
                     "{} tool call: {title}",
                     if expanded { "Collapse" } else { "Expand" }
                 ))
-                .child(icon(glyph).text_color(color))
+                .child(icon(glyph).size(px(13.)).text_color(color))
                 .child(
                     div()
                         .flex_1()
@@ -229,24 +223,18 @@ impl Shell {
                         .text_ellipsis()
                         .text_color(t.text)
                         .when(output.kind == ToolKind::Command, |d| {
-                            d.font_family("JetBrains Mono").text_size(px(11.))
+                            d.font_family(crate::theme::MONO).text_size(px(11.))
                         })
                         .child(title),
                 )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_size(px(10.))
-                        .text_color(color)
-                        .child(status),
-                )
+                .child(caps(status, t).flex_shrink_0().text_color(color))
                 .on_click(cx.listener(move |s, _, _, cx| {
                     s.toggle_tool_detail(&detail_conversation, &key, group_index, cx)
                 })),
             );
         if expanded {
             let mut details = div()
-                .p_3()
+                .p(px(10.))
                 .border_t_1()
                 .border_color(t.border)
                 .flex()
@@ -282,13 +270,14 @@ impl Shell {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .text_size(px(10.))
-                        .text_color(t.muted)
-                        .child(if output.kind == ToolKind::Files {
-                            format!("{} changed paths", body.lines().count())
-                        } else {
-                            format!("Output · {} lines", body.lines().count())
-                        })
+                        .child(caps(
+                            if output.kind == ToolKind::Files {
+                                format!("{} changed paths", body.lines().count())
+                            } else {
+                                format!("Output · {} lines", body.lines().count())
+                            },
+                            t,
+                        ))
                         .child(div().flex_1())
                         .child(
                             self.icon_button(

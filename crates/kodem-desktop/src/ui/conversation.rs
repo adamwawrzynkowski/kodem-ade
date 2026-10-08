@@ -130,11 +130,13 @@ impl Shell {
             block = block
                 .w_auto()
                 .min_w_0()
-                .max_w(relative(0.86))
+                .max_w(relative(0.82))
                 .flex()
                 .flex_col()
                 .gap_2()
                 .bg(t.raised)
+                .border_1()
+                .border_color(t.border)
                 .shadow(t.elevation())
                 .rounded(px(crate::theme::MESSAGE_RADIUS))
                 .p(px(crate::theme::MESSAGE_PADDING));
@@ -149,10 +151,9 @@ impl Shell {
                 div()
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .mb_1()
+                    .gap(px(8.))
+                    .mb(px(4.))
                     .text_size(px(11.))
-                    .font_weight(FontWeight::MEDIUM)
                     .child(if message_active {
                         motion::active_icon(
                             (
@@ -166,31 +167,15 @@ impl Shell {
                         )
                     } else {
                         icon(glyph)
-                            .size(px(15.))
+                            .size(px(13.))
                             .text_color(color)
                             .into_any_element()
                     })
-                    .child(if message_active {
-                        motion::gleam(
-                            (
-                                ElementId::from("message-label"),
-                                SharedString::from(message_key.clone()),
-                            ),
-                            name,
-                            t,
-                        )
-                    } else {
-                        div().child(name).into_any_element()
-                    })
+                    .child(caps(name, t).text_color(color))
                     .when(message_active, |d| {
-                        d.child(
-                            div()
-                                .text_size(px(10.))
-                                .text_color(t.accent)
-                                .child("Working…"),
-                        )
+                        d.child(caps("Working", t).text_color(t.accent))
                     })
-                    .child(div().flex_1()),
+                    .child(div().flex_1().h(px(1.)).bg(t.border)),
             );
         }
         if !message.attachments.is_empty() {
@@ -243,8 +228,9 @@ impl Shell {
                             "copy",
                             "Copy message",
                         )
-                        .w(px(18.))
-                        .h(px(18.))
+                        .w(px(20.))
+                        .h(px(20.))
+                        .text_color(t.subtle)
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
                         }),

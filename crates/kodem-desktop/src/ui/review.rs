@@ -40,22 +40,17 @@ impl Shell {
             .when(!center, |d| d.w(px(width)).h_full().flex_shrink_0())
             .flex()
             .flex_col()
-            .bg(t.inset)
-            .child(motion::window_texture(
-                self.settings.light,
-                self.theme.accent,
-            ))
+            .bg(if center { t.canvas } else { t.sidebar })
             .overflow_hidden()
             .when(!center, |panel| {
                 panel.child(
                     div()
-                        .h(px(34.))
+                        .h(px(36.))
                         .flex_shrink_0()
-                        .px_3()
+                        .px(px(8.))
                         .flex()
                         .items_center()
-                        .gap_2()
-                        .bg(t.canvas)
+                        .gap(px(6.))
                         .border_b_1()
                         .border_color(t.border)
                         .child(
@@ -68,11 +63,12 @@ impl Shell {
                                     *label
                                 },
                             )
-                            .h(px(26.))
+                            .px(px(7.))
                             .text_size(px(12.))
+                            .font_weight(FontWeight::MEDIUM)
                             .text_color(t.text)
                             .accessibility_label("Choose changes comparison")
-                            .child(icon("chevron-down").size(px(11.)))
+                            .child(icon("chevrons-up-down").size(px(12.)).text_color(t.subtle))
                             .on_click_with_bounds(cx.listener(
                                 |s, bounds: &Bounds<Pixels>, _, cx| {
                                     s.menu_anchor = Some(bounds.top_right());
@@ -85,24 +81,30 @@ impl Shell {
                                 },
                             )),
                         )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(t.subtle)
-                                .child(count.to_string()),
-                        )
-                        .child(div().flex_1()),
+                        .child(figure(count.to_string(), t.subtle))
+                        .child(div().flex_1())
+                        .child(caps("Changes", t).mr(px(6.))),
                 )
             });
         if self.new_diff.is_some() {
             panel = panel.child(
                 div()
-                    .px_3()
-                    .py_2()
+                    .px(px(12.))
+                    .py(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
                     .bg(t.accent_bg)
+                    .border_b_1()
+                    .border_color(t.accent.opacity(0.25))
                     .text_size(px(11.))
                     .text_color(t.accent)
-                    .child("New changes available. Your selected revision is preserved.")
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child("New changes available. Your selected revision is preserved."),
+                    )
                     .child(
                         self.ghost("use-current", "refresh", "Load latest")
                             .on_click(cx.listener(|s, _, _, cx| {
@@ -120,11 +122,16 @@ impl Shell {
                 if let Some(notice) = &repo.notice {
                     panel = panel.child(
                         div()
-                            .px_3()
-                            .py_2()
+                            .px(px(12.))
+                            .py(px(6.))
+                            .flex()
+                            .gap(px(8.))
                             .text_size(px(11.))
                             .text_color(t.muted)
-                            .child(format!("{}: {notice}", repo.label)),
+                            .border_b_1()
+                            .border_color(t.border)
+                            .child(caps(&repo.label, t))
+                            .child(div().flex_1().min_w_0().child(notice.clone())),
                     );
                 }
             }
@@ -138,8 +145,8 @@ impl Shell {
                             .flex_col()
                             .items_center()
                             .justify_center()
-                            .gap_2()
-                            .child(icon("circle-check").size(px(25.)).text_color(t.added))
+                            .gap(px(8.))
+                            .child(caps("Clean", t).text_color(t.added))
                             .child(div().text_size(px(13.)).child("No changes"))
                             .child(
                                 div()
@@ -171,17 +178,25 @@ impl Shell {
                     panel
                         .child(
                             div()
-                                .h(px(32.))
-                                .px_3()
+                                .h(px(30.))
+                                .px(px(14.))
                                 .flex()
                                 .items_center()
-                                .gap_2()
-                                .text_size(px(10.))
-                                .text_color(t.subtle)
-                                .child(format!("{} files", snapshot.files.len()))
+                                .gap(px(8.))
+                                .child(caps(
+                                    format!(
+                                        "{} {}",
+                                        snapshot.files.len(),
+                                        if snapshot.files.len() == 1 {
+                                            "file"
+                                        } else {
+                                            "files"
+                                        }
+                                    ),
+                                    t,
+                                ))
                                 .child(div().flex_1())
-                                .child(div().text_color(t.added).child(format!("+{added}")))
-                                .child(div().text_color(t.removed).child(format!("−{removed}"))),
+                                .child(line_totals(added, removed, t)),
                         )
                         .child(files),
                 );
@@ -194,14 +209,17 @@ impl Shell {
                     panel = panel.child(
                         div()
                             .id("diff-repository")
-                            .h(px(26.))
+                            .h(px(24.))
                             .flex_shrink_0()
-                            .px_3()
+                            .px(px(12.))
                             .flex()
                             .items_center()
                             .gap_2()
-                            .bg(t.sidebar)
-                            .text_size(px(11.))
+                            .bg(t.inset)
+                            .border_b_1()
+                            .border_color(t.border)
+                            .font_family(crate::theme::MONO)
+                            .text_size(px(10.5))
                             .text_color(t.muted)
                             .child(icon("branch").size(px(12.)))
                             .child(div().min_w_0().text_ellipsis().child(label))
@@ -216,21 +234,24 @@ impl Shell {
                 }
                 panel = panel.child(
                     div()
-                        .h(px(34.))
+                        .h(px(36.))
                         .flex_shrink_0()
-                        .px_3()
+                        .pl(px(12.))
+                        .pr(px(6.))
                         .flex()
                         .items_center()
-                        .gap_2()
-                        .bg(t.sidebar)
+                        .gap(px(2.))
+                        .bg(if center { t.sidebar } else { t.canvas })
                         .border_b_1()
                         .border_color(t.border)
+                        .child(icon("file").size(px(13.)).text_color(t.subtle).mr(px(6.)))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .text_ellipsis()
-                                .text_size(px(12.))
+                                .text_ellipsis_start()
+                                .font_family(crate::theme::MONO)
+                                .text_size(px(11.5))
                                 .child(file.label.clone()),
                         )
                         .child(
@@ -260,7 +281,7 @@ impl Shell {
                                 },
                             )
                             .when(self.settings.wrap_diff, |button| {
-                                button.bg(t.selected).text_color(t.accent)
+                                button.bg(t.selected).text_color(t.text)
                             })
                             .on_click(cx.listener(|s, _, _, cx| {
                                 s.settings.wrap_diff = !s.settings.wrap_diff;
@@ -281,21 +302,40 @@ impl Shell {
                 if self.split {
                     panel = panel.child(
                         div()
-                            .h(px(26.))
+                            .h(px(24.))
                             .flex()
-                            .text_size(px(10.))
-                            .text_color(t.subtle)
-                            .bg(t.sidebar)
-                            .child(div().w_1_2().pl_3().child("BEFORE"))
-                            .child(div().w_1_2().pl_3().child("AFTER")),
+                            .items_center()
+                            .bg(t.inset)
+                            .border_b_1()
+                            .border_color(t.border)
+                            .child(
+                                div()
+                                    .w_1_2()
+                                    .pl(px(12.))
+                                    .child(caps("Before", t).text_color(t.removed)),
+                            )
+                            .child(
+                                div()
+                                    .w_1_2()
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .pl(px(12.))
+                                    .border_l_1()
+                                    .border_color(t.border)
+                                    .child(caps("After", t).text_color(t.added)),
+                            ),
                     );
                 }
                 if let Some(notice) = &file.notice {
                     panel = panel.child(
                         div()
-                            .p_3()
+                            .px(px(12.))
+                            .py(px(8.))
                             .text_size(px(12.))
                             .text_color(t.muted)
+                            .border_b_1()
+                            .border_color(t.border)
                             .child(notice.clone()),
                     );
                 }
@@ -347,31 +387,40 @@ impl Shell {
                 }
                 panel = panel.child(
                     div()
-                        .h(px(24.))
+                        .h(px(26.))
                         .flex_shrink_0()
-                        .px_3()
+                        .px(px(12.))
                         .flex()
                         .items_center()
-                        .gap_2()
+                        .gap(px(8.))
+                        .bg(t.sidebar)
                         .border_t_1()
                         .border_color(t.border)
-                        .text_size(px(10.))
-                        .text_color(t.subtle)
-                        .child(icon("shield").size(px(12.)))
-                        .child(format!(
-                            "Revision {}",
-                            &snapshot.id[..8.min(snapshot.id.len())]
+                        .child(caps(
+                            format!("Rev {}", &snapshot.id[..8.min(snapshot.id.len())]),
+                            t,
                         ))
                         .child(div().flex_1())
-                        .child("Select text to copy · Drag line numbers to add context"),
+                        .child(
+                            div()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .text_size(px(11.))
+                                .text_color(t.subtle)
+                                .child("Select to copy · drag line numbers to comment"),
+                        ),
                 );
             }
         } else {
             panel = panel.child(
                 div()
-                    .p_5()
+                    .p(px(16.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
                     .text_size(px(12.))
                     .text_color(t.muted)
+                    .child(dither::pulse("review-loading", t.muted, cx.reduce_motion()))
                     .child("Reading repository changes…"),
             );
         }

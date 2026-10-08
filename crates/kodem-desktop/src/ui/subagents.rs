@@ -104,7 +104,11 @@ impl Shell {
             glyph(index),
             agent.name.clone(),
         )
-        .h(px(32.))
+        .h(px(28.))
+        .px(px(8.))
+        .bg(t.raised)
+        .border_1()
+        .border_color(t.border)
         .child(if agent.state.active() {
             motion::active_icon(
                 (
@@ -119,13 +123,8 @@ impl Shell {
         } else {
             div().into_any_element()
         })
-        .child(
-            div()
-                .text_size(px(11.))
-                .text_color(t.muted)
-                .child(state_label(&agent.state)),
-        )
-        .child(icon("external-link").size(px(12.)))
+        .child(caps(state_label(&agent.state), t))
+        .child(icon("external-link").size(px(11.)).text_color(t.subtle))
         .on_click(cx.listener(move |s, _, window, cx| s.open_agent(id.clone(), window, cx)))
         .into_any_element()
     }
@@ -146,25 +145,26 @@ impl Shell {
             .count();
         div()
             .id("composer-agents")
-            .px_3()
-            .py_2()
+            .px(px(14.))
+            .py(px(8.))
             .max_h(px(156.))
             .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
             .border_b_1()
             .border_color(self.theme.border)
-            .bg(self.theme.sidebar)
+            .bg(self.theme.inset)
+            .child(caps(
+                if active > 0 {
+                    format!("Agents · {active} working")
+                } else {
+                    "Agents".into()
+                },
+                self.theme,
+            ))
             .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(self.theme.muted)
-                    .child(if active > 0 {
-                        format!("Agents · {active} working")
-                    } else {
-                        "Agents".into()
-                    }),
-            )
-            .child(
-                div().flex().flex_wrap().gap_1().children(
+                div().flex().flex_wrap().gap(px(4.)).children(
                     view.task
                         .subagents
                         .iter()
@@ -282,16 +282,25 @@ impl Shell {
         let task = self.view.as_ref()?.task.clone();
         let t = self.theme;
         let mut header = div()
-            .px_4()
-            .py_3()
+            .h(px(42.))
+            .flex_shrink_0()
+            .pl(px(16.))
+            .pr(px(8.))
             .flex()
             .items_center()
-            .gap_2()
+            .gap(px(10.))
+            .bg(t.sidebar)
             .border_b_1()
             .border_color(t.border)
-            .child(icon(glyph(index)))
-            .child(name)
-            .child(div().text_color(t.muted).child(state_label(&state)))
+            .child(caps("Agent", t))
+            .child(icon(glyph(index)).size(px(14.)).text_color(t.accent))
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_size(px(13.))
+                    .child(name),
+            )
+            .child(caps(state_label(&state), t))
             .when(state.active(), |d| {
                 d.child(motion::active_icon(
                     "popup-agent-progress",
@@ -301,14 +310,7 @@ impl Shell {
                     cx.reduce_motion(),
                 ))
             })
-            .when(history_loading, |d| {
-                d.child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(t.muted)
-                        .child("Loading history…"),
-                )
-            })
+            .when(history_loading, |d| d.child(caps("Loading history…", t)))
             .child(div().flex_1());
         if task.state.active() {
             let task_id = task.id.clone();
@@ -333,7 +335,14 @@ impl Shell {
             .flex_col()
             .child(selection);
         if let Some(error) = load_error {
-            body = body.child(div().p_3().text_color(t.removed).child(error));
+            body = body.child(
+                div()
+                    .px(px(20.))
+                    .py(px(10.))
+                    .text_size(px(12.))
+                    .text_color(t.removed)
+                    .child(error),
+            );
         }
         if let Some(before) = before {
             body = body.child(
@@ -362,17 +371,21 @@ impl Shell {
                             })
                         })
                         .w_full()
-                        .max_w(px(940.))
+                        .max_w(px(900.))
                         .min_w_0()
                         .h_full()
-                        .py_3(),
+                        .py(px(12.)),
                     ),
             )
         } else {
             body.child(
                 div()
-                    .p_5()
+                    .p(px(20.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
                     .text_color(t.muted)
+                    .child(dither::pulse("agent-loading", t.muted, cx.reduce_motion()))
                     .child("Loading agent thread…"),
             )
         };
@@ -387,12 +400,14 @@ impl Shell {
             .collect();
         for (index, request) in requests.iter().enumerate() {
             let permission = div()
-                .p_3()
+                .p(px(14.))
                 .border_t_1()
                 .border_color(t.border)
+                .bg(t.accent_bg)
                 .flex()
                 .flex_col()
-                .gap_2()
+                .gap(px(8.))
+                .child(caps("Permission", t).text_color(t.accent))
                 .child(
                     request.params["reason"]
                         .as_str()
@@ -450,27 +465,33 @@ impl Shell {
                 .size_full()
                 .p(px(16.))
                 .pt(px(44.))
-                .bg(t.canvas)
+                .bg(t.sidebar)
                 .text_color(t.text)
-                .font_family("IBM Plex Sans")
+                .font_family(crate::theme::SANS)
                 .text_size(px(self.settings.font_size - 1.))
                 .line_height(relative(1.5))
                 .on_action(cx.listener(|s, _: &Cancel, window, cx| s.close_agent(window, cx)))
                 .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
                 .child(
                     div()
+                        .relative()
                         .size_full()
-                        .min_h_0()
-                        .flex()
-                        .flex_col()
-                        .rounded(px(12.))
-                        .border_1()
-                        .border_color(t.border)
-                        .shadow(t.elevation())
-                        .bg(t.canvas)
-                        .overflow_hidden()
-                        .child(header)
-                        .child(body),
+                        .child(dither::shadow(t, crate::theme::RADIUS_FLOATING, 6.))
+                        .child(
+                            div()
+                                .size_full()
+                                .min_h_0()
+                                .flex()
+                                .flex_col()
+                                .rounded(px(crate::theme::RADIUS_FLOATING))
+                                .border_1()
+                                .border_color(t.edge)
+                                .shadow(t.floating())
+                                .bg(t.canvas)
+                                .overflow_hidden()
+                                .child(header)
+                                .child(body),
+                        ),
                 ),
         )
     }

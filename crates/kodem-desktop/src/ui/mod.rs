@@ -8,6 +8,7 @@ mod composition;
 mod conversation;
 mod diff_refresh;
 mod diff_view;
+mod dither;
 mod effort_slider;
 mod image_preview;
 mod menus;
@@ -1264,10 +1265,10 @@ impl Shell {
     fn control(&self, id: impl Into<ElementId>) -> Button {
         let theme = self.theme;
         Button::new(id)
-            .h(px(28.))
+            .h(px(26.))
             .px(px(9.))
             .gap(px(6.))
-            .rounded(px(6.))
+            .rounded(px(crate::theme::RADIUS_CONTROL))
             .bg(theme.raised)
             .shadow(theme.elevation())
             .border_1()
@@ -1287,10 +1288,10 @@ impl Shell {
     ) -> Button {
         let theme = self.theme;
         self.control(id)
-            .child(icon(glyph))
+            .child(icon(glyph).size(px(14.)))
             .child(label.into())
-            .hover(move |s| s.bg(theme.selected))
-            .active(move |s| s.bg(theme.inset))
+            .hover(move |s| s.bg(theme.selected).border_color(theme.edge))
+            .active(move |s| s.bg(theme.inset).shadow(Vec::new()))
     }
     fn ghost(
         &self,
@@ -1301,13 +1302,14 @@ impl Shell {
         let theme = self.theme;
         let label = label.into();
         self.control(id)
-            .child(icon(name))
+            .child(icon(name).size(px(14.)))
             .when(!label.is_empty(), |b| b.child(label))
             .border_0()
             .shadow(Vec::new())
             .bg(hsla(0., 0., 0., 0.))
             .text_color(theme.muted)
-            .hover(move |s| s.bg(theme.raised).text_color(theme.text))
+            .hover(move |s| s.bg(theme.selected).text_color(theme.text))
+            .active(move |s| s.bg(theme.inset))
     }
     fn icon_button(
         &self,
@@ -1317,7 +1319,7 @@ impl Shell {
     ) -> Button {
         let theme = self.theme;
         self.ghost(id, name, "")
-            .w(px(28.))
+            .w(px(26.))
             .px_0()
             .accessibility_label(label)
             .tooltip(move |_, cx| {
@@ -1335,15 +1337,62 @@ impl Shell {
         label: impl Into<SharedString>,
     ) -> Button {
         let theme = self.theme;
+        let mut hover = theme.accent;
+        hover.lightness = (hover.lightness + 0.05).min(1.);
+        let mut pressed = theme.accent;
+        pressed.lightness = (pressed.lightness - 0.06).max(0.);
         self.control(id)
-            .child(icon(glyph))
+            .child(icon(glyph).size(px(14.)))
             .child(label.into())
             .bg(theme.accent)
-            .text_color(theme.inset)
-            .border_color(theme.accent)
-            .hover(move |s| s.opacity(0.88))
-            .active(move |s| s.opacity(0.72))
+            .text_color(theme.on_accent)
+            .font_weight(FontWeight::MEDIUM)
+            .border_color(pressed)
+            .shadow(vec![BoxShadow {
+                inset: true,
+                color: rgb_to_hsla(rgb(0xffffff)).opacity(0.22),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+            }])
+            .hover(move |s| s.bg(hover))
+            .active(move |s| s.bg(pressed).shadow(Vec::new()))
     }
+}
+
+/// Returns an uppercase monospace instrument label, used for section and metadata captions.
+pub(super) fn caps(text: impl AsRef<str>, theme: Theme) -> Div {
+    div()
+        .font_family(crate::theme::MONO)
+        .text_size(px(10.))
+        .letter_spacing(px(crate::theme::LABEL_TRACKING))
+        .text_color(theme.subtle)
+        .line_height(relative(1.2))
+        .child(text.as_ref().to_uppercase())
+}
+
+/// Returns tabular monospace text for counts, durations and other numeric metadata.
+pub(super) fn figure(text: impl Into<SharedString>, color: Hsla) -> Div {
+    div()
+        .flex_shrink_0()
+        .font_family(crate::theme::MONO)
+        .text_size(px(10.5))
+        .text_color(color)
+        .child(text.into())
+}
+
+/// Returns colored addition and removal totals in tabular figures.
+pub(super) fn line_totals(
+    added: impl std::fmt::Display,
+    removed: impl std::fmt::Display,
+    theme: Theme,
+) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .gap(px(5.))
+        .child(figure(format!("+{added}"), theme.added))
+        .child(figure(format!("−{removed}"), theme.removed))
 }
 
 // Polls refresh the tail; explicit page requests extend the retained prefix.
@@ -1369,18 +1418,23 @@ struct Hint {
 impl Render for Hint {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
-            .font_family("IBM Plex Sans")
+            .relative()
             .max_w(px(360.))
-            .px_2()
-            .py_1()
-            .text_size(px(12.))
-            .bg(self.theme.raised)
-            .text_color(self.theme.text)
-            .border_1()
-            .border_color(self.theme.border)
-            .rounded(px(5.))
-            .shadow_sm()
-            .child(self.text.clone())
+            .child(dither::shadow(self.theme, 4., 3.))
+            .child(
+                div()
+                    .font_family(crate::theme::SANS)
+                    .px(px(8.))
+                    .py(px(4.))
+                    .text_size(px(12.))
+                    .line_height(relative(1.4))
+                    .bg(self.theme.raised)
+                    .text_color(self.theme.text)
+                    .border_1()
+                    .border_color(self.theme.edge)
+                    .rounded(px(4.))
+                    .child(self.text.clone()),
+            )
     }
 }
 /// Installs workspace keyboard commands and macOS menu actions.

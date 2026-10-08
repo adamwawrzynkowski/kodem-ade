@@ -1,5 +1,7 @@
 # Design guidance for implementation
 
+The current visual language is recorded in [dithered interface](dithered-interface.md). It applies the constraints below.
+
 Decision recorded on 9 September 2026: stop image generation and continue directly with native implementation. The generated concepts were rejected. They are not a reference for the product, and another image set is not an implementation prerequisite. Do not generate more unless the user explicitly asks again.
 
 ## What the user wants

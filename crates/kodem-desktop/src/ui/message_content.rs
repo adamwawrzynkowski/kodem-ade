@@ -25,8 +25,9 @@ impl Shell {
                         _ => 0.,
                     };
                     div()
-                        .mt_2()
+                        .mt(px(if level <= 2 { 10. } else { 6. }))
                         .text_size(px(self.settings.font_size + extra))
+                        .line_height(relative(1.3))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(self.message_prose(&key, text, streaming, cx))
                         .into_any_element()
@@ -36,27 +37,40 @@ impl Shell {
                 }
                 Block::Quote(blocks) => div()
                     .border_l_2()
-                    .border_color(t.accent)
-                    .pl_3()
-                    .py_1()
+                    .border_color(t.edge)
+                    .pl(px(12.))
+                    .py(px(2.))
                     .text_color(t.muted)
                     .child(self.message_blocks(&key, blocks, streaming, cx))
                     .into_any_element(),
-                Block::Rule => div().h(px(1.)).my_2().bg(t.border).into_any_element(),
+                Block::Rule => div()
+                    .my(px(8.))
+                    .child(dither::rule(t.edge))
+                    .into_any_element(),
                 Block::List { start, items } => {
                     let mut list = div().flex().flex_col().gap(px(6.));
                     for (index, item) in items.into_iter().enumerate() {
                         let marker = match item.checked {
                             Some(done) => icon(if done { "check-square" } else { "stop" })
-                                .text_color(if done { t.added } else { t.muted })
+                                .size(px(14.))
+                                .mt(px(3.))
+                                .text_color(if done { t.added } else { t.subtle })
                                 .into_any_element(),
-                            None => div()
-                                .text_color(t.muted)
-                                .child(start.map_or_else(
-                                    || "•".into(),
-                                    |start| format!("{}.", start.saturating_add(index as u64)),
-                                ))
-                                .into_any_element(),
+                            None => match start {
+                                Some(start) => div()
+                                    .pt(px(2.))
+                                    .font_family(crate::theme::MONO)
+                                    .text_size(px(self.settings.font_size - 3.))
+                                    .text_color(t.subtle)
+                                    .child(format!("{}.", start.saturating_add(index as u64)))
+                                    .into_any_element(),
+                                // A square pixel bullet, vertically centered on the first line.
+                                None => div()
+                                    .mt(px(self.settings.font_size * 0.775 - 2.))
+                                    .size(px(4.))
+                                    .bg(t.subtle)
+                                    .into_any_element(),
+                            },
                         };
                         list = list.child(
                             div()
@@ -65,7 +79,7 @@ impl Shell {
                                 .gap_2()
                                 .child(
                                     div()
-                                        .min_w(px(22.))
+                                        .min_w(px(20.))
                                         .flex_shrink_0()
                                         .flex()
                                         .justify_end()
@@ -115,9 +129,12 @@ impl Shell {
                         let mut line = div()
                             .flex()
                             .when(row_index == 0, |d| {
-                                d.bg(t.sidebar).font_weight(FontWeight::SEMIBOLD)
+                                d.bg(t.inset)
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .border_b_1()
+                                    .border_color(t.edge)
                             })
-                            .when(row_index > 0, |d| d.border_t_1().border_color(t.border));
+                            .when(row_index > 1, |d| d.border_t_1().border_color(t.border));
                         for (col, cell) in row.into_iter().enumerate() {
                             line = line.child(
                                 div()
@@ -143,7 +160,7 @@ impl Shell {
                         .overflow_x_scroll()
                         .border_1()
                         .border_color(t.border)
-                        .rounded(px(8.))
+                        .rounded(px(crate::theme::RADIUS_CONTROL))
                         .child(table)
                         .into_any_element()
                 }
@@ -195,26 +212,29 @@ impl Shell {
         div()
             .w_full()
             .min_w_0()
-            .rounded(px(8.))
+            .rounded(px(crate::theme::RADIUS_SURFACE))
             .border_1()
             .border_color(t.border)
             .bg(t.inset)
             .overflow_hidden()
             .child(
                 div()
-                    .px_3()
-                    .h(px(30.))
+                    .pl(px(12.))
+                    .pr(px(4.))
+                    .h(px(28.))
                     .flex()
                     .items_center()
-                    .text_size(px(10.))
-                    .text_color(t.muted)
+                    .gap(px(8.))
                     .border_b_1()
                     .border_color(t.border)
-                    .child(if language.is_empty() {
-                        "Plain text".to_owned()
-                    } else {
-                        language.to_owned()
-                    })
+                    .child(caps(
+                        if language.is_empty() {
+                            "Text"
+                        } else {
+                            language
+                        },
+                        t,
+                    ))
                     .child(div().flex_1())
                     .child(
                         self.icon_button(
@@ -235,8 +255,9 @@ impl Shell {
                     .when_some(max_height, |d, height| {
                         d.max_h(px(height)).overflow_y_scroll()
                     })
-                    .p_3()
-                    .font_family("JetBrains Mono")
+                    .px(px(12.))
+                    .py(px(10.))
+                    .font_family(crate::theme::MONO)
                     .text_size(px(self.settings.font_size - 2.))
                     .line_height(relative(1.5))
                     .child(div().min_w_full().w(px(width)).child(input)),

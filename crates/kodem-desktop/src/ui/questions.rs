@@ -39,13 +39,14 @@ impl Shell {
             .max_h(px(300.))
             .overflow_y_scroll()
             .restrict_scroll_to_axis()
-            .p_3()
+            .px(px(14.))
+            .py(px(12.))
             .flex()
             .flex_col()
-            .gap_3()
+            .gap(px(12.))
             .border_b_1()
             .border_color(t.border)
-            .bg(t.sidebar)
+            .bg(t.inset)
             .text_color(t.text)
             .text_size(px(12.))
             .child(
@@ -53,10 +54,10 @@ impl Shell {
                     .flex()
                     .flex_shrink_0()
                     .items_center()
-                    .gap_2()
-                    .text_color(t.accent)
-                    .child(icon("chat"))
-                    .child("Answer needed"),
+                    .gap(px(8.))
+                    .child(div().size(px(6.)).bg(t.accent))
+                    .child(caps("Answer needed", t).text_color(t.accent))
+                    .child(div().flex_1().h(px(1.)).bg(t.border)),
             );
         for request in requests {
             let Some(questions) = request.params["questions"].as_array() else {
@@ -124,12 +125,30 @@ impl Shell {
                             self.control(option_id)
                                 .w_full()
                                 .h_auto()
-                                .py_2()
+                                .py(px(8.))
+                                .px(px(10.))
+                                .gap(px(10.))
                                 .items_start()
+                                .justify_start()
                                 .disabled(sending)
-                                .bg(if chosen { t.accent_bg } else { t.canvas })
-                                .border_color(if chosen { t.accent } else { t.border })
-                                .child(icon(if chosen { "check" } else { "chat" }).flex_shrink_0())
+                                .bg(if chosen { t.accent_bg } else { t.raised })
+                                .border_color(if chosen {
+                                    t.accent.opacity(0.7)
+                                } else {
+                                    t.border
+                                })
+                                .hover(move |b| b.border_color(t.edge))
+                                .child(
+                                    div()
+                                        .mt(px(1.))
+                                        .size(px(12.))
+                                        .flex_shrink_0()
+                                        .rounded(px(2.))
+                                        .border_1()
+                                        .border_color(if chosen { t.accent } else { t.edge })
+                                        .p(px(2.))
+                                        .when(chosen, |d| d.child(div().size_full().bg(t.accent))),
+                                )
                                 .child(caption)
                                 .on_click(cx.listener(move |s, _, _, cx| {
                                     if let Some(draft) = s.question_inputs.get_mut(&answer_key) {
@@ -166,10 +185,11 @@ impl Shell {
                             )))
                             .max_h(px(100.))
                             .overflow_y_scroll()
-                            .p_2()
-                            .rounded(px(6.))
+                            .px(px(10.))
+                            .py(px(7.))
+                            .rounded(px(crate::theme::RADIUS_CONTROL))
                             .border_1()
-                            .border_color(t.border)
+                            .border_color(t.edge)
                             .bg(t.canvas)
                             .child(if sending {
                                 div().child(input.read(cx).text()).into_any_element()

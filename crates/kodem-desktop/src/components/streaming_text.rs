@@ -41,60 +41,27 @@ impl RevealingGlyph {
     }
 }
 
-/// Shared blur curve for arriving text, composer context and sent messages.
-pub(crate) fn reveal_blur(progress: f32) -> Pixels {
-    px(2.4 * (1. - progress).powi(2))
-}
-
-/// Shared opacity curve for progressive content reveals.
+/// Shared stepped opacity curve for progressive content reveals.
+///
+/// Four discrete levels give arriving text and context a palette-limited, phosphor-like fade.
 pub(crate) fn reveal_opacity(progress: f32) -> f32 {
-    1. - (1. - progress).powi(3)
+    ((1. - (1. - progress).powi(3)) * 4.).ceil() / 4.
 }
 
-/// Paints only arriving glyphs, sharing at most eight blur layers per text line.
+/// Paints only arriving glyphs; each starts bright and cools to its final color.
 pub(super) fn paint_glyphs(glyphs: Vec<RevealingGlyph>, window: &mut Window) {
     let visible = window.content_mask().bounds;
-    let mut groups: [Vec<RevealingGlyph>; 8] = Default::default();
     for glyph in glyphs {
-        if glyph.progress > 0. && glyph.bounds().intersects(&visible) {
-            groups[((glyph.progress * 8.) as usize).min(7)].push(glyph);
+        if glyph.progress <= 0. || !glyph.bounds().intersects(&visible) {
+            continue;
         }
-    }
-    for group in groups.iter().filter(|group| !group.is_empty()) {
-        let mut bounds = Bounds::default();
-        let mut progress = 0.;
-        for (index, glyph) in group.iter().enumerate() {
-            let region = glyph.bounds();
-            bounds = if index == 0 {
-                region
-            } else {
-                bounds.union(&region)
-            };
-            progress += glyph.progress;
-        }
-        let blur = reveal_blur(progress / group.len() as f32);
-        window.with_filter_layer(
-            bounds.intersect(&visible),
-            Corners::default(),
-            &[Filter::Blur(blur)],
-            |window| {
-                for glyph in group {
-                    let p = glyph.progress;
-                    let gleam = (std::f32::consts::PI * p).sin().powi(2) * 0.35;
-                    let mut color = glyph.color;
-                    let target = if color.lightness > 0.5 { 1. } else { 0. };
-                    color.lightness += (target - color.lightness) * gleam;
-                    color.alpha *= reveal_opacity(p);
-                    let _ = window.paint_glyph(
-                        glyph.origin,
-                        glyph.font,
-                        glyph.id,
-                        glyph.font_size,
-                        color,
-                    );
-                }
-            },
-        );
+        let p = glyph.progress;
+        let afterglow = ((1. - p) * 3.).ceil() / 3. * 0.45;
+        let mut color = glyph.color;
+        let target = if color.lightness > 0.5 { 1. } else { 0. };
+        color.lightness += (target - color.lightness) * afterglow;
+        color.alpha *= reveal_opacity(p);
+        let _ = window.paint_glyph(glyph.origin, glyph.font, glyph.id, glyph.font_size, color);
     }
 }
 

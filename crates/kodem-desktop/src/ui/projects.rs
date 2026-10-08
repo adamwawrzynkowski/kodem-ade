@@ -4,26 +4,92 @@ use super::*;
 impl Shell {
     /// Builds the saved application accent picker.
     pub(super) fn accent_choices(&self, cx: &mut Context<Self>) -> AnyElement {
-        let t = self.theme;
+        let light = self.settings.light;
         div()
             .flex()
             .flex_col()
-            .gap_2()
-            .child("Accent color")
-            .child(div().flex().flex_wrap().gap_2().children(
+            .gap(px(8.))
+            .child(caps("Accent", self.theme))
+            .child(div().flex().flex_wrap().gap(px(6.)).children(
                 AccentColor::ALL.into_iter().enumerate().map(|(i, color)| {
-                    self.ghost(("accent-choice", i), "circle-check", color.label())
-                        .text_color(rgb(color.rgb(self.settings.light)))
-                        .when(self.settings.accent == color, |b| b.bg(t.selected))
-                        .on_click(cx.listener(move |s, _, _, cx| {
-                            s.settings.accent = color;
-                            s.theme = Theme::with_accent(s.settings.light, color);
-                            s.save_settings();
-                            cx.notify();
-                        }))
+                    self.swatch(
+                        ("accent-choice", i),
+                        crate::theme::accent_color(color, light),
+                        color.label(),
+                        self.settings.accent == color,
+                        false,
+                    )
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.settings.accent = color;
+                        s.theme = Theme::with_accent(s.settings.light, color);
+                        s.save_settings();
+                        cx.notify();
+                    }))
                 }),
             ))
             .into_any_element()
+    }
+
+    /// Returns a square color choice; `follow` dithers it to mean "use the app accent".
+    fn swatch(
+        &self,
+        id: impl Into<ElementId>,
+        color: Hsla,
+        label: &'static str,
+        selected: bool,
+        follow: bool,
+    ) -> Button {
+        let t = self.theme;
+        Button::new(id)
+            .size(px(26.))
+            .p(px(2.))
+            .rounded(px(crate::theme::RADIUS_CONTROL))
+            .border_1()
+            .border_color(if selected {
+                t.text
+            } else {
+                hsla(0., 0., 0., 0.)
+            })
+            .hover(move |b| b.border_color(t.edge))
+            .cursor_pointer()
+            .accessibility_label(label)
+            .tooltip(move |_, cx| {
+                cx.new(|_| Hint {
+                    text: label.into(),
+                    theme: t,
+                })
+                .into()
+            })
+            .child(
+                div()
+                    .relative()
+                    .size_full()
+                    .rounded(px(crate::theme::RADIUS_SMALL))
+                    .overflow_hidden()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(if follow { t.inset } else { color })
+                    .when(follow, |d| {
+                        d.child(
+                            canvas(
+                                |_, _, _| {},
+                                move |bounds, _, window, _| {
+                                    dither::paint_flat(window, bounds, 1., color, 0.5)
+                                },
+                            )
+                            .absolute()
+                            .inset_0(),
+                        )
+                    })
+                    .when(selected, |d| {
+                        d.child(icon("check").size(px(12.)).text_color(if follow {
+                            t.text
+                        } else {
+                            t.on_accent
+                        }))
+                    }),
+            )
     }
 
     /// Lists projects with their current presentation and customization actions.
@@ -46,8 +112,8 @@ impl Shell {
                 div()
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .py_2()
+                    .gap(px(10.))
+                    .py(px(8.))
                     .border_b_1()
                     .border_color(t.border)
                     .child(sidebar::project_icon(&project, t))
@@ -55,12 +121,13 @@ impl Shell {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(div().text_ellipsis().child(project.name))
+                            .child(div().text_size(px(13.)).text_ellipsis().child(project.name))
                             .child(
                                 div()
-                                    .text_size(px(11.))
-                                    .text_color(t.muted)
-                                    .text_ellipsis()
+                                    .font_family(crate::theme::MONO)
+                                    .text_size(px(10.5))
+                                    .text_color(t.subtle)
+                                    .text_ellipsis_start()
                                     .child(project.path.display().to_string()),
                             ),
                     )
@@ -92,40 +159,50 @@ impl Shell {
         let Some(project) = self.editing_project.clone() else {
             return div().into_any_element();
         };
-        let mut colors = div().flex().flex_wrap().gap_2().child(
-            self.ghost("project-color-default", "refresh", "App accent")
-                .when(project.color.is_none(), |b| b.bg(t.selected))
-                .on_click(cx.listener(|s, _, _, cx| {
-                    if let Some(project) = &mut s.editing_project {
-                        project.color = None;
-                    }
-                    cx.notify();
-                })),
+        let light = self.settings.light;
+        let mut colors = div().flex().flex_wrap().gap(px(6.)).child(
+            self.swatch(
+                "project-color-default",
+                t.accent,
+                "App accent",
+                project.color.is_none(),
+                true,
+            )
+            .on_click(cx.listener(|s, _, _, cx| {
+                if let Some(project) = &mut s.editing_project {
+                    project.color = None;
+                }
+                cx.notify();
+            })),
         );
         for (i, color) in AccentColor::ALL.into_iter().enumerate() {
             colors = colors.child(
-                self.ghost(("project-color", i), "circle-check", color.label())
-                    .text_color(rgb(color.rgb(self.settings.light)))
-                    .when(project.color == Some(color.rgb(false)), |b| {
-                        b.bg(t.selected)
-                    })
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        if let Some(project) = &mut s.editing_project {
-                            project.color = Some(color.rgb(false));
-                        }
-                        cx.notify();
-                    })),
+                self.swatch(
+                    ("project-color", i),
+                    crate::theme::accent_color(color, light),
+                    color.label(),
+                    project.color == Some(color.rgb(false)),
+                    false,
+                )
+                .on_click(cx.listener(move |s, _, _, cx| {
+                    if let Some(project) = &mut s.editing_project {
+                        project.color = Some(color.rgb(false));
+                    }
+                    cx.notify();
+                })),
             );
         }
-        let icons = div().flex().flex_wrap().gap_2().children(
+        let icons = div().flex().flex_wrap().gap(px(4.)).children(
             ProjectIcon::ALL.into_iter().enumerate().map(|(i, choice)| {
                 self.ghost(
                     ("project-icon", i),
                     choice.glyph().unwrap_or("refresh"),
                     choice.label(),
                 )
+                .border_1()
+                .border_color(t.border)
                 .when(project.icon == choice, |b| {
-                    b.bg(t.selected).text_color(t.accent)
+                    b.bg(t.selected).border_color(t.edge).text_color(t.text)
                 })
                 .on_click(cx.listener(move |s, _, _, cx| {
                     if let Some(project) = &mut s.editing_project {
@@ -138,27 +215,28 @@ impl Shell {
         div()
             .flex()
             .flex_col()
-            .gap_3()
+            .gap(px(10.))
             .child(
                 div()
                     .flex()
-                    .gap_2()
+                    .gap(px(8.))
                     .items_center()
                     .child(sidebar::project_icon(&project, t))
-                    .child("Name"),
+                    .child(caps("Name", t)),
             )
             .child(
                 div()
-                    .p_2()
+                    .px(px(10.))
+                    .py(px(7.))
                     .bg(t.inset)
                     .border_1()
-                    .border_color(t.border)
-                    .rounded(px(7.))
+                    .border_color(t.edge)
+                    .rounded(px(crate::theme::RADIUS_CONTROL))
                     .child(self.aux.clone()),
             )
-            .child("Accent color")
+            .child(caps("Accent", t).mt(px(6.)))
             .child(colors)
-            .child("Icon")
+            .child(caps("Icon", t).mt(px(6.)))
             .child(
                 div()
                     .text_size(px(11.))
