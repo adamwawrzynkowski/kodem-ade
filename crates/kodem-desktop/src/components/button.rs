@@ -3,14 +3,15 @@ use std::{cell::Cell, rc::Rc};
 
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Div, ElementId, FocusHandle, InteractiveElement,
-    Interactivity, IntoElement, MouseButton, ParentElement, Pixels, Refineable as _, RenderOnce,
-    Role, SharedString, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window,
-    canvas, div, prelude::FluentBuilder as _, relative,
+    Interactivity, IntoElement, MouseButton, ParentElement, Pixels, Point, Refineable as _,
+    RenderOnce, Role, SharedString, Stateful, StatefulInteractiveElement, StyleRefinement, Styled,
+    Window, canvas, div, prelude::FluentBuilder as _, relative,
 };
 
 use super::{RoleOverride, Selectable, StateStyle, StyledExt as _};
 
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+type PressHandler = Rc<dyn Fn(Point<Pixels>, &mut App)>;
 
 /// An unstyled button that owns interaction, focus, keyboard, and accessibility behavior.
 ///
@@ -26,6 +27,7 @@ pub struct Button {
     disabled: bool,
     children: Vec<AnyElement>,
     on_click: Option<ClickHandler>,
+    on_press: Option<PressHandler>,
     accessibility_label: Option<SharedString>,
     role: RoleOverride,
     provided_focus_handle: Option<FocusHandle>,
@@ -47,6 +49,7 @@ impl Button {
             disabled: false,
             children: Vec::new(),
             on_click: None,
+            on_press: None,
             accessibility_label: None,
             role: RoleOverride::Implicit,
             provided_focus_handle: None,
@@ -59,6 +62,14 @@ impl Button {
     /// Sets whether the button ignores pointer and keyboard activation.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// Observes the pointer position of a primary press on an enabled button.
+    ///
+    /// This is for press feedback such as a ripple. It does not activate the button.
+    pub fn on_press(mut self, handler: impl Fn(Point<Pixels>, &mut App) + 'static) -> Self {
+        self.on_press = Some(Rc::new(handler));
         self
     }
 
@@ -230,6 +241,7 @@ impl RenderOnce for Button {
         let disabled = self.disabled;
         let style = self.resolved_style();
         let on_click = self.on_click;
+        let on_press = self.on_press;
 
         self.base
             // Centering is part of Button's control geometry. Without a flex
@@ -264,6 +276,14 @@ impl RenderOnce for Button {
                     cx.stop_propagation();
                 })
             })
+            .when_some(
+                (!disabled).then_some(on_press).flatten(),
+                |this, on_press| {
+                    this.on_mouse_down(MouseButton::Left, move |event, _, cx| {
+                        on_press(event.position, cx);
+                    })
+                },
+            )
             .when_some(
                 (!disabled).then_some(on_click).flatten(),
                 |this, on_click| {

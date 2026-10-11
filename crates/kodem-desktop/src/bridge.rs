@@ -4,7 +4,7 @@ use std::sync::mpsc;
 pub enum Command {
     Flush(mpsc::Sender<()>),
     PrepareUpdate {
-        settings: Option<kodem_core::Settings>,
+        settings: Option<Box<kodem_core::Settings>>,
         draft: Option<(String, String)>,
         done: mpsc::Sender<Result<(), String>>,
     },

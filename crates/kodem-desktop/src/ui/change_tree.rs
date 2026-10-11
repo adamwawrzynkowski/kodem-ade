@@ -124,6 +124,7 @@ impl Shell {
         };
         let mut entry = div()
             .id(("change-tree-row", row_index))
+            .relative()
             .w_full()
             .min_w_0()
             .h(px(26.))
@@ -135,8 +136,8 @@ impl Shell {
             .items_center()
             .gap(px(7.))
             .cursor_pointer()
-            .text_size(px(12.))
-            .hover(move |d| d.bg(t.selected.opacity(0.6)));
+            .font_family(crate::theme::MONO)
+            .text_size(px(11.5));
         if let Some(i) = row.file {
             let file = &snapshot.files[i];
             let added = file
@@ -167,9 +168,22 @@ impl Shell {
             } else {
                 t.accent
             };
+            let current = self.reviewing_file && self.file == i;
             entry = entry
-                .when(self.reviewing_file && self.file == i, |d| {
-                    d.bg(t.selected).text_color(t.text)
+                .text_color(if current { t.text } else { t.muted })
+                .when(current, |d| {
+                    d.overflow_hidden()
+                        .bg(t.accent.opacity(0.1))
+                        .child(dither::row_wash(
+                            t.accent,
+                            crate::theme::RADIUS_CONTROL,
+                            true,
+                            false,
+                        ))
+                        .child(kit::selection_edge(t.accent))
+                })
+                .when(!current, |d| {
+                    d.hover(move |d| d.bg(t.selected).text_color(t.text))
                 })
                 .child(div().w(px(12.)).flex_shrink_0())
                 .child(icon(glyph).size(px(13.)).text_color(color))
@@ -183,10 +197,13 @@ impl Shell {
                         .flex()
                         .items_center()
                         .justify_center()
+                        // A square tile with the tint and edge of a chip.
                         .rounded(px(crate::theme::RADIUS_SMALL))
-                        .bg(status_color.opacity(0.12))
-                        .font_family(crate::theme::MONO)
+                        .border_1()
+                        .border_color(status_color.opacity(0.36))
+                        .bg(status_color.opacity(0.08))
                         .text_size(px(10.))
+                        .line_height(relative(1.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(status_color)
                         .child(status),
@@ -208,15 +225,18 @@ impl Shell {
                     .into()
                 });
             }
+            let repository = row.repository.is_some();
             entry = entry
                 .text_color(t.muted)
+                .hover(move |d| d.bg(t.selected).text_color(t.text))
                 .child(
                     icon(if collapsed {
                         "chevron-right"
                     } else {
                         "chevron-down"
                     })
-                    .size(px(12.)),
+                    .size(px(12.))
+                    .text_color(t.subtle),
                 )
                 .child(
                     icon(if row.repository.is_some() {
@@ -229,8 +249,33 @@ impl Shell {
                     .size(px(13.))
                     .text_color(t.subtle),
                 )
-                .child(div().flex_1().min_w_0().text_ellipsis().child(row.name))
-                .child(figure(row.count.to_string(), t.subtle))
+                // A checkout reads as a section header: label, count, then a dotted rule.
+                .when(repository, |d| {
+                    d.child(
+                        caps(&row.name, t)
+                            .flex_shrink(1.)
+                            .min_w_0()
+                            .text_ellipsis()
+                            .text_color(t.muted),
+                    )
+                    .child(figure(row.count.to_string(), t.muted))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(8.))
+                            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+                    )
+                })
+                .when(!repository, |d| {
+                    d.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .child(row.name.clone()),
+                    )
+                    .child(figure(row.count.to_string(), t.subtle))
+                })
                 .on_click(cx.listener(move |s, _, _, cx| {
                     if !s.collapsed_changes.remove(&row.path) {
                         s.collapsed_changes.insert(row.path.clone());

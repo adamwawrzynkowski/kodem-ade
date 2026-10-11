@@ -1,4 +1,5 @@
 //! On-demand local host. Window closure never drops provider or PTY ownership.
+mod accounts;
 mod attachments;
 mod notifications;
 mod project_icons;
@@ -21,9 +22,15 @@ struct Host {
     store: Store,
     notifications: notifications::Notifications,
     runtimes: BTreeMap<Provider, RuntimeInfo>,
+    /// Last observed sign-in and quota state, keyed by provider and account identity.
+    accounts: BTreeMap<(Provider, String), AccountStatus>,
     sessions: HashMap<String, mpsc::Sender<provider::Control>>,
     requests: HashMap<String, Vec<InputRequest>>,
     activities: HashMap<String, Vec<Activity>>,
+    /// Host-requested compactions in flight, by task, with the state each task returns to.
+    compactions: HashMap<String, provider::Compaction>,
+    /// The usage reading (`ContextUsage::reported`) each task's last compaction left behind.
+    compacted: HashMap<String, u64>,
     terminals: HashMap<String, terminal::Terminal>,
     checks: std::collections::HashSet<String>,
     shutdown: bool,
@@ -60,6 +67,9 @@ fn run() -> Result<()> {
     listener.set_nonblocking(true)?;
     let store = Store::open(&root)?;
     store.recover()?;
+    accounts::ensure_defaults(&store)?;
+    // Claude Code's `default` entry was a stand-in for its own choice and is no longer listed.
+    store.retire_model(Provider::Claude, "default")?;
     let version = codex::version();
     let info = RuntimeInfo {
         version: version.as_ref().ok().cloned(),
@@ -71,11 +81,17 @@ fn run() -> Result<()> {
         notifications: notifications::Notifications::start(),
         runtimes: BTreeMap::from([
             (Provider::Codex, info),
-            (Provider::Devin, RuntimeInfo::default()),
+            (
+                Provider::Claude,
+                provider::initial_runtime(Provider::Claude),
+            ),
         ]),
+        accounts: BTreeMap::new(),
         sessions: HashMap::new(),
         requests: HashMap::new(),
         activities: HashMap::new(),
+        compactions: HashMap::new(),
+        compacted: HashMap::new(),
         terminals: HashMap::new(),
         checks: Default::default(),
         shutdown: false,
@@ -179,7 +195,16 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 before,
             }))
         }
-        Request::RefreshUsage { provider } | Request::ConsumeUsageReset { provider, .. } => {
+        Request::RefreshUsage {
+            provider,
+            ref account,
+        }
+        | Request::ConsumeUsageReset {
+            provider,
+            ref account,
+            ..
+        } => {
+            let account = account.clone();
             {
                 let mut h = host.lock().unwrap();
                 ensure!(
@@ -194,7 +219,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 } => Some(idempotency_key.as_str()),
                 _ => None,
             };
-            let result = provider::account_usage(host, provider, key);
+            let result = provider::account_usage(host, provider, account, key);
             let mut h = host.lock().unwrap();
             h.usage_refreshing = false;
             h.usage_refresh = Some(Instant::now());
@@ -221,8 +246,9 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 h.usage_refresh = Some(Instant::now());
                 h.usage_refreshing = true;
                 let usage_host = host.clone();
+                // Sign-in state and quotas of every account refresh together, off the request path.
                 std::thread::spawn(move || {
-                    let _ = provider::refresh_usage(&usage_host);
+                    let _ = accounts::refresh_all(&usage_host);
                     usage_host.lock().unwrap().usage_refreshing = false;
                 });
             }
@@ -240,6 +266,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 tasks,
                 settings: h.store.settings()?,
                 runtimes: h.runtimes.clone(),
+                accounts: accounts::states(&h)?,
             }))
         }
         Request::TestNotification { sound } => {
@@ -250,8 +277,53 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             provider::reconcile(host, &task_id)?;
             Ok(Response::Ok)
         }
-        Request::ConnectRuntime { provider } => {
-            provider::discover(host.clone(), provider, None)?;
+        Request::ConnectRuntime { provider, account } => {
+            provider::discover(host.clone(), provider, account, None)?;
+            Ok(Response::Ok)
+        }
+        Request::AddAccount { provider, name } => Ok(Response::Account(accounts::add(
+            host, root, provider, &name,
+        )?)),
+        Request::EditAccount {
+            provider,
+            id,
+            name,
+            color,
+        } => {
+            accounts::edit(host, provider, &id, &name, color)?;
+            Ok(Response::Ok)
+        }
+        Request::RemoveAccount { provider, id } => {
+            accounts::remove(host, root, provider, &id)?;
+            Ok(Response::Ok)
+        }
+        Request::SignInAccount { provider, id } => {
+            accounts::sign_in(host, root, provider, &id)?;
+            Ok(Response::Ok)
+        }
+        Request::SignOutAccount { provider, id } => {
+            accounts::sign_out(host, provider, &id)?;
+            Ok(Response::Ok)
+        }
+        Request::RefreshAccount { provider, id } => {
+            // Reading status starts the provider CLI, which can take seconds. The result arrives
+            // with the next workspace reply instead of holding this request open.
+            accounts::resolve(&host.lock().unwrap(), provider, Some(&id))?;
+            let host = host.clone();
+            std::thread::spawn(move || {
+                let _ = accounts::refresh(&host, provider, &id);
+            });
+            Ok(Response::Ok)
+        }
+        Request::SetProjectDefaults {
+            project_id,
+            defaults,
+        } => {
+            let h = host.lock().unwrap();
+            if let Some(defaults) = &defaults {
+                provider::validate_saved_selection(&h, defaults)?;
+            }
+            h.store.set_project_defaults(&project_id, defaults)?;
             Ok(Response::Ok)
         }
         Request::SetAgentPreferences(preferences) => {
@@ -350,6 +422,8 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 subagents: Vec::new(),
                 pending_completion: None,
                 provider: defaults.provider,
+                account: defaults.account.clone(),
+                plan: Vec::new(),
                 provider_access: defaults.provider_access.clone(),
                 id,
                 project_id,
@@ -400,6 +474,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 TaskEdit::Model { .. }
                     | TaskEdit::Access(_)
                     | TaskEdit::Provider(_)
+                    | TaskEdit::Account(_)
                     | TaskEdit::ProviderAccess(_)
             );
             ensure!(
@@ -421,12 +496,39 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                     );
                     provider::validate_saved_selection(&h, &preferences)?;
                     t.provider = preferences.provider;
+                    t.account = preferences.account.clone();
                     t.provider_access = preferences.provider_access.clone();
                     t.model = preferences.model.clone();
                     t.effort = preferences.effort.clone();
                     t.access = preferences.access;
                     t.context_usage = None;
                     defaults = preferences;
+                }
+                TaskEdit::Account(account) => {
+                    ensure!(
+                        !t.state.active() && t.active_turn.is_none(),
+                        "Change the account after this turn finishes"
+                    );
+                    // Codex keeps thread history in per-account state, so a started thread cannot
+                    // continue under another identity.
+                    ensure!(
+                        t.provider != Provider::Codex || t.provider_thread.is_none(),
+                        "Codex cannot continue a started conversation under another account. Start a new task with that account."
+                    );
+                    accounts::resolve(&h, t.provider, account.as_deref())?;
+                    // Both providers' terms forbid getting around usage limits. Carrying one
+                    // conversation to another account when its account is at a limit does that.
+                    ensure!(
+                        t.provider_thread.is_none()
+                            || account.as_deref().unwrap_or(DEFAULT_ACCOUNT) == t.account_id()
+                            || !accounts::limit_reached(&h, t.provider, t.account_id()),
+                        "This task's account reached its usage limit. Moving the same conversation to another account would get around that limit, which the provider's terms do not allow. Wait for the reset, or use the provider's own options for more usage."
+                    );
+                    defaults.account = account.clone();
+                    // The session owner reopens its provider process under the new account
+                    // before the next turn; the environment of a running process is fixed.
+                    t.account = account;
+                    t.context_usage = None;
                 }
                 TaskEdit::ProviderAccess(access) => {
                     ensure!(!t.state.active(), "Change access after this turn finishes");
@@ -497,6 +599,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             }
             h.requests.remove(&task_id);
             h.activities.remove(&task_id);
+            h.compacted.remove(&task_id);
             h.terminals.remove(&task_id);
             Ok(Response::Ok)
         }
@@ -599,6 +702,10 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 "No live provider session. Recovered tasks are not automatically replayed.",
             )?;
             tx.send(provider::Control::Interrupt)?;
+            Ok(Response::Ok)
+        }
+        Request::CompactTask { task_id } => {
+            provider::compact(host.clone(), &task_id)?;
             Ok(Response::Ok)
         }
         Request::Answer {
@@ -730,19 +837,21 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         }
         Request::ComposerCatalog {
             provider,
+            account,
             model: _,
             request_id: _,
             task_id,
             project_id,
         } => Ok(Response::ComposerCatalog(provider::composer_catalog(
-            host, provider, task_id, project_id,
+            host, provider, account, task_id, project_id,
         )?)),
         Request::Resources {
             provider,
+            account,
             task_id,
             project_id,
         } => Ok(Response::Resources(provider::resources(
-            host, provider, task_id, project_id,
+            host, provider, account, task_id, project_id,
         )?)),
         Request::Files { task_id } => {
             let cwd = host.lock().unwrap().store.task(&task_id)?.cwd;
@@ -854,8 +963,7 @@ fn validate_answer(request: &InputRequest, response: &Value) -> Result<()> {
             .as_str()
             .context("Choose an approval decision")?;
         ensure!(
-            ["accept", "acceptForSession", "decline", "cancel"].contains(&decision)
-                || (request.method == "devin/requestApproval" && decision == "declineAlways"),
+            ["accept", "acceptForSession", "decline", "cancel"].contains(&decision),
             "Unsupported approval decision"
         );
         if let Some(available) = request.params["availableDecisions"].as_array() {

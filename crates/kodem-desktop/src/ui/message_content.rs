@@ -1,6 +1,6 @@
 //! Shared Markdown blocks for chat, with selectable prose and copyable code.
 use super::*;
-use crate::markdown::{Block, RichText};
+use crate::markdown::{Block, Callout, RichText};
 
 impl Shell {
     /// Builds nested Markdown content with stable text-selection identities.
@@ -26,26 +26,82 @@ impl Shell {
                     };
                     div()
                         .mt(px(if level <= 2 { 10. } else { 6. }))
-                        .text_size(px(self.settings.font_size + extra))
-                        .line_height(relative(1.3))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(self.message_prose(&key, text, streaming, cx))
+                        .flex()
+                        .flex_col()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .text_size(px(self.settings.font_size + extra))
+                                .line_height(relative(1.3))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(self.message_prose(&key, text, streaming, cx)),
+                        )
+                        .when(level <= 2, |heading| {
+                            heading.child(dither::DottedRule::horizontal(t.subtle.opacity(0.45)))
+                        })
                         .into_any_element()
                 }
                 Block::Code { language, text } => {
                     self.message_code(&key, &language, &text, None, streaming, cx)
                 }
-                Block::Quote(blocks) => div()
-                    .border_l_2()
-                    .border_color(t.edge)
-                    .pl(px(12.))
+                Block::Quote {
+                    callout: None,
+                    blocks,
+                } => div()
+                    .relative()
+                    .pl(px(14.))
                     .py(px(2.))
                     .text_color(t.muted)
+                    .child(
+                        // A dot-matrix bar in place of a solid quote edge.
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left_0()
+                            .w(px(4.))
+                            .child(
+                                dither::Dither::new(dither::DitherField::Fade {
+                                    from: dither::Edge::Top,
+                                    start: 0.75,
+                                    end: 0.75,
+                                })
+                                .color(t.subtle)
+                                .grid(2., 1.),
+                            ),
+                    )
                     .child(self.message_blocks(&key, blocks, streaming, cx))
                     .into_any_element(),
+                Block::Quote {
+                    callout: Some(callout),
+                    blocks,
+                } => {
+                    let tone = match callout {
+                        Callout::Note => t.info,
+                        Callout::Tip => t.added,
+                        Callout::Important => t.accent,
+                        Callout::Warning => t.warning,
+                        Callout::Caution => t.removed,
+                    };
+                    kit::block(t)
+                        .border_color(tone.opacity(0.3))
+                        .bg(tone.opacity(0.05))
+                        .child(
+                            kit::block_header(callout.label(), tone, t)
+                                .bg(tone.opacity(0.07))
+                                .border_color(tone.opacity(0.22)),
+                        )
+                        .child(
+                            div()
+                                .px(px(12.))
+                                .py(px(9.))
+                                .child(self.message_blocks(&key, blocks, streaming, cx)),
+                        )
+                        .into_any_element()
+                }
                 Block::Rule => div()
                     .my(px(8.))
-                    .child(dither::rule(t.edge))
+                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.6)))
                     .into_any_element(),
                 Block::List { start, items } => {
                     let mut list = div().flex().flex_col().gap(px(6.));
@@ -126,15 +182,19 @@ impl Shell {
                         .flex()
                         .flex_col();
                     for (row_index, row) in std::iter::once(header).chain(rows).enumerate() {
-                        let mut line = div()
-                            .flex()
-                            .when(row_index == 0, |d| {
-                                d.bg(t.inset)
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .border_b_1()
-                                    .border_color(t.edge)
-                            })
-                            .when(row_index > 1, |d| d.border_t_1().border_color(t.border));
+                        // Rows are separated by dotted rules; only the header has a solid edge.
+                        if row_index > 1 {
+                            table =
+                                table.child(dither::DottedRule::horizontal(t.subtle.opacity(0.45)));
+                        }
+                        let mut line = div().flex().when(row_index == 0, |d| {
+                            d.bg(t.header)
+                                .font_family(crate::theme::MONO)
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(t.muted)
+                                .border_b_1()
+                                .border_color(t.border)
+                        });
                         for (col, cell) in row.into_iter().enumerate() {
                             line = line.child(
                                 div()
@@ -142,8 +202,10 @@ impl Shell {
                                     .flex_shrink_0()
                                     .flex_grow(1.)
                                     .px_3()
-                                    .py_2()
-                                    .when(col > 0, |d| d.border_l_1().border_color(t.border))
+                                    .py(px(if row_index == 0 { 5. } else { 7. }))
+                                    .when(row_index == 0, |d| {
+                                        d.text_size(px(self.settings.font_size - 3.))
+                                    })
                                     .child(self.message_prose(
                                         &format!("{key}:{row_index}:{col}"),
                                         cell,
@@ -154,14 +216,15 @@ impl Shell {
                         }
                         table = table.child(line);
                     }
-                    div()
-                        .id(SharedString::from(format!("table:{key}")))
-                        .w_full()
-                        .overflow_x_scroll()
-                        .border_1()
-                        .border_color(t.border)
-                        .rounded(px(crate::theme::RADIUS_CONTROL))
-                        .child(table)
+                    kit::block(t)
+                        .bg(gpui::transparent_black())
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("table:{key}")))
+                                .w_full()
+                                .overflow_x_scroll()
+                                .child(table),
+                        )
                         .into_any_element()
                 }
             };
@@ -209,43 +272,36 @@ impl Shell {
             * 0.64
             + 24.;
         let copied = text.to_owned();
-        div()
-            .w_full()
-            .min_w_0()
-            .rounded(px(crate::theme::RADIUS_SURFACE))
-            .border_1()
-            .border_color(t.border)
-            .bg(t.inset)
-            .overflow_hidden()
+        let lines = text.lines().count().max(1);
+        kit::block(t)
             .child(
-                div()
-                    .pl(px(12.))
-                    .pr(px(4.))
-                    .h(px(28.))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .border_b_1()
-                    .border_color(t.border)
-                    .child(caps(
-                        if language.is_empty() {
-                            "Text"
-                        } else {
-                            language
-                        },
-                        t,
-                    ))
-                    .child(div().flex_1())
-                    .child(
-                        self.icon_button(
-                            SharedString::from(format!("copy-code:{key}")),
-                            "copy",
-                            "Copy block",
-                        )
-                        .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))
-                        }),
-                    ),
+                kit::block_header(
+                    if language.is_empty() {
+                        "Text"
+                    } else {
+                        language
+                    },
+                    t.muted,
+                    t,
+                )
+                .child(figure(
+                    format!("{lines} {}", if lines == 1 { "line" } else { "lines" }),
+                    t.subtle,
+                ))
+                .child(
+                    self.icon_button(
+                        SharedString::from(format!("copy-code:{key}")),
+                        "copy",
+                        "Copy block",
+                    )
+                    .w(px(22.))
+                    .h(px(22.))
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
+                        let tone = s.theme.accent;
+                        s.notify_user("Copied", tone, cx);
+                    })),
+                ),
             )
             .child(
                 div()

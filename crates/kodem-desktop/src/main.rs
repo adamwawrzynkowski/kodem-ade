@@ -23,15 +23,13 @@ fn main() {
         .run(|cx| {
             if let Err(error) = cx.text_system().add_fonts(vec![
                 Cow::Borrowed(include_bytes!(
-                    "../../../assets/fonts/IBMPlexSans-Regular.ttf"
+                    "../../../assets/fonts/GeistMono-Regular.ttf"
                 )),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/GeistMono-Medium.ttf")),
                 Cow::Borrowed(include_bytes!(
-                    "../../../assets/fonts/IBMPlexSans-Medium.ttf"
+                    "../../../assets/fonts/GeistMono-SemiBold.ttf"
                 )),
-                Cow::Borrowed(include_bytes!(
-                    "../../../assets/fonts/IBMPlexSans-SemiBold.ttf"
-                )),
-                Cow::Borrowed(include_bytes!("../../../assets/fonts/JetBrainsMono.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/GeistMono-Bold.ttf")),
             ]) {
                 eprintln!("Could not load bundled fonts: {error}");
             }
@@ -48,7 +46,7 @@ fn main() {
                     window_min_size: Some(size(px(850.), px(600.))),
                     ..Default::default()
                 },
-                |window, cx| cx.new(|cx| ui::Shell::new(window, cx)),
+                |window, cx| cx.new(|cx| ui::Stage::new(window, cx)),
             );
             if let Err(error) = &opened {
                 eprintln!("Could not open Kodem: {error}");

@@ -53,6 +53,7 @@ fn spawn_message(h: &crate::Host, task: &Task, thread: &str, parent: &str) -> Re
         attachments: Vec::new(),
         feedback: Vec::new(),
         file_edits: Vec::new(),
+        tool: None,
     })
 }
 

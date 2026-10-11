@@ -3,8 +3,117 @@ use super::*;
 use kodem_core::providers::codex::Codex;
 #[path = "codex_subagents.rs"]
 mod subagents;
+
+/// A limit no context reaches, for a task whose rule turns automatic compaction off.
+const NO_COMPACT_LIMIT: u64 = 1_000_000_000_000;
+
+// Codex compacts at a token count, so the task's percentage needs the model's context window.
+// The window is known once any task of that model has reported its usage.
+fn compact_limit(host: &crate::Host, task: &Task) -> Result<Option<u64>> {
+    let rule = compact_rule(host, task)?;
+    if !rule.enabled {
+        return Ok(Some(NO_COMPACT_LIMIT));
+    }
+    let window = match task.context_usage.as_ref().and_then(|usage| usage.window) {
+        Some(window) => Some(window),
+        None => {
+            let model = effective_model(host, task);
+            host.store
+                .tasks()?
+                .iter()
+                .filter(|other| {
+                    other.provider == Provider::Codex && effective_model(host, other) == model
+                })
+                .find_map(|other| other.context_usage.as_ref()?.window)
+        }
+    };
+    Ok(window.map(|window| window.saturating_mul(u64::from(rule.threshold)) / 100))
+}
+
+// Starts an app-server process and opens the task's thread in it. Codex reads thread
+// configuration, which holds the compaction limit, only here: a changed limit needs a new process.
+fn open(
+    host: &Shared,
+    task_id: &str,
+    cwd: &std::path::Path,
+    account: &Account,
+    event: &mut impl FnMut(Value),
+) -> Result<(Codex, String, Option<u64>)> {
+    let mut codex = Codex::start(cwd, account, &mut *event)?;
+    let known = host
+        .lock()
+        .unwrap()
+        .runtimes
+        .get(&Provider::Codex)
+        .is_some_and(|runtime| !runtime.models.is_empty());
+    // A task without a model runs the catalog's default, so the catalog must be read first.
+    if !known {
+        let info = read_runtime(|method, params| codex.call(method, params, &mut *event))?;
+        host.lock().unwrap().runtimes.insert(Provider::Codex, info);
+    }
+    let (task, model, limit) = {
+        let h = host.lock().unwrap();
+        let task = h.store.task(task_id)?;
+        let model = effective_model(&h, &task);
+        let limit = compact_limit(&h, &task)?;
+        (task, model, limit)
+    };
+    let mut params = json!({"cwd":cwd,"approvalPolicy":task.access.approval_policy(),"approvalsReviewer":task.access.approvals_reviewer(),"sandbox":task.access.sandbox(),"config":{"features.multi_agent":true}});
+    if let Some(limit) = limit {
+        params["config"]["model_auto_compact_token_limit"] = json!(limit);
+    }
+    if let Some(model) = model {
+        params["model"] = json!(model);
+    }
+    let method = if let Some(thread) = &task.provider_thread {
+        params["threadId"] = json!(thread);
+        params["excludeTurns"] = json!(true);
+        "thread/resume"
+    } else {
+        params["historyMode"] = json!("paginated");
+        "thread/start"
+    };
+    let result = codex.call(method, params, event)?;
+    let thread = result["thread"]["id"]
+        .as_str()
+        .context("Codex omitted thread ID")?
+        .to_owned();
+    {
+        let h = host.lock().unwrap();
+        let mut task = h.store.task(task_id)?;
+        task.provider_thread = Some(thread.clone());
+        h.save_task_with_notification(&task)?;
+    }
+    Ok((codex, thread, limit))
+}
+
+// Asks Codex to summarize the thread for the compaction recorded on the host. Codex runs it as
+// a turn of its own, which `ingest` ends without completing a user turn.
+fn compact(
+    host: &Shared,
+    task_id: &str,
+    thread: &str,
+    codex: &mut Codex,
+    event: &mut impl FnMut(Value),
+) -> Result<()> {
+    if !host.lock().unwrap().compactions.contains_key(task_id) {
+        return Ok(());
+    }
+    let Err(error) = codex.call("thread/compact/start", json!({"threadId":thread}), event) else {
+        return Ok(());
+    };
+    let rejected = error.is::<kodem_core::providers::codex::Rejected>();
+    end_compaction(host, task_id, Some(format!("{error:#}")))?;
+    if rejected { Ok(()) } else { Err(error) }
+}
+
 pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result<()> {
-    let cwd = host.lock().unwrap().store.task(task_id)?.cwd;
+    let (cwd, account) = {
+        let h = host.lock().unwrap();
+        let task = h.store.task(task_id)?;
+        let account = accounts::for_task(&h, &task)?;
+        (task.cwd, account)
+    };
     let mut items: HashMap<String, Message> = HashMap::new();
     let event_host = host.clone();
     let event_task = task_id.to_owned();
@@ -16,31 +125,7 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
                 Some(format!("Could not persist provider event: {error}"));
         }
     };
-    let mut codex = Codex::start(&cwd, &mut event)?;
-    let task = host.lock().unwrap().store.task(task_id)?;
-    let mut params = json!({"cwd":cwd,"approvalPolicy":task.access.approval_policy(),"approvalsReviewer":task.access.approvals_reviewer(),"sandbox":task.access.sandbox(),"config":{"features.multi_agent":true}});
-    if let Some(model) = selected_model(&host, &task) {
-        params["model"] = json!(model);
-    }
-    let method = if let Some(thread) = &task.provider_thread {
-        params["threadId"] = json!(thread);
-        params["excludeTurns"] = json!(true);
-        "thread/resume"
-    } else {
-        params["historyMode"] = json!("paginated");
-        "thread/start"
-    };
-    let result = codex.call(method, params, &mut event)?;
-    let thread = result["thread"]["id"]
-        .as_str()
-        .context("Codex omitted thread ID")?
-        .to_owned();
-    {
-        let h = host.lock().unwrap();
-        let mut task = h.store.task(task_id)?;
-        task.provider_thread = Some(thread.clone());
-        h.save_task_with_notification(&task)?;
-    }
+    let (mut codex, thread, mut limit) = open(&host, task_id, &cwd, &account, &mut event)?;
     crate::titles::start(host.clone(), task_id)?;
     let mut branch_refresh = Instant::now();
     let mut children = subagents::Subscriptions::default();
@@ -66,6 +151,7 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
             match control {
                 Control::Close => return Ok(()),
                 Control::Wake => {}
+                Control::Compact => compact(&host, task_id, &thread, &mut codex, &mut event)?,
                 Control::Query {
                     method,
                     params,
@@ -130,6 +216,7 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
                             attachments: Vec::new(),
                             feedback: Vec::new(),
                             file_edits: Vec::new(),
+                            tool: None,
                             complete: true,
                             created: now(),
                         })?;
@@ -192,6 +279,19 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
                 }
             }
         }
+        let waiting = waiting_turn(&host.lock().unwrap(), task_id)?;
+        if let Some(task) = waiting {
+            // The rule, the model or the known window changed since this process opened the thread.
+            let wanted = compact_limit(&host.lock().unwrap(), &task)?;
+            if wanted != limit {
+                drop(codex);
+                (codex, _, limit) = open(&host, task_id, &cwd, &account, &mut event)?;
+                children = subagents::Subscriptions::default();
+            }
+            if begin_due_compaction(&host, task_id)? {
+                compact(&host, task_id, &thread, &mut codex, &mut event)?;
+            }
+        }
         dispatch_next(&host, task_id, &thread, &mut codex, &mut event)?;
         codex.poll(Duration::from_millis(40), &mut event)?;
     }
@@ -226,7 +326,8 @@ fn dispatch_next(
         params["approvalPolicy"] = json!(task.access.approval_policy());
         params["approvalsReviewer"] = json!(task.access.approvals_reviewer());
         params["sandboxPolicy"] = task.access.turn_policy(&task.cwd);
-        if let Some(model) = selected_model(host, &task) {
+        let model = effective_model(&host.lock().unwrap(), &task);
+        if let Some(model) = model {
             params["model"] = json!(model);
         }
         if let Some(effort) = task.effort {
@@ -322,6 +423,21 @@ fn ingest(
             Some("interrupted") => RunState::Interrupted,
             _ => RunState::Failed,
         };
+        // A compaction the host asked for is a turn without user input: nothing completes.
+        let compacting = host.lock().unwrap().compactions.contains_key(task_id);
+        if compacting {
+            let failure = match state {
+                RunState::Completed => None,
+                RunState::Interrupted => Some("it was stopped.".to_owned()),
+                _ => Some(
+                    p["turn"]["error"]["message"]
+                        .as_str()
+                        .unwrap_or("Codex reported an error")
+                        .to_owned(),
+                ),
+            };
+            return end_compaction(host, task_id, failure);
+        }
         subagents::complete_main(
             host,
             task_id,
@@ -391,6 +507,22 @@ fn ingest(
                 return Ok(());
             }
             if let Some(used) = p["tokenUsage"]["last"]["totalTokens"].as_u64() {
+                // Codex reports the smaller context while its compaction item is still open,
+                // which is the only moment both sizes are known. Only the first report counts.
+                let compaction = h.activities.get(task_id).and_then(|activities| {
+                    activities
+                        .iter()
+                        .find(|activity| activity.kind == ActivityKind::Compacting)
+                });
+                if let (Some(compaction), Some(previous)) = (compaction, &task.context_usage)
+                    && !h.store.has_message(task_id, &compaction.id)?
+                {
+                    h.store.message(&compaction_notice(
+                        task_id,
+                        &compaction.id,
+                        format!("Context compacted from {} to {used} tokens.", previous.used),
+                    ))?;
+                }
                 task.context_usage = Some(ContextUsage {
                     cost: None,
                     used,
@@ -403,8 +535,10 @@ fn ingest(
             }
         }
         "account/rateLimits/updated" => {
+            // Quotas belong to the account this session's process was started under.
+            let account = task.account_id().to_owned();
             merge_usage(
-                &mut h.runtimes.entry(Provider::Codex).or_default().usage,
+                accounts::usage_mut(&mut h, Provider::Codex, &account),
                 &p["rateLimits"],
             );
         }
@@ -444,6 +578,7 @@ fn ingest(
                 attachments: Vec::new(),
                 feedback: Vec::new(),
                 file_edits: Vec::new(),
+                tool: None,
                 kind: if method.contains("agentMessage") {
                     MessageKind::Assistant
                 } else {
@@ -467,6 +602,17 @@ fn ingest(
                 return Ok(());
             }
             let key = format!("{}:{id}", p["turnId"].as_str().unwrap_or("unknown"));
+            if kind == "contextCompaction" {
+                // The usage report normally wrote the notice with both sizes already.
+                if method == "item/completed" && !h.store.has_message(&transcript_id, &key)? {
+                    h.store.message(&compaction_notice(
+                        &transcript_id,
+                        &key,
+                        "Context compacted.".into(),
+                    ))?;
+                }
+                return Ok(());
+            }
             let (message_kind, text) = match kind {
                 "userMessage" => (
                     MessageKind::User,
@@ -562,6 +708,7 @@ fn ingest(
                 attachments: Vec::new(),
                 feedback: Vec::new(),
                 file_edits: Vec::new(),
+                tool: None,
                 text: String::new(),
                 complete: method.ends_with("completed"),
                 created: now(),
@@ -613,6 +760,7 @@ fn ingest(
                 attachments: Vec::new(),
                 feedback: Vec::new(),
                 file_edits: Vec::new(),
+                tool: None,
                 text: text.into(),
                 complete: true,
                 created: now(),
@@ -622,6 +770,22 @@ fn ingest(
     }
     Ok(())
 }
+fn compaction_notice(transcript: &str, id: &str, text: String) -> Message {
+    Message {
+        seq: 0,
+        id: id.into(),
+        task_id: transcript.into(),
+        kind: MessageKind::Notice,
+        attachments: Vec::new(),
+        feedback: Vec::new(),
+        file_edits: Vec::new(),
+        tool: None,
+        text,
+        complete: true,
+        created: now(),
+    }
+}
+
 // Track item identities, not inferred prose. Reasoning content is never copied into activity labels.
 fn update_activities(activities: &mut Vec<Activity>, method: &str, params: &Value) {
     if matches!(method, "turn/started" | "turn/completed") {
@@ -814,17 +978,36 @@ enum Catalog {
     Standalone(Codex),
 }
 impl Catalog {
-    fn open(host: &Shared, cwd: &std::path::Path) -> Result<Self> {
+    // A live session answers only for the checkout and account its process was started with.
+    fn open(host: &Shared, cwd: &std::path::Path, account: &Account) -> Result<Self> {
         let h = host.lock().unwrap();
         let session = h.store.tasks()?.iter().find_map(|task| {
-            (task.provider == Provider::Codex && task.cwd == cwd)
+            (task.provider == Provider::Codex && task.cwd == cwd && task.account_id() == account.id)
                 .then(|| h.sessions.get(&task.id).cloned())
                 .flatten()
         });
         drop(h);
         match session {
             Some(session) => Ok(Self::Session(session)),
-            None => Ok(Self::Standalone(Codex::start(cwd, |_| {})?)),
+            None => Ok(Self::Standalone(Codex::start(cwd, account, |_| {})?)),
+        }
+    }
+    // Account-level reads do not depend on a checkout; any session of the account can answer.
+    fn for_account(host: &Shared, account: &Account) -> Result<Self> {
+        let h = host.lock().unwrap();
+        let session = h.store.tasks()?.iter().find_map(|task| {
+            (task.provider == Provider::Codex && task.account_id() == account.id)
+                .then(|| h.sessions.get(&task.id).cloned())
+                .flatten()
+        });
+        drop(h);
+        match session {
+            Some(session) => Ok(Self::Session(session)),
+            None => Ok(Self::Standalone(Codex::start(
+                &std::env::current_dir()?,
+                account,
+                |_| {},
+            )?)),
         }
     }
     fn call(&mut self, method: &'static str, params: Value) -> Result<Value> {
@@ -845,17 +1028,14 @@ impl Catalog {
     }
 }
 
-/// Reads account and model capabilities from the selected provider runtime.
-pub(crate) fn discover(host: Shared, cwd: Option<PathBuf>) -> Result<()> {
-    let cwd = cwd.unwrap_or(std::env::current_dir()?);
-    let mut codex = Catalog::open(&host, &cwd)?;
-    let account = codex.call("account/read", json!({"refreshToken":false}))?;
+// Reads the model catalog through any connection to the runtime. New tasks start with 6.1 Sol
+// when the runtime lists it, and with the runtime's own default otherwise.
+fn read_runtime(mut call: impl FnMut(&'static str, Value) -> Result<Value>) -> Result<RuntimeInfo> {
     let mut models = Vec::new();
-    let mut default_images = false;
-    let mut default_model = None;
+    let mut own_default = None;
     let mut cursor = Value::Null;
     loop {
-        let result = codex.call("model/list", json!({"includeHidden":false,"cursor":cursor}))?;
+        let result = call("model/list", json!({"includeHidden":false,"cursor":cursor}))?;
         if let Some(data) = result["data"].as_array() {
             for model in data {
                 if let Some(id) = model["model"].as_str() {
@@ -864,14 +1044,14 @@ pub(crate) fn discover(host: Shared, cwd: Option<PathBuf>) -> Result<()> {
                         .as_array()
                         .is_none_or(|modes| modes.iter().any(|mode| mode == "image"));
                     if model["isDefault"] == true {
-                        default_images = images;
-                        default_model = Some(id.to_owned());
+                        own_default = Some(id.to_owned());
                     }
+                    let name = model_name(model["displayName"].as_str().unwrap_or(id));
                     models.push(Model {
                         images,
                         effort_models: Default::default(),
                         id: id.into(),
-                        name: model["displayName"].as_str().unwrap_or(id).into(),
+                        name: if name.is_empty() { id.into() } else { name },
                         efforts: model["supportedReasoningEfforts"]
                             .as_array()
                             .map(|a| {
@@ -895,35 +1075,39 @@ pub(crate) fn discover(host: Shared, cwd: Option<PathBuf>) -> Result<()> {
             break;
         }
     }
+    let default_model = default_model(&models, &["6.1", "sol"], own_default.as_deref());
+    Ok(RuntimeInfo {
+        version: Some(kodem_core::providers::codex::version()?),
+        images: models
+            .iter()
+            .find(|model| Some(&model.id) == default_model.as_ref())
+            .is_some_and(|model| model.images),
+        models,
+        default_model,
+        error: None,
+        steering: true,
+        files: true,
+        account_usage: true,
+        usage_resets: true,
+        access_modes: Vec::new(),
+    })
+}
+
+/// Reads account and model capabilities from the selected provider runtime.
+pub(crate) fn discover(host: Shared, account: &Account, cwd: Option<PathBuf>) -> Result<()> {
+    let cwd = cwd.unwrap_or(std::env::current_dir()?);
+    let mut codex = Catalog::open(&host, &cwd, account)?;
+    let identity = codex.call("account/read", json!({"refreshToken":false}))?;
+    let info = read_runtime(|method, params| codex.call(method, params))?;
     let mut h = host.lock().unwrap();
-    let previous_usage = h
-        .runtimes
-        .get(&Provider::Codex)
-        .and_then(|runtime| runtime.usage.clone());
-    h.runtimes.insert(
-        Provider::Codex,
-        RuntimeInfo {
-            version: Some(kodem_core::providers::codex::version()?),
-            authenticated: Some(
-                !account["account"].is_null() || account["requiresOpenaiAuth"] == false,
-            ),
-            models,
-            default_model,
-            usage: previous_usage,
-            error: None,
-            steering: true,
-            images: default_images,
-            files: true,
-            account_usage: true,
-            usage_resets: true,
-            access_modes: Vec::new(),
-        },
-    );
+    accounts::observe(&mut h, account, identity_status(&identity));
+    h.runtimes.insert(Provider::Codex, info);
     Ok(())
 }
 /// Reports instruction, skill, and MCP provenance through the existing provider owner when present.
 pub(crate) fn resources(
     host: &Shared,
+    account: &Account,
     task_id: Option<String>,
     project_id: Option<String>,
 ) -> Result<Vec<Resource>> {
@@ -960,7 +1144,7 @@ pub(crate) fn resources(
         }
         parent = path.parent();
     }
-    let mut codex = Catalog::open(host, &cwd)?;
+    let mut codex = Catalog::open(host, &cwd, account)?;
     let skills = codex.call("skills/list", json!({"cwds":[cwd],"forceReload":false}))?;
     if let Some(data) = skills["data"].as_array() {
         for group in data {
@@ -1015,21 +1199,24 @@ pub(crate) fn resources(
 
 /// Resolves uncertain delivery only from matching provider message or turn identity.
 pub(crate) fn reconcile(host: &Shared, task_id: &str) -> Result<()> {
-    let (task, submission) = {
+    let (task, account, submission) = {
         let h = host.lock().unwrap();
         ensure!(
             !h.sessions.contains_key(task_id),
             "The task still has a live transport owner"
         );
+        let task = h.store.task(task_id)?;
+        let account = accounts::for_task(&h, &task)?;
         (
-            h.store.task(task_id)?,
+            task,
+            account,
             h.store
                 .latest_submission(task_id)?
                 .context("No recorded outgoing submission to reconcile")?,
         )
     };
     let thread=task.provider_thread.as_ref().context("The provider never returned a thread identity. No prompt can be reconciled automatically; retain this task and create a new one.")?;
-    let mut codex = Codex::start(&task.cwd, |_| {})?;
+    let mut codex = Codex::start(&task.cwd, &account, |_| {})?;
     for agent in &task.subagents {
         let child = codex.call(
             "thread/read",
@@ -1162,14 +1349,46 @@ pub(crate) fn reconcile(host: &Shared, task_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Refreshes account limits without starting a model turn or changing authentication.
-pub(crate) fn refresh_usage(host: &Shared) -> Result<()> {
-    let mut catalog = Catalog::open(host, &std::env::current_dir()?)?;
-    read_usage(host, &mut catalog)?;
-    Ok(())
+fn identity_status(identity: &Value) -> AccountStatus {
+    let account = &identity["account"];
+    AccountStatus {
+        signed_in: Some(!account.is_null() || identity["requiresOpenaiAuth"] == false),
+        email: account["email"].as_str().map(str::to_owned),
+        plan: account["planType"].as_str().map(str::to_owned),
+        ..AccountStatus::default()
+    }
 }
 
-fn read_usage(host: &Shared, catalog: &mut Catalog) -> Result<UsageLimits> {
+/// Reads an account's sign-in state, and its quotas when requested, without a model turn.
+///
+/// The quick form asks only `codex login status`, which is enough to notice a finished sign-in.
+pub(crate) fn account_status(
+    host: &Shared,
+    account: &Account,
+    usage: bool,
+) -> Result<AccountStatus> {
+    if !usage {
+        let mut command = std::process::Command::new(kodem_core::providers::codex::executable()?);
+        command.args(["login", "status"]);
+        account.apply(&mut command);
+        let result = accounts::output(command, Duration::from_secs(20))?;
+        return Ok(AccountStatus {
+            signed_in: Some(result.status.success()),
+            ..AccountStatus::default()
+        });
+    }
+    let mut catalog = Catalog::for_account(host, account)?;
+    let mut status = identity_status(&catalog.call("account/read", json!({"refreshToken":false}))?);
+    if status.signed_in == Some(true) {
+        match read_usage(host, &mut catalog, account) {
+            Ok(usage) => status.usage = Some(usage),
+            Err(error) => status.error = Some(format!("{error:#}")),
+        }
+    }
+    Ok(status)
+}
+
+fn read_usage(host: &Shared, catalog: &mut Catalog, account: &Account) -> Result<UsageLimits> {
     let response = catalog.call("account/rateLimits/read", json!({}))?;
     let value = response["rateLimitsByLimitId"]
         .get("codex")
@@ -1177,22 +1396,27 @@ fn read_usage(host: &Shared, catalog: &mut Catalog) -> Result<UsageLimits> {
     let mut usage: UsageLimits = serde_json::from_value(value.clone())?;
     usage.banked_resets = serde_json::from_value(response["rateLimitResetCredits"].clone())?;
     usage.reported = now();
-    host.lock()
-        .unwrap()
-        .runtimes
-        .entry(Provider::Codex)
-        .or_default()
-        .usage = Some(usage.clone());
+    accounts::set_usage(
+        &mut host.lock().unwrap(),
+        Provider::Codex,
+        &account.id,
+        usage.clone(),
+    );
     Ok(usage)
 }
 
-/// Reads account usage or redeems one banked reset, then reads the authoritative balance.
-pub(crate) fn account_usage(host: &Shared, idempotency_key: Option<&str>) -> Result<Response> {
-    let mut catalog = Catalog::open(host, &std::env::current_dir()?)?;
+/// Reads one account's usage or redeems one banked reset, then reads the authoritative balance.
+pub(crate) fn account_usage(
+    host: &Shared,
+    account: &Account,
+    idempotency_key: Option<&str>,
+) -> Result<Response> {
+    let mut catalog = Catalog::for_account(host, account)?;
     let Some(key) = idempotency_key else {
         return Ok(Response::Usage {
             provider: Provider::Codex,
-            usage: read_usage(host, &mut catalog)?,
+            account: account.id.clone(),
+            usage: read_usage(host, &mut catalog, account)?,
         });
     };
     ensure!(
@@ -1205,16 +1429,11 @@ pub(crate) fn account_usage(host: &Shared, idempotency_key: Option<&str>) -> Res
     )?;
     let outcome = serde_json::from_value(response["outcome"].clone())?;
     // A failed refresh must not turn a confirmed redemption into an ambiguous failure.
-    let (usage, refresh_error) = match read_usage(host, &mut catalog) {
+    let (usage, refresh_error) = match read_usage(host, &mut catalog, account) {
         Ok(usage) => (Some(usage), None),
         Err(error) => {
-            if let Some(usage) = &mut host
-                .lock()
-                .unwrap()
-                .runtimes
-                .entry(Provider::Codex)
-                .or_default()
-                .usage
+            if let Some(usage) =
+                accounts::usage_mut(&mut host.lock().unwrap(), Provider::Codex, &account.id)
             {
                 usage.banked_resets = None;
             }
@@ -1223,6 +1442,7 @@ pub(crate) fn account_usage(host: &Shared, idempotency_key: Option<&str>) -> Res
     };
     Ok(Response::UsageReset {
         provider: Provider::Codex,
+        account: account.id.clone(),
         outcome,
         usage,
         refresh_error,
@@ -1265,20 +1485,23 @@ fn merge_usage(current: &mut Option<UsageLimits>, value: &Value) {
 /// Loads enabled skills for the selected task or project without coupling them to MCP health.
 pub(crate) fn composer_catalog(
     host: &Shared,
+    account: &Account,
     task_id: Option<String>,
     project_id: Option<String>,
 ) -> Result<ComposerCatalog> {
-    let cwd = {
+    let (cwd, started) = {
         let h = host.lock().unwrap();
         if let Some(id) = task_id {
-            h.store.task(&id)?.cwd
+            let task = h.store.task(&id)?;
+            (task.cwd, task.provider_thread.is_some())
         } else if let Some(id) = project_id {
-            h.store
+            let project = h
+                .store
                 .projects()?
                 .into_iter()
                 .find(|p| p.id == id)
-                .context("Project is no longer available")?
-                .path
+                .context("Project is no longer available")?;
+            (project.path, false)
         } else {
             anyhow::bail!("Select a project to load its Codex skills");
         }
@@ -1288,7 +1511,13 @@ pub(crate) fn composer_catalog(
         Ok(commands) => result.commands = commands,
         Err(error) => result.errors.push(format!("Commands: {error:#}")),
     }
-    let skills = Catalog::open(host, &cwd)
+    // Only a conversation that exists can be compacted.
+    if !started {
+        result
+            .commands
+            .retain(|command| *command != ComposerCommand::Compact);
+    }
+    let skills = Catalog::open(host, &cwd, account)
         .and_then(|mut codex| codex.call("skills/list", json!({"cwds":[cwd],"forceReload":true})));
     match skills {
         Ok(value) => {
@@ -1327,14 +1556,4 @@ pub(crate) fn composer_catalog(
     });
     result.skills.dedup_by(|a, b| a.path == b.path);
     Ok(result)
-}
-
-fn selected_model(host: &Shared, task: &Task) -> Option<String> {
-    task.model.clone().or_else(|| {
-        host.lock()
-            .unwrap()
-            .runtimes
-            .get(&Provider::Codex)
-            .and_then(|runtime| runtime.default_model.clone())
-    })
 }

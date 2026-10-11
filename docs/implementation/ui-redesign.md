@@ -69,3 +69,76 @@ Verification uses compilation and source checks only. Temporary reducer tests pa
 The four comparison buttons now live in a single compact dropdown in the review header. Its trigger displays the selected comparison and chevron beside the change count. The old 34 px toolbar row is removed. The dropdown marks the selected option and closes on selection, outside click, Escape, or hiding review with Cmd-D. Selecting another comparison clears the prior file selection and pending snapshot before requesting its diff.
 
 Clippy, debug compilation/packaging and release compilation/packaging passed for the dropdown correction. Release installation was blocked by the running installed app or host; the new bundle is ready in target/release/Kodem.app. No app control or visual testing was performed.
+
+## Liquid redesign, 12 October 2026
+
+The user asked for a strong redesign in the fashion of Liquid, their Git client: its dithering, its aesthetics and its animations. They also asked for better use as an agentic coding tool, Claude Code support, several accounts per provider, a default model and account per project, and nicer output. The visual language is recorded in [dithered interface](../design/dithered-interface.md). The survey behind the interaction changes is in [research](../design/research.md). Provider and account behavior is in [providers](providers.md).
+
+### What changed in the desktop
+
+| Area | Change |
+| --- | --- |
+| Design system | Liquid's palette, Geist Mono labels, dot-matrix dither fields, button surfaces, dissolve entrances and the effect layer replace the earlier warm palette, IBM Plex Sans, JetBrains Mono and fine grain. Shared pieces live in `ui/kit.rs`. |
+| Title bar | Project and branch, a worktree chip, a button that opens the next task that needs the user, a running readout, and a field that opens the command palette. |
+| Thread feed | Sections lead with what needs a person: Needs you, Working, Ready for review, then Threads and Settled. A finished result is unread until its task is opened. Rows show the provider, a dot for a non-default account, the branch and a micro diffstat. The footer shows the composer account's limit windows. |
+| Command palette | Command-K lists every action, thread and account in one ranked list. |
+| Keyboard | Next and previous task, Command-1 to Command-9, the next task that needs the user, the agent menus, Shift-Tab to cycle access, Control-backtick for the terminal, and Command-Return to send the other way during a turn. |
+| Composer | One chip for provider, model and account, one for effort and one for access. The send button offers stop on an empty draft during a turn and steer or queue on a draft. The agent's step list is a progress strip. `@` completes files of the task's checkout. |
+| Agent menu | Provider rail, the provider's accounts with plan and limit meter, models, and a control that makes the current choice the project's default. |
+| Requests | Permission requests, plan reviews and questions render inside the composer. A decline can carry feedback. Questions support several choices. The separate approval dialog is removed. |
+| Transcript | A run of tool calls folds into one summary line with counts, totals and a live line for the running call. Failed calls stay visible while the run is folded. Structured calls show a category, a subject, a duration, and an inline diff for edits. Thinking is a foldable row. One-line notices read as dividers. |
+| Markdown | Bare web addresses become links. A click opens a link, and a click on a file reference opens it in the file browser. GitHub alerts render as callouts. Code blocks show their line count. |
+| Notices | Errors and short confirmations float above the workspace instead of taking a row under the title bar. The task's account shows a notice when it is signed out or at its limit, with the action that fixes it. |
+| Settings | An Accounts section with one card per account. Projects show and clear their default agent. The provider section points to accounts for sign-in. |
+
+### Verification
+
+Compilation, formatting and Clippy are the only checks for the desktop. No application launch, screenshot or visual test was performed, under the standing agreement. Appearance, layout at narrow widths, animation timing, effect positions and performance of the dot fields are unverified and remain with the user.
+
+Risks to check first on a real display:
+
+1. Dot fields cost one quad per dot. The hero field on the new-task screen and the active thread rows repaint about twelve times per second.
+2. Effect targets come from the last painted frame. An effect whose target is hidden is skipped or lands on a fallback box.
+3. Menus opened from the keyboard attach to the composer chip that was painted last, or to a position near the composer when none was.
+4. A click on a link opens it only when the pointer did not move between press and release, so that a drag still selects text.
+
+## Follow-up, 12 October 2026
+
+The user tested the Liquid redesign and reported five things: models showed "Default" and "recommended" entries and Devin was still a provider; many elements did not follow the new language; performance was very poor; some settings needed sliders and toggles instead of step buttons; and compaction and automatic compaction were missing.
+
+### Performance
+
+No frame time was measured, because the application may not be launched under the standing agreement. The causes below come from reading what one frame runs. `scripts/build-macos.sh debug` builds the unoptimized profile, so every one of them was several times more expensive there.
+
+| Cause | Change |
+| --- | --- |
+| Each dot of each dither field was one quad on each frame, and each quad was sorted against the scene. | Static fields are baked into cached sprites (`ui/dither.rs`). Moving fields paint quads in one layer on small areas. |
+| The working pulse, the wordmark scan, the text gleam and the blinking glyph requested a redraw on every display frame. Every redraw renders the whole workspace. | They read one stepped clock of about twelve frames per second. |
+| A press ripple or a flying chip redrew the workspace on every frame of the effect. | The effect layer is a sibling of the workspace, and the workspace is a cached view (`Stage` in `ui/chrome.rs`). |
+| A visible run of tool calls built a view of every call on every frame. That removed escape sequences from each call's whole output and cloned every message of the run. | Tool views are cached until their message changes (`tool_output.rs`). Only the calls on screen are copied. |
+| Each visible message was parsed as Markdown on every frame. | Parsed blocks are cached by text (`markdown.rs`). |
+| An expanded tool call parsed its output as JSON on every frame. | The view holds the pretty-printed output. |
+| Streamed text redrew the conversation on every display frame while letters settled. | It redraws about thirty times per second. |
+| The hero field on the new-task screen ran three full-size animated layers. | The noise layer is static and cached. The wave and the pointer glow still move. |
+| GPUI and the other dependencies were unoptimized in the debug profile. | `[profile.dev.package."*"]` sets `opt-level = 3`. Kodem's own crates stay unoptimized. The first debug build after this change takes several minutes longer. |
+
+### Design consistency
+
+`ui/kit.rs` gained the block and its header, the dotted leader and the selection edge. `ui/controls.rs` holds the switch and the slider, ported from Liquid. Every screen was moved onto these recipes: the transcript (code, tables, callouts, quotes, inline code, tool runs, inline diffs), the usage panel and its hover cards, the agent menu, menus, the command palette, the completion menu, the review pane and diff view, the changes tree, the file browser, questions and approvals, the plan and activity strips, attachments and queued messages, the agent popup, the image preview, dialogs, and Settings. A control shows its accent edge only for keyboard focus; a click no longer leaves it outlined.
+
+### Settings
+
+On/off settings are switches. Sidebar width and conversation text size are sliders with a readout. Choices between a few options are segmented groups. The event switches under Notifications are disabled while task notifications are off.
+
+### Models
+
+No menu shows a provider default. The composer always resolves a concrete model: the choice of this draft, the project's default, the model this account used last in this project, the model it used last anywhere, then the provider's default model. The host records the last model per account and per account and project (`Settings::model_choices`).
+
+### Compaction
+
+The usage panel has a Context section with the window, the point where automatic compaction starts, and Compact now. The composer's `/compact` command and the command palette run the same request. Settings → Providers holds the rules: one for all providers, an optional rule per provider, and an optional rule per model.
+
+### Verification
+
+Compilation, formatting and Clippy are the only checks. Appearance, layout, motion and the size of the performance gain are unverified.
+

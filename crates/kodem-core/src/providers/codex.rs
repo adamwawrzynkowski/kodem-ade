@@ -142,8 +142,13 @@ pub fn version() -> Result<String> {
 }
 impl Codex {
     /// Generates a bounded sidebar title in a separate ephemeral, restricted thread.
-    pub fn generate_title(cwd: &Path, model: Option<&str>, input: &str) -> Result<String> {
-        let mut codex = Self::start(cwd, |_| {})?;
+    pub fn generate_title(
+        cwd: &Path,
+        account: &Account,
+        model: Option<&str>,
+        input: &str,
+    ) -> Result<String> {
+        let mut codex = Self::start(cwd, account, |_| {})?;
         let mut config = json!({
             "features.shell_tool": false,
             "features.code_mode_host": false,
@@ -203,10 +208,14 @@ impl Codex {
         Ok(title)
     }
 
-    /// Starts and initializes one owned app-server process.
-    pub fn start(cwd: &Path, mut event: impl FnMut(Value)) -> Result<Self> {
+    /// Starts and initializes one owned app-server process under the given account.
+    ///
+    /// The account is fixed for the life of the process; changing it requires a new one.
+    pub fn start(cwd: &Path, account: &Account, mut event: impl FnMut(Value)) -> Result<Self> {
         let executable = executable()?;
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        account.apply(&mut command);
+        let mut child = command
             .current_dir(cwd)
             .args(["app-server", "--stdio", "-c",
                 "features.default_mode_request_user_input=true", "-c",
@@ -413,6 +422,7 @@ pub fn composer_commands() -> Result<Vec<ComposerCommand>> {
         (ComposerCommand::Skills, "skills/list"),
         (ComposerCommand::Mcp, "mcpServerStatus/list"),
         (ComposerCommand::Status, "account/rateLimits/read"),
+        (ComposerCommand::Compact, "thread/compact/start"),
     ]
     .into_iter()
     .filter_map(|(command, method)| {

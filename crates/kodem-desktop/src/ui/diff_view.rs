@@ -510,6 +510,7 @@ impl DiffView {
             input.set_wrap(self.wrap);
         });
         let selected = self.range().is_some_and(|(a, b)| row >= a && row <= b);
+        let header = line.kind == LineKind::Header;
         let marker = match line.kind {
             LineKind::Added => "+",
             LineKind::Removed => "−",
@@ -535,6 +536,7 @@ impl DiffView {
                 MouseButton::Left,
                 cx.listener(|view, _, window, cx| window.focus(&view.focus, cx)),
             )
+            .relative()
             .flex()
             .min_h(px(24.))
             .when(!self.wrap, |d| d.h(px(24.)))
@@ -545,14 +547,25 @@ impl DiffView {
             .font_family(crate::theme::MONO)
             .text_size(px(12.))
             .bg(if selected {
-                t.selected
+                t.accent.opacity(0.1)
             } else {
                 match line.kind {
                     LineKind::Added => t.added_bg,
                     LineKind::Removed => t.removed_bg,
-                    LineKind::Header => t.raised,
+                    LineKind::Header => t.header,
                     _ => t.inset,
                 }
+            })
+            // A hunk header is a quiet mono row that ends in a dotted rule.
+            .when(header, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+                )
             })
             .child(
                 div()
@@ -566,9 +579,10 @@ impl DiffView {
                     .border_color(if selected {
                         t.accent
                     } else {
+                        // A solid edge in the line's color marks changed lines down the gutter.
                         match line.kind {
-                            LineKind::Added => t.added.opacity(0.7),
-                            LineKind::Removed => t.removed.opacity(0.7),
+                            LineKind::Added => t.added,
+                            LineKind::Removed => t.removed,
                             _ => hsla(0., 0., 0., 0.),
                         }
                     })
@@ -583,7 +597,8 @@ impl DiffView {
                     })
                     .cursor_crosshair()
                     .whitespace_nowrap()
-                    .child(numbers)
+                    .when(header, |d| d.child(super::caps("Hunk", t)))
+                    .when(!header, |d| d.child(numbers))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |view, event, window, cx| {
@@ -597,7 +612,7 @@ impl DiffView {
                     .flex_1()
                     .py(px(3.))
                     .overflow_hidden()
-                    .text_color(t.text)
+                    .text_color(if header { t.muted } else { t.text })
                     .child(input),
             )
             .into_any_element()
@@ -626,93 +641,137 @@ impl DiffView {
     fn comment_editor(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let range = self.range().unwrap();
-        let label = format!("{} selected lines", range.1 - range.0 + 1);
+        let count = range.1 - range.0 + 1;
         div()
             .w(self.bounds.map_or(px(360.), |bounds| bounds.size.width))
             .ml(-self.horizontal.offset().x)
             .h(px(164.))
             .px(px(12.))
-            .py(px(10.))
+            .py(px(8.))
             .bg(t.sidebar)
-            .border_t_2()
-            .border_b_1()
-            .border_color(t.accent)
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .child(super::caps(format!("Comment · {label}"), t).text_color(t.accent))
             .child(
-                div()
-                    .id("diff-comment-input")
-                    .px(px(10.))
-                    .py(px(7.))
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .rounded(px(crate::theme::RADIUS_CONTROL))
-                    .border_1()
-                    .border_color(t.edge)
-                    .bg(t.canvas)
-                    .font_family(crate::theme::SANS)
-                    .text_size(px(13.))
-                    .child(self.comment.clone()),
-            )
-            .child(
-                div()
+                kit::block(t)
+                    .h_full()
                     .flex()
-                    .justify_end()
-                    .gap_2()
+                    .flex_col()
+                    .border_color(t.accent.opacity(0.4))
+                    .bg(t.canvas)
                     .child(
-                        Button::new("cancel-diff-comment")
-                            .disabled(self.pending_comment)
-                            .h(px(26.))
-                            .px(px(9.))
-                            .gap(px(6.))
-                            .rounded(px(crate::theme::RADIUS_CONTROL))
-                            .text_size(px(12.))
-                            .text_color(t.muted)
-                            .hover(move |b| b.bg(t.selected).text_color(t.text))
-                            .cursor_pointer()
-                            .child(icon("close").size(px(14.)))
-                            .child("Cancel")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.gutter = None;
-                                view.comment_open = false;
-                                view.reset_list();
-                                cx.notify();
-                            })),
+                        kit::block_header("Comment", t.accent, t)
+                            .pr(px(10.))
+                            .child(kit::chip(
+                                format!("{count} {}", if count == 1 { "LINE" } else { "LINES" }),
+                                t.accent,
+                            )),
                     )
                     .child(
-                        Button::new("attach-diff-comment")
-                            .disabled(self.pending_comment)
-                            .h(px(26.))
-                            .px(px(9.))
+                        div()
+                            .id("diff-comment-input")
+                            .px(px(10.))
+                            .py(px(7.))
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .font_family(crate::theme::SANS)
+                            .text_size(px(13.))
+                            .child(self.comment.clone()),
+                    )
+                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px(px(6.))
+                            .py(px(4.))
+                            .flex()
+                            .justify_end()
                             .gap(px(6.))
-                            .rounded(px(crate::theme::RADIUS_CONTROL))
-                            .bg(t.accent)
-                            .text_color(t.on_accent)
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .cursor_pointer()
-                            .child(icon("plus").size(px(14.)))
-                            .child("Add context")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                if !view.pending_comment
-                                    && let Some((first_row, last_row)) = view.range()
-                                {
-                                    view.pending_comment = true;
-                                    cx.emit(ContextRequested {
-                                        first_row,
-                                        last_row,
-                                        comment: view.comment.read(cx).text(),
-                                    });
-                                    cx.notify();
-                                }
-                            })),
+                            .child(
+                                action_button("cancel-diff-comment", "close", "Cancel", false, t)
+                                    .disabled(self.pending_comment)
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.gutter = None;
+                                        view.comment_open = false;
+                                        view.reset_list();
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                action_button(
+                                    "attach-diff-comment",
+                                    "plus",
+                                    "Add context",
+                                    true,
+                                    t,
+                                )
+                                .disabled(self.pending_comment)
+                                .on_click(cx.listener(
+                                    |view, _, _, cx| {
+                                        if !view.pending_comment
+                                            && let Some((first_row, last_row)) = view.range()
+                                        {
+                                            view.pending_comment = true;
+                                            cx.emit(ContextRequested {
+                                                first_row,
+                                                last_row,
+                                                comment: view.comment.read(cx).text(),
+                                            });
+                                            cx.notify();
+                                        }
+                                    },
+                                )),
+                            ),
                     ),
             )
             .into_any_element()
     }
+}
+
+// A button of the comment editor in the shared control language. This view is its own entity,
+// so it cannot use the shell's button builders. `filled` selects the accent main action.
+fn action_button(
+    id: &'static str,
+    glyph: &'static str,
+    label: &'static str,
+    filled: bool,
+    theme: Theme,
+) -> Button {
+    let tone = if filled { theme.accent } else { theme.muted };
+    let button = Button::new(id)
+        .relative()
+        .overflow_hidden()
+        .h(px(26.))
+        .px(px(9.))
+        .gap(px(5.))
+        .rounded(px(crate::theme::RADIUS_CONTROL))
+        .border_1()
+        .font_family(crate::theme::MONO)
+        .text_size(px(11.5))
+        .cursor_pointer()
+        .styles(|s| s.disabled(|s| s.opacity(0.4).cursor_default()))
+        .focus_visible(move |s| s.border_color(theme.accent.opacity(0.7)))
+        .on_press(move |position, cx| fx::ripple(position, tone, cx));
+    if filled {
+        button
+            .child(kit::shade(gpui::black().opacity(0.2), dither::Edge::Bottom))
+            .child(kit::glint(gpui::white().opacity(0.3), dither::Edge::Top))
+            .bg(theme.accent)
+            .border_color(theme.accent)
+            .text_color(theme.on_accent)
+            .font_weight(FontWeight::SEMIBOLD)
+            .hover(move |s| s.bg(theme.accent.opacity(0.9)))
+            .active(move |s| s.bg(theme.accent.opacity(0.8)))
+    } else {
+        button
+            .child(kit::glint(theme.dot, dither::Edge::Bottom))
+            .bg(gpui::transparent_black())
+            .border_color(gpui::transparent_black())
+            .text_color(theme.muted)
+            .font_weight(FontWeight::MEDIUM)
+            .hover(move |s| s.bg(theme.selected).text_color(theme.text))
+            .active(move |s| s.bg(theme.control_active))
+    }
+    .child(icon(glyph).size(px(13.)))
+    .child(label)
 }
 impl Render for DiffView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

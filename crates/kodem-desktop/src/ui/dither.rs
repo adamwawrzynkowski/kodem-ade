@@ -1,11 +1,16 @@
 //! Ordered (Bayer) dithering: the workspace's shading, depth and working-state language.
 //!
-//! Patterns are anchored to the window's cell grid, so an animated density field changes which
-//! cells are lit without the pattern itself crawling or flickering. One-point cells are texture
-//! (shadows, scrims, fades, selection grain); two- and three-point cells are signal (work in
-//! progress, the wordmark and the new-task field). Motion is reserved for signal.
+//! Two layers share one 8×8 Bayer threshold. Fine one-point cells anchored to the window grid
+//! are texture: shadows, scrims and fades where content passes under chrome. Dot-matrix fields
+//! (`Dither`) are drawn as separate square dots on a two- or three-point pitch, so smooth values
+//! turn into the regular patterns of retro displays and print halftones. They shade surfaces,
+//! mark selection and report work.
+//!
+//! Static fields are baked into cached sprites, so they cost one draw call per frame. Animated
+//! fields advance on a stepped clock of about twelve frames per second. The steps are
+//! part of the look and keep the redraw cost low. With reduced motion, fields render one frame.
 use super::*;
-use std::{cell::RefCell, f32::consts::TAU, sync::Arc};
+use std::{cell::RefCell, f32::consts::TAU, rc::Rc, sync::Arc, time::Instant};
 
 const BAYER: [[u8; 8]; 8] = [
     [0, 32, 8, 40, 2, 34, 10, 42],
@@ -23,6 +28,11 @@ const TILE_CELLS: u32 = 32;
 /// Returns the threshold of a window-grid cell in the open interval (0, 1).
 fn threshold(x: i64, y: i64) -> f32 {
     (BAYER[y.rem_euclid(8) as usize][x.rem_euclid(8) as usize] as f32 + 0.5) / 64.
+}
+
+/// Returns the Bayer threshold of one dot cell, for effects that paint their own fields.
+pub(super) fn cell_threshold(column: i32, row: i32) -> f32 {
+    threshold(column as i64, row as i64)
 }
 
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -95,6 +105,336 @@ fn inside_rounded(x: f32, y: f32, width: f32, height: f32, radius: f32) -> bool 
     let dx = (radius - x.min(width - x)).max(0.);
     let dy = (radius - y.min(height - y)).max(0.);
     dx * dx + dy * dy <= radius * radius
+}
+
+/// Cells per side of a strip sprite; a multiple of the Bayer period.
+const STRIP_CELLS: u32 = 64;
+/// Bytes of new sprites one frame may bake. Fields beyond it are painted as quads for that frame.
+const FRAME_BUDGET: usize = 2 << 20;
+/// Largest sprite worth caching, in bytes.
+const SPRITE_LIMIT: usize = 4 << 20;
+/// Bytes of cached sprites kept before the least recently used ones are dropped.
+const CACHE_LIMIT: usize = 48 << 20;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct SpriteKey {
+    /// Digest of everything that decides which dots are lit and in which color.
+    content: u64,
+    columns: u32,
+    rows: u32,
+    /// Cell and dot size in device pixels.
+    cell: u32,
+    dot: u32,
+}
+
+struct Sprite {
+    image: Arc<RenderImage>,
+    bytes: usize,
+    used: u64,
+}
+
+// Static dot fields baked at device resolution. A cached field costs one sprite per frame
+// instead of one quad per dot.
+#[derive(Default)]
+struct Bakery {
+    sprites: std::collections::HashMap<SpriteKey, Sprite>,
+    bytes: usize,
+    frame: u64,
+    spent: usize,
+}
+
+thread_local! {
+    static BAKERY: RefCell<Bakery> = RefCell::default();
+}
+
+/// Starts a frame of sprite baking. Call it once before the window's content renders.
+pub(super) fn begin_frame() {
+    BAKERY.with(|bakery| {
+        let mut bakery = bakery.borrow_mut();
+        bakery.frame += 1;
+        bakery.spent = 0;
+    });
+}
+
+// Returns straight-alpha BGRA, the layout of GPUI's sprite atlas.
+fn texel(color: Hsla) -> [u8; 4] {
+    let rgba = hsla_to_rgba(color);
+    let channel = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
+    [
+        channel(rgba.blue),
+        channel(rgba.green),
+        channel(rgba.red),
+        channel(rgba.alpha),
+    ]
+}
+
+fn bake(key: SpriteKey, source: &dyn Fn(i32, i32) -> Option<Hsla>) -> Arc<RenderImage> {
+    let (cell, dot) = (key.cell as usize, key.dot as usize);
+    let (width, height) = (key.columns as usize * cell, key.rows as usize * cell);
+    let inset = (cell - dot) / 2;
+    let mut data = vec![0u8; width * height * 4];
+    let mut line = vec![0u8; width * 4];
+    for row in 0..key.rows as usize {
+        line.fill(0);
+        let mut lit = false;
+        for column in 0..key.columns as usize {
+            let Some(color) = source(column as i32, row as i32) else {
+                continue;
+            };
+            let pixel = texel(color);
+            if pixel[3] == 0 {
+                continue;
+            }
+            lit = true;
+            let start = (column * cell + inset) * 4;
+            for target in line[start..start + dot * 4].chunks_exact_mut(4) {
+                target.copy_from_slice(&pixel);
+            }
+        }
+        if !lit {
+            continue;
+        }
+        for y in 0..dot {
+            let start = (row * cell + inset + y) * width * 4;
+            data[start..start + width * 4].copy_from_slice(&line);
+        }
+    }
+    let buffer = image::RgbaImage::from_raw(width as u32, height as u32, data)
+        .expect("sprite buffer matches its dimensions");
+    Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]))
+}
+
+// Returns the cached sprite for `key`, baking it when this frame's budget allows.
+fn sprite(
+    window: &mut Window,
+    cx: &mut App,
+    key: SpriteKey,
+    source: &dyn Fn(i32, i32) -> Option<Hsla>,
+) -> Option<Arc<RenderImage>> {
+    let bytes = (key.columns * key.cell) as usize * (key.rows * key.cell) as usize * 4;
+    BAKERY.with(|bakery| {
+        let mut bakery = bakery.borrow_mut();
+        let frame = bakery.frame;
+        if let Some(sprite) = bakery.sprites.get_mut(&key) {
+            sprite.used = frame;
+            return Some(sprite.image.clone());
+        }
+        if bytes == 0
+            || bytes > SPRITE_LIMIT
+            || (bakery.spent > 0 && bakery.spent + bytes > FRAME_BUDGET)
+        {
+            return None;
+        }
+        let image = bake(key, source);
+        bakery.spent += bytes;
+        bakery.bytes += bytes;
+        bakery.sprites.insert(
+            key,
+            Sprite {
+                image: image.clone(),
+                bytes,
+                used: frame,
+            },
+        );
+        if bakery.bytes > CACHE_LIMIT {
+            // Sprites of this and the previous frame may still be on screen.
+            let mut idle: Vec<(u64, SpriteKey)> = bakery
+                .sprites
+                .iter()
+                .filter(|(_, sprite)| sprite.used + 1 < frame)
+                .map(|(key, sprite)| (sprite.used, *key))
+                .collect();
+            idle.sort_unstable_by_key(|(used, _)| *used);
+            for (_, key) in idle {
+                if bakery.bytes <= CACHE_LIMIT / 4 * 3 {
+                    break;
+                }
+                if let Some(sprite) = bakery.sprites.remove(&key) {
+                    bakery.bytes -= sprite.bytes;
+                    cx.drop_image(sprite.image, Some(window));
+                }
+            }
+        }
+        Some(image)
+    })
+}
+
+/// A grid of square dots in window coordinates.
+#[derive(Clone, Copy)]
+struct Grid {
+    left: f32,
+    top: f32,
+    columns: u32,
+    rows: u32,
+    cell: f32,
+    dot: f32,
+}
+
+impl Grid {
+    fn bounds(&self) -> Bounds<Pixels> {
+        Bounds::new(
+            point(px(self.left), px(self.top)),
+            size(
+                px(self.columns as f32 * self.cell),
+                px(self.rows as f32 * self.cell),
+            ),
+        )
+    }
+}
+
+// Paints the dots that `source` lights. With `content`, the grid is drawn from a cached sprite of
+// `tile` cells that repeats across the grid; a strip of a field that varies along one axis serves
+// every size along the other. Without it, or while the sprite cannot be baked, each dot is a quad.
+fn paint_dots(
+    window: &mut Window,
+    cx: &mut App,
+    grid: Grid,
+    tile: (u32, u32),
+    content: Option<u64>,
+    radius: f32,
+    source: &dyn Fn(i32, i32) -> Option<Hsla>,
+) {
+    if grid.columns == 0 || grid.rows == 0 {
+        return;
+    }
+    let bounds = grid.bounds();
+    if !window.content_mask().bounds.intersects(&bounds) {
+        return;
+    }
+    let scale = window.scale_factor();
+    let device_cell = (grid.cell * scale).round();
+    // A sprite is sharp only when a cell covers whole device pixels.
+    if let Some(content) = content
+        && device_cell >= 1.
+        && (grid.cell * scale - device_cell).abs() < 0.01
+    {
+        let key = SpriteKey {
+            content,
+            columns: tile.0,
+            rows: tile.1,
+            cell: device_cell as u32,
+            dot: ((grid.dot * scale).round() as u32).clamp(1, device_cell as u32),
+        };
+        if let Some(image) = sprite(window, cx, key, source) {
+            paint_sprite(window, image, bounds, tile, grid.cell, radius);
+            return;
+        }
+    }
+    paint_quads(window, grid, radius, source);
+}
+
+// Repeats a sprite across `bounds` and rounds the corners that coincide with the grid's corners.
+fn paint_sprite(
+    window: &mut Window,
+    image: Arc<RenderImage>,
+    bounds: Bounds<Pixels>,
+    tile: (u32, u32),
+    cell: f32,
+    radius: f32,
+) {
+    let (tile_width, tile_height) = (tile.0 as f32 * cell, tile.1 as f32 * cell);
+    let (left, top) = (f32::from(bounds.left()), f32::from(bounds.top()));
+    let (right, bottom) = (f32::from(bounds.right()), f32::from(bounds.bottom()));
+    let mut y = top;
+    while y < bottom {
+        let mut x = left;
+        while x < right {
+            let region = Bounds::new(point(px(x), px(y)), size(px(tile_width), px(tile_height)));
+            let (first_column, last_column) = (x <= left, x + tile_width >= right);
+            let (first_row, last_row) = (y <= top, y + tile_height >= bottom);
+            let corner = |rounded: bool| px(if rounded { radius } else { 0. });
+            let radii = Corners {
+                top_left: corner(first_column && first_row),
+                top_right: corner(last_column && first_row),
+                bottom_right: corner(last_column && last_row),
+                bottom_left: corner(first_column && last_row),
+            };
+            let _ = window.paint_image(
+                region.intersect(&bounds),
+                region,
+                radii,
+                image.clone(),
+                0,
+                false,
+            );
+            x += tile_width;
+        }
+        y += tile_height;
+    }
+}
+
+// Paints each lit dot as a quad in one layer. Solid cells merge into runs.
+fn paint_quads(
+    window: &mut Window,
+    grid: Grid,
+    radius: f32,
+    source: &dyn Fn(i32, i32) -> Option<Hsla>,
+) {
+    let bounds = grid.bounds();
+    let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+    let cell = grid.cell;
+    let dot = grid.dot.clamp(0.5, cell);
+    let inset = (cell - dot) / 2.;
+    let solid = dot >= cell;
+    let columns = grid.columns as i32;
+    window.paint_layer(bounds, |window| {
+        for row in 0..grid.rows as i32 {
+            let y = grid.top + row as f32 * cell;
+            let mut run: Option<(i32, Hsla)> = None;
+            for column in 0..=columns {
+                let lit = if column < columns
+                    && !outside_rounded_corner(
+                        (column as f32 + 0.5) * cell,
+                        (row as f32 + 0.5) * cell,
+                        width,
+                        height,
+                        radius,
+                    ) {
+                    source(column, row)
+                } else {
+                    None
+                };
+                if !solid {
+                    if let Some(color) = lit {
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(px(grid.left + column as f32 * cell + inset), px(y + inset)),
+                                size(px(dot), px(dot)),
+                            ),
+                            color,
+                        ));
+                    }
+                    continue;
+                }
+                if let (Some(color), Some((_, current))) = (lit, run)
+                    && color == current
+                {
+                    continue;
+                }
+                if let Some((start, color)) = run {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(px(grid.left + start as f32 * cell), px(y)),
+                            size(px((column - start) as f32 * cell), px(cell)),
+                        ),
+                        color,
+                    ));
+                }
+                run = lit.map(|color| (column, color));
+            }
+        }
+    });
+}
+
+// Starts a digest of the values that decide a sprite's content.
+fn digest(color: Hsla, values: &[f32]) -> std::collections::hash_map::DefaultHasher {
+    use std::hash::Hash;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    texel(color).hash(&mut hasher);
+    for value in values {
+        value.to_bits().hash(&mut hasher);
+    }
+    hasher
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -256,16 +596,6 @@ pub(super) fn fade(color: Hsla, height: f32, solid_at_bottom: bool) -> Canvas<()
     .h(px(height))
 }
 
-/// Draws a one-point dotted rule on alternating window pixels.
-pub(super) fn rule(color: Hsla) -> impl IntoElement {
-    canvas(
-        |_, _, _| {},
-        move |bounds, _, window, _| paint_cells(window, bounds, 1., color, |_, _| 0.5),
-    )
-    .w_full()
-    .h(px(1.))
-}
-
 /// Casts a dithered contact shadow below and right of its parent's rounded bounds.
 ///
 /// Place it as the first child of a relatively positioned wrapper that has the same bounds as
@@ -273,81 +603,148 @@ pub(super) fn rule(color: Hsla) -> impl IntoElement {
 pub(super) fn shadow(theme: Theme, radius: f32, depth: f32) -> impl IntoElement {
     canvas(
         |_, _, _| {},
-        move |bounds, _, window, _| paint_shadow(window, bounds, radius, depth, theme.ink),
+        move |bounds, _, window, cx| paint_shadow(window, cx, bounds, radius, depth, theme.ink),
     )
     .absolute()
     .inset_0()
 }
 
-// Visits only the uncovered band around the surface, never its interior.
-fn paint_shadow(window: &mut Window, surface: Bounds<Pixels>, radius: f32, depth: f32, ink: Hsla) {
-    let (left, top) = (f32::from(surface.left()), f32::from(surface.top()));
-    let (width, height) = (
-        f32::from(surface.size.width),
-        f32::from(surface.size.height),
+// Covers only the uncovered bands around the surface: beside its right edge and below it.
+fn paint_shadow(
+    window: &mut Window,
+    cx: &mut App,
+    surface: Bounds<Pixels>,
+    radius: f32,
+    depth: f32,
+    ink: Hsla,
+) {
+    use std::hash::{Hash, Hasher};
+    let (left, top) = (
+        f32::from(surface.left()).floor(),
+        f32::from(surface.top()).floor(),
     );
+    let (width, height) = (
+        f32::from(surface.size.width).round(),
+        f32::from(surface.size.height).round(),
+    );
+    if width < 1. || height < 1. {
+        return;
+    }
     let (offset_x, offset_y) = (depth * 0.4, depth);
     let spread = depth * 1.5;
-    let region = Bounds::new(
-        point(px(left + offset_x - spread), px(top + offset_y - spread)),
-        size(px(width + spread * 2.), px(height + spread * 2.)),
-    );
-    let x0 = left.floor() as i64;
-    let x1 = (left + width + offset_x + spread).ceil() as i64;
-    let y0 = top.floor() as i64;
-    let y1 = (top + height + offset_y + spread).ceil() as i64;
-    let cast = |x: f32, y: f32| -> f32 {
-        // Distance outside the offset rounded rectangle, in points.
-        let (sx, sy) = (x - left - offset_x, y - top - offset_y);
-        let qx = (sx - width / 2.).abs() - (width / 2. - radius);
-        let qy = (sy - height / 2.).abs() - (height / 2. - radius);
-        let outside = qx.max(0.).hypot(qy.max(0.)) + qx.max(qy).min(0.) - radius;
-        0.62 * (1. - smoothstep(0., spread, outside))
-    };
-    window.paint_layer(region, |window| {
-        for y in y0..y1 {
-            let cy = y as f32 + 0.5;
-            let beside = cy < top + height - radius;
-            let mut run: Option<i64> = None;
-            let start = if beside {
-                (left + width).floor() as i64 - 1
-            } else {
-                x0
-            };
-            for x in start..=x1 {
-                let cx = x as f32 + 0.5;
-                let lit = x < x1
-                    && !inside_rounded(cx - left, cy - top, width, height, radius)
-                    && cast(cx, cy) > threshold(x, y);
-                match (lit, run) {
-                    (true, None) => run = Some(x),
-                    (false, Some(first)) => {
-                        window.paint_quad(fill(
-                            Bounds::new(
-                                point(px(first as f32), px(y as f32)),
-                                size(px((x - first) as f32), px(1.)),
-                            ),
-                            ink,
-                        ));
-                        run = None;
-                    }
-                    _ => {}
-                }
+    let right = (width + offset_x + spread).ceil();
+    let bottom = (height + offset_y + spread).ceil();
+    // The surface hides everything left of its right edge above this row.
+    let split = (height - radius).floor().max(0.);
+    let beside = (width - 1.).max(0.);
+    let bands = [
+        (0u8, beside, 0., right - beside, split),
+        (1u8, 0., split, right, bottom - split),
+    ];
+    for (band, x0, y0, columns, rows) in bands {
+        let source = |column: i32, row: i32| -> Option<Hsla> {
+            // Cell positions relative to the surface, so both bands share one pattern.
+            let (cell_x, cell_y) = (x0 as i32 + column, y0 as i32 + row);
+            let (x, y) = (cell_x as f32 + 0.5, cell_y as f32 + 0.5);
+            if inside_rounded(x, y, width, height, radius) {
+                return None;
             }
-        }
-    });
+            // Distance outside the offset rounded rectangle, in points.
+            let (sx, sy) = (x - offset_x, y - offset_y);
+            let qx = (sx - width / 2.).abs() - (width / 2. - radius);
+            let qy = (sy - height / 2.).abs() - (height / 2. - radius);
+            let outside = qx.max(0.).hypot(qy.max(0.)) + qx.max(qy).min(0.) - radius;
+            let cast = 0.62 * (1. - smoothstep(0., spread, outside));
+            (cast > threshold(cell_x as i64, cell_y as i64)).then_some(ink)
+        };
+        let mut content = digest(ink, &[width, height, radius, depth]);
+        band.hash(&mut content);
+        let grid = Grid {
+            left: left + x0,
+            top: top + y0,
+            columns: columns.max(0.) as u32,
+            rows: rows.max(0.) as u32,
+            cell: 1.,
+            dot: 1.,
+        };
+        paint_dots(
+            window,
+            cx,
+            grid,
+            (grid.columns, grid.rows),
+            Some(content.finish()),
+            0.,
+            &source,
+        );
+    }
+}
+
+/// Time between steps of animated dot-matrix fields.
+const FRAME: Duration = Duration::from_millis(80);
+
+thread_local! {
+    // Views that already wait for the next step, so each schedules one timer.
+    static PENDING: RefCell<HashSet<EntityId>> = RefCell::default();
+}
+
+// Returns the stepped animation time in seconds. Every animated element reads this clock, so
+// they advance together and the window redraws at most once per step.
+fn clock_seconds() -> f32 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let elapsed = START.get_or_init(Instant::now).elapsed();
+    let steps = elapsed.as_millis() / FRAME.as_millis();
+    steps as f32 * FRAME.as_secs_f32()
+}
+
+/// Returns the phase of a repeating cycle on the stepped clock, from 0 to 1.
+pub(super) fn cycle(period: Duration) -> f32 {
+    (clock_seconds() / period.as_secs_f32()).fract()
+}
+
+// Schedules one redraw of the view that is being painted, at the next step of the clock.
+fn schedule_step(window: &Window, cx: &mut App) {
+    if !window.is_window_active() {
+        return;
+    }
+    let view = window.current_view();
+    if !PENDING.with(|pending| pending.borrow_mut().insert(view)) {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(FRAME).await;
+        cx.update(|cx| {
+            PENDING.with(|pending| pending.borrow_mut().remove(&view));
+            cx.notify(view);
+        });
+    })
+    .detach();
+}
+
+/// An invisible element that redraws its view on the next clock step.
+///
+/// Add it beside content whose look comes from [`cycle`]. A background window holds its frame;
+/// GPUI redraws the window when it becomes active, which resumes the animation.
+pub(super) fn ticker() -> impl IntoElement {
+    canvas(|_, _, _| {}, |_, _, window, cx| schedule_step(window, cx))
+        .absolute()
+        .size(px(1.))
 }
 
 /// Draws a 4×4 working glyph that fills and empties in Bayer order.
-pub(super) fn pulse(id: impl Into<ElementId>, color: Hsla, reduce_motion: bool) -> AnyElement {
-    let frame = move |level: f32| {
-        canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                const ORDER: [[u8; 4]; 4] =
-                    [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
-                let pitch = f32::from(bounds.size.width.min(bounds.size.height)) / 4.;
-                let dot = (pitch - 0.75).max(1.);
+pub(super) fn pulse(color: Hsla, reduce_motion: bool) -> AnyElement {
+    let level = if reduce_motion {
+        0.5
+    } else {
+        0.5 - 0.5 * (cycle(Duration::from_millis(1600)) * TAU).cos()
+    };
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, cx| {
+            const ORDER: [[u8; 4]; 4] =
+                [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+            let pitch = f32::from(bounds.size.width.min(bounds.size.height)) / 4.;
+            let dot = (pitch - 0.75).max(1.);
+            window.paint_layer(bounds, |window| {
                 for (row, values) in ORDER.iter().enumerate() {
                     for (col, value) in values.iter().enumerate() {
                         let lit = level > (*value as f32 + 0.5) / 16.;
@@ -361,105 +758,772 @@ pub(super) fn pulse(id: impl Into<ElementId>, color: Hsla, reduce_motion: bool) 
                         ));
                     }
                 }
-            },
-        )
-        .size(px(13.))
-        .flex_shrink_0()
-    };
-    if reduce_motion {
-        return frame(0.5).into_any_element();
-    }
-    div()
-        .size(px(13.))
-        .flex_shrink_0()
-        .with_animation(
-            id,
-            Animation::new(Duration::from_millis(1600)).repeat(),
-            move |d, phase| d.child(frame(0.5 - 0.5 * (phase * TAU).cos())),
-        )
-        .into_any_element()
-}
-
-/// Sweeps a dithered signal packet across a thin band while an agent works.
-pub(super) fn scanner(id: impl Into<ElementId>, color: Hsla, reduce_motion: bool) -> AnyElement {
-    let frame = move |phase: f32| {
-        canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                let width = f32::from(bounds.size.width).max(1.);
-                let center = (phase * 1.5 - 0.25) * width;
-                let reach = width * 0.16;
-                paint_cells(window, bounds, 2., color, |x, _| {
-                    let d = (x - center) / reach;
-                    0.06 + 0.94 * (-d * d).exp()
-                });
-            },
-        )
-        .absolute()
-        .inset_0()
-    };
-    let band = div().absolute().top_0().left_0().right_0().h(px(4.));
-    if reduce_motion {
-        return band.child(frame(0.5)).into_any_element();
-    }
-    band.with_animation(
-        id,
-        Animation::new(Duration::from_millis(2200)).repeat(),
-        move |d, phase| d.child(frame(phase)),
+            });
+            if !reduce_motion {
+                schedule_step(window, cx);
+            }
+        },
     )
+    .size(px(13.))
+    .flex_shrink_0()
     .into_any_element()
 }
 
-/// Shades a rounded row with fine grain fading to the right, sweeping it while work runs.
-pub(super) fn row_wash(
-    id: impl Into<ElementId>,
+fn hash(x: i32, y: i32, seed: u32) -> f32 {
+    let mut value = (x as u32).wrapping_mul(0x8DA6_B343)
+        ^ (y as u32).wrapping_mul(0xD816_3841)
+        ^ seed.wrapping_mul(0xCB1A_B31F);
+    value ^= value >> 13;
+    value = value.wrapping_mul(0x5BD1_E995);
+    value ^= value >> 15;
+    (value & 0xFFFF) as f32 / 65_535.
+}
+
+fn lerp(from: f32, to: f32, amount: f32) -> f32 {
+    from + (to - from) * amount
+}
+
+fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
+    let (x0, y0) = (x.floor(), y.floor());
+    let (fx, fy) = (x - x0, y - y0);
+    let sx = fx * fx * (3. - 2. * fx);
+    let sy = fy * fy * (3. - 2. * fy);
+    let (ix, iy) = (x0 as i32, y0 as i32);
+    let top = lerp(hash(ix, iy, seed), hash(ix + 1, iy, seed), sx);
+    let bottom = lerp(hash(ix, iy + 1, seed), hash(ix + 1, iy + 1, seed), sx);
+    lerp(top, bottom, sy)
+}
+
+// Two octaves of value noise, normalized to 0..1.
+fn fractal_noise(x: f32, y: f32, seed: u32) -> f32 {
+    value_noise(x, y, seed) * 0.65
+        + value_noise(x * 2.03 + 17., y * 2.03 + 5., seed ^ 0x9E37) * 0.35
+}
+
+/// The edge where a fade starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Edge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl Edge {
+    fn distance(self, u: f32, v: f32) -> f32 {
+        match self {
+            Edge::Left => u,
+            Edge::Right => 1. - u,
+            Edge::Top => v,
+            Edge::Bottom => 1. - v,
+        }
+    }
+}
+
+/// One dot cell of a field's grid, with the values a field needs.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Sample {
+    /// Horizontal position, 0 at the left edge and 1 at the right.
+    pub u: f32,
+    /// Vertical position, 0 at the top edge and 1 at the bottom.
+    pub v: f32,
+    pub column: i32,
+    pub row: i32,
+    pub rows: i32,
+    /// Width divided by height.
+    pub aspect: f32,
+    /// Seconds on the stepped animation clock.
+    pub time: f32,
+    /// Pointer position in `u, v` space while the pointer is over the grid.
+    pub pointer: Option<(f32, f32)>,
+}
+
+/// A function that gives the dot density at each cell.
+#[derive(Clone)]
+pub(super) enum DitherField {
+    /// Density goes from `start` at `from` to `end` at the opposite edge.
+    Fade { from: Edge, start: f32, end: f32 },
+    /// Density peaks at `x, y` (in 0..1 space) and falls off with distance.
+    Glow {
+        x: f32,
+        y: f32,
+        radius: f32,
+        strength: f32,
+    },
+    /// Slowly drifting noise, like light on moving water.
+    Flow { scale: f32, speed: f32, bias: f32 },
+    /// A liquid fill with a moving wave surface. `level` is measured from the bottom edge.
+    Wave {
+        level: f32,
+        amplitude: f32,
+        speed: f32,
+    },
+    /// A packet of light that travels from left to right and repeats.
+    Sweep { width: f32, speed: f32, floor: f32 },
+    /// A glow that follows the pointer while it is over the grid.
+    Pointer { radius: f32, strength: f32 },
+    /// Covers the surface while progress goes from 0 to 1, then reveals it from the top.
+    Dissolve(f32),
+    /// Multiplies two fields.
+    Product(Rc<DitherField>, Rc<DitherField>),
+}
+
+impl DitherField {
+    /// Multiplies this field by another field.
+    pub(super) fn times(self, other: DitherField) -> Self {
+        DitherField::Product(Rc::new(self), Rc::new(other))
+    }
+
+    /// Returns the density of one cell.
+    pub(super) fn intensity(&self, sample: &Sample) -> f32 {
+        match self {
+            DitherField::Fade { from, start, end } => {
+                lerp(*start, *end, from.distance(sample.u, sample.v))
+            }
+            DitherField::Glow {
+                x,
+                y,
+                radius,
+                strength,
+            } => {
+                let dx = (sample.u - x) * sample.aspect;
+                let dy = sample.v - y;
+                let distance = (dx * dx + dy * dy).sqrt() / radius.max(0.001);
+                strength * (1. - distance).max(0.).powf(1.4)
+            }
+            DitherField::Flow { scale, speed, bias } => {
+                let x = sample.column as f32 * scale + sample.time * speed;
+                let y = sample.row as f32 * scale - sample.time * speed * 0.55;
+                (fractal_noise(x, y, 7) + bias).clamp(0., 1.)
+            }
+            DitherField::Wave {
+                level,
+                amplitude,
+                speed,
+            } => {
+                let phase = sample.u * TAU;
+                let surface = 1. - level
+                    + amplitude
+                        * (0.6 * (phase * 1.3 + sample.time * speed).sin()
+                            + 0.4 * (phase * 2.9 - sample.time * speed * 1.4).sin());
+                if sample.v < surface {
+                    return 0.;
+                }
+                let cell = 1. / sample.rows.max(1) as f32;
+                if sample.v - surface < cell {
+                    return 1.;
+                }
+                let depth = ((sample.v - surface) / (1. - surface).max(0.001)).clamp(0., 1.);
+                let shimmer = fractal_noise(
+                    sample.column as f32 * 0.18 + sample.time * 0.8,
+                    sample.row as f32 * 0.3,
+                    11,
+                );
+                (0.28 + depth * 0.55 + (shimmer - 0.5) * 0.3).clamp(0., 1.)
+            }
+            DitherField::Sweep {
+                width,
+                speed,
+                floor,
+            } => {
+                let center = (sample.time * speed).fract() * (1. + width * 4.) - width * 2.;
+                let distance = (sample.u - center) / width.max(0.001);
+                floor + (1. - floor) * (-distance * distance).exp()
+            }
+            DitherField::Pointer { radius, strength } => {
+                let Some((x, y)) = sample.pointer else {
+                    return 0.;
+                };
+                let dx = (sample.u - x) * sample.aspect;
+                let dy = sample.v - y;
+                let distance = (dx * dx + dy * dy).sqrt() / radius.max(0.001);
+                strength * (1. - distance).max(0.)
+            }
+            DitherField::Dissolve(progress) => {
+                ((1. - progress) * 1.6 - sample.v * 0.6).clamp(0., 1.)
+            }
+            DitherField::Product(left, right) => left.intensity(sample) * right.intensity(sample),
+        }
+    }
+
+    // Reports a field that varies along one axis only, so a strip of it serves any length
+    // along the other axis.
+    fn axis(&self) -> Option<Axis> {
+        match self {
+            DitherField::Fade {
+                from: Edge::Top | Edge::Bottom,
+                ..
+            } => Some(Axis::Vertical),
+            DitherField::Fade { .. } => Some(Axis::Horizontal),
+            DitherField::Product(left, right) => {
+                let axis = left.axis()?;
+                (right.axis() == Some(axis)).then_some(axis)
+            }
+            _ => None,
+        }
+    }
+
+    // Reports a field whose dots move with the animation clock.
+    fn timed(&self) -> bool {
+        match self {
+            DitherField::Flow { .. } | DitherField::Wave { .. } | DitherField::Sweep { .. } => true,
+            DitherField::Product(left, right) => left.timed() || right.timed(),
+            _ => false,
+        }
+    }
+
+    // Reports a field that looks the same on every frame, so its dots can be cached.
+    fn cacheable(&self) -> bool {
+        match self {
+            DitherField::Pointer { .. } | DitherField::Dissolve(_) => false,
+            DitherField::Product(left, right) => left.cacheable() && right.cacheable(),
+            _ => true,
+        }
+    }
+
+    fn digest(&self, hasher: &mut impl std::hash::Hasher) {
+        use std::hash::Hash;
+        let mut values = |tag: u8, values: &[f32]| {
+            tag.hash(hasher);
+            for value in values {
+                value.to_bits().hash(hasher);
+            }
+        };
+        match self {
+            DitherField::Fade { from, start, end } => values(*from as u8, &[*start, *end]),
+            DitherField::Glow {
+                x,
+                y,
+                radius,
+                strength,
+            } => values(8, &[*x, *y, *radius, *strength]),
+            DitherField::Flow { scale, speed, bias } => values(9, &[*scale, *speed, *bias]),
+            DitherField::Wave {
+                level,
+                amplitude,
+                speed,
+            } => values(10, &[*level, *amplitude, *speed]),
+            DitherField::Sweep {
+                width,
+                speed,
+                floor,
+            } => values(11, &[*width, *speed, *floor]),
+            DitherField::Pointer { radius, strength } => values(12, &[*radius, *strength]),
+            DitherField::Dissolve(progress) => values(13, &[*progress]),
+            DitherField::Product(left, right) => {
+                values(14, &[]);
+                left.digest(hasher);
+                right.digest(hasher);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Axis {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Clone)]
+struct PaintSpec {
+    field: DitherField,
     color: Hsla,
-    radius: f32,
-    selected: bool,
-    active: bool,
-    reduce_motion: bool,
-) -> AnyElement {
-    let frame = move |phase: Option<f32>| {
+    cell: f32,
+    dot: f32,
+    toned: bool,
+    hover_only: bool,
+    corner_radius: f32,
+    /// Whether the field advances with the clock on this frame.
+    moving: bool,
+    time: f32,
+}
+
+// Returns the dot alpha for one intensity. Three steps keep the limited palette of retro displays.
+fn tone(intensity: f32) -> f32 {
+    if intensity > 0.82 {
+        1.
+    } else if intensity > 0.5 {
+        0.72
+    } else {
+        0.46
+    }
+}
+
+fn outside_rounded_corner(x: f32, y: f32, width: f32, height: f32, radius: f32) -> bool {
+    if radius <= 0. {
+        return false;
+    }
+    let corner_x = if x < radius {
+        radius
+    } else if x > width - radius {
+        width - radius
+    } else {
+        return false;
+    };
+    let corner_y = if y < radius {
+        radius
+    } else if y > height - radius {
+        height - radius
+    } else {
+        return false;
+    };
+    let (dx, dy) = (x - corner_x, y - corner_y);
+    dx * dx + dy * dy > radius * radius
+}
+
+fn paint_grid(bounds: Bounds<Pixels>, spec: &PaintSpec, window: &mut Window, cx: &mut App) {
+    use std::hash::{Hash, Hasher};
+    let width = f32::from(bounds.size.width);
+    let height = f32::from(bounds.size.height);
+    let cell = spec.cell.max(1.);
+    if width < cell || height < cell || spec.color.alpha <= 0. {
+        return;
+    }
+    let mouse = window.mouse_position();
+    let hovered = bounds.contains(&mouse);
+    if spec.hover_only && !hovered {
+        return;
+    }
+    let scale = window.scale_factor();
+    let snap = |value: f32| (value * scale).round() / scale;
+    let columns = (width / cell).floor() as i32;
+    let rows = (height / cell).floor() as i32;
+    let grid_width = columns as f32 * cell;
+    let grid_height = rows as f32 * cell;
+    let grid = Grid {
+        left: snap(f32::from(bounds.origin.x) + (width - grid_width) / 2.),
+        top: snap(f32::from(bounds.origin.y) + (height - grid_height) / 2.),
+        columns: columns as u32,
+        rows: rows as u32,
+        cell,
+        dot: spec.dot,
+    };
+    let pointer = hovered.then(|| {
+        (
+            (f32::from(mouse.x) - grid.left) / grid_width,
+            (f32::from(mouse.y) - grid.top) / grid_height,
+        )
+    });
+    let aspect = grid_width / grid_height;
+    let source = |column: i32, row: i32| -> Option<Hsla> {
+        let intensity = spec.field.intensity(&Sample {
+            u: (column as f32 + 0.5) / columns as f32,
+            v: (row as f32 + 0.5) / rows as f32,
+            column,
+            row,
+            rows,
+            aspect,
+            time: spec.time,
+            pointer,
+        });
+        if intensity <= threshold(column as i64, row as i64) {
+            return None;
+        }
+        Some(if spec.toned {
+            spec.color.opacity(tone(intensity))
+        } else {
+            spec.color
+        })
+    };
+    if spec.moving || !spec.field.cacheable() {
+        paint_dots(
+            window,
+            cx,
+            grid,
+            (grid.columns, grid.rows),
+            None,
+            spec.corner_radius,
+            &source,
+        );
+        return;
+    }
+    let mut content = digest(spec.color, &[]);
+    spec.toned.hash(&mut content);
+    spec.field.digest(&mut content);
+    let tile = match spec.field.axis() {
+        Some(Axis::Vertical) => (STRIP_CELLS, grid.rows),
+        Some(Axis::Horizontal) if grid.rows > STRIP_CELLS => (grid.columns, STRIP_CELLS),
+        _ => (grid.columns, grid.rows),
+    };
+    paint_dots(
+        window,
+        cx,
+        grid,
+        tile,
+        Some(content.finish()),
+        spec.corner_radius,
+        &source,
+    );
+}
+
+/// A dot-matrix surface. It fills its parent, so the parent sets the size.
+#[derive(IntoElement, Clone)]
+pub(super) struct Dither {
+    field: DitherField,
+    color: Hsla,
+    cell: f32,
+    dot: f32,
+    toned: bool,
+    animated: bool,
+    hover_only: bool,
+    corner_radius: f32,
+}
+
+impl Dither {
+    /// Creates a surface for a field. The default grid has a 3-point pitch with 2-point dots.
+    pub(super) fn new(field: DitherField) -> Self {
+        Self {
+            field,
+            color: gpui::white(),
+            cell: 3.,
+            dot: 2.,
+            toned: false,
+            animated: false,
+            hover_only: false,
+            corner_radius: 0.,
+        }
+    }
+
+    /// Sets the dot color.
+    pub(super) fn color(mut self, color: Hsla) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// Sets the grid pitch and the dot size, in logical pixels.
+    pub(super) fn grid(mut self, cell: f32, dot: f32) -> Self {
+        self.cell = cell;
+        self.dot = dot;
+        self
+    }
+
+    /// Varies the dot alpha in three steps with the field intensity.
+    pub(super) fn toned(mut self) -> Self {
+        self.toned = true;
+        self
+    }
+
+    /// Advances the field on the stepped clock while the window is active and motion is allowed.
+    pub(super) fn animated(mut self) -> Self {
+        self.animated = true;
+        self
+    }
+
+    /// Paints the dots only while the pointer is over the surface.
+    pub(super) fn hover_only(mut self) -> Self {
+        self.hover_only = true;
+        self
+    }
+
+    /// Skips dots outside rounded corners of this radius.
+    pub(super) fn corner_radius(mut self, radius: f32) -> Self {
+        self.corner_radius = radius;
+        self
+    }
+
+    /// Wraps the surface in an absolute layer that covers its parent.
+    ///
+    /// Add the layer as the first child so that content paints on top.
+    pub(super) fn layer(self) -> Div {
+        div().absolute().inset_0().child(self)
+    }
+}
+
+impl RenderOnce for Dither {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let moving = self.animated && self.field.timed() && !cx.reduce_motion();
+        // A pointer glow follows the pointer only while something redraws the view.
+        let follows = self.animated && !self.field.cacheable() && !cx.reduce_motion();
+        let spec = PaintSpec {
+            field: self.field,
+            color: self.color,
+            cell: self.cell,
+            dot: self.dot,
+            toned: self.toned,
+            hover_only: self.hover_only,
+            corner_radius: self.corner_radius,
+            moving,
+            time: if moving { clock_seconds() } else { 0. },
+        };
         canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| {
-                let width = f32::from(bounds.size.width).max(1.);
-                let height = f32::from(bounds.size.height);
-                if selected {
-                    paint_cells(window, bounds, 1., color.opacity(0.13), |x, y| {
-                        if !inside_rounded(x, y, width, height, radius) {
-                            return 0.;
-                        }
-                        let t = x / width;
-                        0.55 * (1. - smoothstep(0., 0.72, t))
-                    });
-                }
-                if let Some(phase) = phase {
-                    let center = (phase * 1.6 - 0.3) * width;
-                    paint_cells(window, bounds, 2., color.opacity(0.22), |x, y| {
-                        if !inside_rounded(x, y, width, height, radius) {
-                            return 0.;
-                        }
-                        let d = (x - center) / (width * 0.2);
-                        0.7 * (-d * d).exp()
-                    });
+            move |bounds, _, window, cx| {
+                paint_grid(bounds, &spec, window, cx);
+                // The view stack is only reliable during paint, so the next step is scheduled
+                // here rather than in `render`.
+                if moving || follows {
+                    schedule_step(window, cx);
                 }
             },
         )
+        .size_full()
+    }
+}
+
+/// Returns a 50% checker texture with cells of `logical` pixels, drawn in the shader.
+pub(super) fn checker(color: Hsla, logical: f32, window: &Window) -> Background {
+    checkerboard(color, logical * window.scale_factor())
+}
+
+/// A one-pixel dotted rule that fills the width or height it is given.
+#[derive(IntoElement)]
+pub(super) struct DottedRule {
+    color: Hsla,
+    vertical: bool,
+}
+
+impl DottedRule {
+    /// Creates a horizontal dotted rule.
+    pub(super) fn horizontal(color: Hsla) -> Self {
+        Self {
+            color,
+            vertical: false,
+        }
+    }
+
+    /// Creates a vertical dotted rule that fills its parent's height.
+    pub(super) fn vertical(color: Hsla) -> Self {
+        Self {
+            color,
+            vertical: true,
+        }
+    }
+}
+
+impl RenderOnce for DottedRule {
+    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+        let rule = div().flex_shrink_0().bg(checker(self.color, 1., window));
+        if self.vertical {
+            rule.w(px(1.)).h_full()
+        } else {
+            rule.h(px(1.)).w_full()
+        }
+    }
+}
+
+/// One colored part of a [`DitherBar`].
+#[derive(Debug, Clone, Copy)]
+pub(super) struct BarSegment {
+    pub weight: f32,
+    pub color: Hsla,
+}
+
+/// A dot-matrix ratio bar, like a memory usage bar on a retro display.
+#[derive(IntoElement)]
+pub(super) struct DitherBar {
+    segments: Rc<[BarSegment]>,
+    empty: Hsla,
+    total: Option<f32>,
+}
+
+impl DitherBar {
+    /// Creates a bar from weighted segments. `empty` colors the dots no segment covers.
+    pub(super) fn new(segments: impl Into<Rc<[BarSegment]>>, empty: Hsla) -> Self {
+        Self {
+            segments: segments.into(),
+            empty,
+            total: None,
+        }
+    }
+
+    /// Creates a meter: one segment that fills `fraction` of the bar.
+    pub(super) fn meter(fraction: f32, color: Hsla, empty: Hsla) -> Self {
+        Self {
+            segments: Rc::from(vec![BarSegment {
+                weight: fraction.clamp(0., 1.),
+                color,
+            }]),
+            empty,
+            total: Some(1.),
+        }
+    }
+}
+
+impl RenderOnce for DitherBar {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let (segments, empty, total) = (self.segments, self.empty, self.total);
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, cx| paint_bar(bounds, &segments, empty, total, window, cx),
+        )
+        .size_full()
+    }
+}
+
+fn paint_bar(
+    bounds: Bounds<Pixels>,
+    segments: &[BarSegment],
+    empty: Hsla,
+    total: Option<f32>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    use std::hash::{Hash, Hasher};
+    let (cell, dot) = (3., 2.);
+    let columns = (f32::from(bounds.size.width) / cell).floor() as i32;
+    let rows = (f32::from(bounds.size.height) / cell).floor() as i32;
+    if columns <= 0 || rows <= 0 {
+        return;
+    }
+    let scale = window.scale_factor();
+    let total = total.unwrap_or_else(|| segments.iter().map(|s| s.weight.max(0.)).sum());
+    let source = |column: i32, row: i32| -> Option<Hsla> {
+        let u = (column as f32 + 0.5) / columns as f32;
+        let mut color = empty;
+        let mut fade = 0.18;
+        if total > 0. {
+            let mut start = 0.;
+            for segment in segments {
+                let share = segment.weight.max(0.) / total;
+                if share > 0. && u <= start + share {
+                    color = segment.color;
+                    // Dots thin out toward the end of each segment so the seams read as
+                    // dithered transitions.
+                    let local = ((u - start) / share).clamp(0., 1.);
+                    fade = 1. - (local - 0.75).max(0.) * 2.2;
+                    break;
+                }
+                start += share;
+            }
+        }
+        (fade > threshold(column as i64, row as i64)).then_some(color)
+    };
+    let mut content = digest(empty, &[total]);
+    for segment in segments {
+        segment.weight.to_bits().hash(&mut content);
+        texel(segment.color).hash(&mut content);
+    }
+    let grid = Grid {
+        left: (f32::from(bounds.origin.x) * scale).round() / scale,
+        top: (f32::from(bounds.origin.y) * scale).round() / scale,
+        columns: columns as u32,
+        rows: rows as u32,
+        cell,
+        dot,
+    };
+    paint_dots(
+        window,
+        cx,
+        grid,
+        (grid.columns, grid.rows),
+        Some(content.finish()),
+        0.,
+        &source,
+    );
+}
+
+/// Sweeps a dot-matrix packet across a thin band at the top of its parent while an agent works.
+pub(super) fn scanner(color: Hsla) -> Div {
+    div().absolute().top_0().left_0().right_0().h(px(4.)).child(
+        Dither::new(DitherField::Sweep {
+            width: 0.16,
+            speed: 0.42,
+            floor: 0.07,
+        })
+        .color(color)
+        .grid(2., 1.)
+        .animated(),
+    )
+}
+
+/// Shades a rounded row: grain that fades to the right when selected, a moving flow while active.
+pub(super) fn row_wash(color: Hsla, radius: f32, selected: bool, active: bool) -> Div {
+    div()
         .absolute()
         .inset_0()
-    };
-    let layer = div().absolute().inset_0();
-    if !active || reduce_motion {
-        return layer.child(frame(None)).into_any_element();
-    }
-    layer
-        .with_animation(
-            id,
-            Animation::new(Duration::from_millis(2600)).repeat(),
-            move |d, phase| d.child(frame(Some(phase))),
+        .when(selected, |layer| {
+            layer.child(
+                Dither::new(DitherField::Fade {
+                    from: Edge::Left,
+                    start: 0.62,
+                    end: -0.12,
+                })
+                .color(color.opacity(0.3))
+                .grid(2., 1.)
+                .corner_radius(radius)
+                .layer(),
+            )
+        })
+        .when(active, |layer| {
+            // The flow fades out toward the left, so only the trailing part of the row holds
+            // dots. A fixed width keeps the moving field small on wide rows.
+            layer.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .w(px(132.))
+                    .max_w_full()
+                    .child(
+                        Dither::new(
+                            DitherField::Flow {
+                                scale: 0.2,
+                                speed: 1.3,
+                                bias: -0.08,
+                            }
+                            .times(DitherField::Fade {
+                                from: Edge::Right,
+                                start: 0.95,
+                                end: 0.,
+                            }),
+                        )
+                        .color(color.opacity(0.5))
+                        .grid(2., 1.)
+                        .animated(),
+                    ),
+            )
+        })
+}
+
+/// Paints the ambient hero field: a still glow of noise over a moving liquid surface.
+pub(super) fn hero(accent: Hsla, dot: Hsla) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .child(
+            Dither::new(
+                DitherField::Glow {
+                    x: 0.5,
+                    y: 0.1,
+                    radius: 0.85,
+                    strength: 0.9,
+                }
+                .times(DitherField::Flow {
+                    scale: 0.11,
+                    speed: 0.5,
+                    bias: 0.18,
+                }),
+            )
+            .color(dot)
+            .grid(3., 2.)
+            .toned()
+            .layer(),
         )
-        .into_any_element()
+        .child(
+            Dither::new(DitherField::Wave {
+                level: 0.34,
+                amplitude: 0.05,
+                speed: 1.1,
+            })
+            .color(accent)
+            .grid(3., 2.)
+            .toned()
+            .animated()
+            .layer(),
+        )
+        .child(
+            Dither::new(DitherField::Pointer {
+                radius: 0.22,
+                strength: 0.9,
+            })
+            .color(accent)
+            .grid(3., 2.)
+            .hover_only()
+            .animated()
+            .layer(),
+        )
 }
 
 /// Five-by-seven dot-matrix glyphs for the wordmark.
@@ -490,222 +1554,49 @@ const WORDMARK_PITCH: f32 = 2.;
 /// Renders the dot-matrix wordmark; a scan of accent runs through it while any task works.
 pub(super) fn wordmark(theme: Theme, working: bool, reduce_motion: bool) -> AnyElement {
     let columns = WORDMARK.len() * 6 - 1;
-    let frame = move |phase: Option<f32>| {
-        canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                let sweep = phase.map(|p| p * (columns as f32 + 16.) - 8.);
-                window.paint_layer(bounds, |window| {
-                    for (letter, rows) in WORDMARK.iter().enumerate() {
-                        for (row, bits) in rows.iter().enumerate() {
-                            for col in 0..5 {
-                                if bits & (0b10000 >> col) == 0 {
-                                    continue;
-                                }
-                                let x = letter * 6 + col;
-                                let glow = sweep
-                                    .map_or(0., |s| (1. - ((x as f32 - s).abs() / 4.)).max(0.));
-                                let mut color = theme.text;
-                                if glow > 0. {
-                                    color = theme.accent;
-                                    color.alpha = 0.55 + 0.45 * glow;
-                                }
-                                window.paint_quad(fill(
-                                    Bounds::new(
-                                        bounds.origin
-                                            + point(
-                                                px(x as f32 * WORDMARK_PITCH),
-                                                px(row as f32 * WORDMARK_PITCH),
-                                            ),
-                                        size(px(WORDMARK_PITCH - 0.4), px(WORDMARK_PITCH - 0.4)),
-                                    ),
-                                    color,
-                                ));
+    let scanning = working && !reduce_motion;
+    let phase = scanning.then(|| cycle(Duration::from_millis(2400)));
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, cx| {
+            let sweep = phase.map(|p| p * (columns as f32 + 16.) - 8.);
+            window.paint_layer(bounds, |window| {
+                for (letter, rows) in WORDMARK.iter().enumerate() {
+                    for (row, bits) in rows.iter().enumerate() {
+                        for col in 0..5 {
+                            if bits & (0b10000 >> col) == 0 {
+                                continue;
                             }
+                            let x = letter * 6 + col;
+                            let glow =
+                                sweep.map_or(0., |s| (1. - ((x as f32 - s).abs() / 4.)).max(0.));
+                            let mut color = theme.text;
+                            if glow > 0. {
+                                color = theme.accent;
+                                color.alpha = 0.55 + 0.45 * glow;
+                            }
+                            window.paint_quad(fill(
+                                Bounds::new(
+                                    bounds.origin
+                                        + point(
+                                            px(x as f32 * WORDMARK_PITCH),
+                                            px(row as f32 * WORDMARK_PITCH),
+                                        ),
+                                    size(px(WORDMARK_PITCH - 0.4), px(WORDMARK_PITCH - 0.4)),
+                                ),
+                                color,
+                            ));
                         }
                     }
-                });
-            },
-        )
-        .w(px(columns as f32 * WORDMARK_PITCH))
-        .h(px(7. * WORDMARK_PITCH))
-        .flex_shrink_0()
-    };
-    if !working || reduce_motion {
-        return frame(None).into_any_element();
-    }
-    div()
-        .flex_shrink_0()
-        .with_animation(
-            "wordmark-scan",
-            Animation::new(Duration::from_millis(2400)).repeat(),
-            move |d, phase| d.child(frame(Some(phase))),
-        )
-        .into_any_element()
-}
-
-/// Paints a slow 1-bit plasma for the new-task screen, dissolving into the canvas at its edges.
-pub(super) fn field(color: Hsla, reduce_motion: bool) -> AnyElement {
-    let frame = move |phase: f32| {
-        canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                let width = f32::from(bounds.size.width).max(1.);
-                let height = f32::from(bounds.size.height).max(1.);
-                let a = phase * TAU;
-                paint_cells(window, bounds, 3., color, |x, y| {
-                    let (u, v) = (x / width, y / height);
-                    let r = ((u - 0.5) * (u - 0.5) * 4. + (v - 0.5) * (v - 0.5)).sqrt();
-                    let wave = (u * 9. + 2. * a).sin()
-                        + 0.8 * (v * 5.5 - a).sin()
-                        + 0.6 * ((u + v) * 6. + a).sin()
-                        + 0.5 * (r * 14. - 3. * a).sin();
-                    let level = (0.5 + wave / 5.8).clamp(0., 1.).powf(1.7);
-                    let edge = smoothstep(0., 0.3, u)
-                        * smoothstep(0., 0.3, 1. - u)
-                        * smoothstep(0., 0.4, v)
-                        * smoothstep(0., 0.4, 1. - v);
-                    level * edge
-                });
-            },
-        )
-        .absolute()
-        .inset_0()
-    };
-    let layer = div().absolute().inset_0();
-    if reduce_motion {
-        return layer.child(frame(0.)).into_any_element();
-    }
-    layer
-        .with_animation(
-            "new-task-field",
-            Animation::new(Duration::from_secs(24))
-                .with_easing(|p| p)
-                .repeat(),
-            move |d, phase| d.child(frame(phase)),
-        )
-        .into_any_element()
-}
-
-/// Reveals a floating surface like a CRT unrolling, led by a dithered scan line.
-pub(super) fn unroll(
-    id: impl Into<ElementId>,
-    element: impl IntoElement,
-    theme: Theme,
-    upward: bool,
-) -> AnyElement {
-    Unroll {
-        child: Some(element.into_any_element()),
-        progress: 0.,
-        upward,
-        beam: theme.accent,
-    }
-    .with_animation(
-        id,
-        Animation::new(Duration::from_millis(190)).with_easing(|p| 1. - (1. - p).powi(3)),
-        |mut unroll, progress| {
-            unroll.progress = progress;
-            unroll
+                }
+            });
+            if scanning {
+                schedule_step(window, cx);
+            }
         },
     )
+    .w(px(columns as f32 * WORDMARK_PITCH))
+    .h(px(7. * WORDMARK_PITCH))
+    .flex_shrink_0()
     .into_any_element()
-}
-
-struct Unroll {
-    child: Option<AnyElement>,
-    progress: f32,
-    upward: bool,
-    beam: Hsla,
-}
-impl IntoElement for Unroll {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
-    }
-}
-impl Element for Unroll {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-        None
-    }
-    fn request_layout(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, ()) {
-        let child = self.child.as_mut().expect("unroll child is laid out once");
-        (child.request_layout(window, cx), ())
-    }
-    fn prepaint(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        _: Bounds<Pixels>,
-        _: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        if let Some(child) = &mut self.child {
-            child.prepaint(window, cx);
-        }
-    }
-    fn paint(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _: &mut (),
-        _: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let Some(child) = &mut self.child else {
-            return;
-        };
-        if self.progress >= 1. {
-            child.paint(window, cx);
-            return;
-        }
-        // Extend the clip past the surface so its dithered shadow unrolls with it.
-        let margin = px(24.);
-        let reach = (bounds.size.height + margin) * self.progress;
-        let visible = if self.upward {
-            Bounds::from_corners(
-                point(bounds.left() - margin, bounds.bottom() + margin - reach),
-                point(bounds.right() + margin, bounds.bottom() + margin),
-            )
-        } else {
-            Bounds::from_corners(
-                point(bounds.left() - margin, bounds.top() - margin),
-                point(bounds.right() + margin, bounds.top() + reach),
-            )
-        };
-        window.with_content_mask(Some(ContentMask { bounds: visible }), |window| {
-            child.paint(window, cx);
-        });
-        // Keep the beam on the surface while the clip edge travels through the shadow margin.
-        let edge = if self.upward {
-            visible.top()
-        } else {
-            visible.bottom() - px(3.)
-        }
-        .clamp(bounds.top(), (bounds.bottom() - px(3.)).max(bounds.top()));
-        let beam = Bounds::new(point(bounds.left(), edge), size(bounds.size.width, px(3.)));
-        let strength = 1. - self.progress;
-        paint_cells(
-            window,
-            beam,
-            1.,
-            self.beam.opacity(0.9 * strength),
-            |_, y| {
-                if y < 1.5 { 0.85 } else { 0.4 }
-            },
-        );
-    }
 }

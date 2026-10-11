@@ -1,5 +1,7 @@
 //! Structured Markdown for native, selectable chat content. HTML remains inert text.
-use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    Alignment, BlockQuoteKind, CodeBlockKind, Event, Options, Parser, Tag, TagEnd,
+};
 use std::{iter::Peekable, ops::Range};
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -111,7 +113,21 @@ impl RichText {
                     .trim()
                     .trim_start_matches(|ch: char| "()[]{}\"“”,;!?".contains(ch))
                     .trim_end_matches(|ch: char| "()[]{}\"“”,;!?.".contains(ch));
-                if is_reference(reference) {
+                if style.link.is_none()
+                    && !style.code
+                    && let Some(url) = bare_url(reference)
+                {
+                    let start = token.find(reference).unwrap();
+                    result.push(&token[..start], style.clone());
+                    result.push(
+                        reference,
+                        InlineStyle {
+                            link: Some(url),
+                            ..style.clone()
+                        },
+                    );
+                    result.push(&token[start + reference.len()..], style.clone());
+                } else if is_reference(reference) {
                     let start = token.find(reference).unwrap();
                     result.push(&token[..start], style.clone());
                     result.push(
@@ -129,6 +145,19 @@ impl RichText {
         }
         result
     }
+}
+
+// Recognizes a web address written without link syntax and returns the address to open.
+fn bare_url(text: &str) -> Option<String> {
+    let rest = text
+        .strip_prefix("https://")
+        .or_else(|| text.strip_prefix("http://"));
+    if let Some(rest) = rest {
+        return (rest.contains('.') || rest.starts_with("localhost")).then(|| text.to_owned());
+    }
+    let host = text.strip_prefix("www.")?;
+    (host.contains('.') && host.chars().all(|ch| !ch.is_whitespace()))
+        .then(|| format!("https://{text}"))
 }
 
 fn is_reference(text: &str) -> bool {
@@ -208,6 +237,27 @@ fn is_reference(text: &str) -> bool {
             )
     })
 }
+/// A GitHub alert kind, shown as a labeled callout instead of a plain quotation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Callout {
+    Note,
+    Tip,
+    Important,
+    Warning,
+    Caution,
+}
+impl Callout {
+    /// Returns the label shown at the top of the callout.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Note => "Note",
+            Self::Tip => "Tip",
+            Self::Important => "Important",
+            Self::Warning => "Warning",
+            Self::Caution => "Caution",
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct ListItem {
     pub checked: Option<bool>,
@@ -224,7 +274,11 @@ pub enum Block {
         language: String,
         text: String,
     },
-    Quote(Vec<Block>),
+    Quote {
+        /// The kind of a GitHub alert such as `> [!NOTE]`; absent for a plain quotation.
+        callout: Option<Callout>,
+        blocks: Vec<Block>,
+    },
     List {
         start: Option<u64>,
         items: Vec<ListItem>,
@@ -292,11 +346,52 @@ impl InlineBuilder {
     }
 }
 
+/// Parsed messages kept per generation before the older generation is dropped.
+const CACHED_MESSAGES: usize = 192;
+
+#[derive(Default)]
+struct BlockCache {
+    recent: std::collections::HashMap<(u64, usize), Vec<Block>>,
+    older: std::collections::HashMap<(u64, usize), Vec<Block>>,
+}
+
+thread_local! {
+    static BLOCK_CACHE: std::cell::RefCell<BlockCache> = std::cell::RefCell::default();
+}
+
 /// Parses message Markdown while retaining nested blocks and inline UTF-8 style ranges.
+///
+/// A conversation renders its visible messages again on every frame, so the blocks of the
+/// messages seen lately are kept and only changed text is parsed.
 pub fn blocks(text: &str) -> Vec<Block> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    let key = (hasher.finish(), text.len());
+    BLOCK_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(blocks) = cache.recent.get(&key) {
+            return blocks.clone();
+        }
+        let blocks = match cache.older.remove(&key) {
+            Some(blocks) => blocks,
+            None => parse_blocks(text),
+        };
+        if cache.recent.len() >= CACHED_MESSAGES {
+            cache.older = std::mem::take(&mut cache.recent);
+        }
+        cache.recent.insert(key, blocks.clone());
+        blocks
+    })
+}
+
+fn parse_blocks(text: &str) -> Vec<Block> {
     let mut events = Parser::new_ext(
         text,
-        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
+        Options::ENABLE_TABLES
+            | Options::ENABLE_STRIKETHROUGH
+            | Options::ENABLE_TASKLISTS
+            | Options::ENABLE_GFM,
     )
     .peekable();
     read_blocks(&mut events, None).blocks
@@ -341,9 +436,16 @@ fn read_blocks<'a>(
             }
             Event::Start(Tag::BlockQuote(kind)) => {
                 inline.flush(&mut blocks);
-                blocks.push(Block::Quote(
-                    read_blocks(events, Some(TagEnd::BlockQuote(kind))).blocks,
-                ));
+                blocks.push(Block::Quote {
+                    callout: kind.map(|kind| match kind {
+                        BlockQuoteKind::Note => Callout::Note,
+                        BlockQuoteKind::Tip => Callout::Tip,
+                        BlockQuoteKind::Important => Callout::Important,
+                        BlockQuoteKind::Warning => Callout::Warning,
+                        BlockQuoteKind::Caution => Callout::Caution,
+                    }),
+                    blocks: read_blocks(events, Some(TagEnd::BlockQuote(kind))).blocks,
+                });
             }
             Event::Start(Tag::List(start)) => {
                 inline.flush(&mut blocks);

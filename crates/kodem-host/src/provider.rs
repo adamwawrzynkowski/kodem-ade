@@ -1,9 +1,9 @@
 //! Provider routing and durable, per-task conversation ownership.
-use crate::Shared;
+use crate::{Shared, accounts};
+#[path = "providers/claude.rs"]
+mod claude;
 #[path = "providers/codex.rs"]
 mod codex;
-#[path = "providers/devin.rs"]
-mod devin;
 use anyhow::{Context, Result, ensure};
 use kodem_core::*;
 use serde_json::{Value, json};
@@ -18,6 +18,8 @@ pub(super) enum Control {
     Close,
     Wake,
     Interrupt,
+    /// Runs the compaction that `begin_compaction` recorded for this task.
+    Compact,
     Answer {
         id: Value,
         response: Value,
@@ -27,6 +29,13 @@ pub(super) enum Control {
         params: Value,
         reply: mpsc::SyncSender<std::result::Result<Value, String>>,
     },
+}
+
+/// State a task returns to when its host-requested compaction ends.
+pub(crate) struct Compaction {
+    state: RunState,
+    error: Option<String>,
+    updated: u64,
 }
 
 pub(crate) fn prompt_for(message: &OutgoingMessage) -> Result<String> {
@@ -135,7 +144,10 @@ pub(super) fn submit(
                 .any(|t| t.id != task.id && t.cwd == task.cwd && t.state.active()),
             "Another task is writing to this checkout. Use a separate task worktree."
         );
-        let expected_turn = if task.state.active() && mode == SendMode::Steer {
+        // A compaction has no turn to join, so input sent meanwhile starts the next turn.
+        let steers =
+            task.state.active() && mode == SendMode::Steer && !h.compactions.contains_key(&task_id);
+        let expected_turn = if steers {
             Some(task.active_turn.clone().context("The turn is still starting. Queue this message or wait until it begins before steering.")?)
         } else {
             None
@@ -201,6 +213,10 @@ pub(super) fn steer_queued(host: Shared, task_id: &str, id: &str) -> Result<()> 
         "This provider does not support steering"
     );
     ensure!(!h.shutdown, "Host is restarting. Retry after reconnecting.");
+    ensure!(
+        !h.compactions.contains_key(task_id),
+        "Steer after the context compaction finishes"
+    );
     let sender = h
         .sessions
         .get(task_id)
@@ -236,6 +252,139 @@ pub(super) fn resume_queue(host: Shared, task_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Starts a compaction of an idle task's conversation through its provider session.
+///
+/// A running turn is neither interrupted nor queued behind: the request is refused until the
+/// turn ends. The result arrives with the task: its activity, context usage and transcript.
+pub(super) fn compact(host: Shared, task_id: &str) -> Result<()> {
+    {
+        let mut h = host.lock().unwrap();
+        ensure!(!h.shutdown, "Host is restarting. Retry after reconnecting.");
+        let mut task = h.store.task(task_id)?;
+        ensure!(
+            !task.state.active() && !h.compactions.contains_key(task_id),
+            "Compact after this turn finishes"
+        );
+        ensure!(
+            task.state != RunState::DeliveryUnknown
+                && !h.store.has_uncertain_submission(task_id)?,
+            "Reconcile uncertain delivery before compacting"
+        );
+        ensure!(
+            task.provider_thread.is_some(),
+            "There is nothing to compact yet. Send a message first."
+        );
+        validate_preferences(&h, &preferences(&task))?;
+        begin_compaction(&mut h, &mut task)?;
+    }
+    ensure_owner(host.clone(), task_id.into());
+    let sent = host
+        .lock()
+        .unwrap()
+        .sessions
+        .get(task_id)
+        .is_some_and(|session| session.send(Control::Compact).is_ok());
+    if !sent {
+        end_compaction(&host, task_id, None)?;
+        anyhow::bail!("The provider session ended. Try again.");
+    }
+    Ok(())
+}
+
+/// Marks a host-requested compaction as running and remembers the state the task returns to.
+///
+/// The task counts as working meanwhile, so queued input waits and nothing else starts a turn.
+pub(crate) fn begin_compaction(host: &mut crate::Host, task: &mut Task) -> Result<()> {
+    host.compactions.insert(
+        task.id.clone(),
+        Compaction {
+            state: task.state.clone(),
+            error: task.error.take(),
+            updated: task.updated,
+        },
+    );
+    task.state = RunState::Running;
+    task.active_turn = None;
+    host.store.save_task(task)
+}
+
+/// Returns a task to the state it had before its compaction, without a completion alert.
+///
+/// A failure leaves a notice in the transcript. It never fails the task or its queued input.
+pub(crate) fn end_compaction(host: &Shared, task_id: &str, failure: Option<String>) -> Result<()> {
+    let mut h = host.lock().unwrap();
+    let Some(previous) = h.compactions.remove(task_id) else {
+        return Ok(());
+    };
+    h.activities.remove(task_id);
+    let mut task = h.store.task(task_id)?;
+    task.state = previous.state;
+    task.error = previous.error;
+    task.updated = previous.updated;
+    task.active_turn = None;
+    // The reading a compaction leaves behind must not start the next one.
+    if let Some(usage) = &task.context_usage {
+        h.compacted.insert(task_id.into(), usage.reported);
+    }
+    if let Some(failure) = failure {
+        h.store.message(&Message {
+            seq: 0,
+            id: format!("compact:{}", new_id()),
+            task_id: task_id.into(),
+            kind: MessageKind::Notice,
+            text: format!("Context was not compacted: {failure}"),
+            attachments: Vec::new(),
+            feedback: Vec::new(),
+            file_edits: Vec::new(),
+            tool: None,
+            complete: true,
+            created: now(),
+        })?;
+    }
+    h.store.save_task(&task)
+}
+
+/// Returns the task when it is idle with input waiting to start its next turn.
+pub(crate) fn waiting_turn(host: &crate::Host, task_id: &str) -> Result<Option<Task>> {
+    let task = host.store.task(task_id)?;
+    let waiting = matches!(task.state, RunState::Idle | RunState::Completed)
+        && !host.store.has_uncertain_submission(task_id)?
+        && host.store.outgoing(task_id)?.iter().any(|message| {
+            message.state == DeliveryState::Queued && message.expected_turn.is_none()
+        });
+    Ok(waiting.then_some(task))
+}
+
+/// Begins a compaction when the next queued turn would start at or above the task's threshold.
+///
+/// This is the check between turns. The provider's own limit covers a turn that is running.
+/// A usage reading is acted on once, and the one a compaction leaves behind never starts another.
+pub(crate) fn begin_due_compaction(host: &Shared, task_id: &str) -> Result<bool> {
+    let mut h = host.lock().unwrap();
+    let Some(mut task) = waiting_turn(&h, task_id)? else {
+        return Ok(false);
+    };
+    let Some((used, window, reported)) = task.context_usage.as_ref().and_then(|usage| {
+        Some((
+            usage.used,
+            usage.window.filter(|window| *window > 0)?,
+            usage.reported,
+        ))
+    }) else {
+        return Ok(false);
+    };
+    if task.provider_thread.is_none() || h.compacted.get(task_id) == Some(&reported) {
+        return Ok(false);
+    }
+    let rule = compact_rule(&h, &task)?;
+    if !rule.enabled || used.saturating_mul(100) < window.saturating_mul(u64::from(rule.threshold))
+    {
+        return Ok(false);
+    }
+    begin_compaction(&mut h, &mut task)?;
+    Ok(true)
+}
+
 fn ensure_owner(host: Shared, task_id: String) {
     let mut h = host.lock().unwrap();
     if let Some(sender) = h.sessions.get(&task_id) {
@@ -255,11 +404,19 @@ fn ensure_owner(host: Shared, task_id: String) {
             .map(|task| task.provider);
         let result = provider.and_then(|provider| match provider {
             Provider::Codex => codex::run(host.clone(), &task_id, rx),
-            Provider::Devin => devin::run(host.clone(), &task_id, rx),
+            Provider::Claude => claude::run(host.clone(), &task_id, rx),
         });
         if let Err(error) = result {
-            let h = host.lock().unwrap();
+            let mut h = host.lock().unwrap();
+            let compaction = h.compactions.remove(&task_id);
             if let Ok(mut task) = h.store.task(&task_id) {
+                // A compaction carries no user input, so its failure is never an uncertain delivery.
+                if let Some(previous) = compaction {
+                    task.state = previous.state;
+                    task.updated = previous.updated;
+                    task.active_turn = None;
+                    let _ = h.store.save_task(&task);
+                }
                 let unknown = task.active_turn.is_some()
                     || task.subagents.iter().any(|a| a.state.active())
                     || h.store.has_uncertain_submission(&task_id).unwrap_or(true);
@@ -288,6 +445,7 @@ fn ensure_owner(host: Shared, task_id: String) {
         h.activities.remove(&task_id);
         h.sessions.remove(&task_id);
         h.requests.remove(&task_id);
+        h.compactions.remove(&task_id);
     });
 }
 
@@ -353,6 +511,7 @@ pub(crate) fn claim_next(host: &Shared, task_id: &str) -> Result<Option<Outgoing
 pub(crate) fn preferences(task: &Task) -> AgentPreferences {
     AgentPreferences {
         provider: task.provider,
+        account: task.account.clone(),
         provider_access: task.provider_access.clone(),
         model: task.model.clone(),
         effort: task.effort.clone(),
@@ -360,10 +519,85 @@ pub(crate) fn preferences(task: &Task) -> AgentPreferences {
     }
 }
 
+/// Returns the model that runs a task: its own choice, or the provider's default for new tasks.
+pub(crate) fn effective_model(host: &crate::Host, task: &Task) -> Option<String> {
+    task.model.clone().or_else(|| {
+        host.runtimes
+            .get(&task.provider)
+            .and_then(|runtime| runtime.default_model.clone())
+    })
+}
+
+/// Returns the automatic compaction rule for a task's provider and the model that runs it.
+pub(crate) fn compact_rule(host: &crate::Host, task: &Task) -> Result<CompactRule> {
+    Ok(host
+        .store
+        .settings()?
+        .auto_compact
+        .rule(task.provider, effective_model(host, task).as_deref()))
+}
+
+/// Removes the "default" and "recommended" markers a provider adds to a model name.
+///
+/// The result is empty when the name was only such a marker and names no model.
+pub(crate) fn model_name(name: &str) -> String {
+    let marked = |text: &str| {
+        let text = text.to_lowercase();
+        text.contains("default") || text.contains("recommended")
+    };
+    let mut plain = String::new();
+    for (index, part) in name.split('(').enumerate() {
+        // After the first split every part starts inside a parenthesis.
+        let (inside, outside) = match (index, part.split_once(')')) {
+            (0, _) => ("", part),
+            (_, Some((inside, outside))) => (inside, outside),
+            (_, None) => (part, ""),
+        };
+        if !inside.is_empty() && !marked(inside) {
+            plain.push_str(&format!("({inside})"));
+        }
+        plain.push_str(outside);
+    }
+    plain
+        .split_whitespace()
+        .filter(|word| !marked(word))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_end_matches([' ', '-', '·', ':', ','])
+        .to_owned()
+}
+
+/// Picks the model new tasks start with, which is always one of `models`.
+///
+/// The first model whose identity and name contain every wanted part wins, then the
+/// provider's own default, then the first one listed.
+pub(crate) fn default_model(
+    models: &[Model],
+    wanted: &[&str],
+    own: Option<&str>,
+) -> Option<String> {
+    models
+        .iter()
+        .find(|model| {
+            let text = format!("{} {}", model.id, model.name).to_lowercase();
+            wanted.iter().all(|part| text.contains(part))
+        })
+        .or_else(|| models.iter().find(|model| Some(model.id.as_str()) == own))
+        .or(models.first())
+        .map(|model| model.id.clone())
+}
+
 /// Checks selected options against the provider's discovered catalog before persistence or delivery.
 pub(crate) fn validate_preferences(host: &crate::Host, selection: &AgentPreferences) -> Result<()> {
+    // An account identity is only meaningful for the provider it was registered with.
+    accounts::resolve(host, selection.provider, selection.account.as_deref())?;
     let runtime = host.runtimes.get(&selection.provider);
-    if let Some(model_id) = &selection.model {
+    // An absent model runs as the provider's default, so reasoning is checked against that one.
+    let model_id = selection
+        .model
+        .as_ref()
+        .or_else(|| runtime.and_then(|runtime| runtime.default_model.as_ref()));
+    if let Some(model_id) = model_id {
         let model = runtime.and_then(|runtime| runtime.models.iter().find(|model| &model.id == model_id))
             .context("The selected model is unavailable. Refresh this provider and choose an available model.")?;
         if let Some(effort) = &selection.effort {
@@ -380,11 +614,8 @@ pub(crate) fn validate_preferences(host: &crate::Host, selection: &AgentPreferen
     }
     if let Some(access) = &selection.provider_access {
         ensure!(
-            selection.provider == Provider::Devin
-                && runtime.is_some_and(|runtime| runtime
-                    .access_modes
-                    .iter()
-                    .any(|mode| &mode.id == access)),
+            runtime
+                .is_some_and(|runtime| runtime.access_modes.iter().any(|mode| &mode.id == access)),
             "The selected provider access mode is unavailable. Refresh its capabilities."
         );
     }
@@ -449,12 +680,19 @@ pub(crate) fn validate_attachments(
     Ok(())
 }
 
-/// Refreshes one provider without overwriting another integration's account or catalog.
-pub(super) fn discover(host: Shared, provider: Provider, cwd: Option<PathBuf>) -> Result<()> {
-    let result = match provider {
-        Provider::Codex => codex::discover(host.clone(), cwd),
-        Provider::Devin => devin::discover(host.clone(), cwd),
-    };
+/// Refreshes one provider's catalog through the given account without touching other providers.
+pub(super) fn discover(
+    host: Shared,
+    provider: Provider,
+    account: Option<String>,
+    cwd: Option<PathBuf>,
+) -> Result<()> {
+    // The registry lookup must release the host before a provider process is started.
+    let account = accounts::resolve(&host.lock().unwrap(), provider, account.as_deref());
+    let result = account.and_then(|account| match provider {
+        Provider::Codex => codex::discover(host.clone(), &account, cwd),
+        Provider::Claude => claude::discover(host.clone(), &account, cwd),
+    });
     if let Err(error) = &result {
         let mut h = host.lock().unwrap();
         let runtime = h.runtimes.entry(provider).or_default();
@@ -463,29 +701,48 @@ pub(super) fn discover(host: Shared, provider: Provider, cwd: Option<PathBuf>) -
     result
 }
 
+/// Returns the capabilities known before a provider's CLI has been asked for its catalog.
+pub(super) fn initial_runtime(provider: Provider) -> RuntimeInfo {
+    match provider {
+        Provider::Claude => claude::initial_runtime(),
+        Provider::Codex => RuntimeInfo::default(),
+    }
+}
+
 /// Reconciles only against a provider that can prove the exact submission identity.
 pub(super) fn reconcile(host: &Shared, task_id: &str) -> Result<()> {
     let provider = host.lock().unwrap().store.task(task_id)?.provider;
     match provider {
         Provider::Codex => codex::reconcile(host, task_id),
-        Provider::Devin => anyhow::bail!(
-            "Devin ACP cannot verify the exact receipt of an uncertain prompt. Inspect the session with devin --resume; this task will not resend it automatically."
-        ),
+        Provider::Claude => claude::reconcile(host, task_id),
     }
 }
 
-/// Refreshes supported account quotas without starting a model turn.
-pub(super) fn refresh_usage(host: &Shared) -> Result<()> {
-    let supported = host
-        .lock()
-        .unwrap()
-        .runtimes
-        .get(&Provider::Codex)
-        .is_some_and(|runtime| runtime.account_usage);
-    if supported {
-        codex::refresh_usage(host)
-    } else {
-        Ok(())
+/// Resolves the CLI that signs an account in or out.
+pub(crate) fn executable(provider: Provider) -> Result<PathBuf> {
+    match provider {
+        Provider::Codex => kodem_core::providers::codex::executable(),
+        Provider::Claude => Ok(claude::executable()),
+    }
+}
+
+/// Generates a short task title under the task's account for providers without their own.
+pub(crate) fn generate_title(account: &Account, input: &str) -> Result<String> {
+    match account.provider {
+        Provider::Claude => claude::generate_title(account, input),
+        Provider::Codex => anyhow::bail!("This provider titles its conversations itself"),
+    }
+}
+
+/// Reads an account's sign-in state, and its quotas when requested, without a model turn.
+pub(crate) fn account_status(
+    host: &Shared,
+    account: &Account,
+    usage: bool,
+) -> Result<AccountStatus> {
+    match account.provider {
+        Provider::Codex => codex::account_status(host, account, usage),
+        Provider::Claude => claude::account_status(host, account, usage),
     }
 }
 
@@ -493,26 +750,28 @@ pub(super) fn refresh_usage(host: &Shared) -> Result<()> {
 pub(super) fn account_usage(
     host: &Shared,
     provider: Provider,
+    account: Option<String>,
     key: Option<&str>,
 ) -> Result<Response> {
+    let account = accounts::resolve(&host.lock().unwrap(), provider, account.as_deref())?;
     match provider {
-        Provider::Codex => codex::account_usage(host, key),
-        Provider::Devin => anyhow::bail!(
-            "Devin ACP does not expose account quotas or banked resets. Session context is shown when the provider reports it."
-        ),
+        Provider::Codex => codex::account_usage(host, &account, key),
+        Provider::Claude => claude::account_usage(host, &account, key),
     }
 }
 
-/// Resolves the task's immutable integration before loading commands or resources.
-fn scoped_provider(
+/// Resolves the task's immutable integration and account before loading commands or resources.
+fn scoped_account(
     host: &Shared,
     provider: Provider,
+    account: Option<String>,
     task_id: &Option<String>,
-) -> Result<Provider> {
+) -> Result<Account> {
+    let h = host.lock().unwrap();
     if let Some(task_id) = task_id {
-        Ok(host.lock().unwrap().store.task(task_id)?.provider)
+        accounts::for_task(&h, &h.store.task(task_id)?)
     } else {
-        Ok(provider)
+        accounts::resolve(&h, provider, account.as_deref())
     }
 }
 
@@ -520,13 +779,14 @@ fn scoped_provider(
 pub(super) fn composer_catalog(
     host: &Shared,
     provider: Provider,
+    account: Option<String>,
     task_id: Option<String>,
     project_id: Option<String>,
 ) -> Result<ComposerCatalog> {
-    let provider = scoped_provider(host, provider, &task_id)?;
-    let mut catalog = match provider {
-        Provider::Codex => codex::composer_catalog(host, task_id, project_id)?,
-        Provider::Devin => devin::composer_catalog(host, task_id, project_id)?,
+    let account = scoped_account(host, provider, account, &task_id)?;
+    let mut catalog = match account.provider {
+        Provider::Codex => codex::composer_catalog(host, &account, task_id, project_id)?,
+        Provider::Claude => claude::composer_catalog(host, &account, task_id, project_id)?,
     };
     if !catalog.commands.contains(&ComposerCommand::Provider) {
         catalog.commands.insert(0, ComposerCommand::Provider);
@@ -538,12 +798,14 @@ pub(super) fn composer_catalog(
 pub(super) fn resources(
     host: &Shared,
     provider: Provider,
+    account: Option<String>,
     task_id: Option<String>,
     project_id: Option<String>,
 ) -> Result<Vec<Resource>> {
-    match scoped_provider(host, provider, &task_id)? {
-        Provider::Codex => codex::resources(host, task_id, project_id),
-        Provider::Devin => devin::resources(host, task_id, project_id),
+    let account = scoped_account(host, provider, account, &task_id)?;
+    match account.provider {
+        Provider::Codex => codex::resources(host, &account, task_id, project_id),
+        Provider::Claude => claude::resources(host, &account, task_id, project_id),
     }
 }
 

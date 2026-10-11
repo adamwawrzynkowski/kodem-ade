@@ -47,6 +47,7 @@ impl Store {
             )?;
         }
         db.execute_batch("CREATE TABLE IF NOT EXISTS agent_message_order(transcript TEXT NOT NULL, id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(transcript,id)); COMMIT;")?;
+        retire_removed_providers(&db)?;
         fs::set_permissions(
             root.join("workspace.sqlite"),
             fs::Permissions::from_mode(0o600),
@@ -188,6 +189,7 @@ impl Store {
             color: None,
             icon: ProjectIcon::default(),
             removed: false,
+            defaults: None,
         };
         self.db.execute(
             "INSERT INTO projects VALUES(?1,?2,?3)",
@@ -278,7 +280,105 @@ impl Store {
         let saved = self.settings()?;
         settings.agent_defaults = saved.agent_defaults;
         settings.provider_preferences = saved.provider_preferences;
+        settings.model_choices = saved.model_choices;
+        settings.accounts = saved.accounts;
         self.write_settings(&settings)
+    }
+    /// Replaces the account registry without touching window preferences.
+    pub fn save_accounts(&self, accounts: Vec<Account>) -> Result<()> {
+        let mut settings = self.settings()?;
+        settings.accounts = accounts;
+        self.write_settings(&settings)
+    }
+    /// Forgets an account and returns saved choices for new tasks to the default account.
+    ///
+    /// Existing tasks keep their reference, so a removed identity is never replaced silently.
+    pub fn remove_account(&self, provider: Provider, id: &str) -> Result<()> {
+        let selects = |preferences: &AgentPreferences| {
+            preferences.provider == provider && preferences.account.as_deref() == Some(id)
+        };
+        let mut settings = self.settings()?;
+        settings
+            .accounts
+            .retain(|account| !(account.provider == provider && account.id == id));
+        if selects(&settings.agent_defaults) {
+            settings.agent_defaults.account = None;
+        }
+        for preferences in settings.provider_preferences.values_mut() {
+            if selects(preferences) {
+                preferences.account = None;
+            }
+        }
+        let projects: Vec<Project> = self.read_json("SELECT json FROM projects")?;
+        let transaction = self.db.unchecked_transaction()?;
+        self.write_settings(&settings)?;
+        for mut project in projects {
+            if project.defaults.as_ref().is_some_and(selects) {
+                if let Some(defaults) = &mut project.defaults {
+                    defaults.account = None;
+                }
+                self.save_project(&project)?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+    /// Clears a model identity that a provider no longer lists from tasks and saved choices.
+    ///
+    /// An absent model selects the provider's default, so nothing keeps naming a removed entry.
+    pub fn retire_model(&self, provider: Provider, model: &str) -> Result<()> {
+        let names = |preferences: &AgentPreferences| {
+            preferences.provider == provider && preferences.model.as_deref() == Some(model)
+        };
+        let transaction = self.db.unchecked_transaction()?;
+        for mut task in self.tasks()? {
+            if task.provider == provider && task.model.as_deref() == Some(model) {
+                task.model = None;
+                self.save_task(&task)?;
+            }
+        }
+        let projects: Vec<Project> = self.read_json("SELECT json FROM projects")?;
+        for mut project in projects {
+            if let Some(defaults) = project.defaults.as_mut().filter(|defaults| names(defaults)) {
+                defaults.model = None;
+                self.save_project(&project)?;
+            }
+        }
+        let mut settings = self.settings()?;
+        let mut changed = false;
+        let prefix = format!("{}/", provider.icon());
+        let saved = std::iter::once(&mut settings.agent_defaults)
+            .chain(settings.provider_preferences.values_mut())
+            .filter(|preferences| names(preferences))
+            .map(|preferences| &mut preferences.model)
+            .chain(
+                settings
+                    .model_choices
+                    .iter_mut()
+                    .filter(|(key, choice)| {
+                        key.starts_with(&prefix) && choice.model.as_deref() == Some(model)
+                    })
+                    .map(|(_, choice)| &mut choice.model),
+            );
+        for choice in saved {
+            *choice = None;
+            changed = true;
+        }
+        if changed {
+            self.write_settings(&settings)?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+    /// Sets or clears the options that new tasks in one project start with.
+    pub fn set_project_defaults(&self, id: &str, defaults: Option<AgentPreferences>) -> Result<()> {
+        let mut project = self
+            .projects()?
+            .into_iter()
+            .find(|p| p.id == id)
+            .context("Project not found")?;
+        project.defaults = defaults;
+        self.save_project(&project)
     }
     /// Saves the last provider and that provider's model options before a task is created.
     pub fn save_agent_preferences(&self, defaults: AgentPreferences) -> Result<()> {
@@ -290,7 +390,14 @@ impl Store {
         settings
             .provider_preferences
             .insert(defaults.provider, defaults.clone());
+        settings.remember_model(&defaults, None);
         settings.agent_defaults = defaults;
+        self.write_settings(&settings)
+    }
+    /// Records the model a new task starts with as the last choice of its account and project.
+    pub fn remember_model(&self, preferences: &AgentPreferences, project: &str) -> Result<()> {
+        let mut settings = self.settings()?;
+        settings.remember_model(preferences, Some(project));
         self.write_settings(&settings)
     }
     /// Atomically saves an accepted task preference change and the defaults for new tasks.
@@ -303,6 +410,7 @@ impl Store {
         settings
             .provider_preferences
             .insert(defaults.provider, defaults.clone());
+        settings.remember_model(&defaults, Some(&task.project_id));
         settings.agent_defaults = defaults;
         let transaction = self.db.unchecked_transaction()?;
         self.save_task(task)?;
@@ -640,6 +748,7 @@ impl Store {
             attachments: message.attachments.clone(),
             feedback: message.feedback.clone(),
             file_edits: Vec::new(),
+            tool: None,
             complete: true,
             created: message.created,
         })
@@ -746,4 +855,86 @@ impl Store {
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
+}
+
+// Providers that earlier versions stored and this version no longer has.
+const REMOVED_PROVIDERS: [&str; 1] = ["Devin"];
+
+// Moves tasks of removed providers aside and drops saved choices that name them, so the
+// remaining records still parse. The moved tasks and their messages stay in the database.
+fn retire_removed_providers(db: &Connection) -> Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS retired_tasks(id TEXT PRIMARY KEY, json TEXT NOT NULL);",
+    )?;
+    for provider in REMOVED_PROVIDERS {
+        let pattern = format!("%\"provider\":\"{provider}\"%");
+        let mut retired = Vec::new();
+        {
+            let mut statement = db.prepare("SELECT id, json FROM tasks WHERE json LIKE ?1")?;
+            let rows = statement.query_map([&pattern], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (id, json) = row?;
+                let task: serde_json::Value = serde_json::from_str(&json)?;
+                if task["provider"] == provider {
+                    retired.push((id, json));
+                }
+            }
+        }
+        for (id, json) in retired {
+            db.execute(
+                "INSERT OR REPLACE INTO retired_tasks VALUES(?1,?2)",
+                params![id, json],
+            )?;
+            db.execute("DELETE FROM tasks WHERE id=?1", [&id])?;
+        }
+        let mut projects = Vec::new();
+        {
+            let mut statement = db.prepare("SELECT id, json FROM projects WHERE json LIKE ?1")?;
+            let rows = statement.query_map([&pattern], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                projects.push(row?);
+            }
+        }
+        for (id, json) in projects {
+            let mut project: serde_json::Value = serde_json::from_str(&json)?;
+            if project["defaults"]["provider"] == provider {
+                project["defaults"] = serde_json::Value::Null;
+                db.execute(
+                    "UPDATE projects SET json=?1 WHERE id=?2",
+                    params![serde_json::to_string(&project)?, id],
+                )?;
+            }
+        }
+        let saved: Option<String> = db
+            .query_row("SELECT json FROM settings WHERE id=1", [], |row| row.get(0))
+            .optional()?;
+        let Some(saved) = saved else {
+            continue;
+        };
+        if !saved.contains(provider) {
+            continue;
+        }
+        let mut settings: serde_json::Value = serde_json::from_str(&saved)?;
+        if let Some(preferences) = settings["provider_preferences"].as_object_mut() {
+            preferences.remove(provider);
+        }
+        // Every provider has a registered default account, so the removed one has an entry.
+        if let Some(accounts) = settings["accounts"].as_array_mut() {
+            accounts.retain(|account| account["provider"] != provider);
+        }
+        if settings["agent_defaults"]["provider"] == provider
+            && let Some(fields) = settings.as_object_mut()
+        {
+            fields.remove("agent_defaults");
+        }
+        db.execute(
+            "UPDATE settings SET json=?1 WHERE id=1",
+            [serde_json::to_string(&settings)?],
+        )?;
+    }
+    Ok(())
 }

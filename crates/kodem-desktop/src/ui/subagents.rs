@@ -41,6 +41,17 @@ fn state_label(state: &RunState) -> &'static str {
     }
 }
 
+// The tone of an agent's state chip: working, waiting, finished, failed or at rest.
+fn state_tone(state: &RunState, theme: Theme) -> Hsla {
+    match state {
+        RunState::Starting | RunState::Running => theme.accent,
+        RunState::Waiting => theme.warning,
+        RunState::Completed => theme.added,
+        RunState::Failed | RunState::DeliveryUnknown => theme.removed,
+        RunState::Interrupted | RunState::Idle => theme.subtle,
+    }
+}
+
 impl Shell {
     /// Keeps child questions and approvals inside their own conversation.
     pub(super) fn request_in_current_thread(&self, request: &InputRequest) -> bool {
@@ -92,7 +103,7 @@ impl Shell {
                 .enumerate()
                 .find(|(_, a)| a.thread_id == thread_id)
         }) else {
-            return div().child("Agent thread unavailable").into_any_element();
+            return kit::chip("AGENT THREAD UNAVAILABLE", self.theme.subtle).into_any_element();
         };
         let id = agent.thread_id.clone();
         let t = self.theme;
@@ -106,24 +117,17 @@ impl Shell {
         )
         .h(px(28.))
         .px(px(8.))
-        .bg(t.raised)
-        .border_1()
-        .border_color(t.border)
+        .bg(t.control)
+        .border_color(t.edge)
         .child(if agent.state.active() {
-            motion::active_icon(
-                (
-                    ElementId::from("agent-progress"),
-                    SharedString::from(id.clone()),
-                ),
-                "loader",
-                t.accent,
-                true,
-                cx.reduce_motion(),
-            )
+            motion::active_icon("loader", t.accent, true, cx.reduce_motion())
         } else {
             div().into_any_element()
         })
-        .child(caps(state_label(&agent.state), t))
+        .child(kit::chip(
+            state_label(&agent.state).to_uppercase(),
+            state_tone(&agent.state, t),
+        ))
         .child(icon("external-link").size(px(11.)).text_color(t.subtle))
         .on_click(cx.listener(move |s, _, window, cx| s.open_agent(id.clone(), window, cx)))
         .into_any_element()
@@ -143,34 +147,38 @@ impl Shell {
             .iter()
             .filter(|agent| agent.state.active())
             .count();
+        let t = self.theme;
         div()
-            .id("composer-agents")
-            .px(px(14.))
-            .py(px(8.))
-            .max_h(px(156.))
-            .overflow_y_scroll()
+            .flex_shrink_0()
             .flex()
             .flex_col()
-            .gap(px(6.))
-            .border_b_1()
-            .border_color(self.theme.border)
-            .bg(self.theme.inset)
-            .child(caps(
-                if active > 0 {
-                    format!("Agents · {active} working")
-                } else {
-                    "Agents".into()
-                },
-                self.theme,
-            ))
+            .bg(t.inset)
             .child(
-                div().flex().flex_wrap().gap(px(4.)).children(
-                    view.task
-                        .subagents
-                        .iter()
-                        .map(|agent| self.agent_link(&agent.thread_id, cx)),
-                ),
+                div()
+                    .id("composer-agents")
+                    .px(px(14.))
+                    .py(px(8.))
+                    .max_h(px(156.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .child(
+                        kit::section_header("Agents", Some(view.task.subagents.len()), t)
+                            .when(active > 0, |header| {
+                                header.child(kit::chip(format!("{active} WORKING"), t.accent))
+                            }),
+                    )
+                    .child(
+                        div().flex().flex_wrap().gap(px(4.)).children(
+                            view.task
+                                .subagents
+                                .iter()
+                                .map(|agent| self.agent_link(&agent.thread_id, cx)),
+                        ),
+                    ),
             )
+            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
             .into_any_element()
     }
 
@@ -281,40 +289,28 @@ impl Shell {
         let history_loading = !agent.history_loaded;
         let task = self.view.as_ref()?.task.clone();
         let t = self.theme;
-        let mut header = div()
-            .h(px(42.))
-            .flex_shrink_0()
-            .pl(px(16.))
-            .pr(px(8.))
+        let tone = state_tone(&state, t);
+        // The state and the window actions sit over the trailing side of the glow header.
+        let mut actions = div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right(px(10.))
             .flex()
             .items_center()
-            .gap(px(10.))
-            .bg(t.sidebar)
-            .border_b_1()
-            .border_color(t.border)
-            .child(caps("Agent", t))
-            .child(icon(glyph(index)).size(px(14.)).text_color(t.accent))
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_size(px(13.))
-                    .child(name),
-            )
-            .child(caps(state_label(&state), t))
+            .gap(px(8.))
             .when(state.active(), |d| {
                 d.child(motion::active_icon(
-                    "popup-agent-progress",
                     "loader",
                     t.accent,
                     true,
                     cx.reduce_motion(),
                 ))
             })
-            .when(history_loading, |d| d.child(caps("Loading history…", t)))
-            .child(div().flex_1());
+            .child(kit::chip(state_label(&state).to_uppercase(), tone));
         if task.state.active() {
             let task_id = task.id.clone();
-            header = header.child(self.ghost("stop-agent-task", "stop", "Stop task").on_click(
+            actions = actions.child(self.ghost("stop-agent-task", "stop", "Stop task").on_click(
                 cx.listener(move |s, _, _, _| {
                     s.send(core::Request::Interrupt {
                         task_id: task_id.clone(),
@@ -322,10 +318,32 @@ impl Shell {
                 }),
             ));
         }
-        header = header.child(
+        actions = actions.child(
             self.icon_button("close-agent", "close", "Close agent thread")
                 .on_click(cx.listener(|s, _, window, cx| s.close_agent(window, cx))),
         );
+        let header = div()
+            .relative()
+            .flex_shrink_0()
+            .bg(t.header)
+            .border_b_1()
+            .border_color(t.border)
+            .child(
+                // The padding keeps a long agent name clear of the actions laid over the header.
+                kit::glow_header(
+                    glyph(index),
+                    name,
+                    if history_loading {
+                        "Agent thread · loading history…"
+                    } else {
+                        "Agent thread"
+                    },
+                    tone,
+                    t,
+                )
+                .pr(px(150.)),
+            )
+            .child(actions);
         let entity = cx.entity();
         let mut body = div()
             .relative()
@@ -339,22 +357,28 @@ impl Shell {
                 div()
                     .px(px(20.))
                     .py(px(10.))
-                    .text_size(px(12.))
+                    .flex()
+                    .gap(px(8.))
+                    .font_family(crate::theme::MONO)
+                    .text_size(px(11.))
                     .text_color(t.removed)
-                    .child(error),
+                    .child(kit::chip("ERROR", t.removed))
+                    .child(div().flex_1().min_w_0().child(error)),
             );
         }
         if let Some(before) = before {
-            body = body.child(
-                self.ghost("agent-earlier", "arrow-up", "Earlier messages")
-                    .on_click(cx.listener(move |s, _, _, _| {
-                        s.send(core::Request::SubagentThread {
-                            task_id: task.id.clone(),
-                            thread_id: thread_id.clone(),
-                            before: Some(before),
-                        })
-                    })),
-            );
+            body =
+                body.child(div().flex_shrink_0().px_5().pt_2().child(
+                    self.earlier_messages("agent-earlier").on_click(cx.listener(
+                        move |s, _, _, _| {
+                            s.send(core::Request::SubagentThread {
+                                task_id: task.id.clone(),
+                                thread_id: thread_id.clone(),
+                                before: Some(before),
+                            })
+                        },
+                    )),
+                ));
         }
         body = if loaded {
             body.child(
@@ -381,12 +405,7 @@ impl Shell {
             body.child(
                 div()
                     .p(px(20.))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .text_color(t.muted)
-                    .child(dither::pulse("agent-loading", t.muted, cx.reduce_motion()))
-                    .child("Loading agent thread…"),
+                    .child(kit::loader_row("Loading agent thread…", t)),
             )
         };
         body = body.child(self.question_panel(cx));
@@ -399,26 +418,41 @@ impl Shell {
             .cloned()
             .collect();
         for (index, request) in requests.iter().enumerate() {
-            let permission = div()
-                .p(px(14.))
-                .border_t_1()
-                .border_color(t.border)
-                .bg(t.accent_bg)
-                .flex()
-                .flex_col()
-                .gap(px(8.))
-                .child(caps("Permission", t).text_color(t.accent))
+            let details = self.readonly(
+                format!("agent-approval:{}", request.id),
+                serde_json::to_string_pretty(&request.params).unwrap_or_default(),
+                cx,
+            );
+            let permission = kit::block(t)
+                .flex_shrink_0()
+                .border_color(t.warning.opacity(0.3))
                 .child(
-                    request.params["reason"]
-                        .as_str()
-                        .unwrap_or("Agent needs permission")
-                        .to_owned(),
+                    kit::block_header("Permission", t.warning, t)
+                        .bg(t.warning.opacity(0.07))
+                        .border_color(t.warning.opacity(0.22)),
                 )
-                .child(self.readonly(
-                    format!("agent-approval:{}", request.id),
-                    serde_json::to_string_pretty(&request.params).unwrap_or_default(),
-                    cx,
-                ));
+                .child(
+                    div()
+                        .px(px(12.))
+                        .py(px(9.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .child(
+                            request.params["reason"]
+                                .as_str()
+                                .unwrap_or("Agent needs permission")
+                                .to_owned(),
+                        )
+                        .child(
+                            div()
+                                .font_family(crate::theme::MONO)
+                                .text_size(px(11.5))
+                                .text_color(t.muted)
+                                .child(details),
+                        ),
+                )
+                .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)));
             let decisions = request.params["availableDecisions"]
                 .as_array()
                 .cloned()
@@ -429,7 +463,7 @@ impl Shell {
                         serde_json::json!("cancel"),
                     ]
                 });
-            let mut buttons = div().flex().gap_2();
+            let mut buttons = div().px(px(6.)).py(px(4.)).flex().flex_wrap().gap(px(6.));
             for (choice, decision) in decisions.into_iter().enumerate() {
                 let Some(decision) = decision.as_str().map(str::to_owned) else {
                     continue;
@@ -454,7 +488,13 @@ impl Shell {
                         })),
                 );
             }
-            body = body.child(permission.child(buttons));
+            body = body.child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(14.))
+                    .pb(px(12.))
+                    .child(permission.child(buttons)),
+            );
         }
         Some(
             div()

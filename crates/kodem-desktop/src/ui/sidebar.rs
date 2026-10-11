@@ -1,6 +1,16 @@
 use super::*;
+use crate::thread_list::{Row, Section};
+
+/// Name of the effect anchor on the thread feed, where chips for new tasks land.
+pub(super) const FEED_ANCHOR: &str = "thread-feed";
+
+/// Returns the effect anchor name of one thread row.
+pub(super) fn thread_anchor(task_id: &str) -> SharedString {
+    SharedString::from(format!("thread:{task_id}"))
+}
+
 impl Shell {
-    /// Builds a project-filtered task feed with status, branch and saved review metadata.
+    /// Builds the attention-first thread feed with status, branch and saved review metadata.
     pub(super) fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         if self.settings.collapsed {
@@ -22,6 +32,10 @@ impl Shell {
                 .child(
                     self.icon_button("rail-search", "search", "Search tasks · ⌘F")
                         .on_click(cx.listener(|s, _, w, cx| s.open_search(w, cx))),
+                )
+                .child(
+                    self.icon_button("rail-palette", "command", "Command palette · ⌘K")
+                        .on_click(cx.listener(|s, _, w, cx| s.open_palette(w, cx))),
                 )
                 .child(
                     self.icon_button("rail-open", "folder-open", "Open repository · ⌘O")
@@ -59,7 +73,8 @@ impl Shell {
                 .rounded(px(crate::theme::RADIUS_CONTROL))
                 .bg(t.inset)
                 .border_1()
-                .border_color(t.edge)
+                .border_color(t.accent.opacity(0.5))
+                .font_family(crate::theme::MONO)
                 .child(icon("search").size(px(13.)).text_color(t.muted))
                 .child(div().flex_1().min_w_0().child(self.search.clone()))
                 .child(
@@ -76,20 +91,14 @@ impl Shell {
                 )
                 .into_any_element()
         } else {
-            self.control("search-tasks")
+            self.button("new-task", "plus", "New task")
                 .flex_1()
                 .min_w_0()
                 .h(px(28.))
                 .justify_start()
-                .px(px(8.))
-                .bg(t.inset)
-                .shadow(Vec::new())
-                .text_color(t.subtle)
-                .hover(move |b| b.border_color(t.edge).text_color(t.muted))
-                .child(icon("search").size(px(13.)))
-                .child(div().flex_1().child("Search"))
-                .child(caps("⌘F", t))
-                .on_click(cx.listener(|s, _, w, cx| s.open_search(w, cx)))
+                .child(div().flex_1())
+                .child(kit::keycap("⌘N", t))
+                .on_click(cx.listener(|s, _, w, cx| s.new_task(&NewTask, w, cx)))
                 .into_any_element()
         };
         let mut panel = div()
@@ -110,14 +119,22 @@ impl Shell {
                     .pb(px(6.))
                     .flex()
                     .items_center()
-                    .gap(px(6.))
+                    .gap(px(4.))
                     .child(search)
-                    .child(
-                        self.icon_button("new-task", "edit", "New task · ⌘N")
-                            .h(px(28.))
-                            .w(px(28.))
-                            .on_click(cx.listener(|s, _, w, cx| s.new_task(&NewTask, w, cx))),
-                    ),
+                    .when(!self.search_visible, |row| {
+                        row.child(
+                            self.icon_button("search-tasks", "search", "Search tasks · ⌘F")
+                                .h(px(28.))
+                                .w(px(28.))
+                                .on_click(cx.listener(|s, _, w, cx| s.open_search(w, cx))),
+                        )
+                        .child(
+                            self.icon_button("open-palette", "command", "Command palette · ⌘K")
+                                .h(px(28.))
+                                .w(px(28.))
+                                .on_click(cx.listener(|s, _, w, cx| s.open_palette(w, cx))),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -159,13 +176,17 @@ impl Shell {
                             )),
                     )
                     .child(
-                        self.icon_button("add-project", "plus", "Open repository · ⌘O")
+                        self.icon_button("add-project", "folder-open", "Open repository · ⌘O")
                             .on_click(
                                 cx.listener(|s, _, w, cx| s.open_project(&OpenProject, w, cx)),
                             ),
                     ),
             )
-            .child(div().mx(px(10.)).h(px(1.)).bg(t.border));
+            .child(
+                div()
+                    .px(px(10.))
+                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+            );
         let query = self.search.read(cx).text().to_lowercase();
         if self.sidebar_dirty {
             if let Some(workspace) = &self.workspace {
@@ -215,77 +236,74 @@ impl Shell {
         .pt(px(6.))
         .pb_2();
         let connected = self.host_connected && self.workspace.is_some();
-        panel = panel.child(feed).child(
-            div()
-                .h(px(40.))
-                .flex_shrink_0()
-                .px(px(10.))
-                .border_t_1()
-                .border_color(t.border)
-                .flex()
-                .items_center()
-                .gap(px(2.))
-                .child(
-                    self.ghost(
-                        "settings",
-                        "settings",
-                        if self.settings.sidebar_width < 280.
-                            && !matches!(
-                                self.update_state,
-                                crate::updater::State::Idle | crate::updater::State::Checking
-                            )
-                        {
-                            ""
-                        } else {
-                            "Settings"
-                        },
+        panel = panel
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(fx::anchor(FEED_ANCHOR))
+                    .child(feed),
+            )
+            .child(self.sidebar_usage(cx))
+            .child(
+                div()
+                    .px(px(10.))
+                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+            )
+            .child(
+                div()
+                    .h(px(38.))
+                    .flex_shrink_0()
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(2.))
+                    .child(
+                        self.icon_button("settings", "settings", "Settings · ⌘,")
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.panel = Panel::Settings;
+                                cx.notify();
+                            })),
                     )
-                    .px(px(6.))
-                    .on_click(cx.listener(|s, _, _, cx| {
-                        s.panel = Panel::Settings;
-                        cx.notify();
-                    })),
-                )
-                .child(
-                    self.icon_button("archive-view", "archive", "Toggle archived tasks")
-                        .when(self.show_archived, |b| {
-                            b.bg(t.selected).text_color(t.accent)
-                        })
-                        .on_click(cx.listener(|s, _, _, cx| {
-                            s.show_archived = !s.show_archived;
-                            s.sidebar_dirty = true;
-                            cx.notify();
-                        })),
-                )
-                .child(div().flex_1())
-                .child(self.update_control(false, cx))
-                .child(
-                    div()
-                        .id("host-status")
-                        .flex()
-                        .items_center()
-                        .gap(px(5.))
-                        .pl(px(6.))
-                        .child(
-                            div()
-                                .size(px(5.))
-                                .bg(if connected { t.added } else { t.subtle }),
-                        )
-                        .child(caps(if connected { "Host" } else { "Offline" }, t))
-                        .tooltip(move |_, cx| {
-                            cx.new(|_| Hint {
-                                text: if connected {
-                                    "Local host connected".into()
-                                } else {
-                                    "Local host unavailable; reconnecting".into()
-                                },
-                                theme: t,
+                    .child(
+                        self.icon_button("archive-view", "archive", "Toggle archived tasks")
+                            .when(self.show_archived, |b| {
+                                b.bg(t.accent.opacity(0.1)).text_color(t.accent)
                             })
-                            .into()
-                        }),
-                ),
-        );
-        motion::reveal("sidebar-enter", panel)
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.show_archived = !s.show_archived;
+                                s.sidebar_dirty = true;
+                                cx.notify();
+                            })),
+                    )
+                    .child(div().flex_1())
+                    .child(self.update_control(false, cx))
+                    .child(
+                        div()
+                            .id("host-status")
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .px(px(6.))
+                            .child(kit::marker(if connected { t.added } else { t.subtle }))
+                            .child(caps(if connected { "Host" } else { "Offline" }, t))
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| Hint {
+                                    text: if connected {
+                                        "Local host connected".into()
+                                    } else {
+                                        "Local host unavailable; reconnecting".into()
+                                    },
+                                    theme: t,
+                                })
+                                .into()
+                            }),
+                    ),
+            );
+        panel.into_any_element()
     }
     fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings.collapsed = false;
@@ -293,13 +311,74 @@ impl Shell {
         window.focus(&self.search.read(cx).focus_handle(cx), cx);
         cx.notify();
     }
+    /// Returns the tasks of the feed in display order, for keyboard navigation.
+    pub(super) fn feed_tasks(&self) -> Vec<String> {
+        self.sidebar_rows
+            .iter()
+            .filter_map(|row| row.task_id().map(str::to_owned))
+            .collect()
+    }
+    /// Opens the task `offset` rows away from the open one in the feed, wrapping at the ends.
+    pub(super) fn select_adjacent_task(&mut self, offset: isize, cx: &mut Context<Self>) {
+        let tasks = self.feed_tasks();
+        if tasks.is_empty() {
+            return;
+        }
+        let count = tasks.len() as isize;
+        let current = self
+            .selected
+            .as_ref()
+            .and_then(|id| tasks.iter().position(|task| task == id));
+        let next = match current {
+            Some(index) => (index as isize + offset).rem_euclid(count),
+            None if offset < 0 => count - 1,
+            None => 0,
+        };
+        self.select_task(tasks[next as usize].clone(), cx);
+    }
+    /// Opens the next task after the open one that waits for the user or reported a failure.
+    pub(super) fn select_next_attention(&mut self, cx: &mut Context<Self>) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let waiting: Vec<_> = self
+            .feed_tasks()
+            .into_iter()
+            .filter(|id| {
+                workspace.tasks.iter().any(|task| {
+                    &task.id == id && Section::of(task, &self.settings) == Section::NeedsYou
+                })
+            })
+            .collect();
+        let after = self
+            .selected
+            .as_ref()
+            .and_then(|id| waiting.iter().position(|task| task == id))
+            .map_or(0, |index| index + 1);
+        if let Some(id) = waiting.get(after).or(waiting.first()) {
+            self.select_task(id.clone(), cx);
+        }
+    }
     fn sidebar_row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        use crate::thread_list::Row;
         let Some(row) = self.sidebar_rows.get(index) else {
             return div().into_any_element();
         };
         let t = self.theme;
         match row {
+            Row::Section { section, count } => {
+                let header = match section {
+                    Section::NeedsYou => kit::status_header(section.label(), *count, t.warning, t),
+                    Section::Working => kit::status_header(section.label(), *count, t.accent, t),
+                    Section::Ready => kit::status_header(section.label(), *count, t.added, t),
+                    Section::Threads => kit::section_header(section.label(), Some(*count), t),
+                };
+                div()
+                    .px(px(6.))
+                    .pt(px(if index == 0 { 4. } else { 12. }))
+                    .pb(px(4.))
+                    .child(header)
+                    .into_any_element()
+            }
             Row::Task {
                 index,
                 project,
@@ -333,7 +412,7 @@ impl Shell {
                     && self.search.read(cx).text().is_empty();
                 let id = id.clone();
                 div()
-                    .pt(px(4.))
+                    .pt(px(8.))
                     .child(
                         self.ghost(
                             SharedString::from(format!("project-group:{id}")),
@@ -345,7 +424,7 @@ impl Shell {
                             "",
                         )
                         .w_full()
-                        .h(px(28.))
+                        .h(px(26.))
                         .px(px(6.))
                         .justify_start()
                         .min_w_0()
@@ -356,15 +435,17 @@ impl Shell {
                         ))
                         .child(project_icon(project, t))
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
+                            caps(&project.name, t)
+                                .max_w(relative(0.6))
                                 .text_ellipsis()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(t.text)
-                                .child(project.name.clone()),
+                                .text_color(t.muted),
                         )
                         .child(figure(count.to_string(), t.subtle))
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+                        )
                         .on_click(cx.listener(move |s, _, _, cx| {
                             if !s.settings.collapsed_projects.remove(&id) {
                                 s.settings.collapsed_projects.insert(id.clone());
@@ -385,14 +466,13 @@ impl Shell {
                     "settled:{}",
                     project.as_deref().unwrap_or("all")
                 )))
-                .border_0()
-                .shadow(Vec::new())
-                .bg(hsla(0., 0., 0., 0.))
+                .border_color(gpui::transparent_black())
+                .bg(gpui::transparent_black())
                 .hover(move |b| b.bg(t.selected))
                 .w_full()
                 .h(px(26.))
                 .px(px(6.))
-                .mt(px(4.))
+                .mt(px(8.))
                 .justify_start()
                 .text_color(t.subtle)
                 .when(project.is_some(), |row| row.pl(px(18.)))
@@ -405,8 +485,12 @@ impl Shell {
                     .size(px(12.)),
                 )
                 .child(caps("Settled", t))
-                .child(div().flex_1().h(px(1.)).mx(px(4.)).bg(t.border))
                 .child(figure(count.to_string(), t.subtle))
+                .child(
+                    div()
+                        .flex_1()
+                        .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+                )
                 .on_click(cx.listener(move |s, _, _, cx| {
                     if let Some(id) = &project {
                         if !s.expanded_settled_projects.remove(id) {
@@ -420,15 +504,7 @@ impl Shell {
                 }))
                 .into_any_element()
             }
-            Row::Empty(label) => div()
-                .px(px(10.))
-                .py(px(18.))
-                .flex()
-                .flex_col()
-                .gap(px(6.))
-                .child(caps("Nothing here", t))
-                .child(div().text_size(px(12.)).text_color(t.muted).child(*label))
-                .into_any_element(),
+            Row::Empty(label) => kit::empty_hint(*label, t).into_any_element(),
         }
     }
     fn task_card(
@@ -442,62 +518,59 @@ impl Shell {
         let radius = crate::theme::RADIUS_CONTROL;
         let id = task.id.clone();
         let menu_id = id.clone();
+        let section = Section::of(task, &self.settings);
         let needs_input = task.needs_input();
-        let active = task.state.active() && !needs_input;
-        let failed = matches!(task.state, RunState::Failed | RunState::DeliveryUnknown);
+        let active = section == Section::Working;
+        let blocked = task.is_blocked();
+        let unread = section == Section::Ready;
         let leading = if needs_input {
-            motion::active_icon(
-                (
-                    ElementId::from("sidebar-status"),
-                    SharedString::from(id.clone()),
-                ),
-                "shield",
-                t.accent,
-                false,
-                cx.reduce_motion(),
-            )
+            motion::active_icon("shield", t.warning, false, cx.reduce_motion())
         } else if active {
-            dither::pulse(
-                (
-                    ElementId::from("sidebar-status"),
-                    SharedString::from(id.clone()),
-                ),
-                t.accent,
-                cx.reduce_motion(),
-            )
-        } else if failed {
+            dither::pulse(t.accent, cx.reduce_motion())
+        } else if blocked {
             icon("circle-x")
                 .size(px(13.))
                 .text_color(t.removed)
                 .into_any_element()
+        } else if unread {
+            kit::marker(t.added).into_any_element()
         } else {
             project_icon(project, t)
         };
         let status = if needs_input {
-            motion::gleam(
-                (
-                    ElementId::from("sidebar-status-label"),
-                    SharedString::from(id.clone()),
-                ),
-                "Input",
-                t,
-            )
-        } else if active {
-            figure(elapsed(task.updated), t.accent).into_any_element()
-        } else if failed {
-            caps(task.state.label(), t)
-                .text_color(t.removed)
-                .into_any_element()
+            kit::chip("INPUT", t.warning).into_any_element()
+        } else if blocked {
+            kit::chip(task.state.label().to_uppercase(), t.removed).into_any_element()
         } else {
-            figure(elapsed(task.updated), t.subtle).into_any_element()
+            figure(
+                elapsed(task.updated),
+                if active { t.accent } else { t.subtle },
+            )
+            .into_any_element()
         };
         let review_hint = task.review.as_ref().map_or_else(|| "No saved task diff. A snapshot will be recorded when the next turn finishes.".to_owned(), |r| {
             if let Some(error) = &r.error { format!("Could not capture task diff: {error}") }
             else { format!("Saved task diff · {} ago\n+{} added · −{} removed\n{} files omitted from inline counts. Later checkout changes do not affect these totals.", elapsed(r.captured),r.added,r.removed,r.omitted_files) }
         });
+        let provider = task.provider;
+        let account = self
+            .workspace
+            .as_ref()
+            .and_then(|w| w.account(provider, task.account.as_deref()))
+            .filter(|state| !state.account.is_default())
+            .map(|state| {
+                (
+                    state.account.name.clone(),
+                    self.account_tone(&state.account),
+                )
+            });
+        let provider_hint = match &account {
+            Some((name, _)) => format!("{} · {name}", provider.label()),
+            None => provider.label().to_owned(),
+        };
         let mut meta = div()
             .h(px(16.))
-            .pl(px(21.))
+            .pl(px(22.))
             .flex()
             .items_center()
             .gap(px(6.))
@@ -506,12 +579,38 @@ impl Shell {
             .text_color(if selected { t.muted } else { t.subtle })
             .child(
                 div()
-                    .flex_shrink_0()
-                    .max_w(relative(0.45))
-                    .text_ellipsis()
-                    .child(project.name.clone()),
+                    .id((
+                        ElementId::from("task-provider"),
+                        SharedString::from(id.clone()),
+                    ))
+                    .flex()
+                    .items_center()
+                    .gap(px(3.))
+                    .child(icon(provider.icon()).size(px(11.)))
+                    .when_some(account.as_ref(), |d, (_, tone)| {
+                        d.child(div().size(px(5.)).rounded(px(1.)).bg(*tone))
+                    })
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| Hint {
+                            text: provider_hint.clone(),
+                            theme: t,
+                        })
+                        .into()
+                    }),
             )
-            .child(div().flex_shrink_0().child("/"))
+            .when(
+                self.sidebar_project.is_none() && !self.settings.group_tasks_by_project,
+                |d| {
+                    d.child(
+                        div()
+                            .flex_shrink_0()
+                            .max_w(relative(0.4))
+                            .text_ellipsis()
+                            .child(project.name.clone()),
+                    )
+                    .child(div().flex_shrink_0().child("/"))
+                },
+            )
             .child(
                 div()
                     .flex_1()
@@ -525,16 +624,15 @@ impl Shell {
             meta = meta.child(
                 self.control((ElementId::from("task-diff"), SharedString::from(id.clone())))
                     .border_0()
-                    .shadow(Vec::new())
-                    .bg(hsla(0., 0., 0., 0.))
-                    .hover(move |b| b.bg(t.raised))
+                    .bg(gpui::transparent_black())
+                    .hover(move |b| b.bg(t.selected))
                     .h(px(16.))
                     .px(px(3.))
                     .rounded(px(crate::theme::RADIUS_SMALL))
                     .disabled(snapshot.is_none())
                     .accessibility_label("Open saved task diff")
                     .when(review.omitted_files > 0, |b| b.child(figure("~", t.subtle)))
-                    .child(line_totals(review.added, review.removed, t))
+                    .child(kit::diffstat(review.added, review.removed, t))
                     .on_click(cx.listener(move |s, _, _, cx| {
                         cx.stop_propagation();
                         s.select_task(task_id.clone(), cx);
@@ -554,42 +652,14 @@ impl Shell {
                         .into()
                     }),
             );
-        } else {
-            meta = meta.child(
-                div()
-                    .id((
-                        ElementId::from("missing-task-diff"),
-                        SharedString::from(id.clone()),
-                    ))
-                    .px(px(3.))
-                    .child("—")
-                    .tooltip(move |_, cx| {
-                        cx.new(|_| Hint {
-                            text: review_hint.clone(),
-                            theme: t,
-                        })
-                        .into()
-                    }),
-            );
         }
-        let provider = task.provider;
-        meta = meta.child(
-            div()
-                .id((
-                    ElementId::from("task-provider"),
-                    SharedString::from(id.clone()),
-                ))
-                .child(icon(provider.icon()).size(px(12.)))
-                .tooltip(move |_, cx| {
-                    cx.new(|_| Hint {
-                        text: provider.label().into(),
-                        theme: t,
-                    })
-                    .into()
-                }),
-        );
-        let mut hover = t.selected;
-        hover.alpha *= 0.6;
+        let tone = if needs_input {
+            t.warning
+        } else if blocked {
+            t.removed
+        } else {
+            t.accent
+        };
         div()
             .id((ElementId::from("task"), SharedString::from(id.clone())))
             .relative()
@@ -602,26 +672,19 @@ impl Shell {
             .gap(px(2.))
             .rounded(px(radius))
             .border_1()
-            .border_color(if selected {
-                t.border
-            } else {
-                hsla(0., 0., 0., 0.)
-            })
-            .when(selected, |row| row.bg(t.selected))
+            .border_color(gpui::transparent_black())
+            .when(selected, |row| row.bg(tone.opacity(0.1)))
             .cursor_pointer()
-            .when(!selected, |row| row.hover(move |d| d.bg(hover)))
+            .when(!selected, |row| row.hover(move |d| d.bg(t.selected)))
             .when(selected || active, |row| {
-                row.child(dither::row_wash(
-                    SharedString::from(format!("thread-wash:{id}")),
-                    if active { t.accent } else { t.text },
-                    radius,
-                    selected,
-                    active,
-                    cx.reduce_motion(),
-                ))
+                row.child(dither::row_wash(tone, radius, selected, active))
             })
+            // The open task carries an edge in its tone, not an outline.
+            .when(selected, |row| row.child(kit::selection_edge(tone)))
+            .child(fx::anchor(thread_anchor(&id)))
             .child(
                 div()
+                    .relative()
                     .h(px(20.))
                     .flex()
                     .items_center()
@@ -640,15 +703,15 @@ impl Shell {
                             .flex_1()
                             .min_w_0()
                             .text_size(px(13.))
-                            .font_weight(if selected {
+                            .font_weight(if selected || unread || needs_input {
                                 FontWeight::MEDIUM
                             } else {
                                 FontWeight::NORMAL
                             })
-                            .text_color(if selected || active || needs_input {
+                            .text_color(if selected || active || needs_input || unread {
                                 t.text
                             } else {
-                                t.text.opacity(0.88)
+                                t.text.opacity(0.86)
                             })
                             .text_ellipsis()
                             .child(task.title.clone()),
@@ -656,15 +719,9 @@ impl Shell {
                     .when(task.pinned, |d| {
                         d.child(icon("pin").size(px(11.)).text_color(t.accent))
                     })
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_size(px(11.))
-                            .text_color(t.accent)
-                            .child(status),
-                    ),
+                    .child(div().flex_shrink_0().child(status)),
             )
-            .child(meta)
+            .child(meta.relative())
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |s, event: &MouseDownEvent, window, cx| {
@@ -690,6 +747,12 @@ impl Shell {
             )
             .on_click(cx.listener(move |s, _, _, cx| s.select_task(id.clone(), cx)))
             .into_any_element()
+    }
+    /// Returns the tint that identifies an account on rows and chips.
+    pub(super) fn account_tone(&self, account: &Account) -> Hsla {
+        account.color.map_or(self.theme.info, |color| {
+            crate::theme::accent_color(color, self.theme.light)
+        })
     }
 }
 /// Returns a stable, distinct project glyph and tint without filesystem work during rendering.
@@ -743,8 +806,11 @@ pub(super) fn project_icon(project: &Project, theme: Theme) -> AnyElement {
         .flex()
         .items_center()
         .justify_center()
-        .bg(tint.opacity(0.12))
-        .child(icon(glyph).size(px(12.)).text_color(tint))
+        // The tint and edge of a chip, so project tiles match status tiles.
+        .border_1()
+        .border_color(tint.opacity(0.36))
+        .bg(tint.opacity(0.08))
+        .child(icon(glyph).size(px(11.)).text_color(tint))
         .into_any_element()
 }
 

@@ -1,4 +1,5 @@
-//! Runtime-backed slash completions anchored to the native prompt editor.
+//! Completions anchored to the native prompt editor: runtime-backed slash commands and skills,
+//! and `@` mentions of files in the task's checkout.
 use super::*;
 use crate::components::text_input::CompletionInput;
 use std::{ops::Range, time::Instant};
@@ -8,6 +9,8 @@ enum Choice {
     Command(ComposerCommand),
     ProviderCommand(ProviderCommand),
     Skill(ComposerSkill),
+    /// A file of the task's checkout, inserted as an `@` mention.
+    Path(String),
     Attach,
     Files,
     Diff,
@@ -51,6 +54,12 @@ impl Choice {
                 ComposerCommand::Mcp => {
                     ("mcp", "Inspect connected MCP servers", "code", "Provider")
                 }
+                ComposerCommand::Compact => (
+                    "compact",
+                    "Summarize the conversation to free context",
+                    "layers",
+                    "Provider",
+                ),
                 ComposerCommand::Status => (
                     "status",
                     "View runtime and account status",
@@ -59,6 +68,12 @@ impl Choice {
                 ),
             },
             Self::Skill(skill) => (&skill.name, &skill.description, "code", "Skill"),
+            Self::Path(path) => (
+                path.rsplit('/').next().unwrap_or(path),
+                path,
+                "file-text",
+                "File",
+            ),
             Self::Attach => ("attach", "Add files or images", "paperclip", "Context"),
             Self::Files => ("mention", "Choose a project file", "file", "Context"),
             Self::Diff => ("diff", "Open the current changes", "file-text", "Context"),
@@ -72,6 +87,7 @@ struct CatalogContext {
     task_id: Option<String>,
     project_id: Option<String>,
     provider: Provider,
+    account: Option<String>,
     model: Option<String>,
 }
 
@@ -82,6 +98,10 @@ pub(super) struct SlashPicker {
     loading: bool,
     request_id: Option<String>,
     token: Option<(Range<usize>, String)>,
+    /// The token is an `@` file mention, not a slash command.
+    mention: bool,
+    files_requested: bool,
+    files_loading: bool,
     dismissed: Option<(Range<usize>, String)>,
     choices: Vec<Choice>,
     selected: usize,
@@ -107,13 +127,22 @@ impl Shell {
                     .map(|p| p.id.clone())
             }),
             provider: self.composer_preferences().provider,
+            account: self.composer_preferences().account,
             model: self.composer_preferences().model,
         }
     }
 
     /// Synchronizes completions with the caret without treating paths or IME text as commands.
     pub(super) fn sync_slash(&mut self, cx: &mut Context<Self>) {
-        let token = self.input.read(cx).slash_query();
+        let slash = self.input.read(cx).slash_query();
+        // Mentions list the open task's files, so they need a task.
+        let mention = slash.is_none() && self.view.is_some();
+        let token = slash.or_else(|| {
+            mention
+                .then(|| self.input.read(cx).mention_query())
+                .flatten()
+        });
+        let mention = mention && token.is_some();
         if self.panel != Panel::None || token.is_none() || token == self.slash.dismissed {
             self.close_slash(cx);
             if token.is_none() {
@@ -121,8 +150,23 @@ impl Shell {
             }
             return;
         }
-        let context = self.catalog_context();
-        if self.slash.context.as_ref() != Some(&context) {
+        if mention != self.slash.mention {
+            self.slash.mention = mention;
+            self.slash.token = None;
+            self.slash.choices.clear();
+        }
+        if mention {
+            // One request per task; an empty checkout must not ask again on every frame.
+            if self.files.is_empty()
+                && !self.slash.files_requested
+                && let Some(task_id) = self.selected.clone()
+            {
+                self.slash.files_requested = true;
+                self.slash.files_loading = true;
+                self.send(core::Request::Files { task_id });
+            }
+        } else if self.slash.context.as_ref() != Some(&self.catalog_context()) {
+            let context = self.catalog_context();
             self.slash.catalog = ComposerCatalog::default();
             self.slash.token = None;
             self.slash.choices.clear();
@@ -150,6 +194,7 @@ impl Shell {
             task_id,
             project_id,
             provider,
+            account,
             model,
         } = self.catalog_context();
         self.slash.loading = true;
@@ -160,6 +205,7 @@ impl Shell {
             task_id,
             project_id,
             provider,
+            account,
             model,
         });
     }
@@ -175,6 +221,7 @@ impl Shell {
             task_id,
             project_id,
             provider,
+            account,
             model,
         } = request
             && self.slash.request_id.as_ref() == Some(request_id)
@@ -183,6 +230,7 @@ impl Shell {
                     task_id: task_id.clone(),
                     project_id: project_id.clone(),
                     provider: *provider,
+                    account: account.clone(),
                     model: model.clone(),
                 })
         {
@@ -192,6 +240,48 @@ impl Shell {
         }
     }
 
+    /// Lists the task's files again after its file list arrived.
+    pub(super) fn files_loaded(&mut self) {
+        self.slash.files_loading = false;
+        if self.slash.mention {
+            self.filter_slash();
+        }
+    }
+
+    // Ranks files for a mention: a file name that starts with the query, then a file name that
+    // contains it, then a path that contains it.
+    fn filter_mentions(&mut self, query: &str) {
+        let mut ranked: Vec<(u8, String)> = self
+            .files
+            .iter()
+            .filter_map(|path| {
+                let path = String::from_utf8_lossy(path).into_owned();
+                let lower = path.to_lowercase();
+                let name = lower.rsplit('/').next().unwrap_or(&lower);
+                let rank = if name.starts_with(query) {
+                    0
+                } else if name.contains(query) {
+                    1
+                } else if lower.contains(query) {
+                    2
+                } else {
+                    return None;
+                };
+                Some((rank, path))
+            })
+            .collect();
+        ranked.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.len().cmp(&b.1.len())));
+        self.slash.choices = ranked
+            .into_iter()
+            .take(40)
+            .map(|(_, path)| Choice::Path(path))
+            .collect();
+        self.slash.selected = self
+            .slash
+            .selected
+            .min(self.slash.choices.len().saturating_sub(1));
+    }
+
     fn filter_slash(&mut self) {
         let query = self
             .slash
@@ -199,6 +289,10 @@ impl Shell {
             .as_ref()
             .map_or("", |(_, query)| query)
             .to_lowercase();
+        if self.slash.mention {
+            self.filter_mentions(&query);
+            return;
+        }
         let mut choices: Vec<_> = self
             .slash
             .catalog
@@ -212,6 +306,15 @@ impl Shell {
                     .catalog
                     .provider_commands
                     .iter()
+                    // Kodem's own Compact command and its rules replace the CLI's commands.
+                    .filter(|command| {
+                        !self
+                            .slash
+                            .catalog
+                            .commands
+                            .contains(&ComposerCommand::Compact)
+                            || !matches!(command.name.as_str(), "compact" | "autocompact")
+                    })
                     .cloned()
                     .map(Choice::ProviderCommand),
             )
@@ -280,7 +383,12 @@ impl Shell {
     }
 
     fn accept_slash(&mut self, index: usize, cx: &mut Context<Self>) {
-        if !self.slash.open() || self.input.read(cx).slash_query() != self.slash.token {
+        let current = if self.slash.mention {
+            self.input.read(cx).mention_query()
+        } else {
+            self.input.read(cx).slash_query()
+        };
+        if !self.slash.open() || current != self.slash.token {
             return;
         }
         let Some(choice) = self.slash.choices.get(index).cloned() else {
@@ -299,6 +407,7 @@ impl Shell {
         self.close_slash(cx);
         let replacement = match &choice {
             Choice::ProviderCommand(command) => format!("/{} ", command.name),
+            Choice::Path(path) => format!("@{path} "),
             _ => String::new(),
         };
         self.input.update(cx, |input, cx| {
@@ -310,7 +419,7 @@ impl Shell {
             .text_bounds()
             .map(|bounds| bounds.origin);
         match choice {
-            Choice::ProviderCommand(_) => {}
+            Choice::ProviderCommand(_) | Choice::Path(_) => {}
             Choice::Skill(skill) => self.attach_skill(skill.path, cx),
             Choice::Attach => self.choose_attachments(cx),
             Choice::Files => {
@@ -332,14 +441,14 @@ impl Shell {
                     self.panel = Panel::Resources;
                     self.send(core::Request::Resources {
                         provider: self.composer_preferences().provider,
+                        account: self.composer_preferences().account,
                         task_id: self.selected.clone(),
                         project_id: self.catalog_context().project_id,
                     });
                 }
+                ComposerCommand::Compact => self.compact_task(cx),
                 ComposerCommand::Status => {
-                    self.panel = Panel::Settings;
-                    self.settings_section = 2;
-                    self.settings_provider = self.composer_preferences().provider;
+                    self.open_settings(settings::PROVIDERS);
                 }
             },
             Choice::Retry => unreachable!(),
@@ -394,62 +503,90 @@ impl Shell {
             .p_1();
         for (index, choice) in self.slash.choices.iter().enumerate() {
             let (name, detail, glyph, category) = choice.labels();
-            rows =
-                rows.child(
-                    div()
-                        .id(("slash-choice", index))
-                        .flex_shrink_0()
-                        .h(px(44.))
-                        .flex()
-                        .items_center()
-                        .gap(px(10.))
-                        .px(px(10.))
-                        .rounded(px(crate::theme::RADIUS_CONTROL))
-                        .cursor_pointer()
-                        .when(index == self.slash.selected, |d| d.bg(t.selected))
-                        .hover(move |d| d.bg(t.selected))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |s, _, _, cx| {
-                                cx.stop_propagation();
-                                s.accept_slash(index, cx);
-                            }),
-                        )
-                        .child(icon(glyph).size(px(14.)).text_color(
-                            if index == self.slash.selected {
-                                t.accent
-                            } else {
-                                t.muted
-                            },
-                        ))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .child(
-                                    div()
-                                        .font_family(crate::theme::MONO)
-                                        .text_size(px(12.))
-                                        .child(format!("/{name}")),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(t.muted)
-                                        .text_ellipsis()
-                                        .child(detail.to_owned()),
-                                ),
-                        )
-                        .child(caps(category, t)),
-                );
-        }
-        if self.slash.choices.is_empty() {
+            let chosen = index == self.slash.selected;
+            let path = matches!(choice, Choice::Path(_));
             rows = rows.child(
                 div()
-                    .p_3()
-                    .text_color(t.muted)
-                    .child("No matching commands or skills"),
+                    .id(("slash-choice", index))
+                    .relative()
+                    .overflow_hidden()
+                    .flex_shrink_0()
+                    .h(px(44.))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .px(px(10.))
+                    .rounded(px(crate::theme::RADIUS_CONTROL))
+                    .cursor_pointer()
+                    .when(chosen, |d| {
+                        d.bg(t.accent.opacity(0.1))
+                            .child(dither::row_wash(
+                                t.accent,
+                                crate::theme::RADIUS_CONTROL,
+                                true,
+                                false,
+                            ))
+                            .child(kit::selection_edge(t.accent))
+                    })
+                    .when(!chosen, |d| d.hover(move |d| d.bg(t.selected)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |s, _, _, cx| {
+                            cx.stop_propagation();
+                            s.accept_slash(index, cx);
+                        }),
+                    )
+                    .child(icon(glyph).size(px(14.)).text_color(if chosen {
+                        t.accent
+                    } else {
+                        t.muted
+                    }))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .font_family(crate::theme::MONO)
+                                    .text_size(px(12.))
+                                    .child(if path {
+                                        name.to_owned()
+                                    } else {
+                                        format!("/{name}")
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(t.muted)
+                                    .text_ellipsis()
+                                    .when(path, |d| {
+                                        d.font_family(crate::theme::MONO)
+                                            .text_size(px(10.5))
+                                            .text_color(t.subtle)
+                                    })
+                                    .child(detail.to_owned()),
+                            ),
+                    )
+                    .child(kit::chip(category.to_uppercase(), t.subtle)),
             );
+        }
+        if self.slash.choices.is_empty() {
+            rows = rows.child(if self.slash.mention && self.slash.files_loading {
+                div()
+                    .p_3()
+                    .child(kit::loader_row("Reading the task's files…", t))
+            } else {
+                kit::empty_hint(
+                    if self.slash.mention {
+                        "No matching files"
+                    } else {
+                        "No matching commands or skills"
+                    },
+                    t,
+                )
+                .py(px(12.))
+            });
         }
         let menu = div()
             .id("slash-picker")
@@ -465,35 +602,61 @@ impl Shell {
                 s.close_slash(cx);
                 cx.notify();
             }))
-            .child(rows)
-            .when(!self.slash.catalog.errors.is_empty(), |d| {
-                d.child(
-                    div()
-                        .px_3()
-                        .py_2()
-                        .text_size(px(11.))
-                        .text_color(t.removed)
-                        .max_h(px(48.))
-                        .overflow_hidden()
-                        .child(self.slash.catalog.errors.join("\n")),
-                )
-            })
             .child(
                 div()
                     .px(px(12.))
-                    .py(px(7.))
-                    .border_t_1()
-                    .border_color(t.border)
-                    .bg(t.sidebar)
-                    .child(caps(
-                        if self.slash.loading {
-                            "Loading commands and skills…"
+                    .pt(px(8.))
+                    .pb(px(2.))
+                    .child(kit::section_header(
+                        if self.slash.mention {
+                            "Files"
                         } else {
-                            "↑↓ navigate · ⏎ select · esc dismiss"
+                            "Commands and skills"
                         },
+                        Some(self.slash.choices.len()),
                         t,
                     )),
-            );
+            )
+            .child(rows)
+            .when(!self.slash.catalog.errors.is_empty(), |d| {
+                d.child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .font_family(crate::theme::MONO)
+                            .text_size(px(11.))
+                            .text_color(t.removed)
+                            .max_h(px(48.))
+                            .overflow_hidden()
+                            .child(self.slash.catalog.errors.join("\n")),
+                    )
+            })
+            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
+            .child(if self.slash.loading && !self.slash.mention {
+                div()
+                    .h(px(30.))
+                    .px(px(12.))
+                    .flex()
+                    .items_center()
+                    .bg(t.header)
+                    .child(kit::loader_row("Loading commands and skills…", t))
+            } else {
+                let mut hints = div()
+                    .h(px(30.))
+                    .px(px(12.))
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .bg(t.header);
+                for (keys, label) in [("↑↓", "Navigate"), ("⏎", "Select"), ("esc", "Dismiss")]
+                {
+                    hints = hints
+                        .child(kit::keycap(keys, t))
+                        .child(caps(label, t).mr(px(9.)));
+                }
+                hints
+            });
         let p = if cx.reduce_motion() {
             1.
         } else {

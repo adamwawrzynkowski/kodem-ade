@@ -14,6 +14,7 @@ impl Shell {
                         let task = s.selected.clone();
                         div()
                             .id(("file", i))
+                            .relative()
                             .h(px(26.))
                             .mx(px(6.))
                             .px(px(8.))
@@ -22,10 +23,27 @@ impl Shell {
                             .gap(px(8.))
                             .rounded(px(crate::theme::RADIUS_CONTROL))
                             .cursor_pointer()
-                            .when(selected, |d| d.bg(t.selected).text_color(t.text))
-                            .when(!selected, |d| d.text_color(t.muted))
-                            .hover(move |d| d.bg(t.selected.opacity(0.6)).text_color(t.text))
-                            .child(icon("file").size(px(13.)).text_color(t.subtle))
+                            .when(selected, |d| {
+                                d.overflow_hidden()
+                                    .bg(t.accent.opacity(0.1))
+                                    .text_color(t.text)
+                                    .child(dither::row_wash(
+                                        t.accent,
+                                        crate::theme::RADIUS_CONTROL,
+                                        true,
+                                        false,
+                                    ))
+                                    .child(kit::selection_edge(t.accent))
+                            })
+                            .when(!selected, |d| {
+                                d.text_color(t.muted)
+                                    .hover(move |d| d.bg(t.selected).text_color(t.text))
+                            })
+                            .child(icon("file").size(px(13.)).text_color(if selected {
+                                t.accent
+                            } else {
+                                t.subtle
+                            }))
                             .child(
                                 div()
                                     .min_w_0()
@@ -67,42 +85,35 @@ impl Shell {
             let reference = path.clone();
             preview = preview
                 .child(
-                    div()
-                        .h(px(36.))
-                        .pl(px(14.))
-                        .pr(px(6.))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .border_b_1()
-                        .border_color(t.border)
-                        .bg(t.canvas)
-                        .child(caps("Preview", t))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_ellipsis_start()
-                                .font_family(crate::theme::MONO)
-                                .text_size(px(11.5))
-                                .child(path),
+                    kit::block_title(
+                        div()
+                            .flex_shrink(1.)
+                            .min_w_0()
+                            .text_ellipsis_start()
+                            .font_family(crate::theme::MONO)
+                            .text_size(px(11.5))
+                            .text_color(t.text)
+                            .child(path),
+                        t.info,
+                        t,
+                    )
+                    .h(px(34.))
+                    .pr(px(6.))
+                    .child(caps("Preview", t))
+                    .child(
+                        self.icon_button(
+                            "reference-file",
+                            "paperclip",
+                            "Reference this file in the prompt",
                         )
-                        .child(
-                            self.icon_button(
-                                "reference-file",
-                                "paperclip",
-                                "Reference this file in the prompt",
-                            )
-                            .on_click(cx.listener(
-                                move |s, _, _, cx| {
-                                    let mut text = s.input.read(cx).text();
-                                    text.push_str(&format!("\n@{reference}"));
-                                    s.input.update(cx, |i, cx| i.set_text(text, cx));
-                                    s.panel = Panel::None;
-                                    cx.notify();
-                                },
-                            )),
-                        ),
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            let mut text = s.input.read(cx).text();
+                            text.push_str(&format!("\n@{reference}"));
+                            s.input.update(cx, |i, cx| i.set_text(text, cx));
+                            s.panel = Panel::None;
+                            cx.notify();
+                        })),
+                    ),
                 )
                 .child(
                     div()
@@ -117,21 +128,22 @@ impl Shell {
                 );
         } else {
             preview = preview.child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(8.))
-                    .text_color(t.muted)
-                    .child(caps("No file selected", t))
-                    .child(div().text_size(px(13.)).child("Select a file to preview"))
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .child("Attach its path to your next message."),
-                    ),
+                div().flex_1().min_h_0().child(kit::empty_state(
+                    "No file selected",
+                    "Select a file to preview it. You can attach its path to your next message.",
+                    dither::DitherField::Glow {
+                        x: 0.5,
+                        y: 0.55,
+                        radius: 0.7,
+                        strength: 0.85,
+                    }
+                    .times(dither::DitherField::Flow {
+                        scale: 0.18,
+                        speed: 0.9,
+                        bias: 0.12,
+                    }),
+                    t,
+                )),
             );
         }
         div()

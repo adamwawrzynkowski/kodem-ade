@@ -43,9 +43,8 @@ impl Shell {
             })
             .when(!collapsed || !downloading, |b| b.child(icon(glyph)))
             .border_0()
-            .shadow(Vec::new())
             .bg(hsla(0., 0., 0., 0.))
-            .hover(move |s| s.bg(theme.raised))
+            .hover(move |s| s.bg(theme.selected))
             .flex_shrink_0()
             .px_2()
             .text_color(self.theme.accent)
@@ -91,7 +90,10 @@ impl Shell {
                 self.update_state = State::Installing;
                 let (done, rx) = mpsc::channel();
                 let _ = self.tx.send(bridge::Command::PrepareUpdate {
-                    settings: self.workspace.as_ref().map(|_| self.settings_snapshot()),
+                    settings: self
+                        .workspace
+                        .as_ref()
+                        .map(|_| Box::new(self.settings_snapshot())),
                     draft,
                     done,
                 });

@@ -11,6 +11,9 @@ use gpui::{
 
 use unicode_segmentation::*;
 
+/// Time between redraws while streamed text settles into place.
+const REVEAL_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
+
 actions!(
     text_input,
     [
@@ -47,6 +50,7 @@ actions!(
         Copy,
         Newline,
         Submit,
+        SubmitAlternate,
         Up,
         Down,
         AcceptCompletion,
@@ -55,7 +59,13 @@ actions!(
 );
 
 /// Raised when a composer requests submission outside an IME composition.
-pub struct SubmitInput;
+pub struct SubmitInput {
+    /// The user asked for the delivery that is not the configured default.
+    pub alternate: bool,
+}
+
+/// Raised when the user clicks a file or symbol reference in read-only prose.
+pub struct ReferenceInput(pub String);
 
 /// Routes completion navigation while the composer retains keyboard focus.
 #[derive(Clone, Copy)]
@@ -95,6 +105,8 @@ pub struct TextInput {
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
     click_anchor: Option<Range<usize>>,
+    // Where a single press landed in read-only prose, to tell a click from a drag selection.
+    press: Option<(Point<Pixels>, usize)>,
     undo: Vec<EditState>,
     redo: Vec<EditState>,
     readonly: bool,
@@ -106,6 +118,8 @@ pub struct TextInput {
     colors: Vec<(Range<usize>, [u8; 3])>,
     prose: Option<(Vec<crate::markdown::Span>, crate::theme::Theme)>,
     streaming: super::streaming_text::StreamingText,
+    /// Whether a redraw for the streamed-text reveal is already scheduled.
+    reveal_pending: bool,
 }
 
 impl TextInput {
@@ -123,6 +137,7 @@ impl TextInput {
             last_bounds: None,
             is_selecting: false,
             click_anchor: None,
+            press: None,
             undo: Vec::new(),
             redo: Vec::new(),
             readonly: false,
@@ -134,6 +149,7 @@ impl TextInput {
             colors: Vec::new(),
             prose: None,
             streaming: Default::default(),
+            reveal_pending: false,
         }
     }
     /// Creates a prompt editor where Enter submits and Shift-Enter inserts a newline.
@@ -148,6 +164,14 @@ impl TextInput {
             return None;
         }
         slash_token(&self.content, self.cursor_offset())
+    }
+
+    /// Returns the `@` file mention at a collapsed caret outside an IME composition.
+    pub fn mention_query(&self) -> Option<(Range<usize>, String)> {
+        if !self.composer || self.marked_range.is_some() || !self.selected_range.is_empty() {
+            return None;
+        }
+        mention_token(&self.content, self.cursor_offset())
     }
 
     /// Enables completion key routing without changing focus or IME behavior.
@@ -502,7 +526,16 @@ impl TextInput {
             if self.completion_open {
                 cx.emit(CompletionInput::Accept);
             } else {
-                cx.emit(SubmitInput);
+                cx.emit(SubmitInput { alternate: false });
+            }
+        }
+    }
+    fn submit_alternate(&mut self, _: &SubmitAlternate, _: &mut Window, cx: &mut Context<Self>) {
+        if self.composer && self.marked_range.is_none() {
+            if self.completion_open {
+                cx.emit(CompletionInput::Accept);
+            } else {
+                cx.emit(SubmitInput { alternate: true });
             }
         }
     }
@@ -581,22 +614,9 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus_handle, cx);
-        if self.readonly
-            && event.modifiers.platform
-            && let Some((spans, _)) = &self.prose
-        {
-            let byte = self.index_for_mouse_position(event.position);
-            if let Some(url) = spans
-                .iter()
-                .find(|span| span.range.contains(&byte))
-                .and_then(|span| span.style.link.as_deref())
-                .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
-            {
-                cx.open_url(url);
-                return;
-            }
-        }
         let byte = self.index_for_mouse_position(event.position);
+        self.press = (self.readonly && self.prose.is_some() && event.click_count == 1)
+            .then_some((event.position, byte));
         let range = clicked_range(&self.content, byte, event.click_count);
         if self.delegated_selection {
             cx.emit(SelectionInput::Begin {
@@ -617,11 +637,41 @@ impl TextInput {
         }
     }
 
-    fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_up(&mut self, event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if self.delegated_selection {
             cx.emit(SelectionInput::End);
         }
         self.is_selecting = false;
+        // A press that ends where it began is a click: it follows the link or reference under it.
+        let Some((origin, byte)) = self.press.take() else {
+            return;
+        };
+        let moved = event.position - origin;
+        if moved.x.abs() > px(3.) || moved.y.abs() > px(3.) {
+            return;
+        }
+        let Some(span) = self.prose.as_ref().and_then(|(spans, _)| {
+            spans
+                .iter()
+                .find(|span| span.range.contains(&byte))
+                .cloned()
+        }) else {
+            return;
+        };
+        if let Some(url) = span.style.link.as_deref() {
+            if ["https://", "http://", "mailto:"]
+                .iter()
+                .any(|scheme| url.starts_with(scheme))
+            {
+                cx.open_url(url);
+            } else if !url.is_empty() {
+                cx.emit(ReferenceInput(url.to_owned()));
+            }
+        } else if span.style.reference
+            && let Some(text) = self.content.get(span.range.clone())
+        {
+            cx.emit(ReferenceInput(text.to_owned()));
+        }
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1212,7 +1262,22 @@ impl Render for TextInput {
         } else {
             self.streaming.prune(Instant::now());
             if self.streaming.start().is_some() {
-                window.request_animation_frame();
+                if self.composer {
+                    // A typed letter settles in a few frames and must follow the key at once.
+                    window.request_animation_frame();
+                } else if !self.reveal_pending {
+                    // Streamed text settles in four opacity steps. A redraw every REVEAL_FRAME
+                    // shows them all without rendering the conversation on every display frame.
+                    self.reveal_pending = true;
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(REVEAL_FRAME).await;
+                        let _ = this.update(cx, |input, cx| {
+                            input.reveal_pending = false;
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+                }
             }
         }
         div()
@@ -1257,6 +1322,7 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::newline))
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(Self::submit_alternate))
             .on_action(cx.listener(Self::completion_accept))
             .on_action(cx.listener(Self::completion_dismiss))
             .on_action(cx.listener(Self::up))
@@ -1278,6 +1344,7 @@ impl Render for TextInput {
 }
 
 impl gpui::EventEmitter<SubmitInput> for TextInput {}
+impl gpui::EventEmitter<ReferenceInput> for TextInput {}
 impl gpui::EventEmitter<CompletionInput> for TextInput {}
 impl gpui::EventEmitter<crate::clipboard::PastedAttachments> for TextInput {}
 impl gpui::EventEmitter<SelectionInput> for TextInput {}
@@ -1339,7 +1406,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("enter", Newline, Some("TextInput")),
         KeyBinding::new("shift-enter", Newline, Some("TextInput")),
         KeyBinding::new("enter", Submit, Some("Composer")),
-        KeyBinding::new("cmd-enter", Submit, Some("Composer")),
+        KeyBinding::new("cmd-enter", SubmitAlternate, Some("Composer")),
         KeyBinding::new("tab", AcceptCompletion, Some("Composer")),
         KeyBinding::new("escape", DismissCompletion, Some("Composer")),
         KeyBinding::new("up", Up, Some("TextInput")),
@@ -1570,6 +1637,16 @@ fn clicked_range(text: &str, byte: usize, count: usize) -> Range<usize> {
 }
 
 // UTF-8 offsets are supplied by the native editor, never by a bytewise cursor increment.
+// Finds an `@` token that ends at the caret. An address such as `name@host` is not a mention.
+fn mention_token(text: &str, end: usize) -> Option<(Range<usize>, String)> {
+    let prefix = text.get(..end)?;
+    let start = prefix
+        .rfind(char::is_whitespace)
+        .map_or(0, |i| i + text[i..].chars().next().unwrap().len_utf8());
+    let query = text[start..end].strip_prefix('@')?;
+    Some((start..end, query.into()))
+}
+
 fn slash_token(text: &str, end: usize) -> Option<(Range<usize>, String)> {
     let prefix = text.get(..end)?;
     let start = prefix

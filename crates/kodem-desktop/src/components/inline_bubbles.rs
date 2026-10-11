@@ -269,12 +269,8 @@ impl TextLine {
                     size(right - left, block_height),
                 );
                 let corners = Corners::all(px(INLINE_RADIUS));
-                window.paint_quad(
-                    fill(bounds, theme.raised)
-                        .corner_radii(corners)
-                        .border_widths(px(1.))
-                        .border_color(theme.border),
-                );
+                // A tinted chip, like every other badge: no outline to fight the letters.
+                window.paint_quad(fill(bounds, theme.accent.opacity(0.11)).corner_radii(corners));
             }
             start = end;
         }

@@ -120,6 +120,32 @@ impl Shell {
         if message.kind == MessageKind::Tool {
             return self.tool_calls(conversation, index, cx);
         }
+        // A one-line provider notice reads as a divider in the conversation, not as a message.
+        if message.kind == MessageKind::Notice
+            && message.attachments.is_empty()
+            && !message.text.trim().contains('\n')
+            && message.text.trim().chars().count() <= 96
+        {
+            return div()
+                .w_full()
+                .px_5()
+                .py(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .child(
+                    div()
+                        .flex_1()
+                        .child(dither::DottedRule::horizontal(t.subtle.opacity(0.45))),
+                )
+                .child(caps(message.text.trim(), t))
+                .child(
+                    div()
+                        .flex_1()
+                        .child(dither::DottedRule::horizontal(t.subtle.opacity(0.45))),
+                )
+                .into_any_element();
+        }
         let message_active = self.conversation_message_active(conversation, &message);
         let message_key = format!("{}:{}", message.task_id, message.id);
         let text = message.text.clone();
@@ -128,6 +154,8 @@ impl Shell {
         if user {
             outer = outer.flex().justify_end();
             block = block
+                .relative()
+                .overflow_hidden()
                 .w_auto()
                 .min_w_0()
                 .max_w(relative(0.82))
@@ -136,16 +164,26 @@ impl Shell {
                 .gap_2()
                 .bg(t.raised)
                 .border_1()
-                .border_color(t.border)
-                .shadow(t.elevation())
+                .border_color(t.edge)
                 .rounded(px(crate::theme::MESSAGE_RADIUS))
-                .p(px(crate::theme::MESSAGE_PADDING));
+                .p(px(crate::theme::MESSAGE_PADDING))
+                .child(
+                    dither::Dither::new(dither::DitherField::Fade {
+                        from: dither::Edge::Bottom,
+                        start: 0.3,
+                        end: -0.25,
+                    })
+                    .color(t.dot)
+                    .grid(2., 1.)
+                    .corner_radius(crate::theme::MESSAGE_RADIUS)
+                    .layer(),
+                );
         } else if message.kind != MessageKind::Assistant {
             let (name, glyph, color) = match message.kind {
                 MessageKind::Error => ("Error", "circle-x", t.removed),
                 MessageKind::Check => ("Check result", "check-square", t.added),
                 MessageKind::Tool => ("Tool output", "square-terminal", t.muted),
-                _ => ("Activity", "chat", t.muted),
+                _ => ("Notice", "info", t.info),
             };
             block = block.child(
                 div()
@@ -155,16 +193,7 @@ impl Shell {
                     .mb(px(4.))
                     .text_size(px(11.))
                     .child(if message_active {
-                        motion::active_icon(
-                            (
-                                ElementId::from("message-icon"),
-                                SharedString::from(message_key.clone()),
-                            ),
-                            glyph,
-                            color,
-                            false,
-                            cx.reduce_motion(),
-                        )
+                        motion::active_icon(glyph, color, false, cx.reduce_motion())
                     } else {
                         icon(glyph)
                             .size(px(13.))
@@ -175,7 +204,11 @@ impl Shell {
                     .when(message_active, |d| {
                         d.child(caps("Working", t).text_color(t.accent))
                     })
-                    .child(div().flex_1().h(px(1.)).bg(t.border)),
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(dither::DottedRule::horizontal(color.opacity(0.35))),
+                    ),
             );
         }
         if !message.attachments.is_empty() {
@@ -194,22 +227,25 @@ impl Shell {
         }
         if !user || !message.text.is_empty() {
             block = block.child(
-                div().text_size(px(self.settings.font_size - 1.)).child(
-                    self.message_blocks(
-                        &format!("message:{message_key}"),
-                        markdown::blocks(&message.text),
-                        message.kind == MessageKind::Assistant
-                            && !message.complete
-                            && match conversation {
-                                Conversation::Main => self
-                                    .view
-                                    .as_ref()
-                                    .is_some_and(|view| view.task.state == RunState::Running),
-                                Conversation::Subagent(_) => message_active,
-                            },
-                        cx,
+                div()
+                    .relative()
+                    .text_size(px(self.settings.font_size - 1.))
+                    .child(
+                        self.message_blocks(
+                            &format!("message:{message_key}"),
+                            markdown::blocks(&message.text),
+                            message.kind == MessageKind::Assistant
+                                && !message.complete
+                                && match conversation {
+                                    Conversation::Main => self
+                                        .view
+                                        .as_ref()
+                                        .is_some_and(|view| view.task.state == RunState::Running),
+                                    Conversation::Subagent(_) => message_active,
+                                },
+                            cx,
+                        ),
                     ),
-                ),
             );
         }
         if !user {
@@ -226,28 +262,27 @@ impl Shell {
                                 SharedString::from(message_key.clone()),
                             ),
                             "copy",
-                            "Copy message",
+                            "Copy message as Markdown",
                         )
                         .w(px(20.))
                         .h(px(20.))
                         .text_color(t.subtle)
-                        .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-                        }),
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                            let tone = s.theme.accent;
+                            s.notify_user("Copied", tone, cx);
+                        })),
                     )
                     .child(div().text_size(px(10.)).text_color(t.subtle).child(
                         if message_active {
                             motion::gleam(
-                                (
-                                    ElementId::from("streaming"),
-                                    SharedString::from(message_key.clone()),
-                                ),
                                 if message.kind == MessageKind::Assistant {
                                     "Writing…"
                                 } else {
                                     "In progress…"
                                 },
                                 t,
+                                cx.reduce_motion(),
                             )
                         } else {
                             div().into_any_element()

@@ -2,6 +2,9 @@
 use super::*;
 use std::path::PathBuf;
 
+/// Name of the effect anchor on the queue tray, where chips for queued messages land.
+pub(super) const OUTBOX_ANCHOR: &str = "outbox";
+
 impl Shell {
     /// Tracks only newly added draft context and stops requesting frames once it settles.
     pub(super) fn sync_context_arrivals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -54,6 +57,12 @@ impl Shell {
 
     /// Sends the same composition for keyboard and pointer submission.
     pub(super) fn submit_current(&mut self, cx: &mut Context<Self>) {
+        self.submit_with(false, cx);
+    }
+
+    /// Sends the composition. While a turn runs, `alternate` delivers it the way that is not the
+    /// configured default: steering instead of queueing, or the reverse.
+    pub(super) fn submit_with(&mut self, alternate: bool, cx: &mut Context<Self>) {
         if self.agent_popup.is_some()
             || self.panel != Panel::None
             || self.pasting_images > 0
@@ -68,7 +77,10 @@ impl Shell {
                 .as_ref()
                 .is_none_or(|v| v.task.pending_completion.is_none())
         {
-            self.settings.send_mode
+            match (self.settings.send_mode, alternate) {
+                (SendMode::Queue, false) | (SendMode::Steer, true) => SendMode::Queue,
+                (SendMode::Steer, false) | (SendMode::Queue, true) => SendMode::Steer,
+            }
         } else {
             SendMode::Queue
         };
@@ -299,18 +311,14 @@ impl Shell {
                 .map(|name| name.to_string_lossy().into_owned()),
             _ => None,
         };
-        let mut card = div()
+        let mut card = kit::block(t)
+            .w_auto()
             .flex()
             .items_center()
             .gap(px(8.))
             .p(px(4.))
             .pr(px(6.))
-            .rounded(px(crate::theme::RADIUS_CONTROL))
-            .bg(t.inset)
-            .border_1()
-            .border_color(t.border)
             .flex_shrink_0()
-            .min_w_0()
             .max_w(px(280.));
         card = card.child(if attachment.kind == AttachmentKind::Image {
             let attachment = attachment.clone();
@@ -334,30 +342,32 @@ impl Shell {
             }))
             .into_any_element()
         } else {
-            div()
-                .size(px(28.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(crate::theme::RADIUS_SMALL))
-                .bg(t.raised)
-                .child(
-                    icon(if skill_name.is_some() { "code" } else { "file" })
-                        .size(px(14.))
-                        .text_color(t.accent),
-                )
-                .into_any_element()
+            kit::icon_tile(
+                if skill_name.is_some() { "code" } else { "file" },
+                if skill_name.is_some() {
+                    t.info
+                } else {
+                    t.accent
+                },
+                28.,
+                false,
+            )
+            .into_any_element()
         });
         card = card.child(
             div()
                 .flex_1()
                 .min_w_0()
                 .child(
-                    div().text_size(px(12.)).text_ellipsis().child(
-                        skill_name
-                            .clone()
-                            .unwrap_or_else(|| attachment.name.clone()),
-                    ),
+                    div()
+                        .font_family(crate::theme::MONO)
+                        .text_size(px(11.5))
+                        .text_ellipsis()
+                        .child(
+                            skill_name
+                                .clone()
+                                .unwrap_or_else(|| attachment.name.clone()),
+                        ),
                 )
                 .child(caps(
                     if skill_name.is_some() {
@@ -419,24 +429,22 @@ impl Shell {
                 feedback.end
             )
         };
-        let mut title = div()
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .pl(px(10.))
-            .pr(px(4.))
-            .h(px(32.))
-            .child(icon("code").size(px(13.)).text_color(t.accent))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_ellipsis_start()
-                    .font_family(crate::theme::MONO)
-                    .text_size(px(11.))
-                    .child(feedback.label.clone()),
-            )
-            .child(figure(range, t.subtle));
+        // A captured selection is a block that has only its title row.
+        let mut title = kit::block_title(
+            div()
+                .flex_shrink(1.)
+                .min_w_0()
+                .text_ellipsis_start()
+                .font_family(crate::theme::MONO)
+                .text_size(px(11.))
+                .text_color(t.text)
+                .child(feedback.label.clone()),
+            t.accent,
+            t,
+        )
+        .h(px(32.))
+        .border_b_0()
+        .child(figure(range, t.muted));
         if let Some(task_id) = task_id {
             let task_id = task_id.to_owned();
             let id = feedback.id.clone();
@@ -462,16 +470,9 @@ impl Shell {
                 })),
             );
         }
-        div()
-            .w_full()
-            .min_w_0()
+        kit::block(t)
             .h(px(34.))
             .flex_shrink_0()
-            .rounded(px(crate::theme::RADIUS_CONTROL))
-            .border_1()
-            .border_color(t.border)
-            .bg(t.inset)
-            .overflow_hidden()
             .child(title)
             .into_any_element()
     }
@@ -499,39 +500,37 @@ impl Shell {
             && starting.is_none()
             && outgoing.iter().any(|m| m.state == DeliveryState::Queued);
         let task_id = task.id.clone();
+        let count = outgoing.len();
         let mut tray = div()
             .id("outgoing-tray")
+            .relative()
             .max_h(px(220.))
             .overflow_y_scroll()
-            .mb(px(8.))
-            .rounded(px(crate::theme::RADIUS_SURFACE))
-            .border_1()
-            .border_color(t.border)
-            .bg(t.sidebar)
             .p(px(6.))
             .flex()
             .flex_col()
             .gap(px(4.))
             .child(
+                // The tray header reads as a section header: label, count, state, dotted rule.
                 div()
+                    .relative()
                     .h(px(24.))
+                    .flex_shrink_0()
                     .px(px(6.))
                     .flex()
                     .items_center()
                     .gap(px(8.))
+                    .child(fx::anchor(OUTBOX_ANCHOR))
                     .child(icon("arrow-down").size(px(12.)).text_color(t.subtle))
+                    .child(caps("Next messages", t).text_color(t.muted))
+                    .child(figure(count.to_string(), t.muted))
+                    .when(paused, |d| d.child(kit::chip("PAUSED", t.warning)))
                     .child(
-                        caps(
-                            if paused {
-                                "Queue paused"
-                            } else {
-                                "Next messages"
-                            },
-                            t,
-                        )
-                        .when(paused, |d| d.text_color(t.accent)),
+                        div()
+                            .flex_1()
+                            .min_w(px(8.))
+                            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
                     )
-                    .child(div().flex_1())
                     .when(paused, |d| {
                         d.child(
                             self.ghost("resume-queue", "arrow-right", "Resume")
@@ -554,18 +553,15 @@ impl Shell {
             let steer_id = id.clone();
             let expanded_key = format!("outgoing:{id}");
             let expanded = self.folded.contains(&expanded_key);
-            let label = match outgoing.state {
-                DeliveryState::Queued => "Queued",
-                DeliveryState::Pending => "Sending…",
-                DeliveryState::Failed => "Not sent",
-                DeliveryState::Unknown => "Delivery unknown",
+            let (label, tone) = match outgoing.state {
+                DeliveryState::Queued => ("Queued", t.subtle),
+                DeliveryState::Pending => ("Sending…", t.accent),
+                DeliveryState::Failed => ("Not sent", t.removed),
+                DeliveryState::Unknown => ("Delivery unknown", t.warning),
             };
-            let mut row = div()
+            let mut row = kit::block(t)
+                .flex_shrink_0()
                 .p(px(4.))
-                .rounded(px(crate::theme::RADIUS_CONTROL))
-                .bg(t.raised)
-                .border_1()
-                .border_color(t.border)
                 .flex()
                 .flex_col()
                 .gap(px(4.))
@@ -582,11 +578,11 @@ impl Shell {
                                 } else {
                                     "chevron-right"
                                 },
-                                format!("{} · {label}", index + 1),
+                                (index + 1).to_string(),
                             )
                             .h(px(22.))
-                            .font_family(crate::theme::MONO)
                             .text_size(px(10.5))
+                            .accessibility_label(format!("{} · {label}", index + 1))
                             .on_click(cx.listener(
                                 move |s, _, _, cx| {
                                     if !s.folded.remove(&expanded_key) {
@@ -596,6 +592,7 @@ impl Shell {
                                 },
                             )),
                         )
+                        .child(kit::chip(label.to_uppercase(), tone))
                         .child(
                             div()
                                 .flex_1()
@@ -699,7 +696,14 @@ impl Shell {
                         ),
                 )
                 .when_some(outgoing.error.clone(), |d, error| {
-                    d.child(div().text_size(px(11.)).text_color(t.removed).child(error))
+                    d.child(
+                        div()
+                            .px(px(6.))
+                            .font_family(crate::theme::MONO)
+                            .text_size(px(11.))
+                            .text_color(t.removed)
+                            .child(error),
+                    )
                 });
             if expanded {
                 let text = self.readonly(
@@ -707,7 +711,9 @@ impl Shell {
                     outgoing.text.clone(),
                     cx,
                 );
-                row = row.child(div().text_size(px(12.)).child(text));
+                row = row
+                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
+                    .child(div().px(px(6.)).py(px(2.)).text_size(px(12.)).child(text));
                 for attachment in &outgoing.attachments {
                     row = row.child(self.attachment_card(attachment, None, cx));
                 }
@@ -715,10 +721,13 @@ impl Shell {
                     row = row.child(self.context_card(feedback, None, cx));
                 }
             } else if !outgoing.attachments.is_empty() || !outgoing.feedback.is_empty() {
-                row = row.child(div().text_size(px(10.)).text_color(t.muted).child(format!(
-                    "{} attachments · {} code selections",
-                    outgoing.attachments.len(),
-                    outgoing.feedback.len()
+                row = row.child(div().px(px(6.)).child(figure(
+                    format!(
+                        "{} attachments · {} code selections",
+                        outgoing.attachments.len(),
+                        outgoing.feedback.len()
+                    ),
+                    t.subtle,
                 )));
             }
             tray = tray.child(
@@ -733,7 +742,7 @@ impl Shell {
                 },
             );
         }
-        tray.into_any_element()
+        kit::card(t).mb(px(8.)).child(tray).into_any_element()
     }
 }
 

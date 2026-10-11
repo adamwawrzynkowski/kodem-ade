@@ -11,31 +11,94 @@ use uuid::Uuid;
 pub enum Provider {
     #[default]
     Codex,
-    Devin,
+    Claude,
 }
 impl Provider {
-    pub const ALL: [Self; 2] = [Self::Codex, Self::Devin];
+    pub const ALL: [Self; 2] = [Self::Claude, Self::Codex];
     /// Returns the integration's display name.
     pub fn label(self) -> &'static str {
         match self {
             Self::Codex => "Codex",
-            Self::Devin => "Devin",
+            Self::Claude => "Claude Code",
         }
     }
     /// Returns the bundled provider logo asset.
     pub fn icon(self) -> &'static str {
         match self {
             Self::Codex => "openai",
-            Self::Devin => "devin",
+            Self::Claude => "claude",
         }
     }
     /// Returns the CLI command used to authenticate this integration.
     pub fn login_command(self) -> &'static str {
         match self {
             Self::Codex => "codex login",
-            Self::Devin => "devin auth login",
+            Self::Claude => "claude auth login",
         }
     }
+    /// Returns the CLI command that removes this integration's saved sign-in.
+    pub fn logout_command(self) -> &'static str {
+        match self {
+            Self::Codex => "codex logout",
+            Self::Claude => "claude auth logout",
+        }
+    }
+    /// Returns the environment variable that moves the CLI to another configuration directory.
+    pub fn home_variable(self) -> Option<&'static str> {
+        match self {
+            Self::Codex => Some("CODEX_HOME"),
+            Self::Claude => Some("CLAUDE_CONFIG_DIR"),
+        }
+    }
+}
+
+/// Identity of the account a provider CLI uses when no configuration directory is set.
+pub const DEFAULT_ACCOUNT: &str = "default";
+
+/// One signed-in identity of a provider, isolated by its own CLI configuration directory.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Account {
+    pub id: String,
+    pub provider: Provider,
+    pub name: String,
+    /// Directory passed through the provider's home variable; absent for the CLI's own directory.
+    #[serde(default)]
+    pub home: Option<PathBuf>,
+    #[serde(default)]
+    pub color: Option<AccentColor>,
+    pub created: u64,
+}
+impl Account {
+    /// Reports whether this is the account the CLI uses outside Kodem.
+    pub fn is_default(&self) -> bool {
+        self.id == DEFAULT_ACCOUNT
+    }
+}
+
+/// Sign-in and quota state observed from the provider CLI. It never holds credentials.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AccountStatus {
+    /// Unknown until the CLI has reported its sign-in state.
+    pub signed_in: Option<bool>,
+    pub email: Option<String>,
+    pub plan: Option<String>,
+    pub organization: Option<String>,
+    pub usage: Option<UsageLimits>,
+    pub error: Option<String>,
+    /// A sign-in window was opened and its result is not yet known.
+    #[serde(default)]
+    pub signing_in: bool,
+    /// Wall-clock milliseconds of the last completed check; zero before the first one.
+    #[serde(default)]
+    pub checked: u64,
+}
+
+/// An account together with its last observed status.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AccountState {
+    pub account: Account,
+    #[serde(default)]
+    pub status: AccountStatus,
 }
 
 /// A permission mode advertised by a provider, preserved without remapping its semantics.
@@ -69,6 +132,9 @@ pub struct Project {
     pub icon: ProjectIcon,
     #[serde(default)]
     pub removed: bool,
+    /// Provider, account, model and access used for new tasks in this project.
+    #[serde(default)]
+    pub defaults: Option<AgentPreferences>,
 }
 /// Named accents with coordinated foreground colors for both appearances.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -354,6 +420,12 @@ pub struct UsageLimits {
     #[serde(default)]
     pub reported: u64,
 }
+impl UsageLimits {
+    /// Reports that the provider refuses further use of the account until a reset.
+    pub fn limit_reached(&self) -> bool {
+        self.spend_control_reached == Some(true) || self.rate_limit_reached_type.is_some()
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Task {
     #[serde(default)]
@@ -363,6 +435,12 @@ pub struct Task {
     pub pending_completion: Option<TurnOutcome>,
     #[serde(default)]
     pub provider: Provider,
+    /// Account that runs this task's turns; absent selects the provider's default account.
+    #[serde(default)]
+    pub account: Option<String>,
+    /// The agent's current step list, replaced whenever the provider reports a new one.
+    #[serde(default)]
+    pub plan: Vec<PlanStep>,
     #[serde(default)]
     pub provider_access: Option<String>,
     pub id: String,
@@ -410,9 +488,23 @@ pub struct Task {
     pub questions: Vec<InputRequest>,
 }
 impl Task {
+    /// Returns the identity of the account that runs this task.
+    pub fn account_id(&self) -> &str {
+        self.account.as_deref().unwrap_or(DEFAULT_ACCOUNT)
+    }
     /// Reports pending blocking or asynchronous requests for user input.
     pub fn needs_input(&self) -> bool {
         self.state == RunState::Waiting || !self.questions.is_empty()
+    }
+    /// Reports a failure or uncertain delivery that the user has to resolve.
+    pub fn is_blocked(&self) -> bool {
+        matches!(self.state, RunState::Failed | RunState::DeliveryUnknown)
+    }
+    /// Reports a finished turn whose result arrived after the task was last open.
+    pub fn is_unread(&self, viewed: Option<u64>) -> bool {
+        matches!(self.state, RunState::Completed | RunState::Interrupted)
+            && self.last_started.is_some()
+            && viewed.is_none_or(|viewed| viewed < self.updated)
     }
     /// Resolves manual or merge-based settlement while keeping active or uncertain work visible.
     pub fn is_settled(&self) -> bool {
@@ -488,9 +580,69 @@ pub struct Message {
     pub feedback: Vec<Feedback>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_edits: Vec<FileEdit>,
+    /// Structured form of a tool message. When present, `text` holds only the tool's output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolCall>,
     pub text: String,
     pub complete: bool,
     pub created: u64,
+}
+/// Selects a tool call's icon, summary wording and detail layout.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ToolCategory {
+    Command,
+    Read,
+    Edit,
+    Search,
+    Fetch,
+    Agent,
+    Plan,
+    Thinking,
+    Mcp,
+    #[default]
+    Other,
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ToolStatus {
+    #[default]
+    Running,
+    Completed,
+    Failed,
+    Declined,
+}
+/// One tool invocation in a form the transcript can summarize without parsing text.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ToolCall {
+    /// The provider's own tool name, such as `Bash` or `mcp__server__tool`.
+    pub name: String,
+    pub category: ToolCategory,
+    /// The subject of the call: a command, a path, a query or a short description.
+    pub title: String,
+    /// Secondary context, such as a search scope or the tool's own description of the call.
+    #[serde(default)]
+    pub detail: String,
+    pub status: ToolStatus,
+    #[serde(default)]
+    pub exit: Option<i64>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    /// Changed lines of an edit, in display order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diff: Vec<DiffLine>,
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PlanStatus {
+    #[default]
+    Pending,
+    Active,
+    Done,
+}
+/// One step of the agent's current plan.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PlanStep {
+    pub text: String,
+    #[serde(default)]
+    pub status: PlanStatus,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InputRequest {
@@ -636,17 +788,75 @@ pub struct RuntimeInfo {
     #[serde(default)]
     pub usage_resets: bool,
     pub version: Option<String>,
-    pub authenticated: Option<bool>,
-    #[serde(default)]
-    pub usage: Option<UsageLimits>,
     pub models: Vec<Model>,
     pub error: Option<String>,
+}
+/// The model and effort last chosen for one account, in general or within one project.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ModelChoice {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+/// When a task's context is compacted without being asked.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CompactRule {
+    pub enabled: bool,
+    /// Share of the context window, in percent, at which compaction starts.
+    pub threshold: u8,
+}
+impl CompactRule {
+    pub const MIN_THRESHOLD: u8 = 30;
+    pub const MAX_THRESHOLD: u8 = 95;
+    /// Returns the rule with its threshold inside the supported range.
+    pub fn bounded(self) -> Self {
+        Self {
+            enabled: self.enabled,
+            threshold: self
+                .threshold
+                .clamp(Self::MIN_THRESHOLD, Self::MAX_THRESHOLD),
+        }
+    }
+}
+impl Default for CompactRule {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold: 80,
+        }
+    }
+}
+/// Automatic compaction rules: one for every task, with overrides per provider and per model.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AutoCompact {
+    pub default: CompactRule,
+    pub providers: std::collections::BTreeMap<Provider, CompactRule>,
+    /// Keyed by [`AutoCompact::model_key`].
+    pub models: std::collections::BTreeMap<String, CompactRule>,
+}
+impl AutoCompact {
+    /// Returns the key of one provider's model in `models`.
+    pub fn model_key(provider: Provider, model: &str) -> String {
+        format!("{}/{model}", provider.icon())
+    }
+    /// Returns the rule for a task: its model's override, then its provider's, then the default.
+    pub fn rule(&self, provider: Provider, model: Option<&str>) -> CompactRule {
+        model
+            .and_then(|model| self.models.get(&Self::model_key(provider, model)))
+            .or_else(|| self.providers.get(&provider))
+            .copied()
+            .unwrap_or(self.default)
+            .bounded()
+    }
 }
 /// Last explicitly chosen agent options, inherited by newly created tasks.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct AgentPreferences {
     #[serde(default)]
     pub provider: Provider,
+    /// Account of `provider`; absent selects that provider's default account.
+    #[serde(default)]
+    pub account: Option<String>,
     #[serde(default)]
     pub provider_access: Option<String>,
     pub model: Option<String>,
@@ -656,7 +866,12 @@ pub struct AgentPreferences {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Host-owned account registry. Saving window preferences never replaces it.
+    pub accounts: Vec<Account>,
     pub provider_preferences: std::collections::BTreeMap<Provider, AgentPreferences>,
+    /// Host-owned. Keyed by [`Settings::model_choice_key`].
+    pub model_choices: std::collections::BTreeMap<String, ModelChoice>,
+    pub auto_compact: AutoCompact,
     pub notifications: NotificationSettings,
     pub sidebar_width: f32,
     pub review_width: f32,
@@ -669,6 +884,9 @@ pub struct Settings {
     pub group_tasks_by_project: bool,
     pub collapsed_projects: std::collections::HashSet<String>,
     pub selected_task: Option<String>,
+    /// When each task was last open in the window, in wall-clock milliseconds. A finished task
+    /// whose result is newer than this is still unread.
+    pub viewed: std::collections::BTreeMap<String, u64>,
     #[serde(default)]
     pub diff_placement: DiffPlacement,
     #[serde(default)]
@@ -695,16 +913,69 @@ impl Default for Settings {
             group_tasks_by_project: false,
             collapsed_projects: Default::default(),
             selected_task: None,
+            viewed: Default::default(),
             diff_placement: DiffPlacement::default(),
             send_mode: SendMode::default(),
             agent_defaults: AgentPreferences::default(),
             provider_preferences: Default::default(),
+            model_choices: Default::default(),
+            auto_compact: AutoCompact::default(),
+            accounts: Vec::new(),
             default_worktree: false,
             show_review: true,
             show_terminal: false,
             split_diff: false,
             wrap_diff: true,
         }
+    }
+}
+impl Settings {
+    /// Returns the key of an account's last model, in one project or in general.
+    pub fn model_choice_key(
+        provider: Provider,
+        account: Option<&str>,
+        project: Option<&str>,
+    ) -> String {
+        let account = account.unwrap_or(DEFAULT_ACCOUNT);
+        match project {
+            Some(project) => format!("{}/{account}/{project}", provider.icon()),
+            None => format!("{}/{account}", provider.icon()),
+        }
+    }
+    /// Returns the model last chosen for an account: in this project first, then anywhere.
+    pub fn model_choice(
+        &self,
+        provider: Provider,
+        account: Option<&str>,
+        project: Option<&str>,
+    ) -> Option<&ModelChoice> {
+        project
+            .and_then(|project| {
+                self.model_choices
+                    .get(&Self::model_choice_key(provider, account, Some(project)))
+            })
+            .or_else(|| {
+                self.model_choices
+                    .get(&Self::model_choice_key(provider, account, None))
+            })
+    }
+    /// Records the model of `preferences` as the last choice of its account and of `project`.
+    pub fn remember_model(&mut self, preferences: &AgentPreferences, project: Option<&str>) {
+        let choice = ModelChoice {
+            model: preferences.model.clone(),
+            effort: preferences.effort.clone(),
+        };
+        let account = preferences.account.as_deref();
+        if let Some(project) = project {
+            self.model_choices.insert(
+                Self::model_choice_key(preferences.provider, account, Some(project)),
+                choice.clone(),
+            );
+        }
+        self.model_choices.insert(
+            Self::model_choice_key(preferences.provider, account, None),
+            choice,
+        );
     }
 }
 /// Controls task alerts independently of macOS notification permissions.
@@ -865,6 +1136,18 @@ pub struct Workspace {
     // Older hosts must deserialize so connect_or_start can negotiate an idle upgrade.
     #[serde(default)]
     pub runtimes: std::collections::BTreeMap<Provider, RuntimeInfo>,
+    /// Every provider account with its last observed sign-in and quota state.
+    #[serde(default)]
+    pub accounts: Vec<AccountState>,
+}
+impl Workspace {
+    /// Finds an account and its status; an absent identity selects the provider's default account.
+    pub fn account(&self, provider: Provider, id: Option<&str>) -> Option<&AccountState> {
+        let id = id.unwrap_or(DEFAULT_ACCOUNT);
+        self.accounts
+            .iter()
+            .find(|state| state.account.provider == provider && state.account.id == id)
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Comparison {
@@ -1025,6 +1308,7 @@ pub enum ComposerCommand {
     Skills,
     Mcp,
     Status,
+    Compact,
 }
 
 /// An enabled skill returned by the provider for the current working directory.
@@ -1070,6 +1354,8 @@ pub struct TerminalView {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TaskEdit {
     Provider(AgentPreferences),
+    /// Moves the task to another account of its provider; absent selects the default account.
+    Account(Option<String>),
     ProviderAccess(String),
     Access(AccessMode),
     Rename(String),
@@ -1092,15 +1378,56 @@ pub enum Request {
     Hello,
     RefreshUsage {
         provider: Provider,
+        #[serde(default)]
+        account: Option<String>,
     },
     ConsumeUsageReset {
         provider: Provider,
+        #[serde(default)]
+        account: Option<String>,
         idempotency_key: String,
     },
     ConnectRuntime {
         provider: Provider,
+        #[serde(default)]
+        account: Option<String>,
     },
     SetAgentPreferences(AgentPreferences),
+    /// Registers another account of a provider with its own configuration directory.
+    AddAccount {
+        provider: Provider,
+        name: String,
+    },
+    EditAccount {
+        provider: Provider,
+        id: String,
+        name: String,
+        color: Option<AccentColor>,
+    },
+    /// Forgets an added account and deletes its configuration directory.
+    RemoveAccount {
+        provider: Provider,
+        id: String,
+    },
+    /// Opens the provider CLI's own sign-in for this account.
+    SignInAccount {
+        provider: Provider,
+        id: String,
+    },
+    SignOutAccount {
+        provider: Provider,
+        id: String,
+    },
+    /// Reads sign-in state and quotas again without starting a model turn.
+    RefreshAccount {
+        provider: Provider,
+        id: String,
+    },
+    /// Sets or clears the options that new tasks in one project start with.
+    SetProjectDefaults {
+        project_id: String,
+        defaults: Option<AgentPreferences>,
+    },
     Reconcile {
         task_id: String,
     },
@@ -1135,7 +1462,8 @@ pub enum Request {
     TaskChanges {
         task_id: String,
     },
-    SaveSettings(Settings),
+    // Boxed: the settings are far larger than any other request.
+    SaveSettings(Box<Settings>),
     TestNotification {
         sound: Option<NotificationSound>,
     },
@@ -1173,6 +1501,10 @@ pub enum Request {
         task_id: String,
     },
     Interrupt {
+        task_id: String,
+    },
+    /// Summarizes the task's conversation so far to free its context window.
+    CompactTask {
         task_id: String,
     },
     Answer {
@@ -1217,6 +1549,8 @@ pub enum Request {
     },
     ComposerCatalog {
         provider: Provider,
+        #[serde(default)]
+        account: Option<String>,
         model: Option<String>,
         request_id: String,
         task_id: Option<String>,
@@ -1224,6 +1558,8 @@ pub enum Request {
     },
     Resources {
         provider: Provider,
+        #[serde(default)]
+        account: Option<String>,
         task_id: Option<String>,
         project_id: Option<String>,
     },
@@ -1256,10 +1592,12 @@ pub enum Request {
 pub enum Response {
     Usage {
         provider: Provider,
+        account: String,
         usage: UsageLimits,
     },
     UsageReset {
         provider: Provider,
+        account: String,
         outcome: UsageResetOutcome,
         usage: Option<UsageLimits>,
         refresh_error: Option<String>,
@@ -1276,6 +1614,7 @@ pub enum Response {
     Task(TaskView),
     SubagentThread(SubagentView),
     Project(Project),
+    Account(Account),
     Created(Task),
     Diff(DiffSnapshot),
     TaskChanges {

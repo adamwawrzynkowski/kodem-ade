@@ -10,13 +10,13 @@ fn presentation(kind: ActivityKind) -> (&'static str, &'static str, bool) {
         ActivityKind::ViewingImage => ("Inspecting image…", "file", false),
         ActivityKind::GeneratingImage => ("Generating image…", "loader", true),
         ActivityKind::WaitingTimer => ("Waiting…", "loader", false),
-        ActivityKind::Reasoning => ("Reasoning…", "bot", false),
+        ActivityKind::Reasoning => ("Reasoning…", "sparkles", false),
         ActivityKind::Responding => ("Writing response…", "edit", false),
         ActivityKind::Command => ("Running command…", "loader", true),
         ActivityKind::EditingFiles => ("Editing files…", "file-text", false),
-        ActivityKind::Searching => ("Searching the web…", "search", false),
+        ActivityKind::Searching => ("Searching the web…", "globe", false),
         ActivityKind::Tool => ("Running tool…", "loader", true),
-        ActivityKind::Planning => ("Planning…", "check-square", false),
+        ActivityKind::Planning => ("Planning…", "list-checks", false),
         ActivityKind::Compacting => ("Compacting context…", "loader", true),
     }
 }
@@ -75,37 +75,13 @@ impl Shell {
                             .items_center()
                             .justify_center()
                             .child(motion::active_icon(
-                                "agent-state-icon",
                                 glyph,
                                 t.accent,
                                 spin && !waiting,
                                 cx.reduce_motion(),
                             )),
                     )
-                    .child(motion::gleam("agent-state-label", label, t))
-                    .when(
-                        waiting
-                            && view.requests.iter().any(|r| {
-                                self.request_in_current_thread(r)
-                                    && r.method.ends_with("requestApproval")
-                            }),
-                        |d| {
-                            d.child(div().flex_1()).child(
-                                self.icon_button(
-                                    "activity-respond",
-                                    "arrow-right",
-                                    "Respond to agent",
-                                )
-                                .size(px(20.))
-                                .on_click(cx.listener(
-                                    |s, _, _, cx| {
-                                        s.panel = Panel::Questions;
-                                        cx.notify();
-                                    },
-                                )),
-                            )
-                        },
-                    ),
+                    .child(motion::gleam(label, t, cx.reduce_motion())),
             );
         } else {
             for activity in &view.activities {
@@ -125,24 +101,13 @@ impl Shell {
                                 .items_center()
                                 .justify_center()
                                 .child(motion::active_icon(
-                                    (
-                                        ElementId::from("activity-icon"),
-                                        SharedString::from(activity.id.clone()),
-                                    ),
                                     glyph,
                                     t.accent,
                                     spin,
                                     cx.reduce_motion(),
                                 )),
                         )
-                        .child(motion::gleam(
-                            (
-                                ElementId::from("activity-label"),
-                                SharedString::from(activity.id.clone()),
-                            ),
-                            label,
-                            t,
-                        ))
+                        .child(motion::gleam(label, t, cx.reduce_motion()))
                         .child(
                             div()
                                 .flex_1()
@@ -165,15 +130,7 @@ impl Shell {
             .w_full()
             .flex_shrink_0()
             .bg(t.inset)
-            .border_b_1()
-            .border_color(t.border)
-            .when(!waiting, |d| {
-                d.child(dither::scanner(
-                    "agent-scanner",
-                    t.accent,
-                    cx.reduce_motion(),
-                ))
-            })
+            .when(!waiting, |d| d.child(dither::scanner(t.accent)))
             .child(
                 div()
                     .w_full()
@@ -184,88 +141,171 @@ impl Shell {
                     .justify_center()
                     .child(rows),
             )
+            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
             .into_any_element()
     }
-    /// Shows live task-baseline totals as a connected section of the prompt.
-    pub(super) fn changed_files_strip(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(summary) = self
-            .task_changes
+    /// Opens the review pane on the task's changes since its baseline.
+    pub(super) fn open_task_changes(&mut self, cx: &mut Context<Self>) {
+        self.show_review = true;
+        self.comparison = if self
+            .view
             .as_ref()
-            .filter(|summary| summary.files > 0)
-        else {
+            .is_some_and(|v| v.task.baseline.is_some())
+        {
+            Comparison::Baseline
+        } else {
+            Comparison::WorkingTree
+        };
+        self.historical_diff = false;
+        self.reviewing_file = false;
+        self.diff = None;
+        self.new_diff = None;
+        self.diff_view = None;
+        self.save_settings();
+        self.refresh_diff();
+        cx.notify();
+    }
+
+    /// Shows the agent's current step list as a progress meter that expands into the steps.
+    pub(super) fn plan_strip(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(view) = self.view.as_ref().filter(|view| !view.task.plan.is_empty()) else {
             return div().into_any_element();
         };
         let t = self.theme;
-        let scope = if self
-            .view
-            .as_ref()
-            .is_some_and(|view| view.task.baseline.is_some())
-        {
-            "Changes since this task's baseline."
-        } else {
-            "Current working-tree changes."
-        };
-        let hint = if summary.omitted_files > 0 {
-            format!(
-                "{scope} Line totals exclude {} binary, large, or metadata-only files.",
-                summary.omitted_files
-            )
-        } else {
-            format!("{scope} Click to review.")
-        };
-        div()
-            .w_full()
-            .bg(t.inset)
-            .border_b_1()
-            .border_color(t.border)
-            .px(px(8.))
-            .py(px(4.))
-            .child(
-                self.ghost(
-                    "composer-changes",
-                    "file-text",
-                    format!(
-                        "{} Changed {}",
-                        summary.files,
-                        if summary.files == 1 { "File" } else { "Files" }
-                    ),
-                )
-                .w_full()
-                .px(px(6.))
-                .gap(px(8.))
-                .justify_start()
-                .text_size(px(12.))
-                .when(summary.omitted_files > 0, |button| {
-                    button.child(figure("~", t.subtle))
-                })
-                .child(line_totals(summary.added, summary.removed, t))
-                .child(div().flex_1())
-                .child(caps("Review", t))
-                .child(icon("chevron-right").size(px(12.)))
-                .tooltip(move |_, cx| {
-                    cx.new(|_| Hint {
-                        text: hint.clone(),
-                        theme: t,
-                    })
-                    .into()
-                })
-                .on_click(cx.listener(|s, _, _, cx| {
-                    s.show_review = true;
-                    s.comparison = if s.view.as_ref().is_some_and(|v| v.task.baseline.is_some()) {
-                        Comparison::Baseline
+        let plan = &view.task.plan;
+        let done = plan
+            .iter()
+            .filter(|step| step.status == PlanStatus::Done)
+            .count();
+        let current = plan
+            .iter()
+            .find(|step| step.status == PlanStatus::Active)
+            .or_else(|| plan.iter().find(|step| step.status == PlanStatus::Pending));
+        let expanded = self.plan_expanded;
+        let mut strip =
+            div().w_full().flex_shrink_0().bg(t.inset).child(
+                self.control("plan-toggle")
+                    .w_full()
+                    .h(px(30.))
+                    .px(px(14.))
+                    .gap(px(8.))
+                    .rounded_none()
+                    .justify_start()
+                    .border_0()
+                    .bg(gpui::transparent_black())
+                    .hover(move |s| s.bg(t.selected))
+                    .accessibility_label(if expanded {
+                        "Collapse plan"
                     } else {
-                        Comparison::WorkingTree
-                    };
-                    s.historical_diff = false;
-                    s.reviewing_file = false;
-                    s.diff = None;
-                    s.new_diff = None;
-                    s.diff_view = None;
-                    s.save_settings();
-                    s.refresh_diff();
-                    cx.notify();
-                })),
-            )
+                        "Expand plan"
+                    })
+                    // The strip reads as a section header: chevron, label, totals, dotted rule.
+                    .child(
+                        icon(if expanded {
+                            "chevron-down"
+                        } else {
+                            "chevron-right"
+                        })
+                        .size(px(12.))
+                        .text_color(t.subtle),
+                    )
+                    .child(caps("Plan", t).text_color(t.muted))
+                    .child(figure(format!("{done}/{}", plan.len()), t.muted))
+                    .child(div().relative().w(px(72.)).h(px(6.)).flex_shrink_0().child(
+                        dither::DitherBar::meter(
+                            done as f32 / plan.len() as f32,
+                            if done == plan.len() {
+                                t.added
+                            } else {
+                                t.accent
+                            },
+                            t.subtle.opacity(0.55),
+                        ),
+                    ))
+                    .child(
+                        div()
+                            .flex_shrink(1.)
+                            .min_w_0()
+                            .text_ellipsis()
+                            .font_family(crate::theme::SANS)
+                            .font_weight(FontWeight::NORMAL)
+                            .text_size(px(12.))
+                            .text_color(t.muted)
+                            .child(current.map_or_else(
+                                || "All steps done".to_owned(),
+                                |step| step.text.clone(),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(8.))
+                            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+                    )
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.plan_expanded = !s.plan_expanded;
+                        cx.notify();
+                    })),
+            );
+        if expanded {
+            let mut steps = div()
+                .id("plan-steps")
+                .max_h(px(180.))
+                .overflow_y_scroll()
+                .px(px(14.))
+                .pb(px(8.))
+                .flex()
+                .flex_col()
+                .gap(px(4.));
+            for step in plan {
+                let (marker, color) = match step.status {
+                    PlanStatus::Done => (
+                        icon("check")
+                            .size(px(12.))
+                            .text_color(t.added)
+                            .into_any_element(),
+                        t.subtle,
+                    ),
+                    PlanStatus::Active => (dither::pulse(t.accent, cx.reduce_motion()), t.text),
+                    PlanStatus::Pending => (
+                        div()
+                            .size(px(8.))
+                            .rounded(px(2.))
+                            .border_1()
+                            .border_color(t.subtle)
+                            .into_any_element(),
+                        t.muted,
+                    ),
+                };
+                steps = steps.child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(px(8.))
+                        .text_size(px(12.))
+                        .child(
+                            div()
+                                .size(px(16.))
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(marker),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_color(color)
+                                .when(step.status == PlanStatus::Done, |d| d.line_through())
+                                .child(step.text.clone()),
+                        ),
+                );
+            }
+            strip = strip.child(steps);
+        }
+        strip
+            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
             .into_any_element()
     }
 }

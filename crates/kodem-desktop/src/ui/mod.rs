@@ -1,20 +1,25 @@
 //! Native workspace state and actions. All blocking work goes through the host bridge.
+mod accounts;
 mod activity;
 mod browser;
 mod change_tree;
 mod chat;
 mod chrome;
 mod composition;
+mod controls;
 mod conversation;
 mod diff_refresh;
 mod diff_view;
 mod dither;
 mod effort_slider;
+mod fx;
 mod image_preview;
+mod kit;
 mod menus;
 mod message_content;
 mod model_picker;
 mod motion;
+mod palette;
 mod panels;
 mod projects;
 mod questions;
@@ -31,10 +36,11 @@ use crate::{
     bridge,
     components::{
         Button,
-        text_input::{SubmitInput, TextInput},
+        text_input::{CompletionInput, ReferenceInput, SubmitInput, TextInput},
     },
     theme::Theme,
 };
+pub use chrome::Stage;
 use conversation::Conversation;
 use gpui::{prelude::*, *};
 use kodem_core::{self as core, *};
@@ -56,7 +62,25 @@ actions!(
         Search,
         Cancel,
         Quit,
-        Latest
+        Latest,
+        CommandPalette,
+        NextTask,
+        PreviousTask,
+        NextAttention,
+        ChooseModel,
+        ChooseEffort,
+        ChooseAccess,
+        CycleAccess,
+        ToggleTerminal,
+        GoToTask1,
+        GoToTask2,
+        GoToTask3,
+        GoToTask4,
+        GoToTask5,
+        GoToTask6,
+        GoToTask7,
+        GoToTask8,
+        GoToTask9
     ]
 );
 #[derive(Clone, PartialEq)]
@@ -70,7 +94,6 @@ enum Panel {
     Files,
     Check,
     Rename,
-    Questions,
     Models,
     Reasoning,
     Access,
@@ -81,10 +104,17 @@ enum Panel {
     Sort,
     Comparison,
     Usage,
+    Palette,
 }
 struct ThreadMenu {
     task_id: String,
     position: Point<Pixels>,
+}
+/// A short confirmation that leaves on its own.
+struct Toast {
+    text: SharedString,
+    tone: Hsla,
+    sequence: u64,
 }
 struct PendingSubmission {
     task_id: String,
@@ -115,7 +145,8 @@ pub struct Shell {
     thread_menu: Option<ThreadMenu>,
     deleting_task: Option<String>,
     error: Option<String>,
-    status: String,
+    toast: Option<Toast>,
+    toast_sequence: u64,
     host_connected: bool,
     new_worktree_override: Option<bool>,
     new_preferences: Option<AgentPreferences>,
@@ -144,7 +175,7 @@ pub struct Shell {
     follow: bool,
     folded: HashSet<String>,
     collapsed_changes: HashSet<String>,
-    text_views: HashMap<String, Entity<TextInput>>,
+    text_views: HashMap<String, (Entity<TextInput>, Subscription)>,
     chat_selection: Entity<crate::components::text_document::TextDocument>,
     selection_inputs: Option<Vec<Entity<TextInput>>>,
     resources: Vec<core::Resource>,
@@ -187,7 +218,11 @@ pub struct Shell {
     settings_section: usize,
     effort_slider: Option<(String, Entity<effort_slider::EffortSlider>, Subscription)>,
     image_preview: Option<image_preview::ImagePreview>,
-    usage_actions: std::collections::BTreeMap<Provider, usage::UsageActions>,
+    plan_expanded: bool,
+    palette_input: Entity<TextInput>,
+    palette: palette::Palette,
+    accounts: accounts::AccountsView,
+    usage_actions: std::collections::BTreeMap<(Provider, String), usage::UsageActions>,
 }
 impl Shell {
     /// Creates the workspace and begins asynchronous host synchronization.
@@ -201,6 +236,8 @@ impl Shell {
             cx.new(|cx| TextInput::composer("Describe what you want to build or change…", cx));
         let aux = cx.new(|cx| TextInput::new("Type here…", cx));
         let search = cx.new(|cx| TextInput::new("Search tasks…", cx));
+        let palette_input =
+            cx.new(|cx| TextInput::composer("Type a command or search threads…", cx));
         let subscriptions = vec![
             cx.observe_window_bounds(window, |s, window, cx| {
                 let placement = window.window_bounds();
@@ -230,7 +267,15 @@ impl Shell {
                 }
             }),
             cx.on_focus_lost(window, |s, window, cx| window.focus(&s.focus, cx)),
-            cx.subscribe(&input, |s, _, _: &SubmitInput, cx| s.submit_current(cx)),
+            cx.subscribe(&input, |s, _, event: &SubmitInput, cx| {
+                s.submit_with(event.alternate, cx)
+            }),
+            cx.subscribe_in(
+                &palette_input,
+                window,
+                |s, _, key: &CompletionInput, window, cx| s.palette_key(key, window, cx),
+            ),
+            cx.observe(&palette_input, |_, _, cx| cx.notify()),
             cx.subscribe(
                 &input,
                 |s, _, key: &crate::components::text_input::CompletionInput, cx| {
@@ -362,7 +407,8 @@ impl Shell {
             thread_menu: None,
             deleting_task: None,
             error: None,
-            status: "Connecting to local host…".into(),
+            toast: None,
+            toast_sequence: 0,
             host_connected: false,
             new_worktree_override: None,
             new_preferences: None,
@@ -433,6 +479,10 @@ impl Shell {
             settings_section: 0,
             effort_slider: None,
             image_preview: None,
+            plan_expanded: false,
+            palette_input,
+            palette: Default::default(),
+            accounts: Default::default(),
         };
         shell.check_for_updates(cx);
         shell.send(core::Request::Hello);
@@ -467,16 +517,16 @@ impl Shell {
             reply.request,
             core::Request::RefreshUsage { .. } | core::Request::ConsumeUsageReset { .. }
         ) {
-            let provider = match reply.request {
-                core::Request::RefreshUsage { provider }
-                | core::Request::ConsumeUsageReset { provider, .. } => provider,
+            let (provider, account) = match reply.request {
+                core::Request::RefreshUsage { provider, account }
+                | core::Request::ConsumeUsageReset {
+                    provider, account, ..
+                } => (provider, account),
                 _ => unreachable!(),
             };
-            self.apply_usage_reply(provider, reply.result, cx);
+            let account = account.unwrap_or_else(|| DEFAULT_ACCOUNT.into());
+            self.apply_usage_reply(provider, account, reply.result, cx);
             return;
-        }
-        if !reply.connected {
-            self.status = "Local host unavailable; reconnecting…".into();
         }
         if let core::Request::ImportAttachments { task_id, .. } = &reply.request
             && let Some(count) = self.importing_tasks.get_mut(task_id)
@@ -499,6 +549,7 @@ impl Shell {
             provider,
             task_id,
             project_id,
+            ..
         } = &reply.request
         {
             let current_project = self.selected_project.clone().or_else(|| {
@@ -553,6 +604,9 @@ impl Shell {
                 if matches!(reply.request, core::Request::DeleteTask { .. }) {
                     self.deleting_task = None;
                 }
+                if matches!(reply.request, core::Request::Files { .. }) {
+                    self.files_loaded();
+                }
                 if matches!(reply.request, core::Request::TaskChanges { .. }) {
                     // Retain the last consistent totals while files are being written.
                     cx.notify();
@@ -590,13 +644,16 @@ impl Shell {
         };
         match response {
             response @ (Response::Usage { .. } | Response::UsageReset { .. }) => {
-                let provider = match &response {
-                    Response::Usage { provider, .. } | Response::UsageReset { provider, .. } => {
-                        *provider
+                let (provider, account) = match &response {
+                    Response::Usage {
+                        provider, account, ..
                     }
+                    | Response::UsageReset {
+                        provider, account, ..
+                    } => (*provider, account.clone()),
                     _ => unreachable!(),
                 };
-                self.apply_usage_reply(provider, Ok(response), cx);
+                self.apply_usage_reply(provider, account, Ok(response), cx);
             }
             Response::Workspace(workspace) => {
                 self.sidebar_dirty = true;
@@ -617,6 +674,16 @@ impl Shell {
                 cx.set_reduce_motion(motion::system_reduce_motion());
                 if self.workspace.is_none() {
                     self.settings = workspace.settings.clone();
+                    // Results that finished before unread tracking existed count as read.
+                    if self.settings.viewed.is_empty() {
+                        let seen = now();
+                        self.settings.viewed = workspace
+                            .tasks
+                            .iter()
+                            .filter(|task| !task.state.active())
+                            .map(|task| (task.id.clone(), seen))
+                            .collect();
+                    }
                     self.show_review = self.settings.show_review;
                     self.show_terminal = self.settings.show_terminal;
                     self.split = self.settings.split_diff;
@@ -629,8 +696,6 @@ impl Shell {
                     self.workspace = Some(workspace);
                     if let Some(id) = selected {
                         self.select_task(id, cx)
-                    } else {
-                        self.status = "Open a repository to start coding".into();
                     }
                     if self.selected.is_none()
                         && self.workspace.as_ref().is_some_and(|w| {
@@ -639,9 +704,7 @@ impl Shell {
                                 .is_none_or(|r| r.models.is_empty())
                         })
                     {
-                        self.send(core::Request::ConnectRuntime {
-                            provider: self.composer_preferences().provider,
-                        });
+                        self.connect_runtime();
                     }
                     cx.notify();
                     return;
@@ -653,9 +716,10 @@ impl Shell {
                 {
                     self.clear_selected_task(cx);
                 }
+                self.celebrate_transitions(&workspace, cx);
                 self.workspace = Some(workspace);
-                self.status = "Local host connected".into();
             }
+            Response::Account(account) => self.account_added(&account, cx),
             Response::Project(project) => {
                 if self.selected.is_some() {
                     self.open_empty_chat(cx);
@@ -668,6 +732,21 @@ impl Shell {
                 self.new_worktree_override = None;
                 self.new_preferences = None;
                 self.selected_project = Some(task.project_id.clone());
+                // The new task leaves the composer as a chip and lands in the thread feed.
+                let label = self
+                    .empty_draft
+                    .lines()
+                    .find(|line| !line.trim().is_empty())
+                    .unwrap_or("New task")
+                    .to_owned();
+                fx::fly_between(
+                    chat::COMPOSER_ANCHOR,
+                    sidebar::FEED_ANCHOR,
+                    label,
+                    self.theme.accent,
+                    Duration::ZERO,
+                    cx,
+                );
                 if !self.empty_draft.is_empty() {
                     let draft = std::mem::take(&mut self.empty_draft);
                     self.send(core::Request::EditTask {
@@ -720,6 +799,7 @@ impl Shell {
                     if self.provider_runtime(view.task.provider).models.is_empty() {
                         self.send(core::Request::ConnectRuntime {
                             provider: view.task.provider,
+                            account: view.task.account.clone(),
                         });
                     }
                     self.observed_draft = view.task.draft.clone();
@@ -807,6 +887,16 @@ impl Shell {
                         self.chat_scroll.scroll_to(anchor);
                     }
                 }
+                // A result that arrives while its task is open is read as it arrives.
+                if !view.task.state.active()
+                    && view
+                        .task
+                        .is_unread(self.settings.viewed.get(&view.task.id).copied())
+                {
+                    self.settings.viewed.insert(view.task.id.clone(), now());
+                    self.sidebar_dirty = true;
+                    self.save_settings();
+                }
                 let pending: HashSet<_> = view.requests.iter().map(|r| r.id.to_string()).collect();
                 self.question_inputs
                     .retain(|(request, _), _| pending.contains(request));
@@ -880,6 +970,20 @@ impl Shell {
                     .is_some_and(|p| p.task_id == task_id && p.id == submission_id)
                 {
                     let pending = self.submitted_draft.take().unwrap();
+                    // A queued message hops from the composer into the queue tray above it.
+                    if pending.queued
+                        && self.selected.as_ref() == Some(&task_id)
+                        && let Some(composer) = fx::anchor_bounds(chat::COMPOSER_ANCHOR, cx)
+                    {
+                        fx::glide_to(
+                            composer.center(),
+                            composition::OUTBOX_ANCHOR,
+                            point(composer.center().x, composer.top() - px(24.)),
+                            pending.text.clone(),
+                            self.theme.accent,
+                            cx,
+                        );
+                    }
                     if self.selected.as_ref() == Some(&task_id) && !cx.reduce_motion() {
                         self.send_arrivals.retain(|_, arrival| !arrival.expired());
                         let mut arrival = motion::Arrival::new(pending.origin);
@@ -910,7 +1014,6 @@ impl Shell {
                         .retain(|a| !attachment_ids.contains(&a.id));
                     view.task.feedback.retain(|f| !feedback_ids.contains(&f.id));
                 }
-                self.status = "Message accepted".into();
                 self.send(core::Request::Task {
                     task_id,
                     before: None,
@@ -934,7 +1037,10 @@ impl Shell {
                 self.receive_slash_catalog(&reply.request, catalog)
             }
             Response::Resources(resources) => self.resources = resources,
-            Response::Files(files) => self.files = files,
+            Response::Files(files) => {
+                self.files = files;
+                self.files_loaded();
+            }
             Response::Text(text) => {
                 if let core::Request::ReadFile { path, .. } = reply.request {
                     self.file_text = Some((String::from_utf8_lossy(&path).into(), text));
@@ -942,6 +1048,10 @@ impl Shell {
             }
             Response::Terminal(terminal) => self.terminal = Some(terminal),
             Response::Ok => match reply.request {
+                core::Request::CompactTask { .. } => {
+                    let tone = self.theme.info;
+                    self.notify_user("Compacting context…", tone, cx);
+                }
                 core::Request::RemoveAttachment { task_id, id } => {
                     if let Some(view) = &mut self.view
                         && view.task.id == task_id
@@ -969,6 +1079,11 @@ impl Shell {
                     self.send(core::Request::Hello);
                 }
                 core::Request::DeleteTask { task_id } => {
+                    // The deleted thread's row breaks into pixels that fall away.
+                    if let Some(row) = fx::anchor_bounds(&sidebar::thread_anchor(&task_id), cx) {
+                        fx::crumble(row, self.theme.removed, cx);
+                    }
+                    self.settings.viewed.remove(&task_id);
                     self.sidebar_dirty = true;
                     self.deleting_task = None;
                     self.thread_menu = None;
@@ -993,9 +1108,7 @@ impl Shell {
                     }
                     self.send(core::Request::Hello);
                 }
-                core::Request::Submit { .. } => {
-                    self.status = "Prompt recorded; awaiting provider acknowledgement".into();
-                }
+                core::Request::Submit { .. } => {}
                 core::Request::AddFeedback { task_id, .. }
                 | core::Request::AddFeedbackRows { task_id, .. }
                     if self.selected.as_ref() == Some(&task_id) =>
@@ -1023,6 +1136,7 @@ impl Shell {
                     edit:
                         TaskEdit::Model { .. }
                         | TaskEdit::Access(_)
+                        | TaskEdit::Account(_)
                         | TaskEdit::Provider(_)
                         | TaskEdit::ProviderAccess(_),
                 } => {
@@ -1074,6 +1188,7 @@ impl Shell {
         self.slash = Default::default();
         self.send_arrivals.clear();
         self.selected = None;
+        self.files.clear();
         self.view = None;
         self.diff = None;
         self.new_diff = None;
@@ -1126,6 +1241,7 @@ impl Shell {
             self.new_submission_origin = None;
         }
         self.selected = Some(id.clone());
+        self.files.clear();
         self.task_changes = None;
         self.view = None;
         self.diff = None;
@@ -1142,6 +1258,8 @@ impl Shell {
         self.terminal = None;
         self.file_text = None;
         self.settings.selected_task = Some(id.clone());
+        self.settings.viewed.insert(id.clone(), now());
+        self.sidebar_dirty = true;
         self.save_settings();
         self.send(core::Request::Task {
             task_id: id,
@@ -1157,7 +1275,9 @@ impl Shell {
         }
     }
     fn save_settings(&self) {
-        self.send(core::Request::SaveSettings(self.settings_snapshot()));
+        self.send(core::Request::SaveSettings(Box::new(
+            self.settings_snapshot(),
+        )));
     }
     fn settings_snapshot(&self) -> Settings {
         let mut settings = self.settings.clone();
@@ -1243,7 +1363,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Entity<TextInput> {
         let animate = streaming && !cx.reduce_motion();
-        let input = if let Some(input) = self.text_views.get(&key) {
+        let input = if let Some((input, _)) = self.text_views.get(&key) {
             if input.read(cx).text() != text {
                 input.update(cx, |input, cx| input.set_streamed_text(text, animate, cx));
             }
@@ -1254,7 +1374,10 @@ impl Shell {
                 input.set_streamed_text(text, animate, cx);
                 input
             });
-            self.text_views.insert(key, input.clone());
+            let subscription = cx.subscribe(&input, |s, _, reference: &ReferenceInput, cx| {
+                s.open_reference(&reference.0, cx)
+            });
+            self.text_views.insert(key, (input.clone(), subscription));
             input
         };
         if let Some(inputs) = &mut self.selection_inputs {
@@ -1262,24 +1385,166 @@ impl Shell {
         }
         input
     }
+    /// Shows a short confirmation that leaves on its own after a few seconds.
+    pub(super) fn notify_user(
+        &mut self,
+        text: impl Into<SharedString>,
+        tone: Hsla,
+        cx: &mut Context<Self>,
+    ) {
+        self.toast_sequence += 1;
+        let sequence = self.toast_sequence;
+        self.toast = Some(Toast {
+            text: text.into(),
+            tone,
+            sequence,
+        });
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(3600))
+                .await;
+            let _ = this.update(cx, |s, cx| {
+                if s.toast
+                    .as_ref()
+                    .is_some_and(|toast| toast.sequence == sequence)
+                {
+                    s.toast = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    // Marks the moment a task changes hands: a finished turn, a failure, or a request for input
+    // lands as an impact on its thread row.
+    fn celebrate_transitions(&mut self, incoming: &Workspace, cx: &mut Context<Self>) {
+        let Some(current) = &self.workspace else {
+            return;
+        };
+        let t = self.theme;
+        for task in &incoming.tasks {
+            let Some(previous) = current.tasks.iter().find(|old| old.id == task.id) else {
+                continue;
+            };
+            let tone = if !previous.needs_input() && task.needs_input() {
+                Some(t.warning)
+            } else if previous.state.active() && task.state == RunState::Completed {
+                Some(t.added)
+            } else if previous.state.active() && task.is_blocked() {
+                Some(t.removed)
+            } else {
+                None
+            };
+            if let Some(tone) = tone {
+                fx::impact(&sidebar::thread_anchor(&task.id), tone, cx);
+            }
+        }
+    }
+
+    // Opens a file or path that the transcript referred to: in the file browser when it belongs
+    // to the task's checkout, otherwise in the system's default application.
+    fn open_reference(&mut self, reference: &str, cx: &mut Context<Self>) {
+        let path = reference
+            .split(['#', ':'])
+            .next()
+            .unwrap_or(reference)
+            .trim_start_matches('@');
+        if path.is_empty() {
+            return;
+        }
+        let Some(view) = &self.view else {
+            return;
+        };
+        let root = &view.task.cwd;
+        let absolute = if let Some(rest) = path.strip_prefix("~/") {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(rest))
+        } else {
+            Some(root.join(path))
+        };
+        let Some(absolute) = absolute else {
+            return;
+        };
+        if let Ok(relative) = absolute.strip_prefix(root) {
+            self.panel = Panel::Files;
+            self.send(core::Request::Files {
+                task_id: view.task.id.clone(),
+            });
+            self.send(core::Request::ReadFile {
+                task_id: view.task.id.clone(),
+                path: relative.to_string_lossy().into_owned().into_bytes(),
+            });
+        } else {
+            cx.open_url(&format!("file://{}", absolute.display()));
+        }
+        cx.notify();
+    }
+
+    /// Opens preferences on one section.
+    pub(super) fn open_settings(&mut self, section: usize) {
+        self.panel = Panel::Settings;
+        self.settings_section = section;
+        if section == settings::PROVIDERS {
+            self.settings_provider = self.composer_preferences().provider;
+            self.send(core::Request::ConnectRuntime {
+                provider: self.settings_provider,
+                account: None,
+            });
+        }
+    }
+
+    /// Opens the provider's inventory of skills, instructions and MCP servers.
+    pub(super) fn open_resources(&mut self) {
+        let preferences = self.composer_preferences();
+        self.panel = Panel::Resources;
+        self.send(core::Request::Resources {
+            provider: preferences.provider,
+            account: preferences.account,
+            project_id: self.composer_project().map(|project| project.id.clone()),
+            task_id: self.selected.clone(),
+        });
+    }
+
+    /// Returns the project that the open task belongs to, or that a new task will start in.
+    pub(super) fn composer_project(&self) -> Option<&Project> {
+        let workspace = self.workspace.as_ref()?;
+        let id = self
+            .view
+            .as_ref()
+            .map(|view| &view.task.project_id)
+            .or(self.selected_project.as_ref());
+        workspace
+            .projects
+            .iter()
+            .find(|project| Some(&project.id) == id)
+            .or(workspace.projects.first())
+    }
+
+    /// Returns the bare control base: geometry, mono label type and focus edge, with no surface
+    /// texture. Callers that restyle it into a row or chip start from here.
     fn control(&self, id: impl Into<ElementId>) -> Button {
         let theme = self.theme;
         Button::new(id)
+            .relative()
             .h(px(26.))
             .px(px(9.))
-            .gap(px(6.))
+            .gap(px(5.))
             .rounded(px(crate::theme::RADIUS_CONTROL))
-            .bg(theme.raised)
-            .shadow(theme.elevation())
+            .bg(theme.control)
             .border_1()
-            .border_color(theme.border)
+            .border_color(theme.edge)
             .text_color(theme.text)
-            .text_size(px(12.))
-            .font_weight(FontWeight::NORMAL)
+            .font_family(crate::theme::MONO)
+            .text_size(px(11.5))
+            .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
-            .styles(|s| s.disabled(|s| s.opacity(0.4)))
-            .focus(move |s| s.border_color(theme.accent))
+            .styles(|s| s.disabled(|s| s.opacity(0.4).cursor_default()))
+            // Only keyboard focus draws the edge; a click must not leave a control outlined.
+            .focus_visible(move |s| s.border_color(theme.accent.opacity(0.7)))
     }
+    /// Returns a raised neutral button: a mono label on a dithered surface that glints on hover
+    /// and ripples from the press point.
     fn button(
         &self,
         id: impl Into<ElementId>,
@@ -1288,11 +1553,19 @@ impl Shell {
     ) -> Button {
         let theme = self.theme;
         self.control(id)
-            .child(icon(glyph).size(px(14.)))
+            .overflow_hidden()
+            .child(kit::shade(theme.dot.opacity(0.9), dither::Edge::Bottom))
+            .child(kit::glint(theme.accent.opacity(0.5), dither::Edge::Bottom))
+            .child(icon(glyph).size(px(13.)))
             .child(label.into())
-            .hover(move |s| s.bg(theme.selected).border_color(theme.edge))
-            .active(move |s| s.bg(theme.inset).shadow(Vec::new()))
+            .hover(move |s| {
+                s.bg(theme.control_hover)
+                    .border_color(theme.accent.opacity(0.5))
+            })
+            .active(move |s| s.bg(theme.control_active))
+            .on_press(move |position, cx| fx::ripple(position, theme.text, cx))
     }
+    /// Returns a button with no surface until the pointer is over it.
     fn ghost(
         &self,
         id: impl Into<ElementId>,
@@ -1302,15 +1575,18 @@ impl Shell {
         let theme = self.theme;
         let label = label.into();
         self.control(id)
-            .child(icon(name).size(px(14.)))
+            .overflow_hidden()
+            .child(kit::glint(theme.dot, dither::Edge::Bottom))
+            .child(icon(name).size(px(13.)))
             .when(!label.is_empty(), |b| b.child(label))
-            .border_0()
-            .shadow(Vec::new())
-            .bg(hsla(0., 0., 0., 0.))
+            .border_color(gpui::transparent_black())
+            .bg(gpui::transparent_black())
             .text_color(theme.muted)
             .hover(move |s| s.bg(theme.selected).text_color(theme.text))
-            .active(move |s| s.bg(theme.inset))
+            .active(move |s| s.bg(theme.control_active))
+            .on_press(move |position, cx| fx::ripple(position, theme.muted, cx))
     }
+    /// Returns a square ghost button with a tooltip and an accessible name.
     fn icon_button(
         &self,
         id: impl Into<ElementId>,
@@ -1330,6 +1606,7 @@ impl Shell {
                 .into()
             })
     }
+    /// Returns the main action of a surface: a solid accent fill with a dithered shade.
     fn primary(
         &self,
         id: impl Into<ElementId>,
@@ -1337,37 +1614,54 @@ impl Shell {
         label: impl Into<SharedString>,
     ) -> Button {
         let theme = self.theme;
-        let mut hover = theme.accent;
-        hover.lightness = (hover.lightness + 0.05).min(1.);
-        let mut pressed = theme.accent;
-        pressed.lightness = (pressed.lightness - 0.06).max(0.);
         self.control(id)
-            .child(icon(glyph).size(px(14.)))
+            .overflow_hidden()
+            .child(kit::shade(gpui::black().opacity(0.2), dither::Edge::Bottom))
+            .child(kit::glint(gpui::white().opacity(0.3), dither::Edge::Top))
+            .child(icon(glyph).size(px(13.)))
             .child(label.into())
             .bg(theme.accent)
+            .border_color(theme.accent)
             .text_color(theme.on_accent)
-            .font_weight(FontWeight::MEDIUM)
-            .border_color(pressed)
-            .shadow(vec![BoxShadow {
-                inset: true,
-                color: rgb_to_hsla(rgb(0xffffff)).opacity(0.22),
-                offset: point(px(0.), px(1.)),
-                blur_radius: px(0.),
-                spread_radius: px(0.),
-            }])
-            .hover(move |s| s.bg(hover))
-            .active(move |s| s.bg(pressed).shadow(Vec::new()))
+            .font_weight(FontWeight::SEMIBOLD)
+            .hover(move |s| s.bg(theme.accent.opacity(0.9)))
+            .active(move |s| s.bg(theme.accent.opacity(0.8)))
+            .on_press(move |position, cx| fx::ripple(position, theme.accent, cx))
+    }
+    /// Returns a button tinted with a tone that carries its own meaning, such as a destructive
+    /// or approving action.
+    fn tinted(
+        &self,
+        id: impl Into<ElementId>,
+        glyph: &'static str,
+        label: impl Into<SharedString>,
+        tone: Hsla,
+    ) -> Button {
+        self.control(id)
+            .overflow_hidden()
+            .child(kit::shade(tone.opacity(0.3), dither::Edge::Bottom))
+            .child(kit::glint(tone.opacity(0.6), dither::Edge::Bottom))
+            .child(icon(glyph).size(px(13.)))
+            .child(label.into())
+            .bg(tone.opacity(0.09))
+            .border_color(tone.opacity(0.45))
+            .text_color(tone)
+            .hover(move |s| s.bg(tone.opacity(0.16)).border_color(tone.opacity(0.7)))
+            .active(move |s| s.bg(tone.opacity(0.22)))
+            .on_press(move |position, cx| fx::ripple(position, tone, cx))
     }
 }
 
-/// Returns an uppercase monospace instrument label, used for section and metadata captions.
+/// Returns a small uppercase mono label, used for section titles, table headers and captions.
 pub(super) fn caps(text: impl AsRef<str>, theme: Theme) -> Div {
     div()
+        .flex_shrink_0()
         .font_family(crate::theme::MONO)
-        .text_size(px(10.))
+        .text_size(px(10.5))
+        .font_weight(FontWeight::MEDIUM)
         .letter_spacing(px(crate::theme::LABEL_TRACKING))
         .text_color(theme.subtle)
-        .line_height(relative(1.2))
+        .line_height(px(14.))
         .child(text.as_ref().to_uppercase())
 }
 
@@ -1376,7 +1670,7 @@ pub(super) fn figure(text: impl Into<SharedString>, color: Hsla) -> Div {
     div()
         .flex_shrink_0()
         .font_family(crate::theme::MONO)
-        .text_size(px(10.5))
+        .text_size(px(11.))
         .text_color(color)
         .child(text.into())
 }
@@ -1420,19 +1714,19 @@ impl Render for Hint {
         div()
             .relative()
             .max_w(px(360.))
-            .child(dither::shadow(self.theme, 4., 3.))
+            .child(dither::shadow(self.theme, 5., 3.))
             .child(
                 div()
-                    .font_family(crate::theme::SANS)
+                    .font_family(crate::theme::MONO)
                     .px(px(8.))
-                    .py(px(4.))
-                    .text_size(px(12.))
-                    .line_height(relative(1.4))
+                    .py(px(5.))
+                    .text_size(px(11.))
+                    .line_height(relative(1.45))
                     .bg(self.theme.raised)
                     .text_color(self.theme.text)
                     .border_1()
                     .border_color(self.theme.edge)
-                    .rounded(px(4.))
+                    .rounded(px(5.))
                     .child(self.text.clone()),
             )
     }
@@ -1447,6 +1741,26 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-d", ToggleReview, None),
         KeyBinding::new("cmd-,", ShowSettings, None),
         KeyBinding::new("cmd-f", Search, None),
+        KeyBinding::new("cmd-k", CommandPalette, None),
+        KeyBinding::new("cmd-shift-]", NextTask, None),
+        KeyBinding::new("cmd-shift-[", PreviousTask, None),
+        KeyBinding::new("ctrl-tab", NextTask, None),
+        KeyBinding::new("ctrl-shift-tab", PreviousTask, None),
+        KeyBinding::new("alt-cmd-a", NextAttention, None),
+        KeyBinding::new("cmd-shift-m", ChooseModel, None),
+        KeyBinding::new("cmd-shift-e", ChooseEffort, None),
+        KeyBinding::new("cmd-shift-a", ChooseAccess, None),
+        KeyBinding::new("shift-tab", CycleAccess, None),
+        KeyBinding::new("ctrl-`", ToggleTerminal, None),
+        KeyBinding::new("cmd-1", GoToTask1, None),
+        KeyBinding::new("cmd-2", GoToTask2, None),
+        KeyBinding::new("cmd-3", GoToTask3, None),
+        KeyBinding::new("cmd-4", GoToTask4, None),
+        KeyBinding::new("cmd-5", GoToTask5, None),
+        KeyBinding::new("cmd-6", GoToTask6, None),
+        KeyBinding::new("cmd-7", GoToTask7, None),
+        KeyBinding::new("cmd-8", GoToTask8, None),
+        KeyBinding::new("cmd-9", GoToTask9, None),
         KeyBinding::new("escape", Cancel, None),
         KeyBinding::new("cmd-q", Quit, None),
     ]);
@@ -1472,9 +1786,16 @@ pub fn init(cx: &mut App) {
             disabled: false,
             name: "View".into(),
             items: vec![
+                MenuItem::action("Command Palette", CommandPalette),
+                MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
                 MenuItem::action("Toggle Changes", ToggleReview),
+                MenuItem::action("Toggle Terminal", ToggleTerminal),
                 MenuItem::action("Jump to Latest", Latest),
+                MenuItem::separator(),
+                MenuItem::action("Next Task", NextTask),
+                MenuItem::action("Previous Task", PreviousTask),
+                MenuItem::action("Next Task That Needs You", NextAttention),
             ],
         },
     ]);
