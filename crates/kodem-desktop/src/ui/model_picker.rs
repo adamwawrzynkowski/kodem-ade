@@ -272,7 +272,7 @@ impl Shell {
             for (index, mode) in runtime
                 .access_modes
                 .iter()
-                .filter(|mode| !is_plan(&mode.id))
+                .filter(|mode| !ProviderAccess::plans(&mode.id))
                 .enumerate()
             {
                 let mode_id = mode.id.clone();
@@ -669,7 +669,9 @@ impl Shell {
         chosen: Option<AgentPreferences>,
     ) -> AgentPreferences {
         if let Some(chosen) = chosen.or_else(|| project?.defaults.clone()) {
-            return self.with_model(chosen, Some(project.map(|project| project.id.as_str())));
+            return self.with_access(
+                self.with_model(chosen, Some(project.map(|project| project.id.as_str()))),
+            );
         }
         // Nothing was chosen for this draft or pinned to this project: start from the last used
         // provider and account, with the model this account used last in this project.
@@ -689,7 +691,29 @@ impl Shell {
             preferences.model = choice.model.clone();
             preferences.effort = choice.effort.clone();
         }
-        self.with_model(preferences, Some(project))
+        self.with_access(self.with_model(preferences, Some(project)))
+    }
+
+    /// Applies the approval rule that was chosen last for the model of `preferences`, in any
+    /// workspace or project. Plan mode stays: it is a mode of work, and the approval rule
+    /// returns when the task leaves it.
+    pub(super) fn with_access(&self, mut preferences: AgentPreferences) -> AgentPreferences {
+        if preferences
+            .provider_access
+            .as_deref()
+            .is_some_and(ProviderAccess::plans)
+        {
+            return preferences;
+        }
+        if let Some(choice) = self.workspace.as_ref().and_then(|workspace| {
+            workspace
+                .settings
+                .access_choice(preferences.provider, preferences.model.as_deref())
+        }) {
+            preferences.provider_access = choice.provider_access.clone();
+            preferences.access = choice.access;
+        }
+        preferences
     }
 
     // Replaces a missing or retired model with a concrete one, so no menu ever shows a
@@ -769,7 +793,8 @@ impl Shell {
             let mut preferences = self.composer_preferences();
             preferences.model = model;
             preferences.effort = effort;
-            self.save_agent_preferences(preferences);
+            // The approval rule follows the model.
+            self.save_agent_preferences(self.with_access(preferences));
         }
         cx.notify();
     }
@@ -827,7 +852,8 @@ impl Shell {
             preferences.model = None;
             preferences.effort = None;
             let project = self.composer_project().map(|project| project.id.clone());
-            let preferences = self.with_model(preferences, Some(project.as_deref()));
+            let preferences =
+                self.with_access(self.with_model(preferences, Some(project.as_deref())));
             self.save_agent_preferences(preferences);
         }
         let provider = self.composer_preferences().provider;
@@ -871,7 +897,7 @@ impl Shell {
         } else {
             let mut preferences = self.composer_preferences();
             preferences.access = access;
-            self.save_agent_preferences(preferences);
+            self.save_access_choice(preferences);
         }
         cx.notify();
     }
@@ -885,7 +911,7 @@ impl Shell {
         } else {
             let mut preferences = self.composer_preferences();
             preferences.provider_access = Some(mode);
-            self.save_agent_preferences(preferences);
+            self.save_access_choice(preferences);
         }
         cx.notify();
     }
@@ -893,9 +919,7 @@ impl Shell {
     /// Steps to the next access mode that still asks or only plans. Modes that remove approval
     /// are left to an explicit choice in the menu.
     pub(super) fn cycle_access(&mut self, cx: &mut Context<Self>) {
-        // A review is read-only; it has no access mode to step through.
         if self.panel != Panel::None
-            || self.mode == TaskKind::Review
             || self.view.as_ref().is_some_and(|view| {
                 view.task.state.active() || view.task.state == RunState::DeliveryUnknown
             })
@@ -919,8 +943,8 @@ impl Shell {
             return;
         }
         // A provider with a plan mode switches between build and plan; its approval rule has
-        // its own menu.
-        if plan_mode(&self.selected_runtime()).is_some() {
+        // its own menu. A review has no plan mode.
+        if self.mode != TaskKind::Review && plan_mode(&self.selected_runtime()).is_some() {
             let planning = !self.planning();
             self.set_planning(planning, cx);
             self.notify_user(
@@ -948,7 +972,7 @@ impl Shell {
         self.composer_preferences()
             .provider_access
             .as_deref()
-            .is_some_and(is_plan)
+            .is_some_and(ProviderAccess::plans)
     }
 
     /// Returns the approval rule of the composer: the provider's access mode, or while plan mode
@@ -960,14 +984,19 @@ impl Shell {
             runtime
                 .access_modes
                 .iter()
-                .filter(|mode| !is_plan(&mode.id))
+                .filter(|mode| !ProviderAccess::plans(&mode.id))
                 .find(|mode| mode.id == "default")
-                .or_else(|| runtime.access_modes.iter().find(|mode| !is_plan(&mode.id)))
+                .or_else(|| {
+                    runtime
+                        .access_modes
+                        .iter()
+                        .find(|mode| !ProviderAccess::plans(&mode.id))
+                })
                 .map(|mode| mode.id.clone())
         };
         let current = self.composer_preferences().provider_access;
         match current {
-            Some(mode) if !is_plan(&mode) => Some(mode),
+            Some(mode) if !ProviderAccess::plans(&mode) => Some(mode),
             Some(_) => self
                 .approval_memory
                 .get(&self.approval_key())
@@ -1017,8 +1046,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let access = matches!(panel, Panel::Access | Panel::Mode);
-        // A review is read-only; its composer has no access or mode menu.
-        if access && self.mode == TaskKind::Review {
+        // A review has an approval rule and no mode of work to choose.
+        if panel == Panel::Mode && self.mode == TaskKind::Review {
             return;
         }
         let anchor = if access { ACCESS_ANCHOR } else { AGENT_ANCHOR };
@@ -1087,26 +1116,40 @@ impl Shell {
                     }
                 }
             });
-        self.with_model(preferences, Some(None))
+        self.with_access(self.with_model(preferences, Some(None)))
     }
 
     /// Persists draft and settings choices immediately, before the first message is sent.
     pub(super) fn save_agent_preferences(&mut self, preferences: AgentPreferences) {
+        self.keep_preferences(&preferences);
+        self.send(core::Request::SetAgentPreferences(preferences));
+    }
+
+    /// Persists a chosen approval rule with the other options, and makes it the rule of its
+    /// model in every workspace and project.
+    pub(super) fn save_access_choice(&mut self, preferences: AgentPreferences) {
+        self.keep_preferences(&preferences);
+        if let Some(workspace) = &mut self.workspace {
+            workspace.settings.remember_access(&preferences);
+        }
+        self.send(core::Request::SetAccessChoice(preferences));
+    }
+
+    // The host records the same choice; this copy serves the composer until the next workspace
+    // snapshot arrives.
+    fn keep_preferences(&mut self, preferences: &AgentPreferences) {
         self.new_preferences = Some(preferences.clone());
         let project = self.composer_project().map(|project| project.id.clone());
         if let Some(workspace) = &mut self.workspace {
-            // The host records the same choice; this copy serves the composer until the next
-            // workspace snapshot arrives.
             workspace
                 .settings
-                .remember_model(&preferences, project.as_deref());
+                .remember_model(preferences, project.as_deref());
             workspace.settings.agent_defaults = preferences.clone();
             workspace
                 .settings
                 .provider_preferences
                 .insert(preferences.provider, preferences.clone());
         }
-        self.send(core::Request::SetAgentPreferences(preferences));
     }
 
     fn choose_provider(&mut self, provider: Provider, cx: &mut Context<Self>) {
@@ -1165,17 +1208,12 @@ fn codex_access_detail(access: AccessMode) -> &'static str {
     }
 }
 
-// Reports a provider mode in which the agent only plans.
-fn is_plan(mode: &str) -> bool {
-    mode.to_ascii_lowercase().contains("plan")
-}
-
 /// Returns the provider's plan mode, when it has one.
 pub(super) fn plan_mode(runtime: &RuntimeInfo) -> Option<ProviderAccess> {
     runtime
         .access_modes
         .iter()
-        .find(|mode| is_plan(&mode.id))
+        .find(|mode| ProviderAccess::plans(&mode.id))
         .cloned()
 }
 

@@ -12,7 +12,7 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-pub const PROTOCOL: u32 = 27;
+pub const PROTOCOL: u32 = 28;
 pub const MAX_PACKET: u64 = 32 * 1024 * 1024;
 /// Resolves the data directory, isolating Debug's host and store unless explicitly overridden.
 pub fn data_dir() -> Result<PathBuf> {

@@ -108,6 +108,12 @@ pub struct ProviderAccess {
     pub name: String,
     pub description: String,
 }
+impl ProviderAccess {
+    /// Reports a provider mode in which the agent only plans.
+    pub fn plans(id: &str) -> bool {
+        id.to_ascii_lowercase().contains("plan")
+    }
+}
 
 /// Returns wall-clock milliseconds for persisted observations.
 pub fn now() -> u64 {
@@ -947,6 +953,12 @@ pub struct ModelChoice {
     pub model: Option<String>,
     pub effort: Option<String>,
 }
+/// The approval rule last chosen for one model, shared by every workspace and project.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct AccessChoice {
+    pub provider_access: Option<String>,
+    pub access: AccessMode,
+}
 /// When a task's context is compacted without being asked.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CompactRule {
@@ -1021,6 +1033,8 @@ pub struct Settings {
     pub provider_preferences: std::collections::BTreeMap<Provider, AgentPreferences>,
     /// Host-owned. Keyed by [`Settings::model_choice_key`].
     pub model_choices: std::collections::BTreeMap<String, ModelChoice>,
+    /// Host-owned. Keyed by [`AutoCompact::model_key`].
+    pub access_choices: std::collections::BTreeMap<String, AccessChoice>,
     pub auto_compact: AutoCompact,
     pub notifications: NotificationSettings,
     pub sidebar_width: f32,
@@ -1072,6 +1086,7 @@ impl Default for Settings {
             agent_defaults: AgentPreferences::default(),
             provider_preferences: Default::default(),
             model_choices: Default::default(),
+            access_choices: Default::default(),
             auto_compact: AutoCompact::default(),
             accounts: Vec::new(),
             default_worktree: false,
@@ -1128,6 +1143,43 @@ impl Settings {
         self.model_choices.insert(
             Self::model_choice_key(preferences.provider, account, None),
             choice,
+        );
+    }
+    /// Makes `defaults` the options of the next new task and of their provider.
+    pub fn keep_agent_preferences(&mut self, defaults: AgentPreferences) {
+        self.provider_preferences
+            .entry(self.agent_defaults.provider)
+            .or_insert_with(|| self.agent_defaults.clone());
+        self.provider_preferences
+            .insert(defaults.provider, defaults.clone());
+        self.remember_model(&defaults, None);
+        self.agent_defaults = defaults;
+    }
+    /// Returns the approval rule last chosen for a model, in any workspace or project.
+    pub fn access_choice(&self, provider: Provider, model: Option<&str>) -> Option<&AccessChoice> {
+        self.access_choices
+            .get(&AutoCompact::model_key(provider, model?))
+    }
+    /// Records the approval rule of `preferences` as the last choice for its model.
+    ///
+    /// A plan mode is a mode of work and not an approval rule, so it is not recorded.
+    pub fn remember_access(&mut self, preferences: &AgentPreferences) {
+        let Some(model) = &preferences.model else {
+            return;
+        };
+        if preferences
+            .provider_access
+            .as_deref()
+            .is_some_and(ProviderAccess::plans)
+        {
+            return;
+        }
+        self.access_choices.insert(
+            AutoCompact::model_key(preferences.provider, model),
+            AccessChoice {
+                provider_access: preferences.provider_access.clone(),
+                access: preferences.access,
+            },
         );
     }
 }
@@ -1546,6 +1598,9 @@ pub enum Request {
         account: Option<String>,
     },
     SetAgentPreferences(AgentPreferences),
+    /// Saves options as `SetAgentPreferences` does, and records their approval rule as the
+    /// choice for their model.
+    SetAccessChoice(AgentPreferences),
     /// Registers another account of a provider with its own configuration directory.
     AddAccount {
         provider: Provider,

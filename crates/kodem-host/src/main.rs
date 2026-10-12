@@ -334,6 +334,12 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             h.store.save_agent_preferences(preferences)?;
             Ok(Response::Ok)
         }
+        Request::SetAccessChoice(preferences) => {
+            let h = host.lock().unwrap();
+            provider::validate_saved_selection(&h, &preferences)?;
+            h.store.save_access_choice(preferences)?;
+            Ok(Response::Ok)
+        }
         Request::OpenProject { path } => {
             let path = git::repository(&path)?;
             Ok(Response::Project(
@@ -472,8 +478,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 head: prepared.head,
                 base: prepared.base,
             });
-            provider::pin_review_access(&mut task);
-            // A review's pinned access must not become the access of new tasks.
+            // Only a coding task's options become the options of new tasks.
             let saved = host.lock().unwrap().store.save_task(&task);
             if let Err(error) = saved {
                 let _ = git::discard_review(Some(&p.path), &task.cwd);
@@ -503,11 +508,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                         && !h.store.has_uncertain_submission(&task_id)?),
                 "Reconcile uncertain delivery before changing provider options"
             );
-            ensure!(
-                t.kind != TaskKind::Review
-                    || !matches!(&edit, TaskEdit::Access(_) | TaskEdit::ProviderAccess(_)),
-                "A review is read-only. Send its findings to Agentic Coding to change files."
-            );
+            let access_changed = matches!(&edit, TaskEdit::Access(_) | TaskEdit::ProviderAccess(_));
             let mut defaults = provider::preferences(&t);
             match edit {
                 TaskEdit::Provider(preferences) => {
@@ -601,15 +602,20 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                     t.context_usage = None;
                 }
             }
-            if t.kind == TaskKind::Review {
-                provider::pin_review_access(&mut t);
-            }
-            // Only a coding task's options become the options of the next new task. A chat has
-            // no project to remember them for, and a review pins its access.
+            // An approval rule chosen in any workspace is the rule of that model everywhere.
+            let rule = access_changed.then(|| AgentPreferences {
+                model: provider::effective_model(&h, &t),
+                ..provider::preferences(&t)
+            });
+            // Only a coding task's options become the options of the next new task. Of a chat
+            // or a review, only the approval rule is remembered, for its model.
             if preferences_changed && t.kind == TaskKind::Coding {
                 h.store.save_task_preferences(&t, defaults)?;
             } else {
                 h.store.save_task(&t)?;
+            }
+            if let Some(rule) = rule {
+                h.store.remember_access(&rule)?;
             }
             Ok(Response::Ok)
         }

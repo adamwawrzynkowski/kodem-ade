@@ -225,10 +225,15 @@ impl Shell {
         self.new_submission_origin = input.text_bounds().map(|bounds| bounds.origin);
         self.empty_draft = review_request(&target, &base, &input.text());
         self.creating_task = true;
+        let mut preferences = self.composer_preferences();
+        // A review has no plan mode: it starts with the approval rule alone.
+        if self.planning() {
+            preferences.provider_access = self.approval_choice();
+        }
         self.send(core::Request::CreateReview {
             project_id: project,
             target,
-            preferences: self.composer_preferences(),
+            preferences,
         });
         cx.notify();
     }

@@ -507,8 +507,8 @@ pub(crate) fn claim_next(host: &Shared, task_id: &str) -> Result<Option<Outgoing
     Ok(Some(message))
 }
 
-/// Rules of a review session. The session cannot be asked to break them: Codex runs it in its
-/// read-only sandbox, and Claude Code runs it without its file-editing tools.
+/// Rules of a review session. Claude Code also runs it without its file-editing tools and with
+/// the commands that publish denied. The approval rule of the task decides everything else.
 const REVIEW_RULES: &str = "\
 You are reviewing code in Kodem's Review workspace. This session is a local, read-only review.
 
@@ -548,18 +548,6 @@ pub(crate) fn instructions(task: &Task) -> Option<String> {
             Some(format!("{REVIEW_RULES}\n\n{scope}\n\n{REVIEW_REPORT}"))
         }
     }
-}
-
-/// Sets the access that every review runs with, whatever the composer last chose.
-///
-/// Codex gets its read-only sandbox. Claude Code asks before each command that is not read-only;
-/// its sessions for reviews start without the tools that edit files.
-pub(crate) fn pin_review_access(task: &mut Task) {
-    task.access = AccessMode::ReadOnly;
-    task.provider_access = match task.provider {
-        Provider::Claude => Some("default".into()),
-        Provider::Codex => None,
-    };
 }
 
 /// Returns the options owned by this task rather than another provider's defaults.

@@ -280,3 +280,13 @@ Checks that ran:
 - The JSON schema of Codex 0.153.4's app-server lists `developerInstructions` on `thread/start` and `thread/resume`, and `web_search` with the value `live` in its configuration.
 
 Not checked: the appearance and pointer behavior of the rail and the Review start screen, because app visual testing is prohibited; a real provider turn of a chat or a review; `gh pr list` against a repository on GitHub (in the test repository it reported that no remote points to GitHub, which the picker shows); and whether Codex accepts a thread in a directory that is not a Git repository. No commit or push was made.
+
+## Approval rule in a review, remembered for each model
+
+Recorded on 12 October 2026. A review no longer pins its access. Its composer has the approval menu of Agentic Coding beside **READ ONLY**, and the provider session runs with the rule of the task; `provider::pin_review_access` and the refusal of access edits for a review are removed. Claude Code keeps the denied tools of a review. Codex has no such list: only the Read only access enforces a review in its sandbox. A review has no Build or Plan mode, and the desktop never starts one in a plan mode.
+
+The approval rule is remembered for each model in `Settings.access_choices` and applies to new tasks with that model in every workspace and project. Only an explicit choice records it: the new request `SetAccessChoice` for a draft or for Settings, and an access edit of a task of any kind. Protocol 28 adds the request and the saved field. No rule is recorded for a model until one is chosen after this change, so until then a new task starts with the project default or the last used options as before.
+
+Checked with `cargo check`, `cargo fmt --all -- --check` and Clippy, which reports the six warnings that the code had before this change and no new one. A temporary unit test, removed afterward, checked the store: an ordinary save records no rule, an explicit choice records it for its model only, a plan mode and a missing model are not recorded, a window layout save keeps the rules, older settings parse, and a retired model loses its rule.
+
+Not checked: the appearance of the composer, because app visual testing is prohibited, and a real provider turn of a review under another approval rule. No commit or push was made.

@@ -641,7 +641,10 @@ impl Shell {
                     cx.notify();
                     return;
                 }
-                if matches!(reply.request, core::Request::SetAgentPreferences(_)) {
+                if matches!(
+                    reply.request,
+                    core::Request::SetAgentPreferences(_) | core::Request::SetAccessChoice(_)
+                ) {
                     self.new_preferences = None;
                     self.send(core::Request::Hello);
                 }
@@ -1239,7 +1242,10 @@ impl Shell {
                 _ => self.send(core::Request::Hello),
             },
             Response::Error(e) => {
-                if matches!(reply.request, core::Request::SetAgentPreferences(_)) {
+                if matches!(
+                    reply.request,
+                    core::Request::SetAgentPreferences(_) | core::Request::SetAccessChoice(_)
+                ) {
                     self.new_preferences = None;
                     self.send(core::Request::Hello);
                 }

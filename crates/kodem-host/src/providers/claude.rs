@@ -106,12 +106,8 @@ const REVIEW_BLOCKED_TOOLS: [&str; 13] = [
     "Bash(gh api:*)",
 ];
 
-// The CLI reports `default` for the mode its flag also accepts as `manual`. A review always asks
-// before a command that is not read-only.
+// The CLI reports `default` for the mode its flag also accepts as `manual`.
 fn access_of(task: &Task) -> String {
-    if task.kind == TaskKind::Review {
-        return "default".into();
-    }
     match task.provider_access.as_deref() {
         None | Some("manual") => "default".into(),
         Some(access) => access.into(),
@@ -597,8 +593,7 @@ impl Owner<'_> {
         self.session.access = mode.to_owned();
         let h = self.host.lock().unwrap();
         let mut task = h.store.task(self.task_id)?;
-        // A review keeps its pinned mode; the next turn sets the session back to it.
-        if task.kind != TaskKind::Review && access_of(&task) != mode {
+        if access_of(&task) != mode {
             task.provider_access = Some(mode.to_owned());
             h.store.save_task(&task)?;
         }

@@ -976,6 +976,8 @@ impl Shell {
             selected.model = Some(model.id.clone());
             selected.effort =
                 (!model.default_effort.is_empty()).then(|| model.default_effort.clone());
+            // The approval rule follows the model.
+            let selected = self.with_access(selected);
             let chosen = preferences.model.as_ref() == Some(&model.id);
             models = models.child(
                 self.choice_row(("settings-model", index), chosen)
@@ -1066,7 +1068,7 @@ impl Shell {
                             row.child(icon("check").size(px(13.)).text_color(t.accent))
                         })
                         .on_click(cx.listener(move |s, _, _, cx| {
-                            s.save_agent_preferences(selected.clone());
+                            s.save_access_choice(selected.clone());
                             cx.notify();
                         })),
                 );
@@ -1104,7 +1106,7 @@ impl Shell {
                             row.child(icon("check").size(px(13.)).text_color(t.accent))
                         })
                         .on_click(cx.listener(move |s, _, _, cx| {
-                            s.save_agent_preferences(selected.clone());
+                            s.save_access_choice(selected.clone());
                             cx.notify();
                         })),
                 );

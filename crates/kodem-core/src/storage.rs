@@ -282,6 +282,7 @@ impl Store {
         settings.agent_defaults = saved.agent_defaults;
         settings.provider_preferences = saved.provider_preferences;
         settings.model_choices = saved.model_choices;
+        settings.access_choices = saved.access_choices;
         settings.accounts = saved.accounts;
         self.write_settings(&settings)
     }
@@ -365,6 +366,10 @@ impl Store {
             *choice = None;
             changed = true;
         }
+        changed |= settings
+            .access_choices
+            .remove(&AutoCompact::model_key(provider, model))
+            .is_some();
         if changed {
             self.write_settings(&settings)?;
         }
@@ -384,15 +389,21 @@ impl Store {
     /// Saves the last provider and that provider's model options before a task is created.
     pub fn save_agent_preferences(&self, defaults: AgentPreferences) -> Result<()> {
         let mut settings = self.settings()?;
-        settings
-            .provider_preferences
-            .entry(settings.agent_defaults.provider)
-            .or_insert_with(|| settings.agent_defaults.clone());
-        settings
-            .provider_preferences
-            .insert(defaults.provider, defaults.clone());
-        settings.remember_model(&defaults, None);
-        settings.agent_defaults = defaults;
+        settings.keep_agent_preferences(defaults);
+        self.write_settings(&settings)
+    }
+    /// Saves options as [`Store::save_agent_preferences`] does, and records their approval rule
+    /// as the choice for their model.
+    pub fn save_access_choice(&self, defaults: AgentPreferences) -> Result<()> {
+        let mut settings = self.settings()?;
+        settings.remember_access(&defaults);
+        settings.keep_agent_preferences(defaults);
+        self.write_settings(&settings)
+    }
+    /// Records the approval rule of `preferences` as the last choice for its model.
+    pub fn remember_access(&self, preferences: &AgentPreferences) -> Result<()> {
+        let mut settings = self.settings()?;
+        settings.remember_access(preferences);
         self.write_settings(&settings)
     }
     /// Records the model a new task starts with as the last choice of its account and project.

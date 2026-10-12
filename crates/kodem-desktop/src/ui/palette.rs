@@ -310,17 +310,14 @@ impl Shell {
             "Agent",
             Action::Reasoning,
         );
-        // A review is read-only, so it has no access mode to change.
-        if self.mode != TaskKind::Review {
-            add(
-                "shield",
-                "Change access mode…",
-                "",
-                "⇧⌘A",
-                "Agent",
-                Action::Access,
-            );
-        }
+        add(
+            "shield",
+            "Change access mode…",
+            "",
+            "⇧⌘A",
+            "Agent",
+            Action::Access,
+        );
         add(
             "code",
             "Skills, instructions and MCP",

@@ -931,7 +931,7 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(2.))
-            // A review is read-only: it has neither a mode nor an approval rule to choose.
+            // A review has no mode of work to choose. Its approval rule is the usual one.
             .when(mode == TaskKind::Review, |d| {
                 d.child(
                     div()
@@ -940,7 +940,7 @@ impl Shell {
                         .child(kit::chip("READ ONLY", t.info))
                         .tooltip(move |_, cx| {
                             cx.new(|_| Hint {
-                                text: "A review changes no file, and it does not push or comment. Codex runs it in its read-only sandbox. Claude Code runs it without its editing tools and asks before a command that is not read-only.".into(),
+                                text: "A review is told to change no file, and not to push or comment. Claude Code also runs it without its editing tools and with the commands that publish denied. The approval rule decides what else runs without asking. For Codex, only the Read only access enforces this in its sandbox.".into(),
                                 theme: t,
                             })
                             .into()
@@ -962,25 +962,21 @@ impl Shell {
                         })),
                 )
             })
-            .when(mode != TaskKind::Review, |d| {
-                d.child(
-                    self.chip_button("composer-access")
-                        .selected(self.panel == Panel::Access)
-                        .accessibility_label("Approvals")
-                        // The rule waits for build mode while the agent only plans.
-                        .when(planning, |b| b.text_color(t.subtle))
-                        .child(fx::anchor(model_picker::ACCESS_ANCHOR))
-                        .child(icon(model_picker::access_glyph(&access_id)).size(px(13.)))
-                        .child(access_label)
-                        .on_click_with_bounds(cx.listener(
-                            |s, bounds: &Bounds<Pixels>, _, cx| {
-                                s.menu_anchor = Some(*bounds);
-                                s.panel = Panel::Access;
-                                cx.notify();
-                            },
-                        )),
-                )
-            });
+            .child(
+                self.chip_button("composer-access")
+                    .selected(self.panel == Panel::Access)
+                    .accessibility_label("Approvals")
+                    // The rule waits for build mode while the agent only plans.
+                    .when(planning, |b| b.text_color(t.subtle))
+                    .child(fx::anchor(model_picker::ACCESS_ANCHOR))
+                    .child(icon(model_picker::access_glyph(&access_id)).size(px(13.)))
+                    .child(access_label)
+                    .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
+                        s.menu_anchor = Some(*bounds);
+                        s.panel = Panel::Access;
+                        cx.notify();
+                    })),
+            );
         let steering = active
             && runtime.steering
             && task.as_ref().is_none_or(|t| t.pending_completion.is_none());
