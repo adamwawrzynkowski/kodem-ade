@@ -342,7 +342,7 @@ impl Shell {
     }
 
     fn go_to_task(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(id) = self.feed_tasks().get(index) {
+        if let Some(id) = self.feed_tasks(cx).get(index) {
             self.select_task(id.clone(), cx);
         }
     }

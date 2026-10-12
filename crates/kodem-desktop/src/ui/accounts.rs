@@ -337,40 +337,20 @@ impl Shell {
                 .into_iter()
                 .flatten()
             {
-                let used = window.used_percent.clamp(0, 100);
-                let fraction = used as f32 / 100.;
-                windows = windows.child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.))
-                        .child(kit::leader(
-                            format!("{} limit", usage::window_short(window.window_duration_mins)),
-                            format!("{used}%"),
-                            kit::usage_tone(fraction, t),
-                            t,
-                        ))
-                        .child(
-                            div()
-                                .relative()
-                                .w_full()
-                                .h(px(6.))
-                                .child(dither::DitherBar::meter(
-                                    fraction,
-                                    kit::usage_tone(fraction, t),
-                                    t.subtle.opacity(0.55),
-                                )),
-                        )
-                        .child(
-                            div()
-                                .font_family(crate::theme::MONO)
-                                .text_size(px(10.5))
-                                .text_color(t.subtle)
-                                .child(usage::reset_time(window.resets_at)),
-                        ),
-                );
+                windows = windows.child(limit_column(
+                    format!("{} limit", usage::window_short(window.window_duration_mins)),
+                    Some(window.used_percent),
+                    usage::reset_time(window.resets_at),
+                    t,
+                ));
+            }
+            if let Some(spend) = &usage.spend {
+                windows = windows.child(limit_column(
+                    "Usage credits".into(),
+                    spend.used_percent,
+                    usage::spend_amounts(spend),
+                    t,
+                ));
             }
             card = card.child(windows);
             if usage::limit_reached(usage) {
@@ -572,3 +552,39 @@ const ACCOUNT_COLORS: [AccentColor; 6] = [
     AccentColor::Gold,
     AccentColor::Teal,
 ];
+
+// One limit of an account on its settings card: the used share, a meter and a caption. A limit
+// without a reported share shows its caption alone.
+fn limit_column(label: String, used_percent: Option<i32>, caption: String, t: Theme) -> Div {
+    let column = div().flex_1().min_w_0().flex().flex_col().gap(px(4.));
+    let caption = div()
+        .font_family(crate::theme::MONO)
+        .text_size(px(10.5))
+        .text_color(t.subtle)
+        .child(caption);
+    let Some(used) = used_percent.map(|percent| percent.clamp(0, 100)) else {
+        return column
+            .child(caps(label, t).text_color(t.muted))
+            .child(caption);
+    };
+    let fraction = used as f32 / 100.;
+    column
+        .child(kit::leader(
+            label,
+            format!("{used}%"),
+            kit::usage_tone(fraction, t),
+            t,
+        ))
+        .child(
+            div()
+                .relative()
+                .w_full()
+                .h(px(6.))
+                .child(dither::DitherBar::meter(
+                    fraction,
+                    kit::usage_tone(fraction, t),
+                    t.subtle.opacity(0.55),
+                )),
+        )
+        .child(caption)
+}

@@ -81,24 +81,35 @@ impl Shell {
         let usage = state.status.usage.as_ref();
         let limited = usage.is_some_and(limit_reached);
         let mut windows = div().flex().items_center().gap(px(10.));
-        for window in usage
-            .into_iter()
-            .flat_map(|usage| [usage.primary.as_ref(), usage.secondary.as_ref()])
-            .flatten()
-        {
-            let fraction = window.used_percent.clamp(0, 100) as f32 / 100.;
+        let meters = usage.map(limit_meters).unwrap_or_default();
+        // Credits without a cap have no share to draw, so the row names the amount spent.
+        let spent = usage
+            .filter(|_| meters.is_empty())
+            .and_then(|usage| usage.spend.as_ref())
+            .and_then(|spend| Some(money(spend.used?, spend.currency.as_deref())));
+        for (label, fraction) in meters {
             windows = windows.child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(5.))
-                    .child(caps(window_short(window.window_duration_mins), t))
+                    .child(caps(label, t))
                     .child(kit::meter(
                         Some(fraction),
                         kit::usage_tone(fraction, t),
                         36.,
                         t,
                     )),
+            );
+        }
+        if let Some(spent) = spent {
+            windows = windows.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(5.))
+                    .child(caps(CREDITS_SHORT, t))
+                    .child(figure(spent, t.muted)),
             );
         }
         let signed_out = state.status.signed_in == Some(false);
@@ -646,7 +657,10 @@ fn usage_details(usage: Option<&UsageLimits>, t: Theme) -> AnyElement {
             ));
         }
     }
-    if usage.primary.is_none() && usage.secondary.is_none() {
+    if let Some(spend) = usage.spend.as_ref() {
+        details = details.child(spend_readout(spend, t));
+    }
+    if usage.primary.is_none() && usage.secondary.is_none() && usage.spend.is_none() {
         details = details.child(
             div()
                 .text_size(px(11.5))
@@ -694,16 +708,83 @@ pub(super) fn limit_reached(usage: &UsageLimits) -> bool {
     usage.limit_reached()
 }
 
-/// Returns the fullest limit window as a fraction, or full when a limit was reached.
+/// Returns the fullest limit of the account as a fraction, or full when a limit was reached.
 pub(super) fn highest_usage(usage: &UsageLimits) -> Option<f32> {
     if limit_reached(usage) {
         return Some(1.);
     }
-    [usage.primary.as_ref(), usage.secondary.as_ref()]
+    limit_meters(usage)
+        .into_iter()
+        .map(|(_, fraction)| fraction)
+        .reduce(f32::max)
+}
+
+/// Caption of the usage credits where a limit window shows its length.
+const CREDITS_SHORT: &str = "cred";
+
+/// Returns the limits that can stop the account, each as a short caption and its used share.
+///
+/// An account without plan windows pays for usage with credits, so their cap stands in.
+pub(super) fn limit_meters(usage: &UsageLimits) -> Vec<(String, f32)> {
+    let mut meters: Vec<(String, f32)> = [usage.primary.as_ref(), usage.secondary.as_ref()]
         .into_iter()
         .flatten()
-        .map(|w| w.used_percent.clamp(0, 100) as f32 / 100.)
-        .reduce(f32::max)
+        .map(|window| {
+            (
+                window_short(window.window_duration_mins),
+                window.used_percent.clamp(0, 100) as f32 / 100.,
+            )
+        })
+        .collect();
+    if meters.is_empty()
+        && let Some(percent) = usage.spend.as_ref().and_then(|spend| spend.used_percent)
+    {
+        meters.push((CREDITS_SHORT.into(), percent.clamp(0, 100) as f32 / 100.));
+    }
+    meters
+}
+
+/// Describes the usage credits of an account as the amount spent and its cap, when it has one.
+pub(super) fn spend_amounts(spend: &UsageSpend) -> String {
+    let currency = spend.currency.as_deref();
+    match (spend.used, spend.limit) {
+        (Some(used), Some(limit)) => {
+            format!("{} / {}", money(used, currency), money(limit, currency))
+        }
+        (Some(used), None) => format!("{} spent", money(used, currency)),
+        (None, Some(limit)) => format!("{} cap", money(limit, currency)),
+        (None, None) => "Amounts not reported".into(),
+    }
+}
+
+// Usage credits against their cap, or the amount alone when the provider reports no share.
+fn spend_readout(spend: &UsageSpend, t: Theme) -> Div {
+    let Some(percent) = spend.used_percent else {
+        return kit::leader("Usage credits", spend_amounts(spend), t.text, t);
+    };
+    let used = percent.clamp(0, 100);
+    let progress = used as f32 / 100.;
+    meter_block(
+        "Usage credits",
+        format!("{used}% USED"),
+        progress,
+        kit::usage_tone(progress, t),
+        None,
+        (
+            spend_amounts(spend).to_uppercase(),
+            format!("{}% LEFT", 100 - used),
+        ),
+        t,
+    )
+}
+
+// Formats an amount given in the smallest unit of its currency, such as cents.
+fn money(minor: f64, currency: Option<&str>) -> String {
+    let amount = number(&format!("{:.2}", minor / 100.));
+    match currency {
+        None | Some("USD") => format!("${amount}"),
+        Some(currency) => format!("{amount} {currency}"),
+    }
 }
 
 // Context is calm until it nears the point where it is compacted.

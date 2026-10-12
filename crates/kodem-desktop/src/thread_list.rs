@@ -2,7 +2,8 @@
 //!
 //! The feed leads with what needs a person: tasks waiting for input or blocked by a failure,
 //! then running tasks, then finished results that were not opened yet. Everything else follows
-//! in the chosen order, and settled work collapses at the end.
+//! in the chosen order. Settled work leaves the feed for one list of its own, which is not
+//! grouped by project, and a project without open tasks has no group.
 use kodem_core::{Settings, Task, Workspace};
 use std::collections::HashMap;
 
@@ -53,11 +54,6 @@ pub enum Row {
         index: usize,
         project: usize,
         id: String,
-        settled: bool,
-    },
-    Settled {
-        project: Option<String>,
-        count: usize,
     },
     Empty(&'static str),
 }
@@ -68,7 +64,6 @@ impl Row {
             (Self::Project { id: a, .. }, Self::Project { id: b, .. })
             | (Self::Task { id: a, .. }, Self::Task { id: b, .. }) => a == b,
             (Self::Section { section: a, .. }, Self::Section { section: b, .. }) => a == b,
-            (Self::Settled { project: a, .. }, Self::Settled { project: b, .. }) => a == b,
             (Self::Empty(a), Self::Empty(b)) => a == b,
             _ => false,
         }
@@ -86,14 +81,19 @@ pub struct Filter<'a> {
     pub project: Option<&'a str>,
     pub query: &'a str,
     pub archived: bool,
-    pub settled_collapsed: bool,
-    pub expanded_settled_projects: &'a std::collections::HashSet<String>,
+}
+
+/// The rows of the thread feed and the settled tasks that are listed apart from it.
+pub struct Feed {
+    pub open: Vec<Row>,
+    /// Task rows only, in the chosen order across all projects.
+    pub settled: Vec<Row>,
 }
 
 type Entry<'a> = (usize, usize, &'a Task);
 
 /// Filters and sorts task identities without cloning drafts, questions or captured context.
-pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> Vec<Row> {
+pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> Feed {
     let projects: HashMap<_, _> = workspace
         .projects
         .iter()
@@ -151,8 +151,10 @@ pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> V
             section,
             count: group.len(),
         });
-        rows.extend(group.into_iter().map(|entry| task_row(entry, false)));
+        rows.extend(group.into_iter().map(task_row));
     }
+    let (rest, settled): (Vec<_>, Vec<_>) =
+        rest.into_iter().partition(|(_, _, task)| !collapses(task));
     if settings.group_tasks_by_project {
         let mut groups: HashMap<usize, Vec<Entry<'_>>> = HashMap::new();
         for task in rest {
@@ -173,38 +175,32 @@ pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> V
             if settings.collapsed_projects.contains(&project.id) && filter.query.is_empty() {
                 continue;
             }
-            append_tasks(
-                &mut rows,
-                tasks,
-                Some(project.id.clone()),
-                filter.expanded_settled_projects.contains(&project.id) || !filter.query.is_empty(),
-            );
+            rows.extend(tasks.into_iter().map(task_row));
         }
     } else {
-        let open = rest.iter().filter(|(_, _, task)| !collapses(task)).count();
-        if has_urgent && open > 0 {
+        if has_urgent && !rest.is_empty() {
             rows.push(Row::Section {
                 section: Section::Threads,
-                count: open,
+                count: rest.len(),
             });
         }
-        append_tasks(
-            &mut rows,
-            rest,
-            None,
-            !filter.settled_collapsed || !filter.query.is_empty(),
-        );
+        rows.extend(rest.into_iter().map(task_row));
     }
     if rows.is_empty() {
         rows.push(Row::Empty(if workspace.projects.is_empty() {
             "Open a repository to start a task."
+        } else if !settled.is_empty() {
+            "No open tasks."
         } else if !filter.query.is_empty() {
             "No matching tasks."
         } else {
             "No tasks here yet."
         }));
     }
-    rows
+    Feed {
+        open: rows,
+        settled: settled.into_iter().map(task_row).collect(),
+    }
 }
 
 // A settled task leaves the open list unless the user pinned it without settling it by hand.
@@ -212,31 +208,10 @@ fn collapses(task: &Task) -> bool {
     task.is_settled() && !(task.settled.is_none() && task.pinned)
 }
 
-fn task_row((index, project, task): Entry<'_>, settled: bool) -> Row {
+fn task_row((index, project, task): Entry<'_>) -> Row {
     Row::Task {
         index,
         project,
         id: task.id.clone(),
-        settled,
-    }
-}
-
-fn append_tasks(
-    rows: &mut Vec<Row>,
-    tasks: Vec<Entry<'_>>,
-    project: Option<String>,
-    show_settled: bool,
-) {
-    let (open, settled): (Vec<_>, Vec<_>) =
-        tasks.into_iter().partition(|(_, _, task)| !collapses(task));
-    rows.extend(open.into_iter().map(|task| task_row(task, false)));
-    if !settled.is_empty() {
-        rows.push(Row::Settled {
-            project,
-            count: settled.len(),
-        });
-        if show_settled {
-            rows.extend(settled.into_iter().map(|task| task_row(task, true)));
-        }
     }
 }

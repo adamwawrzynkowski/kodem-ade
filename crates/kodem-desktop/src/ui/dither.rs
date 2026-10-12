@@ -733,10 +733,10 @@ pub(super) fn cycle(period: Duration) -> f32 {
 }
 
 // Schedules one redraw of the view that is being painted, at the next step of the clock.
+//
+// The next step is scheduled from a paint, so the clock runs in every window that draws, focused
+// or not, and rests while the window is hidden and the system asks for no frames.
 fn schedule_step(window: &Window, cx: &mut App) {
-    if !window.is_window_active() {
-        return;
-    }
     let view = window.current_view();
     if !PENDING.with(|pending| pending.borrow_mut().insert(view)) {
         return;
@@ -753,8 +753,8 @@ fn schedule_step(window: &Window, cx: &mut App) {
 
 /// An invisible element that redraws its view on the next clock step.
 ///
-/// Add it beside content whose look comes from [`cycle`]. A background window holds its frame;
-/// GPUI redraws the window when it becomes active, which resumes the animation.
+/// Add it beside content whose look comes from [`cycle`]. An unfocused window keeps stepping; a
+/// hidden window is not painted, so it schedules nothing until it shows again.
 pub(super) fn ticker() -> impl IntoElement {
     canvas(|_, _, _| {}, |_, _, window, cx| schedule_step(window, cx))
         .absolute()
@@ -1214,7 +1214,7 @@ impl Dither {
         self
     }
 
-    /// Advances the field on the stepped clock while the window is active and motion is allowed.
+    /// Advances the field on the stepped clock while the window is drawn and motion is allowed.
     pub(super) fn animated(mut self) -> Self {
         self.animated = true;
         self

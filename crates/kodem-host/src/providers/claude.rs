@@ -1406,8 +1406,29 @@ fn limit_reason(window: &str) -> String {
         "seven_day" => "Weekly limit reached".into(),
         "seven_day_opus" => "Weekly Opus limit reached".into(),
         "seven_day_sonnet" => "Weekly Sonnet limit reached".into(),
+        "overage" => "Usage credit limit reached".into(),
         other => format!("Usage limit reached ({other})"),
     }
+}
+
+// Reads the account's usage credits from the usage report: spend and cap in cents, use in
+// percent. An account that has none, or has them turned off, reports nothing to track.
+fn spend_report(entry: &Value) -> Option<UsageSpend> {
+    if entry["is_enabled"] != true {
+        return None;
+    }
+    let used = entry["used_credits"].as_f64();
+    let limit = entry["monthly_limit"].as_f64();
+    let share = entry["utilization"].as_f64().or_else(|| {
+        let limit = limit.filter(|limit| *limit > 0.)?;
+        Some(used? / limit * 100.)
+    });
+    Some(UsageSpend {
+        used,
+        limit,
+        used_percent: share.map(|percent| percent.round() as i32),
+        currency: entry["currency"].as_str().map(str::to_uppercase),
+    })
 }
 
 // Converts the control protocol's usage report: utilization in percent, reset times as text.
@@ -1427,6 +1448,14 @@ fn usage_report(report: &Value) -> Result<UsageLimits> {
     };
     let primary = window("five_hour", 300);
     let secondary = window("seven_day", 10_080);
+    let spend = spend_report(&limits["extra_usage"]);
+    // An account without plan windows pays for usage with credits, so their cap is its limit.
+    let spent = primary.is_none()
+        && secondary.is_none()
+        && spend
+            .as_ref()
+            .and_then(|spend| spend.used_percent)
+            .is_some_and(|percent| percent >= 100);
     let reached = [("five_hour", &primary), ("seven_day", &secondary)]
         .into_iter()
         .find(|(_, window)| {
@@ -1434,11 +1463,13 @@ fn usage_report(report: &Value) -> Result<UsageLimits> {
                 .as_ref()
                 .is_some_and(|window| window.used_percent >= 100)
         })
-        .map(|(name, _)| limit_reason(name));
+        .map(|(name, _)| limit_reason(name))
+        .or_else(|| spent.then(|| limit_reason("overage")));
     Ok(UsageLimits {
         plan_type: report["subscription_type"].as_str().map(str::to_owned),
         primary,
         secondary,
+        spend,
         rate_limit_reached_type: reached,
         reported: now(),
         ..UsageLimits::default()

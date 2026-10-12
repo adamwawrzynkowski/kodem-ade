@@ -55,7 +55,7 @@ A task records its account. Changing it is allowed between turns, except that a 
 
 The background refresh reads accounts that are in use on every pass: the account of the next new task and the account of every task that is working or changed in the last 15 minutes. Any other account is read at most once per 30 minutes, or on request.
 
-Usage belongs to an account, not to a provider. Codex quotas come from `account/rateLimits/read` and its rolling notifications. Claude Code quotas come from the `get_usage` control request and `rate_limit_event`. Both are stored in `AccountStatus.usage`.
+Usage belongs to an account, not to a provider. Codex quotas come from `account/rateLimits/read` and its rolling notifications. Claude Code quotas come from the `get_usage` control request and `rate_limit_event`. Both are stored in `AccountStatus.usage`. `get_usage` also reports usage credits as `rate_limits.extra_usage`: the spend and the cap in cents, the use in percent and the currency. They are stored in `UsageLimits.spend` when `is_enabled` is true. A Claude Enterprise seat has no five-hour or weekly window, so its credits are the limit that the sidebar and the composer show, and a spend at or above the cap counts as a reached limit. An account with plan windows shows its credits in the usage details only. The report does not carry the reset time of the credits.
 
 ## Provider terms
 

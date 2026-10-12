@@ -390,6 +390,17 @@ pub struct UsageCredits {
     pub unlimited: bool,
     pub balance: Option<String>,
 }
+/// Usage credits spent in the current billing period against the cap the provider set.
+/// Amounts are in the smallest unit of `currency`, such as cents.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageSpend {
+    pub used: Option<f64>,
+    /// Absent when the account has no cap.
+    pub limit: Option<f64>,
+    pub used_percent: Option<i32>,
+    pub currency: Option<String>,
+}
 /// Banked resets available to the account; the count may exceed the returned detail rows.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -417,6 +428,9 @@ pub struct UsageLimits {
     pub banked_resets: Option<BankedResets>,
     pub rate_limit_reached_type: Option<String>,
     pub spend_control_reached: Option<bool>,
+    /// Spend of an account that pays for usage with credits, such as a Claude Enterprise seat.
+    #[serde(default)]
+    pub spend: Option<UsageSpend>,
     #[serde(default)]
     pub reported: u64,
 }

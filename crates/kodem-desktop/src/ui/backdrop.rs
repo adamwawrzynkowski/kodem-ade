@@ -81,11 +81,11 @@ impl Mood {
     // mood cross-fades two gradients instead of blending the color.
     fn tone(self, theme: Theme) -> Hsla {
         match self {
-            Self::Idle => theme.dot.opacity(0.22),
-            Self::Working => theme.accent.opacity(0.12),
-            Self::Waiting => theme.warning.opacity(0.115),
-            Self::Finished => theme.added.opacity(0.09),
-            Self::Failed => theme.removed.opacity(0.1),
+            Self::Idle => theme.dot.opacity(0.154),
+            Self::Working => theme.accent.opacity(0.084),
+            Self::Waiting => theme.warning.opacity(0.08),
+            Self::Finished => theme.added.opacity(0.063),
+            Self::Failed => theme.removed.opacity(0.07),
         }
     }
 }
@@ -266,7 +266,7 @@ impl Backdrop {
 }
 
 impl Render for Backdrop {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx
             .try_global::<Theme>()
             .copied()
@@ -284,7 +284,7 @@ impl Render for Backdrop {
         state.borrow_mut().painted = Some((bounds, mood, column));
         let target = Field::of(mood);
         let now = Instant::now();
-        // A long pause, such as an inactive window, must not turn into one large jump.
+        // A long pause, such as a hidden window, must not turn into one large jump.
         let elapsed = now.duration_since(self.stepped).as_secs_f32().min(0.25);
         self.stepped = now;
         let still = cx.reduce_motion();
@@ -312,9 +312,9 @@ impl Render for Backdrop {
             field
         };
         self.field = Some(field);
-        // Background windows hold the current frame. GPUI redraws the window when it becomes
-        // active, which resumes the gradient.
-        if !still && window.is_window_active() {
+        // An unfocused window keeps its cadence. A hidden window is not rendered, so the gradient
+        // rests until the window shows again.
+        if !still {
             let delay = if self.fading.is_none() && field.close_to(target) {
                 mood.cadence()
             } else {

@@ -192,17 +192,19 @@ impl Shell {
         let query = self.search.read(cx).text().to_lowercase();
         if self.sidebar_dirty {
             if let Some(workspace) = &self.workspace {
-                let rows = crate::thread_list::rows(
+                let crate::thread_list::Feed {
+                    open: rows,
+                    settled,
+                } = crate::thread_list::rows(
                     workspace,
                     &self.settings,
                     crate::thread_list::Filter {
                         project: self.sidebar_project.as_deref(),
                         query: &query,
                         archived: self.show_archived,
-                        settled_collapsed: self.settled_collapsed,
-                        expanded_settled_projects: &self.expanded_settled_projects,
                     },
                 );
+                self.settled_rows = settled;
                 let changed = rows.len() != self.sidebar_rows.len()
                     || rows
                         .iter()
@@ -238,17 +240,25 @@ impl Shell {
         .pt(px(6.))
         .pb_2();
         let connected = self.host_connected && self.workspace.is_some();
+        let settled_open = self.settled_open(cx);
+        let settled_header =
+            (!self.settled_rows.is_empty()).then(|| self.settled_header(settled_open, cx));
+        let settled_tasks =
+            (settled_open && !self.settled_rows.is_empty()).then(|| self.settled_tasks(cx));
         panel = panel
             .child(
                 div()
                     .relative()
                     .flex_1()
-                    .min_h_0()
+                    // Open tasks keep a share of the panel beside a long settled list.
+                    .min_h(px(96.))
                     .flex()
                     .flex_col()
                     .child(fx::anchor(FEED_ANCHOR))
                     .child(feed),
             )
+            .children(settled_header)
+            .children(settled_tasks)
             .child(self.sidebar_usage(cx))
             .child(
                 div()
@@ -313,16 +323,19 @@ impl Shell {
         window.focus(&self.search.read(cx).focus_handle(cx), cx);
         cx.notify();
     }
-    /// Returns the tasks of the feed in display order, for keyboard navigation.
-    pub(super) fn feed_tasks(&self) -> Vec<String> {
+    /// Returns the tasks of the feed in display order, for keyboard navigation. Settled tasks
+    /// follow the open ones while their list is unfolded.
+    pub(super) fn feed_tasks(&self, cx: &App) -> Vec<String> {
+        let settled_open = self.settled_open(cx);
         self.sidebar_rows
             .iter()
+            .chain(self.settled_rows.iter().filter(|_| settled_open))
             .filter_map(|row| row.task_id().map(str::to_owned))
             .collect()
     }
     /// Opens the task `offset` rows away from the open one in the feed, wrapping at the ends.
     pub(super) fn select_adjacent_task(&mut self, offset: isize, cx: &mut Context<Self>) {
-        let tasks = self.feed_tasks();
+        let tasks = self.feed_tasks(cx);
         if tasks.is_empty() {
             return;
         }
@@ -344,7 +357,7 @@ impl Shell {
             return;
         };
         let waiting: Vec<_> = self
-            .feed_tasks()
+            .feed_tasks(cx)
             .into_iter()
             .filter(|id| {
                 workspace.tasks.iter().any(|task| {
@@ -381,30 +394,7 @@ impl Shell {
                     .child(header)
                     .into_any_element()
             }
-            Row::Task {
-                index,
-                project,
-                settled,
-                ..
-            } => {
-                let Some(workspace) = &self.workspace else {
-                    return div().into_any_element();
-                };
-                let card =
-                    self.task_card(&workspace.tasks[*index], &workspace.projects[*project], cx);
-                // List measures the root's height without its margins; keep the gap inside the row.
-                div()
-                    .pb(px(2.))
-                    .when(*settled, |row| {
-                        row.pl(px(if self.settings.group_tasks_by_project {
-                            22.
-                        } else {
-                            12.
-                        }))
-                    })
-                    .child(card)
-                    .into_any_element()
-            }
+            Row::Task { index, project, .. } => self.task_row(*index, *project, false, cx),
             Row::Project { index, id, count } => {
                 let Some(project) = self.workspace.as_ref().and_then(|w| w.projects.get(*index))
                 else {
@@ -459,60 +449,111 @@ impl Shell {
                     )
                     .into_any_element()
             }
-            Row::Settled { project, count } => {
-                let collapsed = project.as_ref().map_or(self.settled_collapsed, |id| {
-                    !self.expanded_settled_projects.contains(id)
-                });
-                let project = project.clone();
-                self.control(SharedString::from(format!(
-                    "settled:{}",
-                    project.as_deref().unwrap_or("all")
-                )))
-                .border_color(gpui::transparent_black())
-                .bg(gpui::transparent_black())
-                .hover(move |b| b.bg(t.selected))
-                .w_full()
-                .h(px(26.))
-                .px(px(6.))
-                .mt(px(8.))
-                .justify_start()
-                .text_color(t.subtle)
-                .when(project.is_some(), |row| row.pl(px(18.)))
-                .child(
-                    icon(if collapsed && self.search.read(cx).text().is_empty() {
-                        "chevron-right"
-                    } else {
-                        "chevron-down"
-                    })
-                    .size(px(12.)),
-                )
-                .child(caps("Settled", t))
-                .child(figure(count.to_string(), t.subtle))
-                .child(
-                    div()
-                        .flex_1()
-                        .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
-                )
-                .on_click(cx.listener(move |s, _, _, cx| {
-                    if let Some(id) = &project {
-                        if !s.expanded_settled_projects.remove(id) {
-                            s.expanded_settled_projects.insert(id.clone());
-                        }
-                    } else {
-                        s.settled_collapsed = !s.settled_collapsed;
-                    }
-                    s.sidebar_dirty = true;
-                    cx.notify();
-                }))
-                .into_any_element()
-            }
             Row::Empty(label) => kit::empty_hint(*label, t).into_any_element(),
         }
+    }
+    fn task_row(
+        &self,
+        index: usize,
+        project: usize,
+        settled: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some((task, project)) = self
+            .workspace
+            .as_ref()
+            .and_then(|w| w.tasks.get(index).zip(w.projects.get(project)))
+        else {
+            return div().into_any_element();
+        };
+        // List measures the root's height without its margins; keep the gap inside the row.
+        div()
+            .pb(px(2.))
+            .child(self.task_card(task, project, settled, cx))
+            .into_any_element()
+    }
+    // A search unfolds the settled tasks, so that its matches among them show.
+    fn settled_open(&self, cx: &App) -> bool {
+        !self.settled_collapsed || !self.search.read(cx).text().is_empty()
+    }
+    // The header of the settled tasks of every project. It stays above the account row.
+    fn settled_header(&self, open: bool, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        div()
+            .flex_shrink_0()
+            .px(px(6.))
+            .py(px(4.))
+            .child(
+                self.control("settled")
+                    .border_color(gpui::transparent_black())
+                    .bg(gpui::transparent_black())
+                    .hover(move |b| b.bg(t.selected))
+                    .w_full()
+                    .h(px(26.))
+                    .px(px(6.))
+                    .justify_start()
+                    .text_color(t.subtle)
+                    .accessibility_label(if open {
+                        "Collapse settled tasks"
+                    } else {
+                        "Expand settled tasks"
+                    })
+                    .child(
+                        icon(if open {
+                            "chevron-down"
+                        } else {
+                            "chevron-right"
+                        })
+                        .size(px(12.)),
+                    )
+                    .child(caps("Settled", t))
+                    .child(figure(self.settled_rows.len().to_string(), t.subtle))
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+                    )
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.settled_collapsed = !s.settled_collapsed;
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
+    }
+    // The settled tasks as one list that takes the height of its rows, up to half of the panel.
+    fn settled_tasks(&self, cx: &mut Context<Self>) -> AnyElement {
+        let entity = cx.entity();
+        uniform_list(
+            "settled-tasks",
+            self.settled_rows.len(),
+            move |range, _, cx| {
+                entity.update(cx, |s, cx| {
+                    range
+                        .map(|index| {
+                            let row = match s.settled_rows.get(index) {
+                                Some(Row::Task { index, project, .. }) => {
+                                    s.task_row(*index, *project, true, cx)
+                                }
+                                _ => div().into_any_element(),
+                            };
+                            div().w_full().px(px(6.)).child(row)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            },
+        )
+        .with_sizing_behavior(ListSizingBehavior::Infer)
+        .w_full()
+        .min_h_0()
+        .max_h(relative(0.5))
+        .pb(px(4.))
+        .into_any_element()
     }
     fn task_card(
         &self,
         task: &core::Task,
         project: &Project,
+        settled: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
@@ -600,8 +641,10 @@ impl Shell {
                         .into()
                     }),
             )
+            // Settled tasks are never under a project header, so they name their project.
             .when(
-                self.sidebar_project.is_none() && !self.settings.group_tasks_by_project,
+                self.sidebar_project.is_none()
+                    && (settled || !self.settings.group_tasks_by_project),
                 |d| {
                     d.child(
                         div()
