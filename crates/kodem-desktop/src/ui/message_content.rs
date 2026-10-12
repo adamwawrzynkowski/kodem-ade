@@ -2,6 +2,58 @@
 use super::*;
 use crate::markdown::{Block, Callout, RichText};
 
+/// Line height of running prose and of a title, as a share of the text size.
+const PROSE_LEADING: f32 = 1.55;
+const TITLE_LEADING: f32 = 1.3;
+
+// Returns the space between two blocks that follow one another. Blocks that belong together
+// sit close: a title and its section, a sentence and the list that it introduces. A title
+// starts a section, so the most space is above it. `nested` is the content of a list item,
+// which is set tighter than the message around it.
+fn block_gap(above: &Block, below: &Block, nested: bool) -> f32 {
+    match (above, below) {
+        (Block::Heading { level, .. }, _) => {
+            if *level <= 2 {
+                10.
+            } else {
+                6.
+            }
+        }
+        (_, Block::Heading { level, .. }) => {
+            if nested {
+                12.
+            } else if *level <= 2 {
+                24.
+            } else {
+                18.
+            }
+        }
+        (Block::Rule, _) | (_, Block::Rule) => 14.,
+        (Block::Text(_), Block::List { .. }) => {
+            if nested {
+                4.
+            } else {
+                6.
+            }
+        }
+        (Block::Text(_) | Block::List { .. }, Block::Text(_) | Block::List { .. }) => {
+            if nested {
+                6.
+            } else {
+                10.
+            }
+        }
+        // Code, a table or a quotation next to anything else.
+        _ => {
+            if nested {
+                8.
+            } else {
+                12.
+            }
+        }
+    }
+}
+
 impl Shell {
     /// Builds nested Markdown content with stable text-selection identities.
     pub(super) fn message_blocks(
@@ -11,12 +63,31 @@ impl Shell {
         streaming: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.blocks_at(key, blocks, 0, streaming, cx)
+    }
+
+    // Builds the blocks of a message, or of a list item at `depth` lists inside the message.
+    fn blocks_at(
+        &mut self,
+        key: &str,
+        blocks: Vec<Block>,
+        depth: usize,
+        streaming: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let t = self.theme;
-        let mut content = div().w_full().min_w_0().flex().flex_col().gap(px(8.));
+        let gaps: Vec<f32> = blocks
+            .windows(2)
+            .map(|pair| block_gap(&pair[0], &pair[1], depth > 0))
+            .collect();
+        let mut content = div().w_full().min_w_0().flex().flex_col();
         for (index, block) in blocks.into_iter().enumerate() {
+            if index > 0 {
+                content = content.child(div().h(px(gaps[index - 1])).flex_shrink_0());
+            }
             let key = format!("{key}:{index}");
             let element = match block {
-                Block::Text(text) => self.message_prose(&key, text, streaming, cx),
+                Block::Text(text) => self.message_prose(&key, text, PROSE_LEADING, streaming, cx),
                 Block::Heading { level, text } => {
                     let extra = match level {
                         1 => 8.,
@@ -25,16 +96,20 @@ impl Shell {
                         _ => 0.,
                     };
                     div()
-                        .mt(px(if level <= 2 { 10. } else { 6. }))
                         .flex()
                         .flex_col()
                         .gap(px(6.))
                         .child(
                             div()
                                 .text_size(px(self.settings.font_size + extra))
-                                .line_height(relative(1.3))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(self.message_prose(&key, text, streaming, cx)),
+                                .child(self.message_prose(
+                                    &key,
+                                    text,
+                                    TITLE_LEADING,
+                                    streaming,
+                                    cx,
+                                )),
                         )
                         .when(level <= 2, |heading| {
                             heading.child(dither::DottedRule::horizontal(t.subtle.opacity(0.45)))
@@ -70,7 +145,7 @@ impl Shell {
                                 .grid(2., 1.),
                             ),
                     )
-                    .child(self.message_blocks(&key, blocks, streaming, cx))
+                    .child(self.blocks_at(&key, blocks, depth, streaming, cx))
                     .into_any_element(),
                 Block::Quote {
                     callout: Some(callout),
@@ -95,16 +170,27 @@ impl Shell {
                             div()
                                 .px(px(12.))
                                 .py(px(9.))
-                                .child(self.message_blocks(&key, blocks, streaming, cx)),
+                                .child(self.blocks_at(&key, blocks, depth, streaming, cx)),
                         )
                         .into_any_element()
                 }
-                Block::Rule => div()
-                    .my(px(8.))
-                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.6)))
-                    .into_any_element(),
+                Block::Rule => {
+                    dither::DottedRule::horizontal(t.subtle.opacity(0.6)).into_any_element()
+                }
                 Block::List { start, items } => {
-                    let mut list = div().flex().flex_col().gap(px(6.));
+                    // A list whose items hold several paragraphs is loose: its items stand
+                    // further apart, so that each reads as one unit.
+                    let loose = items.iter().any(|item| {
+                        item.blocks
+                            .iter()
+                            .filter(|block| matches!(block, Block::Text(_)))
+                            .count()
+                            > 1
+                    });
+                    let mut list = div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(if loose { 10. } else { 5. }));
                     for (index, item) in items.into_iter().enumerate() {
                         let marker = match item.checked {
                             Some(done) => icon(if done { "check-square" } else { "stop" })
@@ -121,10 +207,17 @@ impl Shell {
                                     .child(format!("{}.", start.saturating_add(index as u64)))
                                     .into_any_element(),
                                 // A square pixel bullet, vertically centered on the first line.
-                                None => div()
+                                None if depth == 0 => div()
                                     .mt(px(self.settings.font_size * 0.775 - 2.))
                                     .size(px(4.))
                                     .bg(t.subtle)
+                                    .into_any_element(),
+                                // A list inside a list has an open bullet.
+                                None => div()
+                                    .mt(px(self.settings.font_size * 0.775 - 2.5))
+                                    .size(px(5.))
+                                    .border_1()
+                                    .border_color(t.subtle)
                                     .into_any_element(),
                             },
                         };
@@ -141,9 +234,10 @@ impl Shell {
                                         .justify_end()
                                         .child(marker),
                                 )
-                                .child(div().flex_1().min_w_0().child(self.message_blocks(
+                                .child(div().flex_1().min_w_0().child(self.blocks_at(
                                     &format!("{key}:item:{index}"),
                                     item.blocks,
+                                    depth + 1,
                                     streaming,
                                     cx,
                                 ))),
@@ -209,6 +303,7 @@ impl Shell {
                                     .child(self.message_prose(
                                         &format!("{key}:{row_index}:{col}"),
                                         cell,
+                                        PROSE_LEADING,
                                         streaming,
                                         cx,
                                     )),
@@ -233,10 +328,12 @@ impl Shell {
         content.into_any_element()
     }
 
+    // Builds selectable prose. `leading` is its line height as a share of its text size.
     fn message_prose(
         &mut self,
         key: &str,
         text: RichText,
+        leading: f32,
         streaming: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -245,7 +342,7 @@ impl Shell {
         div()
             .w_full()
             .min_w_0()
-            .line_height(relative(1.55))
+            .line_height(relative(leading))
             .child(input)
             .into_any_element()
     }

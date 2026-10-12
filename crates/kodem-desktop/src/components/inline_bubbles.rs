@@ -11,7 +11,8 @@ const SPACER: &str = "\u{a0}";
 #[derive(Default)]
 pub(super) struct PaddingMap {
     insertions: Vec<(usize, Range<usize>)>,
-    bubbles: Vec<Range<usize>>,
+    /// Displayed range of each bubble, and whether a click on it opens something.
+    bubbles: Vec<(Range<usize>, bool)>,
 }
 impl PaddingMap {
     /// Converts a displayed byte position to the original text, excluding inserted padding.
@@ -40,15 +41,17 @@ impl PaddingMap {
 }
 
 /// Inserts measured, nonbreaking padding without changing the text owned by the input.
+///
+/// Each bubble is its source range and whether a click on it opens something.
 pub(super) fn pad_text(
     text: &str,
     runs: Vec<TextRun>,
-    bubbles: &[Range<usize>],
+    bubbles: &[(Range<usize>, bool)],
     padding_run: TextRun,
 ) -> (String, Vec<TextRun>, Arc<PaddingMap>) {
     let mut events = bubbles
         .iter()
-        .flat_map(|range| [(range.start, true), (range.end, false)])
+        .flat_map(|(range, opens)| [(range.start, true, *opens), (range.end, false, *opens)])
         .peekable();
     let mut displayed = String::new();
     let mut displayed_runs = Vec::new();
@@ -60,7 +63,7 @@ pub(super) fn pad_text(
         // value leaves the spacer's kerning on the following content.
         run.letter_spacing = Some(run.letter_spacing.unwrap_or(px(0.)));
         let end = source + run.len;
-        while let Some(&(index, opening)) = events.peek() {
+        while let Some(&(index, opening, opens)) = events.peek() {
             if index > end {
                 break;
             }
@@ -78,7 +81,7 @@ pub(super) fn pad_text(
             if opening {
                 bubble_start = start;
             } else {
-                map.bubbles.push(bubble_start..displayed.len());
+                map.bubbles.push((bubble_start..displayed.len(), opens));
             }
             source = index;
             events.next();
@@ -244,7 +247,7 @@ impl TextLine {
         for (row, end) in ends.enumerate() {
             let row_x = layout.x_for_index(start);
             let row_range = self.display_start + start..self.display_start + end;
-            for bubble in &self.map.bubbles {
+            for (bubble, opens) in &self.map.bubbles {
                 let a = bubble.start.max(row_range.start);
                 let b = bubble.end.min(row_range.end);
                 if a >= b || self.map.source_index(a) == self.map.source_index(b) {
@@ -263,25 +266,32 @@ impl TextLine {
                     } else {
                         px(0.)
                     };
-                // The plate is a little taller than the letters and sits on a dotted baseline.
+                // The plate is a little taller than the letters.
                 let block_height = self.line.font_size() + px(3.);
                 let bounds = Bounds::new(
                     origin + point(left, height * row + (height - block_height) / 2.),
                     size(right - left, block_height),
                 );
                 // Inline code is drawn in the interface's own language: a plate of fine
-                // dither instead of a flat fill, square at the corners, on a dotted rule. Both
-                // patterns are drawn in the shader, so a paragraph of many spans stays cheap.
+                // dither instead of a flat fill, square at the corners. The pattern is drawn in
+                // the shader, so a paragraph of many spans stays cheap.
                 let cell = window.scale_factor();
                 window.paint_quad(
                     fill(bounds, checkerboard(theme.dot.opacity(0.8), cell))
                         .corner_radii(Corners::all(px(INLINE_RADIUS))),
                 );
-                let baseline = Bounds::new(
-                    point(bounds.left(), bounds.bottom() - px(1.)),
-                    size(bounds.size.width, px(1.)),
-                );
-                window.paint_quad(fill(baseline, checkerboard(theme.subtle, cell)));
+                // Only a plate that opens something sits on a dotted rule, so that the rule
+                // says that a click works and a line of plain code spans stays quiet.
+                if *opens {
+                    let baseline = Bounds::new(
+                        point(bounds.left(), bounds.bottom() - px(1.)),
+                        size(bounds.size.width, px(1.)),
+                    );
+                    window.paint_quad(fill(
+                        baseline,
+                        checkerboard(theme.accent.opacity(0.7), cell),
+                    ));
+                }
             }
             start = end;
         }

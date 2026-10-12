@@ -318,17 +318,6 @@ impl TextInput {
         self.colors.clear();
         self.prose = Some((spans, theme));
     }
-    fn bubble_padding(&self) -> Pixels {
-        if self
-            .prose
-            .as_ref()
-            .is_some_and(|(spans, _)| spans.iter().any(|span| span.style.is_bubble()))
-        {
-            px(crate::theme::INLINE_PADDING)
-        } else {
-            px(0.)
-        }
-    }
     fn visual_line_boundary(&self, end: bool) -> usize {
         let byte = self.cursor_offset();
         for (start, line) in &self.last_layout {
@@ -1038,7 +1027,6 @@ impl Element for TextElement {
         (
             window.request_measured_layout(style, move |known, available, window, cx| {
                 let input = input.read(cx);
-                let padding = input.bubble_padding();
                 let width = known.width.or(match available.width {
                     gpui::AvailableSpace::Definite(w) => Some(w),
                     _ => None,
@@ -1047,11 +1035,7 @@ impl Element for TextElement {
                     input,
                     &text_style,
                     font_size,
-                    if input.wrap {
-                        width.map(|width| (width - padding * 2.).max(px(1.)))
-                    } else {
-                        None
-                    },
+                    if input.wrap { width } else { None },
                     window,
                 );
                 let measured = lines
@@ -1064,7 +1048,6 @@ impl Element for TextElement {
                         .iter()
                         .map(|(_, line)| line.size(height).width)
                         .fold(px(0.), |a, b| a.max(b))
-                        + padding * 2.
                 };
                 size(
                     width.unwrap_or_else(|| {
@@ -1096,15 +1079,7 @@ impl Element for TextElement {
         );
         let input = self.input.read(cx);
         let style = window.text_style();
-        let padding = input.bubble_padding();
         let height = window.line_height();
-        let bounds = Bounds::new(
-            bounds.origin + point(padding, px(0.)),
-            size(
-                (bounds.size.width - padding * 2.).max(px(1.)),
-                bounds.size.height,
-            ),
-        );
         let lines = shape(
             input,
             &style,
@@ -1192,15 +1167,7 @@ impl Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
-        let padding = self.input.read(cx).bubble_padding();
         let height = window.line_height();
-        let bounds = Bounds::new(
-            bounds.origin + point(padding, px(0.)),
-            size(
-                (bounds.size.width - padding * 2.).max(px(1.)),
-                bounds.size.height,
-            ),
-        );
         let visible = window.content_mask().bounds;
         if let Some((_, theme)) = self.input.read(cx).prose.as_ref() {
             let theme = *theme;
@@ -1546,15 +1513,18 @@ fn shape(
     } else {
         runs
     };
-    let mut bubbles: Vec<Range<usize>> = Vec::new();
+    // Each bubble with whether a click on it opens a file. Spans that touch share one bubble,
+    // which opens something only when all of it does.
+    let mut bubbles: Vec<(Range<usize>, bool)> = Vec::new();
     if let Some((spans, _)) = &input.prose {
         for span in spans.iter().filter(|span| span.style.is_bubble()) {
-            if let Some(last) = bubbles.last_mut()
+            if let Some((last, opens)) = bubbles.last_mut()
                 && last.end == span.range.start
             {
                 last.end = span.range.end;
+                *opens &= span.style.reference;
             } else {
-                bubbles.push(span.range.clone());
+                bubbles.push((span.range.clone(), span.style.reference));
             }
         }
     }

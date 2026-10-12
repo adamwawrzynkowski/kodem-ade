@@ -938,7 +938,10 @@ impl Shell {
                             );
                             // A new tool item extends the summary rendered at the group's first
                             // row, and any new item folds the trays that ended the transcript.
-                            let row = tool_rows_start(&view.messages, previous_count);
+                            // The reply before those rows gives up its row of actions when
+                            // work follows it.
+                            let row =
+                                tool_rows_start(&view.messages, previous_count).saturating_sub(1);
                             self.chat_scroll.remeasure_items(row..previous_count + 1);
                         }
                         for (index, (a, b)) in

@@ -394,7 +394,46 @@ fn parse_blocks(text: &str) -> Vec<Block> {
             | Options::ENABLE_GFM,
     )
     .peekable();
-    read_blocks(&mut events, None).blocks
+    let mut blocks = read_blocks(&mut events, None).blocks;
+    promote_titles(&mut blocks);
+    blocks
+}
+
+/// Level of the heading that a paragraph of bold text becomes.
+const TITLE_LEVEL: u8 = 3;
+/// Longest paragraph of bold text that still reads as a title, in characters.
+const TITLE_CHARS: usize = 72;
+
+// Agents often title a section with a paragraph of bold text instead of a heading. Such a
+// paragraph becomes a heading when a block follows it, so that it gets the size and the spacing
+// of a title. Bold text that ends a message, or that is a sentence, stays emphasis.
+fn promote_titles(blocks: &mut [Block]) {
+    for index in 0..blocks.len().saturating_sub(1) {
+        if matches!(blocks[index + 1], Block::Heading { .. }) {
+            continue;
+        }
+        if let Block::Text(text) = &mut blocks[index]
+            && is_title(text)
+        {
+            let mut text = std::mem::take(text);
+            // The heading supplies the weight.
+            for span in &mut text.spans {
+                span.style.bold = false;
+            }
+            blocks[index] = Block::Heading {
+                level: TITLE_LEVEL,
+                text,
+            };
+        }
+    }
+}
+
+fn is_title(text: &RichText) -> bool {
+    !text.spans.is_empty()
+        && text.spans.iter().all(|span| span.style.bold)
+        && !text.text.contains('\n')
+        && text.text.chars().count() <= TITLE_CHARS
+        && !text.text.trim_end().ends_with(['.', '!', '?', ',', ';'])
 }
 
 fn read_blocks<'a>(

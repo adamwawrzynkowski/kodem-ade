@@ -6,6 +6,27 @@ use crate::markdown;
 /// milliseconds.
 const WHOLE_ARRIVAL_MS: u64 = 1500;
 
+/// Space above a message of the user, which starts a turn.
+const TURN_GAP: f32 = 18.;
+
+/// Name of the hover group of a reply, which shows the reply's actions under the pointer.
+const REPLY_GROUP: &str = "reply";
+
+// Reports whether a reply is the last word of its turn: no work and no reply of the agent
+// follows it before the next message of the user.
+fn closes_turn(transcript: &[Message], index: usize) -> bool {
+    transcript
+        .iter()
+        .skip(index + 1)
+        .take_while(|message| message.kind != MessageKind::User)
+        .all(|message| {
+            !matches!(
+                message.kind,
+                MessageKind::Assistant | MessageKind::Tool | MessageKind::Subagent
+            )
+        })
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum Conversation {
     Main,
@@ -139,10 +160,13 @@ impl Shell {
         index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(message) = self
-            .conversation_messages(conversation)
-            .and_then(|messages| messages.get(index))
-            .cloned()
+        let Some((message, closes_turn)) =
+            self.conversation_messages(conversation)
+                .and_then(|messages| {
+                    messages
+                        .get(index)
+                        .map(|message| (message.clone(), closes_turn(messages, index)))
+                })
         else {
             return div().into_any_element();
         };
@@ -190,7 +214,7 @@ impl Shell {
         let mut outer = div().w_full().px_5().py_2();
         let mut block = div().w_full();
         if user {
-            outer = outer.flex().justify_end();
+            outer = outer.pt(px(TURN_GAP)).flex().justify_end();
             block = block
                 .relative()
                 .overflow_hidden()
@@ -267,32 +291,32 @@ impl Shell {
             );
         }
         if !user {
-            block = block.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .mt_1()
-                    .child(
-                        self.icon_button(
-                            (
-                                ElementId::from("copy-message"),
-                                SharedString::from(message_key.clone()),
-                            ),
-                            "copy",
-                            "Copy message as Markdown",
-                        )
-                        .w(px(20.))
-                        .h(px(20.))
-                        .text_color(t.subtle)
-                        .on_click(cx.listener(move |s, _, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                            let tone = s.theme.accent;
-                            s.notify_user("Copied", tone, cx);
-                        })),
-                    )
-                    .child(div().text_size(px(10.)).text_color(t.subtle).child(
-                        if message_active {
+            let copy = self
+                .icon_button(
+                    (
+                        ElementId::from("copy-message"),
+                        SharedString::from(message_key.clone()),
+                    ),
+                    "copy",
+                    "Copy message as Markdown",
+                )
+                .w(px(20.))
+                .h(px(20.))
+                .text_color(t.subtle)
+                .on_click(cx.listener(move |s, _, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                    let tone = s.theme.accent;
+                    s.notify_user("Copied", tone, cx);
+                }));
+            // The reply that ends a turn, and every notice, error and check result, keeps its
+            // actions in a row below it. A reply that work follows is a step of that work: its
+            // action shows under the pointer, in the padding beside the reply, and takes no
+            // room.
+            if message_active || closes_turn || message.kind != MessageKind::Assistant {
+                block = block.child(div().flex().items_center().gap_2().mt_1().child(copy).when(
+                    message_active,
+                    |row| {
+                        row.child(div().text_size(px(10.)).text_color(t.subtle).child(
                             motion::gleam(
                                 if message.kind == MessageKind::Assistant {
                                     "Writing…"
@@ -301,12 +325,21 @@ impl Shell {
                                 },
                                 t,
                                 cx.reduce_motion(),
-                            )
-                        } else {
-                            div().into_any_element()
-                        },
-                    )),
-            );
+                            ),
+                        ))
+                    },
+                ));
+            } else {
+                outer = outer.relative().group(REPLY_GROUP).child(
+                    div()
+                        .absolute()
+                        .top(px(8.))
+                        .right_0()
+                        .invisible()
+                        .group_hover(REPLY_GROUP, |action| action.visible())
+                        .child(copy),
+                );
+            }
         }
         div()
             .w_full()

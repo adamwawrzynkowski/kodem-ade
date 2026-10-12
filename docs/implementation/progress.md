@@ -322,3 +322,23 @@ The files are stereo: the dry sound is in the middle and only the tail of the ro
 Checked with `cargo check` of the workspace, which embeds the files, and `cargo fmt --all -- --check`. A temporary script, removed afterward, measured each file: no energy of note above 3 kHz (0.13% at most, before up to 5.7%), a largest step between two samples of 0.18 of full scale (before up to 0.39), and a start and an end at zero.
 
 Not checked: the sound of the files. No sound was played, so whether they are pleasant is a judgment for the user. The designs follow measured properties only.
+
+## Conversation typography and message actions
+
+Recorded on 13 October 2026. The user reported that the conversation looked plain and messy, with two screenshots, and asked for a redesign that takes ideas from other agentic coding tools. The screenshots showed five causes, and each has one change.
+
+| Cause | Change |
+| --- | --- |
+| A paragraph or a list item with inline code started three points to the right of the others. `TextInput` moved its text by `INLINE_PADDING` when it held a plate. | `bubble_padding` is removed. All prose starts on one edge. A plate that continues on the next line hangs three points into the margin; every container of prose has at least 11 points of padding there. |
+| Every block had 8 points above it, so a title, its section and the next section were one even column. | `block_gap` in `ui/message_content.rs` gives the space between two blocks from their kinds: 6 after a title or before the list that a sentence introduces, 10 between paragraphs and lists, 12 around code, tables and quotations, 18 or 24 above a title. The content of a list item is tighter. |
+| Agents title sections with a paragraph of bold text, which looked the same as a bold start of a list item. | `promote_titles` in `markdown.rs` turns such a paragraph into a heading of level 3 when it is at most 72 characters, is not a sentence, and a block that is not a heading follows it. Headings now use their line height of 1.3; `message_prose` set 1.55 over it before. |
+| Every span of inline code had a plate and a dotted line below it, so a line with three paths was mostly dotted lines. | Only a file reference keeps the dotted line, in the accent. Plain code keeps its plate. |
+| Every reply had a copy icon below it, also a one-line remark between two runs of tool calls. | The reply that ends a turn keeps the row. A reply that work follows shows the icon under the pointer, in the right padding of its row. A message of the user has 18 points above it. |
+
+A list with several paragraphs in an item has 10 points between its items and other lists have 5. A list inside a list has open bullets. When rows are added, the row before them is measured again, because a reply loses its row of actions when work follows it.
+
+The ideas from other tools are from general knowledge of the Codex app, Claude Code, Cursor and the agent panel of Zed: less emphasis on steps than on the final answer, actions that do not take room on every message, quiet inline code, and space that groups a section. Four web searches on 13 October 2026 found release notes and forum threads but no description of these layouts, so no source is cited for them.
+
+Checked with a locked `cargo check` of the workspace, `cargo fmt --all -- --check` and Clippy, which reports the six warnings that the code had before this change and no new one. Two temporary tests, removed afterward, checked which paragraphs of bold text become titles and which reply ends a turn.
+
+Not checked: the appearance of any of this, because app visual testing is prohibited. The sizes of the gaps, the place of the copy icon under the pointer and the look of a hanging plate are untested judgments. The chat background still draws its dots behind the text in the lower part of the conversation; it was not changed. No commit or push was made.
