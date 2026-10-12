@@ -274,6 +274,27 @@ fn status(cwd: &Path) -> Result<Vec<StatusEntry>> {
     }
     Ok(files)
 }
+/// Lists the paths that differ from `base`, each with its one-letter Git status.
+fn changed_since(cwd: &Path, base: &str, renames: bool) -> Result<Vec<(Vec<u8>, String)>> {
+    let mut args = vec!["diff", "--name-status", "-z"];
+    if !renames {
+        args.push("--no-renames");
+    }
+    args.extend([base, "--"]);
+    let bytes = query(cwd, &args)?;
+    let mut parts = bytes.split(|b| *b == 0).filter(|p| !p.is_empty());
+    let mut files = Vec::new();
+    while let Some(record) = parts.next() {
+        // A rename or copy carries a similarity score and lists its source path first.
+        let kind = String::from_utf8_lossy(&record[..1]).to_string();
+        if kind.contains(['R', 'C']) {
+            parts.next().context("Missing rename path")?;
+        }
+        let path = parts.next().context("Missing changed path")?;
+        files.push((path.to_vec(), kind));
+    }
+    Ok(files)
+}
 fn patch(
     cwd: &Path,
     path: &[u8],
@@ -457,25 +478,9 @@ fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapsho
             let base = comparison_base
                 .as_deref()
                 .context("No task baseline exists yet")?;
-            let mut args = vec!["diff", "--name-only", "-z"];
-            if comparison == Comparison::Branch {
-                args.push("--no-renames");
-            }
-            args.extend([base, "--"]);
-            for p in query(&task.cwd, &args)?
-                .split(|b| *b == 0)
-                .filter(|p| !p.is_empty())
-            {
-                if !paths.iter().any(|f| f.0 == p) {
-                    paths.push((
-                        p.to_vec(),
-                        None,
-                        if comparison == Comparison::Branch {
-                            "branch".into()
-                        } else {
-                            "baseline".into()
-                        },
-                    ));
+            for (path, kind) in changed_since(&task.cwd, base, comparison != Comparison::Branch)? {
+                if !paths.iter().any(|f| f.0 == path) {
+                    paths.push((path, None, kind));
                 }
             }
         }
