@@ -232,12 +232,21 @@ impl Shell {
         let is_default = preferences.account.as_deref().unwrap_or(DEFAULT_ACCOUNT) == account.id;
         let renaming = self.accounts.renaming.as_ref() == Some(&account.id);
         let removing = self.accounts.removing.as_ref() == Some(&account.id);
-        let identity = [status.email.as_deref(), status.organization.as_deref()]
-            .into_iter()
-            .flatten()
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join(" · ");
+        let email = status.email.as_deref().filter(|text| !text.is_empty());
+        let organization = status
+            .organization
+            .as_deref()
+            .filter(|text| !text.is_empty());
+        // What follows the address on the identity line, or stands in its place.
+        let identity = match (email, organization) {
+            (Some(_), Some(organization)) => format!("· {organization}"),
+            (Some(_), None) => String::new(),
+            (None, Some(organization)) => organization.to_owned(),
+            (None, None) => match status.signed_in {
+                Some(false) => "Not signed in".to_owned(),
+                _ => "Identity not reported yet".to_owned(),
+            },
+        };
         let directory = account.home.as_ref().map_or_else(
             || "The CLI's own directory".to_owned(),
             |home| home.display().to_string(),
@@ -288,18 +297,15 @@ impl Shell {
                     )
                     .child(
                         div()
+                            .flex()
+                            .gap(px(7.))
                             .font_family(crate::theme::MONO)
                             .text_size(px(11.))
                             .text_color(t.subtle)
-                            .text_ellipsis()
-                            .child(if identity.is_empty() {
-                                match status.signed_in {
-                                    Some(false) => "Not signed in".to_owned(),
-                                    _ => "Identity not reported yet".to_owned(),
-                                }
-                            } else {
-                                identity
-                            }),
+                            .when_some(email, |line, email| {
+                                line.child(self.censored_email(provider, &account.id, email, cx))
+                            })
+                            .child(div().min_w_0().text_ellipsis().child(identity)),
                     ),
             )
         };

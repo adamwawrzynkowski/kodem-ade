@@ -254,15 +254,15 @@ impl Shell {
             || provider.label().to_owned(),
             |state| state.account.name.clone(),
         );
-        let identity = state
-            .and_then(|state| {
-                state
-                    .status
-                    .email
-                    .clone()
-                    .or_else(|| state.status.organization.clone())
-            })
-            .unwrap_or_else(|| provider.label().to_owned());
+        let identity = match state.and_then(|state| Some((state, state.status.email.as_deref()?))) {
+            Some((state, email)) => self
+                .censored_email(provider, &state.account.id, email, cx)
+                .into_any_element(),
+            None => state
+                .and_then(|state| state.status.organization.clone())
+                .unwrap_or_else(|| provider.label().to_owned())
+                .into_any_element(),
+        };
         let tone = state.map_or(t.accent, |state| self.account_tone(&state.account));
         let plan = self
             .account_usage()

@@ -557,6 +557,7 @@ impl Shell {
             .flex()
             .flex_col();
         let grouped = self.palette.query.is_empty();
+        let provider = self.composer_preferences().provider;
         let mut previous_group = "";
         for (index, item) in items.iter().enumerate() {
             let chosen = index == self.palette.selected;
@@ -618,7 +619,18 @@ impl Shell {
                                 .text_size(px(11.))
                                 .text_color(t.subtle)
                                 .text_ellipsis()
-                                .child(item.detail.clone()),
+                                .map(|detail| match &item.action {
+                                    // The detail of an account row is the account's email.
+                                    Action::Account(id) if !item.detail.is_empty() => {
+                                        detail.child(self.censored_email(
+                                            provider,
+                                            id.as_deref().unwrap_or(DEFAULT_ACCOUNT),
+                                            &item.detail,
+                                            cx,
+                                        ))
+                                    }
+                                    _ => detail.child(item.detail.clone()),
+                                }),
                         )
                         .when(!grouped, |row| row.child(caps(item.group, t)))
                         .when(!item.keys.is_empty(), |row| {

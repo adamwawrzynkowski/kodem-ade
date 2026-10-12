@@ -364,6 +364,7 @@ impl Render for Shell {
         self.window_width = f32::from(window.viewport_size().width);
         backdrop::begin_frame(window, cx);
         self.sync_reveals(cx);
+        self.sync_censor();
         fx::begin_frame(cx);
         dither::begin_frame();
         if let Some(preview) = self.render_image_preview(window, cx) {

@@ -245,7 +245,7 @@ pub(super) fn icon_tile(glyph: &'static str, tone: Hsla, size: f32, animated: bo
 pub(super) fn glow_header(
     glyph: &'static str,
     title: impl Into<SharedString>,
-    detail: impl Into<SharedString>,
+    detail: impl IntoElement,
     tone: Hsla,
     theme: Theme,
 ) -> Div {
@@ -304,7 +304,7 @@ pub(super) fn glow_header(
                                 .text_size(px(11.))
                                 .text_color(theme.subtle)
                                 .text_ellipsis()
-                                .child(detail.into()),
+                                .child(detail),
                         ),
                 ),
         )

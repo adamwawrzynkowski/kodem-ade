@@ -3,6 +3,7 @@ mod accounts;
 mod activity;
 mod backdrop;
 mod browser;
+mod censor;
 mod change_tree;
 mod chat;
 mod chrome;
@@ -249,6 +250,7 @@ pub struct Shell {
     palette_input: Entity<TextInput>,
     palette: palette::Palette,
     accounts: accounts::AccountsView,
+    censor: censor::Censor,
     usage_actions: std::collections::BTreeMap<(Provider, String), usage::UsageActions>,
 }
 impl Shell {
@@ -522,6 +524,7 @@ impl Shell {
             palette_input,
             palette: Default::default(),
             accounts: Default::default(),
+            censor: Default::default(),
         };
         shell.check_for_updates(cx);
         shell.send(core::Request::Hello);

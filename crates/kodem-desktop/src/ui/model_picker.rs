@@ -448,12 +448,6 @@ impl Shell {
             let id = (!state.account.is_default()).then(|| state.account.id.clone());
             let usage = state.status.usage.as_ref();
             let fraction = usage.and_then(usage::highest_usage);
-            let identity = state
-                .status
-                .email
-                .clone()
-                .or_else(|| state.status.organization.clone())
-                .unwrap_or_default();
             list = list.child(
                 self.option_row(
                     ("account-option", index),
@@ -482,7 +476,16 @@ impl Shell {
                         .font_family(crate::theme::MONO)
                         .text_size(px(10.5))
                         .text_color(t.subtle)
-                        .child(identity),
+                        .map(|identity| match state.status.email.as_deref() {
+                            Some(email) => identity.child(self.censored_email(
+                                provider,
+                                &state.account.id,
+                                email,
+                                cx,
+                            )),
+                            None => identity
+                                .child(state.status.organization.clone().unwrap_or_default()),
+                        }),
                 )
                 .map(|row| match state.status.signed_in {
                     Some(false) => row.child(kit::chip("SIGNED OUT", t.removed)),
