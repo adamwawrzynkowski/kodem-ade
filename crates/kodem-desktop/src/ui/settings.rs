@@ -517,6 +517,14 @@ impl Shell {
                         muted,
                         |n| &mut n.interrupted,
                         cx,
+                    ))
+                    .child(self.notification_toggle(
+                        "notifications-while-focused",
+                        ("Show while Kodem is active", "Show the banner and play the sound when Kodem is the frontmost app. When off, these alerts go to Notification Center only."),
+                        self.settings.notifications.while_focused,
+                        muted,
+                        |n| &mut n.while_focused,
+                        cx,
                     )),
             )
             .child(
@@ -531,7 +539,7 @@ impl Shell {
                     ))
                     .child(self.setting_row(
                         "Notification sound",
-                        "The sound that plays with a task notification.",
+                        "The sound that plays with a task notification. Choose a sound to hear it.",
                         self.segmented(
                             "notification-sound",
                             NotificationSound::ALL.map(|sound| (sound, sound.label())),
@@ -539,6 +547,7 @@ impl Shell {
                             |s, sound, cx| {
                                 s.settings.notifications.sound = sound;
                                 s.save_settings();
+                                s.preview_sound(sound, cx);
                                 cx.notify();
                             },
                             cx,
@@ -546,8 +555,19 @@ impl Shell {
                     ))
                     .child(
                         self.setting_row(
+                            "Preview sound",
+                            "Play the selected sound now, without sending a notification.",
+                            self.button("preview-notification-sound", "play", "Play")
+                                .on_click(cx.listener(|s, _, _, cx| {
+                                    s.preview_sound(s.settings.notifications.sound, cx);
+                                }))
+                                .into_any_element(),
+                        ),
+                    )
+                    .child(
+                        self.setting_row(
                             "Test notification",
-                            "Send a preview using the selected sound settings, even if task notifications are off.",
+                            "Send a preview using the selected sound settings, even if task notifications are off. It shows while Kodem is active.",
                             self.button(
                                 "test-notification",
                                 "bell",
@@ -648,6 +668,14 @@ impl Shell {
             ))
             .child(shortcuts)
             .into_any_element()
+    }
+
+    // Plays a notification sound in this process, so no notification is sent.
+    fn preview_sound(&mut self, sound: NotificationSound, cx: &mut Context<Self>) {
+        if let Err(error) = crate::sound::preview(sound) {
+            self.error = Some(format!("Could not preview the sound: {error:#}"));
+            cx.notify();
+        }
     }
 
     fn notification_toggle(

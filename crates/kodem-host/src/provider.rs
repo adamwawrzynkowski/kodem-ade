@@ -55,6 +55,13 @@ pub(crate) fn prompt_for(message: &OutgoingMessage) -> Result<String> {
                 serde_json::to_string(&attachment.path)?
             ));
         }
+        if attachment.kind == AttachmentKind::Folder {
+            prompt.push_str(&format!(
+                "\n\nAttached folder: {}\nRead it in place at its local path: {}",
+                serde_json::to_string(&attachment.name)?,
+                serde_json::to_string(&attachment.path)?
+            ));
+        }
     }
     if !message.feedback.is_empty() {
         prompt.push_str("\n\nReview context refers to captured content. Check current files before applying it:\n");

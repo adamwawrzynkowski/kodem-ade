@@ -5,6 +5,7 @@ mod clipboard;
 mod components;
 mod icons;
 mod markdown;
+mod sound;
 mod syntax;
 mod theme;
 mod thread_list;
@@ -15,7 +16,7 @@ mod window_state;
 use gpui::{prelude::*, *};
 use std::borrow::Cow;
 fn main() {
-    // Foreground presentation is handled by the desktop process, even for host-sent alerts.
+    // macOS can ask this process how to present a host-sent alert while Kodem is active.
     #[cfg(target_os = "macos")]
     let _notification_presentation =
         kodem_core::notification_presentation::NotificationPresentation::install();

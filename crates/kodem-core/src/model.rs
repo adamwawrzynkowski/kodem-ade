@@ -1192,6 +1192,8 @@ pub struct NotificationSettings {
     pub completed: bool,
     pub failed: bool,
     pub interrupted: bool,
+    /// Shows banners and plays sounds while Kodem is the active application.
+    pub while_focused: bool,
     pub play_sound: bool,
     pub sound: NotificationSound,
 }
@@ -1203,6 +1205,7 @@ impl Default for NotificationSettings {
             completed: true,
             failed: true,
             interrupted: true,
+            while_focused: true,
             play_sound: true,
             sound: NotificationSound::default(),
         }
@@ -1272,28 +1275,32 @@ pub enum SendMode {
     Queue,
     Steer,
 }
-/// Preserves whether imported context is an image, ordinary file or explicit skill invocation.
+/// Preserves whether imported context is an image, ordinary file, referenced folder or explicit
+/// skill invocation. The agent reads a folder in place: its `Attachment::path` is the folder,
+/// not a copy.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum AttachmentKind {
     Image,
     File,
+    Folder,
     Skill { source: PathBuf },
 }
-/// Distinguishes a file upload from an explicit skill invocation before importing it.
+/// Distinguishes a file or folder upload from an explicit skill invocation before importing it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum AttachmentSource {
     File(PathBuf),
     Skill(PathBuf),
 }
 impl AttachmentSource {
-    /// Returns the selected file path for importing and draft display.
+    /// Returns the selected file or folder path for importing and draft display.
     pub fn path(&self) -> &std::path::Path {
         match self {
             Self::File(path) | Self::Skill(path) => path,
         }
     }
 }
-/// Host-owned immutable content retained with drafts and outgoing messages.
+/// Host-owned immutable content retained with drafts and outgoing messages. A folder is the
+/// exception: it stays where it is and is attached by reference.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Attachment {
     pub id: String,

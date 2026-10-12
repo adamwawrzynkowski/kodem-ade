@@ -40,11 +40,39 @@ struct Host {
     settlement_refreshing: bool,
 }
 type Shared = Arc<Mutex<Host>>;
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    /// Parks the calling thread to serve the main dispatch queue. It never returns.
+    fn dispatch_main() -> !;
+}
 fn main() {
-    if let Err(error) = run() {
-        eprintln!("Kodem host: {error:#}");
-        std::process::exit(1)
+    // Notification Center calls its delegate on the main dispatch queue. The main thread
+    // serves that queue, so the host can answer how to present an alert while Kodem is active.
+    #[cfg(target_os = "macos")]
+    {
+        // The host keeps the stack size that it had on the main thread.
+        std::thread::Builder::new()
+            .name("host".into())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(serve)
+            .expect("Could not start the Kodem host thread");
+        unsafe { dispatch_main() }
     }
+    #[cfg(not(target_os = "macos"))]
+    serve()
+}
+/// Runs the host to completion, then ends the process with the host's result.
+fn serve() {
+    // A panic must end the process: the main thread would otherwise keep a dead host alive.
+    let code = match std::panic::catch_unwind(run) {
+        Ok(Ok(())) => 0,
+        Ok(Err(error)) => {
+            eprintln!("Kodem host: {error:#}");
+            1
+        }
+        Err(_) => 101,
+    };
+    std::process::exit(code)
 }
 fn run() -> Result<()> {
     let root = ipc::data_dir()?;
@@ -709,7 +737,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 h.store.save_task(&task)
             })();
             if let Err(error) = registration {
-                attachments::discard(&imported);
+                attachments::discard(root, &imported);
                 return Err(error);
             }
             Ok(Response::Attachments {

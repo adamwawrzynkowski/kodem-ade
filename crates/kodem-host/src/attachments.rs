@@ -1,4 +1,5 @@
-//! Imports immutable user-selected files without blocking the host state lock.
+//! Imports immutable user-selected files, and references folders, without blocking the host
+//! state lock.
 use anyhow::{Context, Result, ensure};
 use kodem_core::*;
 use std::{
@@ -11,11 +12,12 @@ use std::{
 const FILE_LIMIT: u64 = 32 * 1024 * 1024;
 const BATCH_LIMIT: u64 = 128 * 1024 * 1024;
 
-/// Copies a bounded batch into private storage and removes partial imports on failure.
+/// Copies a bounded batch of files into private storage and removes partial imports on
+/// failure. A folder is not copied: its attachment refers to the folder in place.
 pub(super) fn import(root: &Path, sources: Vec<AttachmentSource>) -> Result<Vec<Attachment>> {
     ensure!(
         !sources.is_empty() && sources.len() <= 32,
-        "Drop between 1 and 32 files"
+        "Attach between 1 and 32 files or folders"
     );
     let mut imported = Vec::new();
     let mut created = Vec::new();
@@ -42,9 +44,28 @@ pub(super) fn import(root: &Path, sources: Vec<AttachmentSource>) -> Result<Vec<
                 .open(source)
                 .with_context(|| format!("Cannot open {}", source.display()))?;
             let meta = input.metadata()?;
+            if meta.is_dir() && skill.is_none() {
+                // A folder can exceed every attachment limit, so the agent reads it in place.
+                let path = source
+                    .canonicalize()
+                    .with_context(|| format!("Cannot open {}", source.display()))?;
+                let name = path
+                    .file_name()
+                    .context("Attachment has no filename")?
+                    .to_string_lossy()
+                    .into_owned();
+                imported.push(Attachment {
+                    id: new_id(),
+                    name,
+                    path,
+                    bytes: 0,
+                    kind: AttachmentKind::Folder,
+                });
+                continue;
+            }
             ensure!(
                 meta.is_file(),
-                "Drop files rather than folders: {}",
+                "Attach a file or a folder: {}",
                 source.display()
             );
             ensure!(
@@ -108,11 +129,11 @@ pub(super) fn import(root: &Path, sources: Vec<AttachmentSource>) -> Result<Vec<
     result
 }
 
-/// Removes only freshly imported directories when registering a batch fails.
-pub(super) fn discard(imported: &[Attachment]) {
+/// Removes only freshly imported private copies when registering a batch fails.
+pub(super) fn discard(root: &Path, imported: &[Attachment]) {
     for attachment in imported {
-        if let Some(directory) = attachment.path.parent() {
-            let _ = fs::remove_dir_all(directory);
-        }
+        // A referenced folder belongs to the user. Remove the private copy by its identity,
+        // never by the attachment path.
+        let _ = fs::remove_dir_all(root.join("attachments").join(&attachment.id));
     }
 }

@@ -285,7 +285,7 @@ impl Shell {
         });
     }
 
-    /// Opens the native multiple-file picker used by the composer paperclip.
+    /// Opens the native picker of files and folders used by the composer paperclip.
     pub(super) fn choose_attachments(&mut self, cx: &mut Context<Self>) {
         if !self.selected_runtime().files {
             self.error = Some("Attachments are unavailable for the selected provider. Refresh its connection or choose another provider.".into());
@@ -294,9 +294,9 @@ impl Shell {
         }
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: true,
-            directories: false,
+            directories: true,
             multiple: true,
-            prompt: Some("Attach files or images".into()),
+            prompt: Some("Attach files, folders or images".into()),
         });
         let selected = self.selected.clone();
         cx.spawn(async move |this, cx| {
@@ -316,7 +316,7 @@ impl Shell {
         .detach();
     }
 
-    /// Renders a stable imported file or image, with an optional draft removal action.
+    /// Renders a stable imported file, image or folder, with an optional draft removal action.
     pub(super) fn attachment_card(
         &self,
         attachment: &Attachment,
@@ -363,7 +363,13 @@ impl Shell {
             .into_any_element()
         } else {
             kit::icon_tile(
-                if skill_name.is_some() { "code" } else { "file" },
+                if skill_name.is_some() {
+                    "code"
+                } else if attachment.kind == AttachmentKind::Folder {
+                    "folder"
+                } else {
+                    "file"
+                },
                 if skill_name.is_some() {
                     t.info
                 } else {
@@ -392,6 +398,8 @@ impl Shell {
                 .child(caps(
                     if skill_name.is_some() {
                         "Skill".into()
+                    } else if attachment.kind == AttachmentKind::Folder {
+                        "Folder".into()
                     } else {
                         file_size(attachment.bytes)
                     },

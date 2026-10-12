@@ -75,6 +75,7 @@ impl AssetSource for Assets {
             "paperclip",
             "pencil",
             "pin",
+            "play",
             "plus",
             "refresh",
             "search",

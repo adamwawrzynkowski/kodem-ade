@@ -27,7 +27,7 @@ Two independent sketches were compared. The existing-ledger design is the persis
 ## Tradeoffs and alternatives
 
 - A schema migration adds transactional delivery state to the existing ledger. A separate task queue would require coordinating two durable records for each dispatch.
-- Attachment copies remain available for queued input and retained conversation history. References to original source paths would change meaning when files move or change.
+- Attachment copies remain available for queued input and retained conversation history. References to original source paths would change meaning when files move or change. A folder is the exception: it can exceed every attachment limit, so it is attached by reference and the agent reads it in place.
 - A dedicated diff selection owner adds UI code while retaining virtualization. Shaping a full multi-megabyte diff on each render would simplify selection at a substantial rendering cost.
 - Failed, interrupted, and unknown outcomes pause queued execution. This requires an explicit resume action and preserves control over subsequent work.
 

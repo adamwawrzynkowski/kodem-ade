@@ -867,8 +867,12 @@ impl Shell {
             .gap_x(px(2.))
             .gap_y(px(4.))
             .child(
-                self.icon_button("composer-files", "paperclip", "Attach files or images")
-                    .on_click(cx.listener(|s, _, _, cx| s.choose_attachments(cx))),
+                self.icon_button(
+                    "composer-files",
+                    "paperclip",
+                    "Attach files, folders or images",
+                )
+                .on_click(cx.listener(|s, _, _, cx| s.choose_attachments(cx))),
             )
             .child(
                 self.icon_button("composer-skills", "code", "Skills, instructions and MCP")

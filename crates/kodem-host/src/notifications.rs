@@ -8,6 +8,8 @@ struct Alert {
     title: String,
     body: String,
     sound: Option<NotificationSound>,
+    /// Shows a banner and plays the sound while Kodem is the active application.
+    foreground: bool,
 }
 
 pub(super) struct Notifications {
@@ -55,12 +57,14 @@ impl Notifications {
         self.status.lock().unwrap().clone()
     }
 
-    /// Sends an explicit preview even when automatic task notifications are disabled.
+    /// Sends an explicit preview even when automatic task notifications are disabled. The
+    /// preview always shows, because the user sends it from the focused settings window.
     pub(super) fn test(&self, sound: Option<NotificationSound>) {
         self.enqueue(Alert {
             title: "Kodem · Test notification".into(),
             body: "Your task notifications will appear here.".into(),
             sound,
+            foreground: true,
         });
     }
 
@@ -106,6 +110,7 @@ impl Host {
                             .notifications
                             .play_sound
                             .then_some(settings.notifications.sound),
+                        foreground: settings.notifications.while_focused,
                     });
                 }
             }
@@ -180,6 +185,7 @@ mod native {
             let content = UNMutableNotificationContent::new();
             content.setTitle(&NSString::from_str(&alert.title));
             content.setBody(&NSString::from_str(&alert.body));
+            NotificationPresentation::set_foreground(&content, alert.foreground);
             if let Some(sound) = alert.sound {
                 let name = NSString::from_str(sound.filename());
                 ensure!(

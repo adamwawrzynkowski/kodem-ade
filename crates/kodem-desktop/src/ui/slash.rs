@@ -74,7 +74,12 @@ impl Choice {
                 "file-text",
                 "File",
             ),
-            Self::Attach => ("attach", "Add files or images", "paperclip", "Context"),
+            Self::Attach => (
+                "attach",
+                "Add files, folders or images",
+                "paperclip",
+                "Context",
+            ),
             Self::Files => ("mention", "Choose a project file", "file", "Context"),
             Self::Diff => ("diff", "Open the current changes", "file-text", "Context"),
             Self::Retry => ("retry", "Reload commands and skills", "refresh", "Catalog"),
