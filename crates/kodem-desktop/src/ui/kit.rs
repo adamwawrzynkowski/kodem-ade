@@ -310,7 +310,10 @@ pub(super) fn glow_header(
         )
 }
 
-/// An empty or loading state with an animated dithered emblem above a title and a detail line.
+/// An empty or loading state with a dithered emblem above a title and a detail line.
+///
+/// The emblem is still. A moving one would render the whole workspace again on every step for
+/// as long as the empty state is on screen.
 pub(super) fn empty_state(
     title: impl Into<SharedString>,
     detail: impl Into<SharedString>,
@@ -332,7 +335,6 @@ pub(super) fn empty_state(
                     .color(theme.accent.opacity(0.85))
                     .grid(4., 3.)
                     .toned()
-                    .animated()
                     .corner_radius(8.)
                     .layer(),
             ),

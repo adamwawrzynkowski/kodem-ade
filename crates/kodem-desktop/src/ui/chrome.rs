@@ -30,10 +30,14 @@ impl Shell {
             .bg(t.sidebar)
             .border_b_1()
             .border_color(t.border)
-            .when(!self.settings.collapsed, |d| {
+            .when(self.reveals.sidebar > 0., |d| {
                 d.child(
                     div()
-                        .w(px(self.settings.sidebar_width))
+                        .w(px(motion::SIDEBAR_RAIL.max(80.)
+                            + (self.settings.sidebar_width
+                                - motion::SIDEBAR_RAIL.max(80.))
+                                * self.reveals.sidebar))
+                        .overflow_hidden()
                         .h_full()
                         .flex_shrink_0()
                         .pl(px(80.))
@@ -41,11 +45,23 @@ impl Shell {
                         .flex()
                         .items_center()
                         .gap(px(10.))
-                        .child(div().id("wordmark").flex_shrink_0().child(dither::wordmark(
-                            t,
-                            running > 0,
-                            cx.reduce_motion(),
-                        )))
+                        .child(
+                            // The mark and the name in the interface's own mono face.
+                            div()
+                                .id("wordmark")
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .gap(px(7.))
+                                .child(
+                                    div()
+                                        .font_family(crate::theme::MONO)
+                                        .text_size(px(12.5))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(t.text)
+                                        .child("Kodem"),
+                                ),
+                        )
                         .child(
                             div()
                                 .min_w_0()
@@ -71,7 +87,7 @@ impl Shell {
             .min_w_0()
             .flex_1()
             .px(px(14.))
-            .when(self.settings.collapsed, |d| {
+            .when(self.reveals.sidebar <= 0., |d| {
                 d.pl(px(80.)).child(
                     self.icon_button("expand-sidebar", "panel-left", "Show sidebar · ⌘B")
                         .on_click(cx.listener(|s, _, _, cx| {
@@ -334,6 +350,8 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.window_width = f32::from(window.viewport_size().width);
+        backdrop::begin_frame(window, cx);
+        self.sync_reveals(cx);
         fx::begin_frame(cx);
         dither::begin_frame();
         if let Some(preview) = self.render_image_preview(window, cx) {
@@ -344,6 +362,9 @@ impl Render for Shell {
         }
         if cx.try_global::<Theme>() != Some(&self.theme) {
             cx.set_global(self.theme);
+            // The window root and the chat background read the theme and are cached or render
+            // before this view, so a changed theme redraws everything once.
+            window.on_next_frame(|window, _| window.refresh());
         }
         let t = self.theme;
         let mut root = div()
@@ -361,7 +382,8 @@ impl Render for Shell {
             .line_height(relative(1.5))
             .font_weight(FontWeight::NORMAL)
             .text_color(t.text)
-            .bg(t.backdrop)
+            // No fill: the window root paints the backdrop color, and the chat surface with its
+            // dot field lies beneath this view.
             .on_action(cx.listener(Self::open_project))
             .on_action(cx.listener(Self::new_task))
             .on_action(cx.listener(Self::submit))
@@ -459,6 +481,24 @@ impl Render for Shell {
             );
         root = root.child(self.titlebar(cx));
         let sidebar = self.sidebar(cx);
+        let sidebar_open = self.reveals.sidebar;
+        // While the sidebar slides it is clipped to its current width, held at its trailing
+        // edge so that it moves in from the side.
+        let sidebar = if sidebar_open > 0. && sidebar_open < 1. {
+            div()
+                .w(px(motion::SIDEBAR_RAIL
+                    + (self.settings.sidebar_width - motion::SIDEBAR_RAIL)
+                        * sidebar_open))
+                .h_full()
+                .flex_shrink_0()
+                .flex()
+                .justify_end()
+                .overflow_hidden()
+                .child(sidebar)
+                .into_any_element()
+        } else {
+            sidebar
+        };
         let narrow_review = self.show_review
             && self.selected.is_some()
             && self.window_width <= 1100.
@@ -470,51 +510,62 @@ impl Render for Shell {
             .flex_1()
             .min_h_0()
             .child(sidebar)
-            .child(
-                div()
-                    .id("sidebar-divider")
-                    .w(px(1.))
-                    .flex_shrink_0()
-                    .h_full()
-                    .cursor_col_resize()
-                    .bg(if self.dragging_sidebar {
-                        t.accent
-                    } else {
-                        t.border
-                    })
-                    .hover(move |d| d.bg(t.accent.opacity(0.6)))
+            .child(div().w(px(1.)).flex_shrink_0().h_full().bg(t.border))
+            .when(!narrow_review, |d| d.child(chat));
+        let mut handles = Vec::new();
+        if sidebar_open >= 1. {
+            handles.push(
+                self.resize_handle("sidebar-divider", self.dragging_sidebar)
+                    .left(px(self.settings.sidebar_width - RESIZE_REACH))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|s, _, _, _| s.dragging_sidebar = true),
+                        cx.listener(|s, _, _, cx| {
+                            s.dragging_sidebar = true;
+                            cx.stop_propagation();
+                        }),
                     ),
-            )
-            .when(!narrow_review, |d| d.child(chat));
-        if self.show_review
-            && self.selected.is_some()
-            && (self.window_width > 1100. || narrow_review)
-        {
+            );
+        }
+        let review_open = self.reveals.review;
+        if narrow_review {
             body = body
-                .child(
+                .child(div().w(px(1.)).flex_shrink_0().h_full().bg(t.border))
+                .child(self.review(cx, false));
+        } else if review_open > 0. && self.selected.is_some() && self.window_width > 1100. {
+            // The review pane is as wide as `review` makes it; the divider sits before it.
+            let width = self.settings.review_width.min(self.window_width * 0.55);
+            let review = self.review(cx, false);
+            body = body
+                .child(div().w(px(1.)).flex_shrink_0().h_full().bg(t.border))
+                .child(if review_open < 1. {
+                    // While the pane slides it is clipped to its current width; its leading
+                    // edge moves in from the side of the window.
                     div()
-                        .id("review-divider")
-                        .w(px(1.))
-                        .flex_shrink_0()
+                        .w(px(width * review_open))
                         .h_full()
-                        .cursor_col_resize()
-                        .bg(if self.dragging_review {
-                            t.accent
-                        } else {
-                            t.border
-                        })
-                        .hover(move |d| d.bg(t.accent.opacity(0.6)))
+                        .flex_shrink_0()
+                        .overflow_hidden()
+                        .child(review)
+                        .into_any_element()
+                } else {
+                    review
+                });
+            if review_open >= 1. {
+                handles.push(
+                    self.resize_handle("review-divider", self.dragging_review)
+                        .right(px(width - RESIZE_REACH))
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|s, _, _, _| s.dragging_review = s.window_width > 1100.),
+                            cx.listener(|s, _, _, cx| {
+                                s.dragging_review = true;
+                                cx.stop_propagation();
+                            }),
                         ),
-                )
-                .child(self.review(cx, false));
+                );
+            }
         }
-        root = root.child(body);
+        // The handles come last, so they sit above the panes on both sides of a divider.
+        root = root.child(body.relative().children(handles));
         if self.error.is_some() || self.toast.is_some() {
             root = root.child(self.notices(cx));
         }
@@ -526,6 +577,7 @@ impl Render for Shell {
                 | Panel::Usage
                 | Panel::Reasoning
                 | Panel::Access
+                | Panel::Mode
                 | Panel::Projects
                 | Panel::ChatProjects
                 | Panel::TaskMenu
@@ -541,11 +593,41 @@ impl Render for Shell {
     }
 }
 
-/// The window root: the workspace beneath the effect layer.
+/// Half the width of a pane divider's hit area, in points.
+const RESIZE_REACH: f32 = 5.;
+
+impl Shell {
+    // The hit area of a pane divider: wide enough to grab, with a line that lights up under
+    // the pointer and while it is dragged.
+    fn resize_handle(&self, id: &'static str, dragging: bool) -> Stateful<Div> {
+        let t = self.theme;
+        div()
+            .id(id)
+            .group(id)
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .w(px(RESIZE_REACH * 2. + 1.))
+            .cursor_col_resize()
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(RESIZE_REACH - 1.))
+                    .w(px(3.))
+                    .when(dragging, |line| line.bg(t.accent))
+                    .group_hover(id, move |line| line.bg(t.accent.opacity(0.6))),
+            )
+    }
+}
+
+/// The window root: the chat background, the workspace above it, and the effect layer on top.
 ///
-/// The workspace is a cached view. A frame that only advances an effect reuses the workspace's
-/// last paint instead of rendering it again.
+/// The workspace is a cached view. A frame that only advances an effect or the background
+/// reuses the workspace's last paint instead of rendering it again.
 pub struct Stage {
+    backdrop: Entity<backdrop::Backdrop>,
     shell: Entity<Shell>,
     fx: Entity<fx::FxLayer>,
 }
@@ -554,6 +636,7 @@ impl Stage {
     /// Creates the workspace and the effect layer of one window.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
+            backdrop: cx.new(backdrop::Backdrop::new),
             shell: cx.new(|cx| Shell::new(window, cx)),
             fx: cx.new(fx::FxLayer::new),
         }
@@ -561,10 +644,26 @@ impl Stage {
 }
 
 impl Render for Stage {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx
+            .try_global::<Theme>()
+            .copied()
+            .unwrap_or(Theme::new(false));
         div()
             .relative()
             .size_full()
+            .bg(theme.backdrop)
+            // Cached like the workspace: the field renders on its own steps, not on every
+            // frame of a scroll or of an effect.
+            .child(
+                AnyView::from(self.backdrop.clone()).cached(
+                    StyleRefinement::default()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
+                ),
+            )
             .child(AnyView::from(self.shell.clone()).cached(StyleRefinement::default().size_full()))
             .child(self.fx.clone())
     }

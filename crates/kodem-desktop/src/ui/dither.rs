@@ -12,22 +12,12 @@
 use super::*;
 use std::{cell::RefCell, f32::consts::TAU, rc::Rc, sync::Arc, time::Instant};
 
-const BAYER: [[u8; 8]; 8] = [
-    [0, 32, 8, 40, 2, 34, 10, 42],
-    [48, 16, 56, 24, 50, 18, 58, 26],
-    [12, 44, 4, 36, 14, 46, 6, 38],
-    [60, 28, 52, 20, 62, 30, 54, 22],
-    [3, 35, 11, 43, 1, 33, 9, 41],
-    [51, 19, 59, 27, 49, 17, 57, 25],
-    [15, 47, 7, 39, 13, 45, 5, 37],
-    [63, 31, 55, 23, 61, 29, 53, 21],
-];
 /// Cells per side of a cached texture tile; a multiple of the Bayer period.
 const TILE_CELLS: u32 = 32;
 
 /// Returns the threshold of a window-grid cell in the open interval (0, 1).
 fn threshold(x: i64, y: i64) -> f32 {
-    (BAYER[y.rem_euclid(8) as usize][x.rem_euclid(8) as usize] as f32 + 0.5) / 64.
+    crate::bayer::threshold(x, y)
 }
 
 /// Returns the Bayer threshold of one dot cell, for effects that paint their own fields.
@@ -154,6 +144,14 @@ pub(super) fn begin_frame() {
         bakery.frame += 1;
         bakery.spent = 0;
     });
+}
+
+/// Gives a view that paints outside the workspace's frame a baking budget of its own.
+///
+/// The budget is renewed when the workspace renders. A view that steps between those renders
+/// would otherwise find it spent and paint nothing until the workspace renders again.
+pub(super) fn renew_budget() {
+    BAKERY.with(|bakery| bakery.borrow_mut().spent = 0);
 }
 
 // Returns straight-alpha BGRA, the layout of GPUI's sprite atlas.
@@ -435,6 +433,39 @@ fn digest(color: Hsla, values: &[f32]) -> std::collections::hash_map::DefaultHas
         value.to_bits().hash(&mut hasher);
     }
     hasher
+}
+
+/// Returns the cached sprite of one column of dots, `rows` cells tall, or `None` while this
+/// frame's baking budget is spent. `lit` says which rows hold a dot, and `tag` names the rule
+/// that `lit` follows, so that equal columns share one sprite.
+///
+/// A field that changes along its columns only, such as a dithered gradient whose start differs
+/// per column, can be drawn as one sprite per column instead of one quad per dot.
+pub(super) fn column_sprite(
+    window: &mut Window,
+    cx: &mut App,
+    color: Hsla,
+    rows: u32,
+    (cell, dot): (f32, f32),
+    tag: (u8, u8, u8),
+    lit: &dyn Fn(i32) -> bool,
+) -> Option<Arc<RenderImage>> {
+    use std::hash::{Hash, Hasher};
+    let scale = window.scale_factor();
+    let device_cell = (cell * scale).round();
+    if device_cell < 1. || (cell * scale - device_cell).abs() > 0.01 {
+        return None;
+    }
+    let mut content = digest(color, &[]);
+    ("column", tag).hash(&mut content);
+    let key = SpriteKey {
+        content: content.finish(),
+        columns: 1,
+        rows,
+        cell: device_cell as u32,
+        dot: ((dot * scale).round() as u32).clamp(1, device_cell as u32),
+    };
+    sprite(window, cx, key, &|_, row| lit(row).then_some(color))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -834,8 +865,6 @@ pub(super) struct Sample {
     pub aspect: f32,
     /// Seconds on the stepped animation clock.
     pub time: f32,
-    /// Pointer position in `u, v` space while the pointer is over the grid.
-    pub pointer: Option<(f32, f32)>,
 }
 
 /// A function that gives the dot density at each cell.
@@ -860,8 +889,6 @@ pub(super) enum DitherField {
     },
     /// A packet of light that travels from left to right and repeats.
     Sweep { width: f32, speed: f32, floor: f32 },
-    /// A glow that follows the pointer while it is over the grid.
-    Pointer { radius: f32, strength: f32 },
     /// Covers the surface while progress goes from 0 to 1, then reveals it from the top.
     Dissolve(f32),
     /// Multiplies two fields.
@@ -930,15 +957,6 @@ impl DitherField {
                 let distance = (sample.u - center) / width.max(0.001);
                 floor + (1. - floor) * (-distance * distance).exp()
             }
-            DitherField::Pointer { radius, strength } => {
-                let Some((x, y)) = sample.pointer else {
-                    return 0.;
-                };
-                let dx = (sample.u - x) * sample.aspect;
-                let dy = sample.v - y;
-                let distance = (dx * dx + dy * dy).sqrt() / radius.max(0.001);
-                strength * (1. - distance).max(0.)
-            }
             DitherField::Dissolve(progress) => {
                 ((1. - progress) * 1.6 - sample.v * 0.6).clamp(0., 1.)
             }
@@ -975,7 +993,7 @@ impl DitherField {
     // Reports a field that looks the same on every frame, so its dots can be cached.
     fn cacheable(&self) -> bool {
         match self {
-            DitherField::Pointer { .. } | DitherField::Dissolve(_) => false,
+            DitherField::Dissolve(_) => false,
             DitherField::Product(left, right) => left.cacheable() && right.cacheable(),
             _ => true,
         }
@@ -1008,7 +1026,6 @@ impl DitherField {
                 speed,
                 floor,
             } => values(11, &[*width, *speed, *floor]),
-            DitherField::Pointer { radius, strength } => values(12, &[*radius, *strength]),
             DitherField::Dissolve(progress) => values(13, &[*progress]),
             DitherField::Product(left, right) => {
                 values(14, &[]);
@@ -1099,12 +1116,6 @@ fn paint_grid(bounds: Bounds<Pixels>, spec: &PaintSpec, window: &mut Window, cx:
         cell,
         dot: spec.dot,
     };
-    let pointer = hovered.then(|| {
-        (
-            (f32::from(mouse.x) - grid.left) / grid_width,
-            (f32::from(mouse.y) - grid.top) / grid_height,
-        )
-    });
     let aspect = grid_width / grid_height;
     let source = |column: i32, row: i32| -> Option<Hsla> {
         let intensity = spec.field.intensity(&Sample {
@@ -1115,7 +1126,6 @@ fn paint_grid(bounds: Bounds<Pixels>, spec: &PaintSpec, window: &mut Window, cx:
             rows,
             aspect,
             time: spec.time,
-            pointer,
         });
         if intensity <= threshold(column as i64, row as i64) {
             return None;
@@ -1233,8 +1243,6 @@ impl Dither {
 impl RenderOnce for Dither {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let moving = self.animated && self.field.timed() && !cx.reduce_motion();
-        // A pointer glow follows the pointer only while something redraws the view.
-        let follows = self.animated && !self.field.cacheable() && !cx.reduce_motion();
         let spec = PaintSpec {
             field: self.field,
             color: self.color,
@@ -1252,7 +1260,7 @@ impl RenderOnce for Dither {
                 paint_grid(bounds, &spec, window, cx);
                 // The view stack is only reliable during paint, so the next step is scheduled
                 // here rather than in `render`.
-                if moving || follows {
+                if moving {
                     schedule_step(window, cx);
                 }
             },
@@ -1475,128 +1483,4 @@ pub(super) fn row_wash(color: Hsla, radius: f32, selected: bool, active: bool) -
                     ),
             )
         })
-}
-
-/// Paints the ambient hero field: a still glow of noise over a moving liquid surface.
-pub(super) fn hero(accent: Hsla, dot: Hsla) -> Div {
-    div()
-        .absolute()
-        .inset_0()
-        .child(
-            Dither::new(
-                DitherField::Glow {
-                    x: 0.5,
-                    y: 0.1,
-                    radius: 0.85,
-                    strength: 0.9,
-                }
-                .times(DitherField::Flow {
-                    scale: 0.11,
-                    speed: 0.5,
-                    bias: 0.18,
-                }),
-            )
-            .color(dot)
-            .grid(3., 2.)
-            .toned()
-            .layer(),
-        )
-        .child(
-            Dither::new(DitherField::Wave {
-                level: 0.34,
-                amplitude: 0.05,
-                speed: 1.1,
-            })
-            .color(accent)
-            .grid(3., 2.)
-            .toned()
-            .animated()
-            .layer(),
-        )
-        .child(
-            Dither::new(DitherField::Pointer {
-                radius: 0.22,
-                strength: 0.9,
-            })
-            .color(accent)
-            .grid(3., 2.)
-            .hover_only()
-            .animated()
-            .layer(),
-        )
-}
-
-/// Five-by-seven dot-matrix glyphs for the wordmark.
-const WORDMARK: [[u8; 7]; 5] = [
-    // K
-    [
-        0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
-    ],
-    // O
-    [
-        0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
-    ],
-    // D
-    [
-        0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
-    ],
-    // E
-    [
-        0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
-    ],
-    // M
-    [
-        0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
-    ],
-];
-const WORDMARK_PITCH: f32 = 2.;
-
-/// Renders the dot-matrix wordmark; a scan of accent runs through it while any task works.
-pub(super) fn wordmark(theme: Theme, working: bool, reduce_motion: bool) -> AnyElement {
-    let columns = WORDMARK.len() * 6 - 1;
-    let scanning = working && !reduce_motion;
-    let phase = scanning.then(|| cycle(Duration::from_millis(2400)));
-    canvas(
-        |_, _, _| {},
-        move |bounds, _, window, cx| {
-            let sweep = phase.map(|p| p * (columns as f32 + 16.) - 8.);
-            window.paint_layer(bounds, |window| {
-                for (letter, rows) in WORDMARK.iter().enumerate() {
-                    for (row, bits) in rows.iter().enumerate() {
-                        for col in 0..5 {
-                            if bits & (0b10000 >> col) == 0 {
-                                continue;
-                            }
-                            let x = letter * 6 + col;
-                            let glow =
-                                sweep.map_or(0., |s| (1. - ((x as f32 - s).abs() / 4.)).max(0.));
-                            let mut color = theme.text;
-                            if glow > 0. {
-                                color = theme.accent;
-                                color.alpha = 0.55 + 0.45 * glow;
-                            }
-                            window.paint_quad(fill(
-                                Bounds::new(
-                                    bounds.origin
-                                        + point(
-                                            px(x as f32 * WORDMARK_PITCH),
-                                            px(row as f32 * WORDMARK_PITCH),
-                                        ),
-                                    size(px(WORDMARK_PITCH - 0.4), px(WORDMARK_PITCH - 0.4)),
-                                ),
-                                color,
-                            ));
-                        }
-                    }
-                }
-            });
-            if scanning {
-                schedule_step(window, cx);
-            }
-        },
-    )
-    .w(px(columns as f32 * WORDMARK_PITCH))
-    .h(px(7. * WORDMARK_PITCH))
-    .flex_shrink_0()
-    .into_any_element()
 }

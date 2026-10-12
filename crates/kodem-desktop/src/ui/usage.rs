@@ -23,66 +23,49 @@ impl Shell {
         let rule = self.compact_rule();
         let usage = self.account_usage().cloned();
         let highest = usage.as_ref().and_then(highest_usage);
-        let meter = |id: &'static str| {
-            Button::new(id)
-                .h(px(26.))
-                .px(px(6.))
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .rounded(px(crate::theme::RADIUS_CONTROL))
-                .cursor_pointer()
-                .hover(move |s| s.bg(t.selected))
-                .focus_visible(move |s| s.bg(t.selected))
-                .active(move |s| s.bg(t.control_active))
-                .selected(self.panel == Panel::Usage)
-                .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
-                    s.panel = Panel::Usage;
-                    s.menu_anchor = Some(bounds.top_right());
-                    cx.notify();
-                }))
-        };
-        div()
+        // One control for both meters: they open the same panel.
+        Button::new("usage-meters")
+            .h(px(20.))
+            .px(px(6.))
             .flex()
             .items_center()
-            .gap(px(2.))
-            .child(
-                meter("context-meter")
-                    .accessibility_label("Context usage and compaction")
-                    .child(caps("Ctx", t))
-                    .child(kit::meter(
-                        fraction,
-                        fraction.map_or(t.info, |value| context_tone(value, rule, t)),
-                        30.,
-                        t,
-                    ))
-                    .tooltip(move |_, cx| {
-                        cx.new(|_| ContextHint {
-                            usage: context.clone(),
-                            rule,
-                            theme: t,
-                        })
-                        .into()
-                    }),
-            )
-            .child(
-                meter("limit-meter")
-                    .accessibility_label("Account usage, credits and banked resets")
-                    .child(caps("Use", t))
-                    .child(kit::meter(
-                        highest,
-                        kit::usage_tone(highest.unwrap_or(0.), t),
-                        30.,
-                        t,
-                    ))
-                    .tooltip(move |_, cx| {
-                        cx.new(|_| UsageHint {
-                            usage: usage.clone(),
-                            theme: t,
-                        })
-                        .into()
-                    }),
-            )
+            .gap(px(6.))
+            .rounded(px(crate::theme::RADIUS_CONTROL))
+            .cursor_pointer()
+            .hover(move |s| s.bg(t.selected))
+            .focus_visible(move |s| s.bg(t.selected))
+            .active(move |s| s.bg(t.control_active))
+            .selected(self.panel == Panel::Usage)
+            .accessibility_label("Context usage, compaction and account limits")
+            .child(caps("Ctx", t))
+            .child(kit::meter(
+                fraction,
+                fraction.map_or(t.info, |value| context_tone(value, rule, t)),
+                30.,
+                t,
+            ))
+            .child(div().w(px(4.)))
+            .child(caps("Use", t))
+            .child(kit::meter(
+                highest,
+                kit::usage_tone(highest.unwrap_or(0.), t),
+                30.,
+                t,
+            ))
+            .tooltip(move |_, cx| {
+                cx.new(|_| MetersHint {
+                    context: context.clone(),
+                    rule,
+                    usage: usage.clone(),
+                    theme: t,
+                })
+                .into()
+            })
+            .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
+                s.panel = Panel::Usage;
+                s.menu_anchor = Some(*bounds);
+                cx.notify();
+            }))
             .into_any_element()
     }
 
@@ -154,7 +137,7 @@ impl Shell {
             })
             .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
                 s.panel = Panel::Usage;
-                s.menu_anchor = Some(bounds.top_right());
+                s.menu_anchor = Some(*bounds);
                 cx.notify();
             }))
             .into_any_element()
@@ -602,41 +585,27 @@ fn context_readout(usage: &ContextUsage, rule: CompactRule, t: Theme) -> Div {
     )
 }
 
-struct ContextHint {
-    usage: Option<ContextUsage>,
+// The hover card of the composer's meters: the context window, then the account's limits.
+struct MetersHint {
+    context: Option<ContextUsage>,
     rule: CompactRule,
+    usage: Option<UsageLimits>,
     theme: Theme,
 }
-impl Render for ContextHint {
+impl Render for MetersHint {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
         let card = hint_card(t).child(kit::section_header("Context", None, t));
-        match &self.usage {
-            Some(usage) => card
-                .child(context_readout(usage, self.rule, t))
-                .child(figure(
-                    format!(
-                        "UPDATED {} AGO · CLICK TO COMPACT",
-                        age(usage.reported).to_uppercase()
-                    ),
-                    t.subtle,
-                )),
+        let card = match &self.context {
+            Some(context) => card.child(context_readout(context, self.rule, t)),
             None => card.child(
                 div()
                     .text_color(t.muted)
                     .child("Context usage has not been reported yet."),
             ),
-        }
-    }
-}
-
-struct UsageHint {
-    usage: Option<UsageLimits>,
-    theme: Theme,
-}
-impl Render for UsageHint {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        hint_card(self.theme).child(usage_details(self.usage.as_ref(), self.theme))
+        };
+        card.child(usage_details(self.usage.as_ref(), t))
+            .child(figure("CLICK FOR COMPACTION AND LIMIT ACTIONS", t.subtle))
     }
 }
 

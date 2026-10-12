@@ -417,7 +417,7 @@ impl Shell {
             .input
             .read(cx)
             .text_bounds()
-            .map(|bounds| bounds.origin);
+            .map(|bounds| Bounds::new(bounds.origin, Size::default()));
         match choice {
             Choice::ProviderCommand(_) | Choice::Path(_) => {}
             Choice::Skill(skill) => self.attach_skill(skill.path, cx),

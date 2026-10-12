@@ -30,6 +30,7 @@ impl Shell {
             | Panel::Models
             | Panel::Reasoning
             | Panel::Access
+            | Panel::Mode
             | Panel::Projects
             | Panel::ChatProjects
             | Panel::TaskMenu
@@ -336,6 +337,7 @@ impl Shell {
             | Panel::Models
             | Panel::Reasoning
             | Panel::Access
+            | Panel::Mode
             | Panel::Projects
             | Panel::ChatProjects
             | Panel::TaskMenu

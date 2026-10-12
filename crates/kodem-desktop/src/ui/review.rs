@@ -88,7 +88,7 @@ impl Shell {
                             .child(icon("chevrons-up-down").size(px(12.)).text_color(t.subtle))
                             .on_click_with_bounds(cx.listener(
                                 |s, bounds: &Bounds<Pixels>, _, cx| {
-                                    s.menu_anchor = Some(bounds.top_right());
+                                    s.menu_anchor = Some(*bounds);
                                     s.panel = if s.panel == Panel::Comparison {
                                         Panel::None
                                     } else {

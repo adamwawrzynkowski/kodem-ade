@@ -18,6 +18,10 @@ const CHIP_HEIGHT: f32 = 22.0;
 /// Room a flying chip needs between the middle of its arc and a window
 /// edge to stay fully in view.
 const ARC_EDGE_MARGIN: f32 = CHIP_HEIGHT / 2.0;
+/// Room an arc keeps below the top of the window. It covers the title
+/// bar, the stretched chip and its trail: an arc that rises into the
+/// title bar reads as leaving the window.
+const ARC_TOP_MARGIN: f32 = 40.0 + CHIP_HEIGHT * 1.5;
 const CHIP_TEXT_SIZE: f32 = 11.0;
 const CHIP_MAX_CHARS: usize = 32;
 const IMPACT_DURATION: Duration = Duration::from_millis(560);
@@ -523,15 +527,15 @@ fn flight_distance(from: (f32, f32), to: (f32, f32)) -> f32 {
 
 /// The control point that bends a flight into an arc, `lift` pixels
 /// beyond its ends. The arc rises above both ends, unless that carries
-/// the chip past the top of a window `window_height` tall; then it dips
-/// below them instead, as long as that keeps more of it in view. A
-/// flight that starts or ends outside the window is meant to cross its
-/// edge, so it always rises.
+/// the chip into the title bar or past the top of a window
+/// `window_height` tall; then it dips below them instead, as long as
+/// that keeps more of it in view. A flight that starts or ends outside
+/// the window is meant to cross its edge, so it always rises.
 fn arc_control(from: (f32, f32), to: (f32, f32), lift: f32, window_height: f32) -> (f32, f32) {
     let middle = (from.0 + to.0) / 2.0;
     let rising = from.1.min(to.1) - lift;
     let crosses_edge = from.1.min(to.1) < 0.0 || from.1.max(to.1) > window_height;
-    let above_top = ARC_EDGE_MARGIN - quadratic_peak(from.1, rising, to.1);
+    let above_top = ARC_TOP_MARGIN - quadratic_peak(from.1, rising, to.1);
     if crosses_edge || above_top <= 0.0 {
         return (middle, rising);
     }

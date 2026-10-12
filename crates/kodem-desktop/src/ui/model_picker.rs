@@ -184,14 +184,68 @@ impl Shell {
                 );
             }
         }
-        if self.panel == Panel::Access {
+        let plan = plan_mode(&runtime);
+        if self.panel == Panel::Mode {
             content = content.child(
                 div()
                     .px(px(8.))
                     .pt(px(6.))
                     .pb(px(4.))
-                    .child(kit::section_header("Access", None, t)),
+                    .child(kit::section_header("Mode", None, t)),
             );
+            let planning = self.planning();
+            for (index, (plan_row, glyph, name, detail)) in [
+                (
+                    false,
+                    "zap",
+                    "Build",
+                    "The agent edits files and runs commands under the approval rule you chose.",
+                ),
+                (
+                    true,
+                    "list-checks",
+                    "Plan",
+                    "The agent explores and proposes a plan. It changes nothing until you approve the plan.",
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                content = content.child(
+                    self.access_row(
+                        ("mode-option", index),
+                        glyph,
+                        name.to_owned(),
+                        detail.to_owned(),
+                        planning == plan_row,
+                        disabled || plan.is_none(),
+                    )
+                    .on_click(cx.listener(move |s, _, _, cx| s.set_planning(plan_row, cx))),
+                );
+            }
+            content = content.child(
+                div()
+                    .px(px(8.))
+                    .pt(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(kit::keycap("⇧⇥", t))
+                    .child(caps("Switches between build and plan", t)),
+            );
+        }
+        if self.panel == Panel::Access {
+            content = content.child(div().px(px(8.)).pt(px(6.)).pb(px(4.)).child(
+                kit::section_header(
+                    if preferences.provider == Provider::Codex {
+                        "Access"
+                    } else {
+                        "Approvals"
+                    },
+                    None,
+                    t,
+                ),
+            ));
         }
         if self.panel == Panel::Access && preferences.provider == Provider::Codex {
             for (i, access) in CODEX_ACCESS.into_iter().enumerate() {
@@ -212,9 +266,17 @@ impl Shell {
             }
         }
         if self.panel == Panel::Access && preferences.provider != Provider::Codex {
-            for (index, mode) in runtime.access_modes.iter().enumerate() {
+            // Plan mode is a mode of work, chosen in its own menu. This menu holds only the
+            // rules for what the agent may do without asking.
+            let approval = self.approval_choice();
+            for (index, mode) in runtime
+                .access_modes
+                .iter()
+                .filter(|mode| !is_plan(&mode.id))
+                .enumerate()
+            {
                 let mode_id = mode.id.clone();
-                let chosen = preferences.provider_access.as_ref() == Some(&mode.id);
+                let chosen = approval.as_ref() == Some(&mode.id);
                 content = content.child(
                     self.access_row(
                         ("provider-access", index),
@@ -225,8 +287,18 @@ impl Shell {
                         disabled,
                     )
                     .on_click(cx.listener(move |s, _, _, cx| {
-                        s.set_provider_access(mode_id.clone(), cx);
+                        s.set_approval(mode_id.clone(), cx);
                     })),
+                );
+            }
+            if self.planning() {
+                content = content.child(
+                    div()
+                        .px(px(8.))
+                        .py(px(4.))
+                        .text_size(px(11.))
+                        .text_color(t.subtle)
+                        .child("Plan mode is on. This rule applies when the task returns to build mode."),
                 );
             }
             if runtime.access_modes.is_empty() {
@@ -239,7 +311,7 @@ impl Shell {
                 );
             }
         }
-        if self.panel == Panel::Access {
+        if self.panel == Panel::Access && preferences.provider == Provider::Codex {
             content = content.child(
                 div()
                     .px(px(8.))
@@ -248,7 +320,7 @@ impl Shell {
                     .items_center()
                     .gap(px(6.))
                     .child(kit::keycap("⇧⇥", t))
-                    .child(caps("Cycles the modes that still ask or plan", t)),
+                    .child(caps("Cycles the modes that still ask", t)),
             );
         }
         if disabled {
@@ -839,21 +911,95 @@ impl Shell {
             self.notify_user(format!("Access: {}", next.label()), tone, cx);
             return;
         }
-        let modes: Vec<ProviderAccess> = self
-            .selected_runtime()
-            .access_modes
-            .into_iter()
-            .filter(|mode| !removes_approval(&mode.id))
-            .collect();
-        if modes.is_empty() {
+        // A provider with a plan mode switches between build and plan; its approval rule has
+        // its own menu.
+        if plan_mode(&self.selected_runtime()).is_some() {
+            let planning = !self.planning();
+            self.set_planning(planning, cx);
+            self.notify_user(
+                if planning {
+                    "Mode: Plan"
+                } else {
+                    "Mode: Build"
+                },
+                tone,
+                cx,
+            );
+        }
+    }
+
+    // Returns the key of the open task, or of the new-task draft, in `approval_memory`.
+    fn approval_key(&self) -> String {
+        self.view
+            .as_ref()
+            .map(|view| view.task.id.clone())
+            .unwrap_or_default()
+    }
+
+    /// Reports that the composer's provider is in its plan mode.
+    pub(super) fn planning(&self) -> bool {
+        self.composer_preferences()
+            .provider_access
+            .as_deref()
+            .is_some_and(is_plan)
+    }
+
+    /// Returns the approval rule of the composer: the provider's access mode, or while plan mode
+    /// is on, the rule that returns with build mode.
+    pub(super) fn approval_choice(&self) -> Option<String> {
+        let runtime = self.selected_runtime();
+        let known = |id: &String| runtime.access_modes.iter().any(|mode| &mode.id == id);
+        let fallback = || {
+            runtime
+                .access_modes
+                .iter()
+                .filter(|mode| !is_plan(&mode.id))
+                .find(|mode| mode.id == "default")
+                .or_else(|| runtime.access_modes.iter().find(|mode| !is_plan(&mode.id)))
+                .map(|mode| mode.id.clone())
+        };
+        let current = self.composer_preferences().provider_access;
+        match current {
+            Some(mode) if !is_plan(&mode) => Some(mode),
+            Some(_) => self
+                .approval_memory
+                .get(&self.approval_key())
+                .filter(|id| known(id))
+                .cloned()
+                .or_else(fallback),
+            None => fallback(),
+        }
+    }
+
+    /// Turns the provider's plan mode on or off. Leaving plan mode restores the approval rule
+    /// that was chosen before or during it.
+    pub(super) fn set_planning(&mut self, planning: bool, cx: &mut Context<Self>) {
+        if planning == self.planning() {
             return;
         }
-        let next = modes
-            .iter()
-            .position(|mode| Some(&mode.id) == preferences.provider_access.as_ref())
-            .map_or(0, |index| (index + 1) % modes.len());
-        self.set_provider_access(modes[next].id.clone(), cx);
-        self.notify_user(format!("Access: {}", modes[next].name), tone, cx);
+        let Some(approval) = self.approval_choice() else {
+            return;
+        };
+        if planning {
+            let Some(plan) = plan_mode(&self.selected_runtime()) else {
+                return;
+            };
+            self.approval_memory.insert(self.approval_key(), approval);
+            self.set_provider_access(plan.id, cx);
+        } else {
+            self.set_provider_access(approval, cx);
+        }
+    }
+
+    // Chooses the approval rule. While plan mode is on it is only remembered, because the
+    // provider has one mode at a time.
+    fn set_approval(&mut self, mode: String, cx: &mut Context<Self>) {
+        if self.planning() {
+            self.approval_memory.insert(self.approval_key(), mode);
+            cx.notify();
+        } else {
+            self.set_provider_access(mode, cx);
+        }
     }
 
     /// Opens an agent menu from the keyboard, attached to the composer chip it belongs to.
@@ -863,16 +1009,16 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let anchor = if panel == Panel::Access {
+        let anchor = if matches!(panel, Panel::Access | Panel::Mode) {
             ACCESS_ANCHOR
         } else {
             AGENT_ANCHOR
         };
         let viewport = window.viewport_size();
-        self.menu_anchor = Some(fx::anchor_bounds(anchor, cx).map_or(
+        self.menu_anchor = Some(fx::anchor_bounds(anchor, cx).unwrap_or(Bounds::new(
             point(viewport.width / 2. + px(240.), viewport.height - px(140.)),
-            |bounds| bounds.top_right(),
-        ));
+            Size::default(),
+        )));
         self.panel = panel;
         if self.selected_runtime().models.is_empty() {
             self.connect_runtime();
@@ -1009,6 +1155,20 @@ fn codex_access_detail(access: AccessMode) -> &'static str {
         AccessMode::AutoReview => "AI reviews permission requests and can deny unsafe actions",
         AccessMode::FullAccess => "Unrestricted files and network; no approval prompts",
     }
+}
+
+// Reports a provider mode in which the agent only plans.
+fn is_plan(mode: &str) -> bool {
+    mode.to_ascii_lowercase().contains("plan")
+}
+
+/// Returns the provider's plan mode, when it has one.
+pub(super) fn plan_mode(runtime: &RuntimeInfo) -> Option<ProviderAccess> {
+    runtime
+        .access_modes
+        .iter()
+        .find(|mode| is_plan(&mode.id))
+        .cloned()
 }
 
 // Reports a provider mode that stops asking before it acts.

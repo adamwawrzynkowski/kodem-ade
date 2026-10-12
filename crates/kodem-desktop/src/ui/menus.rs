@@ -17,6 +17,9 @@ fn menu_title(label: &str, count: Option<usize>, theme: Theme) -> Div {
         .child(kit::section_header(label, count, theme))
 }
 
+/// Height of the title bar, which holds the window controls.
+const TITLE_BAR: f32 = 40.;
+
 impl Shell {
     // A menu item: an icon and a mono label. The chosen item of a set carries the accent tint,
     // wash, edge and a trailing check in place of a grey fill.
@@ -331,11 +334,18 @@ impl Shell {
                             )),
                         );
                         menu = menu.child(separator(t)).child(
-                            self.ghost("thread-delete", "trash-2", "Delete…")
+                            // Built from the bare control: `ghost` already sets a hover style,
+                            // and GPUI allows one hover style per element.
+                            self.control("thread-delete")
                                 .w_full()
                                 .justify_start()
+                                .border_color(gpui::transparent_black())
+                                .bg(gpui::transparent_black())
                                 .text_color(t.removed)
-                                .hover(move |b| b.bg(t.removed.opacity(0.1)).text_color(t.removed))
+                                .child(icon("trash-2").size(px(13.)))
+                                .child("Delete…")
+                                .hover(move |b| b.bg(t.removed.opacity(0.1)))
+                                .active(move |b| b.bg(t.removed.opacity(0.16)))
                                 .disabled(busy)
                                 .on_click(cx.listener(|s, _, _, cx| {
                                     s.error = None;
@@ -437,7 +447,7 @@ impl Shell {
                     );
                 }
             }
-            Panel::Models | Panel::Reasoning | Panel::Access => {
+            Panel::Models | Panel::Reasoning | Panel::Access | Panel::Mode => {
                 width = if self.panel == Panel::Models {
                     580.
                 } else {
@@ -453,6 +463,18 @@ impl Shell {
         let thread_context = (self.panel == Panel::ThreadMenu)
             .then_some(self.thread_menu.as_ref())
             .flatten();
+        // A menu opens above its trigger, as the composer's menus do, unless the trigger sits in
+        // the upper half of the window. There it opens below, so that it never climbs into the
+        // title bar and under the window controls.
+        let trigger = self
+            .menu_anchor
+            .unwrap_or(Bounds::new(point(px(24.), px(120.)), Size::default()));
+        let upward = thread_context.is_none() && trigger.top() > viewport.height / 2.;
+        let (position, anchor, offset) = match thread_context {
+            Some(context) => (context.position, Anchor::TopLeft, px(0.)),
+            None if upward => (trigger.top_right(), Anchor::BottomRight, px(-8.)),
+            None => (trigger.bottom_left(), Anchor::TopLeft, px(6.)),
+        };
         let menu = motion::popover(
             ("menu-enter", self.panel.clone() as usize),
             div()
@@ -474,12 +496,8 @@ impl Shell {
                         .child(menu),
                 ),
             t,
-            thread_context.is_none(),
+            upward,
         );
-        let position = thread_context
-            .map(|context| context.position)
-            .or(self.menu_anchor)
-            .unwrap_or(point(px(24.), px(120.)));
         div()
             .absolute()
             .inset_0()
@@ -494,16 +512,15 @@ impl Shell {
             .child(
                 anchored()
                     .position(position)
-                    .anchor(if thread_context.is_some() {
-                        Anchor::TopLeft
-                    } else {
-                        Anchor::BottomRight
+                    .anchor(anchor)
+                    .offset(point(px(0.), offset))
+                    // The top margin is the title bar: no menu may cover the window controls.
+                    .snap_to_window_with_margin(Edges {
+                        top: px(TITLE_BAR + 4.),
+                        right: px(8.),
+                        bottom: px(8.),
+                        left: px(8.),
                     })
-                    .offset(point(
-                        px(0.),
-                        px(if thread_context.is_some() { 0. } else { -8. }),
-                    ))
-                    .snap_to_window_with_margin(px(8.))
                     .child(menu),
             )
             .into_any_element()

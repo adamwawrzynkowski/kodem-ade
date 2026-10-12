@@ -8,6 +8,7 @@ impl Shell {
     pub(super) fn chat(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.sync_slash(cx);
         self.sync_context_arrivals(window, cx);
+        let history = self.message_history(window, cx);
         let t = self.theme;
         let mut panel = div()
             .relative()
@@ -17,13 +18,19 @@ impl Shell {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .bg(t.canvas);
+            // The surface and its dot field are painted beneath the workspace, in the mood of
+            // the open task.
+            .child(backdrop::surface(
+                backdrop::Mood::of(self.view.as_ref().map(|view| &view.task)),
+                // The conversation and the new-task column are centered at these widths.
+                if self.view.is_some() { 900. } else { 780. },
+            ));
         if let Some(view) = &self.view {
             self.chat_selection.update(cx, |doc, _| {
                 doc.set_viewport(
                     self.chat_scroll.clone(),
                     view.messages.iter().map(|m| m.seq).collect(),
-                    px(self.composer_height + 8.),
+                    px(8.),
                 )
             });
             panel = panel.child(self.chat_selection.clone());
@@ -68,6 +75,15 @@ impl Shell {
                 .on_scroll_wheel(cx.listener(|s, e: &ScrollWheelEvent, _, cx| {
                     let delta = e.delta.pixel_delta(px(20.));
                     s.nudge_composer((f32::from(delta.y) * 0.015).clamp(-0.45, 0.45), cx);
+                    // The wheel scrolls the conversation anywhere in the chat, also beside and
+                    // below the list. The list handles the wheel over itself, and the composer
+                    // scrolls its own draft.
+                    let over_composer = fx::anchor_bounds(COMPOSER_ANCHOR, cx)
+                        .is_some_and(|bounds| bounds.contains(&e.position));
+                    if !over_composer && !s.chat_scroll.viewport_bounds().contains(&e.position) {
+                        s.chat_scroll.scroll_by(-delta.y);
+                        cx.notify();
+                    }
                 }));
             if center_diff {
                 timeline = timeline
@@ -113,17 +129,48 @@ impl Shell {
                             .min_h_0()
                             .flex()
                             .justify_center()
+                            // The conversation ends where the composer begins. Nothing covers
+                            // the area around the composer, so the background shows down to
+                            // the bottom of the chat.
+                            .pb(px((self.composer_height - COMPOSER_LEAD).max(0.)))
                             .child(
-                                list(self.chat_scroll.clone(), move |index, _, cx| {
-                                    entity.update(cx, |s, cx| {
-                                        s.conversation_message(&Conversation::Main, index, cx)
-                                    })
-                                })
-                                .w_full()
-                                .max_w(px(900.))
-                                .min_w_0()
-                                .h_full()
-                                .pb(px(self.composer_height + 8.)),
+                                div()
+                                    .relative()
+                                    .w_full()
+                                    .min_w_0()
+                                    .h_full()
+                                    .child(
+                                        // The list spans the chat, so the wheel scrolls it
+                                        // from the margins too. Each row centers its content
+                                        // in the reading column.
+                                        list(self.chat_scroll.clone(), move |index, _, cx| {
+                                            let row = entity.update(cx, |s, cx| {
+                                                s.conversation_message(
+                                                    &Conversation::Main,
+                                                    index,
+                                                    cx,
+                                                )
+                                            });
+                                            div()
+                                                .w_full()
+                                                .flex()
+                                                .justify_center()
+                                                .child(
+                                                    div()
+                                                        .w_full()
+                                                        .max_w(px(900.))
+                                                        .min_w_0()
+                                                        .child(row),
+                                                )
+                                                .into_any_element()
+                                        })
+                                        .w_full()
+                                        .min_w_0()
+                                        .h_full()
+                                        .pb(px(8.)),
+                                    )
+                                    // The history rail and its preview lie over the list.
+                                    .children(history),
                             ),
                     );
                 }
@@ -136,32 +183,23 @@ impl Shell {
                     .w_full()
                     .flex()
                     .flex_col()
-                    .child(
-                        div()
-                            .relative()
-                            .h(px(28.))
-                            .flex_shrink_0()
-                            .child(dither::fade(t.canvas, 28., true).top_0())
-                            .when(!self.follow, |d| {
-                                d.child(
-                                    div().absolute().right(px(20.)).top(px(2.)).child(
-                                        self.button("jump-latest", "arrow-down", "Latest")
-                                            .h(px(24.))
-                                            .on_click(cx.listener(|s, _, _, cx| {
-                                                s.follow = true;
-                                                s.chat_scroll.scroll_to_end();
-                                                cx.notify();
-                                            })),
-                                    ),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .bg(t.canvas)
-                            .child(self.composer(false, window, cx)),
-                    )
+                    .child(div().relative().h(px(COMPOSER_LEAD)).flex_shrink_0().when(
+                        !self.follow,
+                        |d| {
+                            d.child(
+                                div().absolute().right(px(20.)).top(px(2.)).child(
+                                    self.button("jump-latest", "arrow-down", "Latest")
+                                        .h(px(24.))
+                                        .on_click(cx.listener(|s, _, _, cx| {
+                                            s.follow = true;
+                                            s.chat_scroll.scroll_to_end();
+                                            cx.notify();
+                                        })),
+                                ),
+                            )
+                        },
+                    ))
+                    .child(div().w_full().child(self.composer(false, window, cx)))
                     .child(
                         canvas(
                             move |bounds, _, cx| {
@@ -205,8 +243,22 @@ impl Shell {
                     ),
             );
         }
-        if self.show_terminal && self.selected.is_some() {
-            panel = panel.child(self.terminal_panel(window, cx));
+        let terminal_open = self.reveals.terminal;
+        if terminal_open > 0. && self.selected.is_some() {
+            let terminal = self.terminal_panel(window, cx);
+            panel = panel.child(if terminal_open < 1. {
+                // While the terminal slides it is clipped to its current height and grows up
+                // from the bottom of the chat.
+                div()
+                    .w_full()
+                    .flex_shrink_0()
+                    .max_h(px(motion::TERMINAL_REACH * terminal_open))
+                    .overflow_hidden()
+                    .child(terminal)
+                    .into_any_element()
+            } else {
+                terminal
+            });
         }
         panel.into_any_element()
     }
@@ -238,6 +290,8 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(10.))
+            // The header is chrome: it keeps a solid fill over the dot field behind the chat.
+            .bg(self.theme.canvas)
             .child(
                 div()
                     .min_w_0()
@@ -291,7 +345,7 @@ impl Shell {
             .child(
                 self.icon_button("task-menu", "ellipsis", "Task actions")
                     .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
-                        s.menu_anchor = Some(bounds.top_right());
+                        s.menu_anchor = Some(*bounds);
                         s.panel = Panel::TaskMenu;
                         cx.notify();
                     })),
@@ -381,18 +435,6 @@ impl Shell {
             .flex()
             .flex_col()
             .gap(px(14.))
-            .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .h(px(140.))
-                    .rounded(px(crate::theme::RADIUS_SURFACE))
-                    .overflow_hidden()
-                    .border_1()
-                    .border_color(t.border)
-                    .bg(t.backdrop)
-                    .child(dither::hero(t.accent, t.dot)),
-            )
             .child(kit::section_header(
                 format!("Hello, {}", self.greeting_name),
                 None,
@@ -430,7 +472,7 @@ impl Shell {
                             .on_click_with_bounds(cx.listener(
                                 |s, bounds: &Bounds<Pixels>, _, cx| {
                                     if !s.creating_task {
-                                        s.menu_anchor = Some(bounds.top_right());
+                                        s.menu_anchor = Some(*bounds);
                                         s.panel = Panel::ChatProjects;
                                         cx.notify();
                                     }
@@ -455,7 +497,7 @@ impl Shell {
         for (keys, label) in [
             ("⌘K", "Commands and threads"),
             ("/", "Provider commands"),
-            ("⇧⇥", "Cycle access"),
+            ("⇧⇥", "Plan or build"),
             ("⇧⌘M", "Model and account"),
             ("⌥⌘A", "Next task that needs you"),
         ] {
@@ -486,28 +528,25 @@ impl Shell {
             .iter()
             .find(|model| preferences.model.as_ref() == Some(&model.id));
         let has_reasoning = selected_model.is_some_and(|model| !model.efforts.is_empty());
+        let approval = self.approval_choice();
         let access_label = if preferences.provider == Provider::Codex {
             preferences.access.label().to_owned()
         } else {
             runtime
                 .access_modes
                 .iter()
-                .find(|mode| preferences.provider_access.as_ref() == Some(&mode.id))
-                .or_else(|| {
-                    runtime
-                        .access_modes
-                        .iter()
-                        .find(|mode| mode.id == "default")
-                })
-                .or(runtime.access_modes.first())
+                .find(|mode| approval.as_ref() == Some(&mode.id))
                 .map(|mode| mode.name.clone())
-                .unwrap_or_else(|| "Access".into())
+                .unwrap_or_else(|| "Approvals".into())
         };
         let access_id = if preferences.provider == Provider::Codex {
             preferences.access.label().to_owned()
         } else {
-            preferences.provider_access.clone().unwrap_or_default()
+            approval.clone().unwrap_or_default()
         };
+        // Plan mode is a mode of work with its own chip; the approval rule is separate.
+        let has_modes = model_picker::plan_mode(&runtime).is_some();
+        let planning = self.planning();
         let model = preferences
             .model
             .as_ref()
@@ -659,6 +698,8 @@ impl Shell {
                 s.attach_paths(paths.paths().to_vec(), cx)
             }))
             .rounded(px(motion::COMPOSER_RADIUS))
+            // The meter tab continues this corner upward.
+            .rounded_tr(px(0.))
             .bg(t.raised)
             .border_1()
             .border_color(if focused {
@@ -677,49 +718,43 @@ impl Shell {
             .when(has_context, |d| {
                 d.child(div().px(px(12.)).pt(px(10.)).child(attachments))
             });
+        // A new task says where it will work in a row above the draft.
         if empty {
             let worktree = self.composer_worktree();
-            editor = editor.child(
-                div()
-                    .px(px(8.))
-                    .pt(px(8.))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        self.ghost(
-                            "composer-worktree",
-                            "branch",
-                            if worktree {
-                                "New worktree"
-                            } else {
-                                "Current checkout"
-                            },
-                        )
-                        .when(worktree, |b| b.text_color(t.info))
-                        .tooltip(move |_, cx| {
-                            cx.new(|_| Hint {
-                                text: if worktree {
-                                    "This task works in its own Git worktree and branch.".into()
-                                } else {
-                                    "This task edits the repository's current checkout.".into()
-                                },
-                                theme: t,
-                            })
-                            .into()
-                        })
-                        .on_click(cx.listener(|s, _, _, cx| {
-                            s.new_worktree_override = Some(!s.composer_worktree());
-                            cx.notify();
-                        })),
-                    ),
+            let status = div().px(px(8.)).pt(px(6.)).flex().items_center().child(
+                self.ghost(
+                    "composer-worktree",
+                    "branch",
+                    if worktree {
+                        "New worktree"
+                    } else {
+                        "Current checkout"
+                    },
+                )
+                .when(worktree, |b| b.text_color(t.info))
+                .tooltip(move |_, cx| {
+                    cx.new(|_| Hint {
+                        text: if worktree {
+                            "This task works in its own Git worktree and branch.".into()
+                        } else {
+                            "This task edits the repository's current checkout.".into()
+                        },
+                        theme: t,
+                    })
+                    .into()
+                })
+                .on_click(cx.listener(|s, _, _, cx| {
+                    s.new_worktree_override = Some(!s.composer_worktree());
+                    cx.notify();
+                })),
             );
+            editor = editor.child(status);
         }
         editor = editor.child(
             div()
                 .id("composer-editor")
                 .px(px(14.))
-                .pt(px(12.))
+                .pt(px(if empty { 6. } else { 12. }))
                 .pb(px(6.))
                 .min_h(px(if empty { 92. } else { 56. }))
                 .max_h(px(180.))
@@ -728,14 +763,23 @@ impl Shell {
                 .text_color(t.text)
                 .child(self.input.clone()),
         );
-        let mut toolbar = div()
-            .flex_wrap()
-            .pl(px(8.))
-            .pr(px(8.))
-            .pb(px(8.))
+        // The options wrap inside their own group. The send group is a separate, fixed column on
+        // the trailing side, so a narrow composer never moves the send button.
+        // The leading group holds what goes with the message and who runs it: attachments and
+        // skills, a gap, then the model and its effort. The trailing group holds how it may act
+        // and the send button. The space between them is whatever the composer has left.
+        let agent_hint = match &account {
+            Some((name, _, _)) => format!("{model} · {name}"),
+            None => model.clone(),
+        };
+        let toolbar = div()
+            .flex_1()
+            .min_w_0()
             .flex()
+            .flex_wrap()
             .items_center()
-            .gap(px(2.))
+            .gap_x(px(2.))
+            .gap_y(px(4.))
             .child(
                 self.icon_button("composer-files", "paperclip", "Attach files or images")
                     .on_click(cx.listener(|s, _, _, cx| s.choose_attachments(cx))),
@@ -747,40 +791,36 @@ impl Shell {
                         cx.notify();
                     })),
             )
-            .child(self.usage_meters(cx))
-            .child(div().flex_1())
+            .child(div().w(px(8.)).flex_shrink_0())
             .child(
                 self.chip_button("composer-model")
                     .selected(self.panel == Panel::Models)
                     .accessibility_label("Provider, account and model")
                     .child(fx::anchor(model_picker::AGENT_ANCHOR))
                     .child(icon(preferences.provider.icon()).size(px(13.)))
-                    .child(div().max_w(px(150.)).min_w_0().text_ellipsis().child(model))
-                    .when_some(account, |b, (name, tone, blocked)| {
+                    .max_w_full()
+                    // The account is its color square beside the provider's logo; its name is
+                    // in the tooltip and in the menu.
+                    .when_some(account, |b, (_, tone, blocked)| {
                         b.child(
-                            div()
-                                .h(px(12.))
-                                .child(dither::DottedRule::vertical(t.subtle.opacity(0.7))),
-                        )
-                        .child(
                             div()
                                 .size(px(6.))
                                 .rounded(px(1.))
                                 .flex_shrink_0()
                                 .bg(if blocked { t.removed } else { tone }),
                         )
-                        .child(
-                            div()
-                                .max_w(px(96.))
-                                .min_w_0()
-                                .text_ellipsis()
-                                .when(blocked, |d| d.text_color(t.removed))
-                                .child(name),
-                        )
                     })
+                    .child(div().max_w(px(170.)).min_w_0().text_ellipsis().child(model))
                     .child(icon("chevron-down").size(px(11.)).text_color(t.subtle))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| Hint {
+                            text: agent_hint.clone(),
+                            theme: t,
+                        })
+                        .into()
+                    })
                     .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
-                        s.menu_anchor = Some(bounds.top_right());
+                        s.menu_anchor = Some(*bounds);
                         s.panel = Panel::Models;
                         if s.selected_runtime().models.is_empty() {
                             s.connect_runtime();
@@ -796,8 +836,27 @@ impl Shell {
                         .child(icon("gauge").size(px(13.)))
                         .child(effort)
                         .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
-                            s.menu_anchor = Some(bounds.top_right());
+                            s.menu_anchor = Some(*bounds);
                             s.panel = Panel::Reasoning;
+                            cx.notify();
+                        })),
+                )
+            });
+        let mut rules = div()
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .when(has_modes, |d| {
+                d.child(
+                    self.chip_button("composer-mode")
+                        .selected(self.panel == Panel::Mode)
+                        .accessibility_label("Mode: build or plan")
+                        .when(planning, |b| b.text_color(t.info))
+                        .child(icon(if planning { "list-checks" } else { "zap" }).size(px(13.)))
+                        .child(if planning { "Plan" } else { "Build" })
+                        .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
+                            s.menu_anchor = Some(*bounds);
+                            s.panel = Panel::Mode;
                             cx.notify();
                         })),
                 )
@@ -805,12 +864,14 @@ impl Shell {
             .child(
                 self.chip_button("composer-access")
                     .selected(self.panel == Panel::Access)
-                    .accessibility_label("Access mode")
+                    .accessibility_label("Approvals")
+                    // The rule waits for build mode while the agent only plans.
+                    .when(planning, |b| b.text_color(t.subtle))
                     .child(fx::anchor(model_picker::ACCESS_ANCHOR))
                     .child(icon(model_picker::access_glyph(&access_id)).size(px(13.)))
                     .child(access_label)
                     .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
-                        s.menu_anchor = Some(bounds.top_right());
+                        s.menu_anchor = Some(*bounds);
                         s.panel = Panel::Access;
                         cx.notify();
                     })),
@@ -821,7 +882,7 @@ impl Shell {
         let has_content = self.has_composer_content(cx);
         let steer = steering && self.settings.send_mode == SendMode::Steer;
         if steering {
-            toolbar = toolbar.child(
+            rules = rules.child(
                 self.chip_button("active-send-mode")
                     .text_color(t.accent)
                     .child(icon(if steer { "arrow-right" } else { "arrow-down" }).size(px(13.)))
@@ -848,6 +909,16 @@ impl Shell {
                     })),
             );
         }
+        // The trailing group wraps toward the trailing side, so the send button stays last and
+        // on the right in a narrow composer.
+        let mut actions = div()
+            .min_w_0()
+            .flex()
+            .flex_wrap()
+            .justify_end()
+            .items_center()
+            .gap(px(4.))
+            .child(rules);
         let blocked = unknown
             || importing
             || self.creating_task
@@ -857,7 +928,7 @@ impl Shell {
         // While a turn runs, an empty draft offers to stop it and a draft offers to send it.
         let stop_only = active && !has_content;
         if active && has_content {
-            toolbar = toolbar.child(
+            actions = actions.child(
                 self.icon_button("composer-stop", "stop", "Stop current turn")
                     .text_color(t.removed)
                     .on_click(cx.listener(|s, _, _, _| {
@@ -897,7 +968,7 @@ impl Shell {
             self.primary("composer-submit", submit_glyph, "")
                 .disabled(blocked)
         };
-        toolbar = toolbar.child(div().w(px(4.))).child(
+        actions = actions.child(
             submit
                 .w(px(28.))
                 .h(px(28.))
@@ -922,13 +993,52 @@ impl Shell {
                     }
                 })),
         );
-        editor = editor.child(toolbar);
+        editor = editor.child(
+            div()
+                .pl(px(8.))
+                .pr(px(8.))
+                .pb(px(8.))
+                .flex()
+                .items_end()
+                .gap(px(8.))
+                .child(toolbar)
+                .child(actions),
+        );
+        // The context and usage meters sit in a tab on the composer's top edge. The tab is
+        // drawn after the composer, one point over its border, so the two read as one surface.
+        let tab_edge = if focused {
+            t.accent.opacity(0.6)
+        } else {
+            t.edge
+        };
+        let tab = div()
+            .absolute()
+            .right_0()
+            .top(px(1. - METER_TAB_HEIGHT))
+            .h(px(METER_TAB_HEIGHT))
+            .pl(px(METER_TAB_FOOT + METER_TAB_SLANT + 6.))
+            .pr(px(6.))
+            .flex()
+            .items_center()
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| paint_meter_tab(bounds, t.raised, tab_edge, window),
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
+            .child(self.usage_meters(cx));
         wrapper = wrapper.child(
             div()
                 .relative()
+                .mt(px(METER_TAB_HEIGHT - 1.))
                 .top(px(self.composer_spring.offset))
                 .child(dither::shadow(t, motion::COMPOSER_RADIUS, 4.))
-                .child(editor),
+                .child(editor)
+                .child(tab),
         );
         if !empty {
             let hint: &[(&str, &str)] = if steering {
@@ -940,7 +1050,11 @@ impl Shell {
             } else if active {
                 &[("⏎", "queue"), ("⇧⏎", "newline")]
             } else {
-                &[("⏎", "send"), ("⇧⏎", "newline"), ("⇧⇥", "access")]
+                if has_modes {
+                    &[("⏎", "send"), ("⇧⏎", "newline"), ("⇧⇥", "plan")]
+                } else {
+                    &[("⏎", "send"), ("⇧⏎", "newline"), ("⇧⇥", "access")]
+                }
             };
             let mut footer = div()
                 .pt(px(7.))
@@ -1005,6 +1119,72 @@ impl Shell {
             .text_color(t.muted)
             .hover(move |s| s.bg(t.selected).text_color(t.text))
             .styles(move |s| s.selected(|s| s.bg(t.accent.opacity(0.12)).text_color(t.text)))
+    }
+}
+
+/// Height of the strip above the floating composer that holds the jump-to-latest button. The
+/// conversation runs beneath it.
+const COMPOSER_LEAD: f32 = 28.;
+
+/// Height of the meter tab on the composer's top edge, and the run of its slanted side.
+const METER_TAB_HEIGHT: f32 = 24.;
+const METER_TAB_SLANT: f32 = 14.;
+/// Room before the slant in which the tab's foot curves out of the composer's edge, and how far
+/// from each corner of the slant its rounding starts.
+const METER_TAB_FOOT: f32 = 7.;
+const METER_TAB_ROUNDING: f32 = 6.;
+
+// Paints the meter tab: a surface with a slanted leading side and a rounded trailing corner
+// that continues the composer's corner. The slant curves out of the composer's edge at its
+// foot and into the top edge at its head. The bottom side has no edge, because it joins the
+// composer.
+fn paint_meter_tab(bounds: Bounds<Pixels>, surface: Hsla, edge: Hsla, window: &mut Window) {
+    let radius = px(motion::COMPOSER_RADIUS);
+    // The edge runs through pixel centers, which keeps a one-point stroke sharp.
+    let half = px(0.5);
+    // The foot starts at the tab's leading edge, where the composer's own edge ends.
+    let (left, right) = (bounds.left(), bounds.right() - half);
+    let (top, bottom) = (bounds.top() + half, bounds.bottom());
+    let foot = point(left + px(METER_TAB_FOOT), bottom);
+    let head = point(foot.x + px(METER_TAB_SLANT), top);
+    // A step of the rounding along the slant.
+    let rise = f32::from(bottom - top);
+    let length = (METER_TAB_SLANT * METER_TAB_SLANT + rise * rise).sqrt();
+    let along = point(
+        px(METER_TAB_SLANT / length * METER_TAB_ROUNDING),
+        px(-rise / length * METER_TAB_ROUNDING),
+    );
+    // `base` is where the foot starts: on the composer's edge for the stroke, so that the two
+    // lines join, and at the tab's bottom for the fill, so that it covers that edge.
+    let outline = |builder: &mut PathBuilder, base: Pixels| {
+        builder.move_to(point(left, base));
+        builder.curve_to(foot + along, point(foot.x, base));
+        builder.line_to(head - along);
+        builder.curve_to(point(head.x + px(METER_TAB_ROUNDING), top), head);
+        builder.line_to(point(right - radius, top));
+        builder.curve_to(point(right, top + radius), point(right, top));
+        builder.line_to(point(right, bottom));
+    };
+    let mut body = PathBuilder::fill();
+    outline(&mut body, bottom);
+    body.close();
+    if let Ok(path) = body.build() {
+        window.paint_path(path, surface);
+    }
+    // The fill is thin where the foot leaves the composer's edge, and a second translucent line
+    // over that edge would show as a brighter stretch. The composer's edge is covered under the
+    // whole tab, so the tab's own stroke is the only line there.
+    window.paint_quad(fill(
+        Bounds::new(
+            point(bounds.left(), bottom - px(1.)),
+            size(bounds.size.width - px(1.), px(1.)),
+        ),
+        surface,
+    ));
+    let mut stroke = PathBuilder::stroke(px(1.));
+    outline(&mut stroke, bottom - half);
+    if let Ok(path) = stroke.build() {
+        window.paint_path(path, edge);
     }
 }
 

@@ -263,14 +263,25 @@ impl TextLine {
                     } else {
                         px(0.)
                     };
-                let block_height = self.line.font_size();
+                // The plate is a little taller than the letters and sits on a dotted baseline.
+                let block_height = self.line.font_size() + px(3.);
                 let bounds = Bounds::new(
                     origin + point(left, height * row + (height - block_height) / 2.),
                     size(right - left, block_height),
                 );
-                let corners = Corners::all(px(INLINE_RADIUS));
-                // A tinted chip, like every other badge: no outline to fight the letters.
-                window.paint_quad(fill(bounds, theme.accent.opacity(0.11)).corner_radii(corners));
+                // Inline code is drawn in the interface's own language: a plate of fine
+                // dither instead of a flat fill, square at the corners, on a dotted rule. Both
+                // patterns are drawn in the shader, so a paragraph of many spans stays cheap.
+                let cell = window.scale_factor();
+                window.paint_quad(
+                    fill(bounds, checkerboard(theme.dot.opacity(0.8), cell))
+                        .corner_radii(Corners::all(px(INLINE_RADIUS))),
+                );
+                let baseline = Bounds::new(
+                    point(bounds.left(), bounds.bottom() - px(1.)),
+                    size(bounds.size.width, px(1.)),
+                );
+                window.paint_quad(fill(baseline, checkerboard(theme.subtle, cell)));
             }
             start = end;
         }

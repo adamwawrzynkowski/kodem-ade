@@ -13,10 +13,12 @@ impl Shell {
     /// Builds the attention-first thread feed with status, branch and saved review metadata.
     pub(super) fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        if self.settings.collapsed {
+        // The rail shows only once the sidebar has closed all the way; while it slides, the
+        // full sidebar is drawn and clipped.
+        if self.reveals.sidebar <= 0. {
             return div()
                 .relative()
-                .w(px(54.))
+                .w(px(motion::SIDEBAR_RAIL))
                 .flex_shrink_0()
                 .h_full()
                 .bg(t.sidebar)
@@ -159,7 +161,7 @@ impl Shell {
                             .child(icon("chevrons-up-down").size(px(12.)))
                             .on_click_with_bounds(cx.listener(
                                 |s, bounds: &Bounds<Pixels>, _, cx| {
-                                    s.menu_anchor = Some(bounds.top_right());
+                                    s.menu_anchor = Some(*bounds);
                                     s.panel = Panel::Projects;
                                     cx.notify();
                                 },
@@ -169,7 +171,7 @@ impl Shell {
                         self.icon_button("sort-tasks", "settings-2", "Thread list settings")
                             .on_click_with_bounds(cx.listener(
                                 |s, bounds: &Bounds<Pixels>, _, cx| {
-                                    s.menu_anchor = Some(bounds.top_right());
+                                    s.menu_anchor = Some(*bounds);
                                     s.panel = Panel::Sort;
                                     cx.notify();
                                 },
@@ -827,7 +829,8 @@ pub(super) fn project_tint(project: &Project, theme: Theme) -> Hsla {
     })
 }
 
-fn elapsed(time: u64) -> String {
+/// Returns the age of a timestamp as one short figure, such as `12m` or `3h`.
+pub(super) fn elapsed(time: u64) -> String {
     let s = now().saturating_sub(time) / 1000;
     if s < 60 {
         format!("{s}s")

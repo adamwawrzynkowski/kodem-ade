@@ -142,3 +142,84 @@ The usage panel has a Context section with the window, the point where automatic
 
 Compilation, formatting and Clippy are the only checks. Appearance, layout, motion and the size of the performance gain are unverified.
 
+## Second follow-up, 12 October 2026
+
+The user reported seven things after using the build.
+
+| Report | Cause | Change |
+| --- | --- | --- |
+| The look of inline code blocks | Every code span was accent text on an accent chip, which is loud in a paragraph with many spans. | Code is text-colored mono on a quiet neutral chip. Links and file references keep the accent. |
+| Icons in some buttons are off center | The button builders added the label as a child even when it was empty. The empty child took a gap and pushed the icon aside. | An empty label is not added (`ui/mod.rs`). |
+| The animated wave is slow and unwanted | The hero field on the new-task screen. | Removed. A reactive dot field behind the whole conversation replaces it (`ui/backdrop.rs`). It is a cached view beneath the workspace, so its steps do not render the conversation. |
+| The KODEM logo | The 5×7 dot-matrix wordmark. | The title bar shows the Kodem mark and the name in Geist Mono. |
+| Effects fly outside the window | An arc rose whenever its chip stayed inside the window by half a chip, which let it pass through the title bar. | An arc keeps a margin of the title bar plus one and a half chips from the top and dips instead (`arc_control` in `ui/fx.rs`). |
+| Panels are hard to resize | The dividers were one point wide and were also their own hit area. | Each divider has an eleven-point hit area drawn above both panes, with a line that lights up under the pointer. |
+| The send button jumps when the composer narrows | All toolbar items were in one wrapping row. | The options wrap in their own group. Stop and send are a fixed group on the trailing side. |
+
+Verified by compilation, formatting and Clippy only. The look of the background, its densities and speeds, and the new arcs are unseen.
+
+## Third follow-up, 12 October 2026
+
+| Report | Change |
+| --- | --- |
+| The chat background makes text hard to read | The first change removed the field from behind the text. The user wanted it kept there with a look that leaves text readable. The field now covers the whole chat: behind the centered reading column it is one-point specks at 30% of the alpha and 80% of the density, and over 130 points beside the column it grows to two-point dots at full alpha. |
+| "K" and "Kodem" doubled in the title bar | The title bar shows the name only. |
+| Inline code blocks still do not fit the interface | A span is mono text on a plate of fine dither with square corners and a dotted baseline, both drawn by the shader. The earlier change had only replaced the fill color. |
+| The composer toolbar is messy; plan mode sits inside the approval choices | The context and usage meters moved out of the toolbar, first to a row above the draft and then, at the user's request, into their own tab on the composer's top edge: a surface with a slanted leading side that is drawn as a path one point over the composer's border (`paint_meter_tab` in `ui/chat.rs`). The toolbar has three sections closed by dotted rules: attachments and skills; model, account and effort; mode and approvals. A provider with a plan mode has a Mode chip (Build or Plan) and a separate Approvals chip. The provider has one mode at a time, so while Plan is on the approval rule is remembered in the window (`Shell::approval_memory`) and applied when the task returns to Build. Shift-Tab switches Build and Plan. |
+
+The approval rule remembered during plan mode is not saved across a restart; after a restart a task that leaves plan mode returns to the provider's asking mode. Verified by compilation, formatting and Clippy only.
+
+## Fourth follow-up, 12 October 2026
+
+| Report | Change |
+| --- | --- |
+| The drifting dot background is still disliked; make it tiles that blink slightly with dithering | `ui/backdrop.rs` is a grid of 24-point tiles. Each tile has its own phase and period from a hash of its position. While its cycle is above a threshold it is lit: a wash fades in and dots fill it in Bayer order. The mood sets the color, the share of time a tile is lit, the speed, a phase per row that makes blinks climb, and how much the tiles blink together. The view is still cached beneath the workspace. |
+| Panels should animate open and closed | `motion::Reveals` holds how far the sidebar, the changes panel and the terminal are open. `Shell::sync_reveals` runs once per render and moves them toward what the settings ask for on a 16-millisecond timer that stops when they arrive. No toggle site changed. Panels take their state at once until the workspace has loaded, and with reduced motion. The changes panel does not slide in a window at most 1100 points wide, where it replaces the chat. Dialogs and menus already dissolve in; they still close at once. |
+
+Verified by compilation, formatting and Clippy only.
+
+## Fifth follow-up, 12 October 2026
+
+The context and usage meters have their own tab on the composer's top edge (`paint_meter_tab`).
+
+The user asked for a shader effect in which dithering creates the letters, for typing and for streamed replies, smooth, performance first, faster for typing. GPUI-CE 0.2.2 has no hook for custom shaders, so `components/streaming_text.rs` builds the effect from what the renderer has: each forming glyph is painted through clip rectangles that cover the grid cells whose Bayer threshold its progress has passed. Lit cells of a row merge into one rectangle, loose dots are plain quads, and a line's forming letters share one layer. A typed letter uses a one-point grid, starts at 34% and takes 110 ms. A streamed letter uses a grid of about one and a half points, starts at 10% and takes 260 ms; streamed text redraws every 28 ms. The Bayer table moved to `bayer.rs` so that the text components and `ui/dither.rs` share it.
+
+Not measured: the cost of the clip-rectangle draws on a fast stream, which is bounded by the 96 letters that may form at once. Verified by compilation, formatting and Clippy only.
+
+## Sixth follow-up, 12 October 2026
+
+| Report | Change |
+| --- | --- |
+| The tiled background is still wrong; the user meant dithering on the whole area with smooth transitions | `ui/backdrop.rs` draws one continuous surface. A field of three slow waves gives a density for each 24-point block, which is one period of the Bayer matrix. The block is painted with a cached sprite of that period at that density (`dither::level_sprite`). Neighboring blocks differ by a dot or two, so the surface has no edges, and a step costs one sprite per block. The color is fixed per mood so that its sprites are baked once; a change of mood cross-fades two surfaces. |
+| The meter tab has sharp corners | The slant curves out of the composer's edge at its foot and into the top edge at its head (`paint_meter_tab`). |
+| The model chip and the toolbar order | The chip shows the provider's logo, the account's color square, the model and a chevron. The account's name moved to the tooltip. The order is attachments, skills, a gap, model, effort, then the free space, then mode, approvals and send. The dotted section rules are gone. |
+| Use the Anthropic logo for Claude models | `assets/icons/claude.svg` is the Anthropic mark from Simple Icons 16.35.0. This reverses the earlier replacement by a neutral drawing and is recorded as an accepted deviation in `providers.md`. |
+
+## Seventh follow-up, 12 October 2026
+
+The user showed a reference for the background: a vertical dithered gradient whose edge is a row of streaks, and asked for that pattern at half the alpha. `ui/backdrop.rs` now draws it. A column of dots starts its band at `edge + drop behind the text + wave - streak`, in rows. The band is a cached sprite one cell wide (`dither::column_sprite`); there are sixty-four of them per color, for the eight columns of the Bayer matrix and the eight rows a band can start on, which keeps every dot on one fixed grid while a band moves a row at a time. The full grid below a band is a second sprite, repeated. The dot colors have half their earlier alpha. The gradient is measured over the part of the chat that the floating composer leaves in view.
+
+## Eighth follow-up, 12 October 2026
+
+The user asked for the gradient to start at the very bottom and to fill three quarters of the height. The band now starts about a quarter of the way down (`Field::of`) and is 176 rows long. Two things had hidden its bottom: an opaque strip behind the floating composer and a fade above it. Both are gone. They existed to hide messages that scrolled beneath the composer, so the conversation list now ends where the composer begins (`COMPOSER_LEAD` in `ui/chat.rs`) and is clipped there. The background renews its own sprite-baking budget, because it steps between renders of the workspace.
+
+## Ninth follow-up, 12 October 2026
+
+The user asked for a history of the sent messages, as in a supplied reference: a column of ticks beside the conversation and a preview card for the tick under the pointer. `ui/history.rs` builds it as a layer over the conversation list. There is one tick for each message of kind `User`. The tick of the turn in view is wider and takes the text color; the tick under the pointer takes the accent, and the two ticks on each side of it widen less. The preview is a card with a block header (the message's number and age), the sent text, the opening of the turn's last reply and the paragraph after it as a quotation with a dithered rule. Each section is clamped to two lines. A click scrolls the list so that the message is at the top (`Shell::open_turn`).
+
+The rail's place follows from the list's last bounds, so the preview needs no measurement: two spacers share the free height in the ratio of the tick's position, which keeps the card beside its tick and inside the conversation. Only the tick under the pointer is stored (`history_hover`, a message sequence number). A conversation with fewer than two sent messages has no rail. When there are more turns than ticks fit, the rail shows those around the turn in view. Turns of pages that are not loaded have no tick.
+
+Not verified: the look, and the ticks over the right edge of a message bubble in a chat narrower than the reading column. Verified by compilation, formatting and Clippy only.
+
+## Tenth follow-up, 12 October 2026
+
+The user asked for a background with less opacity and more movement. In `ui/backdrop.rs` the dot colors have about half of their earlier alpha (`Mood::tone`), after a second, smaller reduction on the same day. The edge moves more in every mood (`Field::of`): the swell along it is about twice as high and faster, a second, longer swell runs against it, the streaks rise and fall further, and the whole gradient breathes a little in every mood. A band that moves a row changes the share of dots at every height, so the swells also make dots come and go across the whole gradient. The quiet moods step every 110 ms instead of every 140 ms. The cost of one step did not change: the same cached sprites are drawn, one band per column.
+
+Verified by compilation, formatting and Clippy only.
+
+## Eleventh follow-up, 12 October 2026
+
+The user asked for fonts that fit better. Prose and titles used the macOS system font beside Geist Mono labels and code. They now use Geist, the sans-serif face of the same family (`theme::SANS`), so both share proportions and letterforms. Six static faces from Geist release 1.7.2 are bundled unchanged: Regular, Medium, SemiBold, Bold, Italic and Bold Italic. Geist Mono is the same as before; its files are identical to those of the release. All text already took its family from `theme::SANS` or `theme::MONO`, so no screen changed.
+
+Not verified: the look, and line lengths in tight rows, because Geist is slightly wider than the system font. Verified by compilation, formatting and Clippy only.
+

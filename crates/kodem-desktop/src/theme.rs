@@ -4,8 +4,9 @@
 //! stays vivid at low dot coverage, mono labels, hairline edges, and dot-matrix dithering in
 //! place of gradients, glows and blurred glass.
 use gpui::*;
-/// Proportional interface and prose typeface.
-pub const SANS: &str = ".SystemUIFont";
+/// Proportional interface and prose typeface: the bundled sans-serif companion of the mono
+/// face, so that prose and labels share one design.
+pub const SANS: &str = "Geist";
 /// Code, metadata, counters, button and instrument labels.
 pub const MONO: &str = "Geist Mono";
 /// Padding on all four sides of user-message bubbles.
@@ -15,7 +16,7 @@ pub const MESSAGE_RADIUS: f32 = 8.;
 /// Horizontal padding for inline blocks; their height follows the font size.
 pub const INLINE_PADDING: f32 = 3.;
 /// Corner radius for compact inline text blocks.
-pub const INLINE_RADIUS: f32 = 3.;
+pub const INLINE_RADIUS: f32 = 2.;
 /// Corner radius for chips, badges and keycaps.
 pub const RADIUS_SMALL: f32 = 4.;
 /// Corner radius for buttons, rows and fields.

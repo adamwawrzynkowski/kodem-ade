@@ -200,6 +200,96 @@ pub(super) fn system_reduce_motion() -> bool {
     }
 }
 
+/// Width of the collapsed sidebar rail, in points.
+pub(super) const SIDEBAR_RAIL: f32 = 54.;
+/// A height no smaller than the terminal panel, which its opening grows toward.
+pub(super) const TERMINAL_REACH: f32 = 300.;
+
+/// How far each side panel is open, from 0 to 1. The values follow what the settings ask for,
+/// so opening and closing a panel slides instead of jumping.
+#[derive(Default)]
+pub(super) struct Reveals {
+    pub sidebar: f32,
+    pub review: f32,
+    pub terminal: f32,
+    running: bool,
+    started: bool,
+}
+
+impl Reveals {
+    fn values(&mut self) -> [&mut f32; 3] {
+        [&mut self.sidebar, &mut self.review, &mut self.terminal]
+    }
+}
+
+impl Shell {
+    // Returns how far the sidebar, the changes panel and the terminal should be open.
+    fn reveal_targets(&self) -> [f32; 3] {
+        let open = |shown: bool| if shown { 1. } else { 0. };
+        let task = self.selected.is_some();
+        [
+            open(!self.settings.collapsed),
+            // In a narrow window the changes panel replaces the chat and does not slide.
+            open(self.show_review && task && self.window_width > 1100.),
+            open(self.show_terminal && task),
+        ]
+    }
+
+    /// Moves the side panels toward the state the settings ask for. Call it once per render.
+    ///
+    /// Panels take their state at once until the workspace has loaded, and with reduced motion.
+    pub(super) fn sync_reveals(&mut self, cx: &mut Context<Self>) {
+        let targets = self.reveal_targets();
+        if cx.reduce_motion() || !self.reveals.started {
+            for (value, target) in self.reveals.values().into_iter().zip(targets) {
+                *value = target;
+            }
+            self.reveals.started = self.workspace.is_some();
+            return;
+        }
+        let settled = self
+            .reveals
+            .values()
+            .into_iter()
+            .zip(targets)
+            .all(|(value, target)| *value == target);
+        if settled || self.reveals.running {
+            return;
+        }
+        self.reveals.running = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+                let moving = this
+                    .update(cx, |s, cx| {
+                        let targets = s.reveal_targets();
+                        let mut moving = false;
+                        for (value, target) in s.reveals.values().into_iter().zip(targets) {
+                            let remaining = target - *value;
+                            if remaining.abs() < 0.004 {
+                                *value = target;
+                            } else {
+                                // Each step covers a share of what is left: fast, then settling.
+                                *value += remaining * 0.26;
+                                moving = true;
+                            }
+                        }
+                        s.reveals.running = moving;
+                        cx.notify();
+                        moving
+                    })
+                    .unwrap_or(false);
+                if !moving {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+}
+
 #[derive(Default)]
 pub(super) struct ComposerSpring {
     pub offset: f32,

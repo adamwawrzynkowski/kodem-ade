@@ -1,4 +1,5 @@
 //! Native macOS desktop for Kodem's durable local host.
+mod bayer;
 mod bridge;
 mod clipboard;
 mod components;
@@ -22,6 +23,12 @@ fn main() {
         .with_assets(icons::Assets)
         .run(|cx| {
             if let Err(error) = cx.text_system().add_fonts(vec![
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-Regular.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-Medium.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-SemiBold.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-Bold.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-Italic.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-BoldItalic.ttf")),
                 Cow::Borrowed(include_bytes!(
                     "../../../assets/fonts/GeistMono-Regular.ttf"
                 )),

@@ -12,7 +12,7 @@ use gpui::{
 use unicode_segmentation::*;
 
 /// Time between redraws while streamed text settles into place.
-const REVEAL_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
+const REVEAL_FRAME: std::time::Duration = std::time::Duration::from_millis(28);
 
 actions!(
     text_input,
@@ -1234,14 +1234,16 @@ impl Element for TextElement {
                 window,
                 cx,
             );
+            let streaming = &self.input.read(cx).streaming;
+            let typed = streaming.typed();
             let glyphs = line.streaming_glyphs(
                 point(bounds.left(), bounds.top() + y),
                 height,
-                &self.input.read(cx).streaming,
+                streaming,
                 now,
                 visible,
             );
-            super::streaming_text::paint_glyphs(glyphs, window);
+            super::streaming_text::paint_glyphs(glyphs, typed, window);
             y += line.size(height).height;
         }
         if let Some(cursor) = prepaint.cursor.take() {
@@ -1266,8 +1268,9 @@ impl Render for TextInput {
                     // A typed letter settles in a few frames and must follow the key at once.
                     window.request_animation_frame();
                 } else if !self.reveal_pending {
-                    // Streamed text settles in four opacity steps. A redraw every REVEAL_FRAME
-                    // shows them all without rendering the conversation on every display frame.
+                    // A streamed letter forms out of dither in about a quarter of a second. A
+                    // redraw every REVEAL_FRAME gives it about nine steps without rendering the
+                    // conversation on every display frame.
                     self.reveal_pending = true;
                     cx.spawn(async move |this, cx| {
                         cx.background_executor().timer(REVEAL_FRAME).await;
@@ -1455,7 +1458,8 @@ fn shape(
                 if span.style.code {
                     styled.font.family = crate::theme::MONO.into();
                 }
-                if span.style.code || span.style.reference {
+                // Code reads in the text color; only a reference that opens something is tinted.
+                if span.style.reference {
                     styled.color = theme.accent;
                 }
                 if span.style.strike {

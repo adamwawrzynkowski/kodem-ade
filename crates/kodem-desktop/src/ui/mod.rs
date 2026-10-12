@@ -1,6 +1,7 @@
 //! Native workspace state and actions. All blocking work goes through the host bridge.
 mod accounts;
 mod activity;
+mod backdrop;
 mod browser;
 mod change_tree;
 mod chat;
@@ -13,6 +14,7 @@ mod diff_view;
 mod dither;
 mod effort_slider;
 mod fx;
+mod history;
 mod image_preview;
 mod kit;
 mod menus;
@@ -105,6 +107,7 @@ enum Panel {
     Comparison,
     Usage,
     Palette,
+    Mode,
 }
 struct ThreadMenu {
     task_id: String,
@@ -141,7 +144,8 @@ pub struct Shell {
     settings: Settings,
     theme: Theme,
     panel: Panel,
-    menu_anchor: Option<Point<Pixels>>,
+    /// Bounds of the control that opened the current menu. The menu opens above or below it.
+    menu_anchor: Option<Bounds<Pixels>>,
     thread_menu: Option<ThreadMenu>,
     deleting_task: Option<String>,
     error: Option<String>,
@@ -150,6 +154,9 @@ pub struct Shell {
     host_connected: bool,
     new_worktree_override: Option<bool>,
     new_preferences: Option<AgentPreferences>,
+    /// The approval rule that returns when a task or the new-task draft leaves plan mode,
+    /// keyed by task id; the draft uses an empty key.
+    approval_memory: HashMap<String, String>,
     settings_provider: Provider,
     // Project chosen for the next task, independent of the currently viewed thread.
     selected_project: Option<String>,
@@ -173,6 +180,8 @@ pub struct Shell {
     split: bool,
     chat_scroll: ListState,
     follow: bool,
+    /// Sequence number of the sent message whose history tick is under the pointer.
+    history_hover: Option<u64>,
     folded: HashSet<String>,
     collapsed_changes: HashSet<String>,
     text_views: HashMap<String, (Entity<TextInput>, Subscription)>,
@@ -215,6 +224,7 @@ pub struct Shell {
     new_submission_origin: Option<Point<Pixels>>,
     composer_height: f32,
     composer_spring: motion::ComposerSpring,
+    reveals: motion::Reveals,
     settings_section: usize,
     effort_slider: Option<(String, Entity<effort_slider::EffortSlider>, Subscription)>,
     image_preview: Option<image_preview::ImagePreview>,
@@ -412,6 +422,7 @@ impl Shell {
             host_connected: false,
             new_worktree_override: None,
             new_preferences: None,
+            approval_memory: HashMap::new(),
             settings_provider: Provider::default(),
             selected_project: None,
             editing_project: None,
@@ -434,6 +445,7 @@ impl Shell {
             split: false,
             chat_scroll: ListState::new(0, ListAlignment::Bottom, px(600.)),
             follow: true,
+            history_hover: None,
             folded: HashSet::new(),
             collapsed_changes: HashSet::new(),
             text_views: HashMap::new(),
@@ -476,6 +488,7 @@ impl Shell {
             new_submission_origin: None,
             composer_height: 170.,
             composer_spring: motion::ComposerSpring::default(),
+            reveals: motion::Reveals::default(),
             settings_section: 0,
             effort_slider: None,
             image_preview: None,
@@ -1241,6 +1254,7 @@ impl Shell {
             self.new_submission_origin = None;
         }
         self.selected = Some(id.clone());
+        self.history_hover = None;
         self.files.clear();
         self.task_changes = None;
         self.view = None;
@@ -1552,12 +1566,13 @@ impl Shell {
         label: impl Into<SharedString>,
     ) -> Button {
         let theme = self.theme;
+        let label = label.into();
         self.control(id)
             .overflow_hidden()
             .child(kit::shade(theme.dot.opacity(0.9), dither::Edge::Bottom))
             .child(kit::glint(theme.accent.opacity(0.5), dither::Edge::Bottom))
             .child(icon(glyph).size(px(13.)))
-            .child(label.into())
+            .when(!label.is_empty(), |b| b.child(label))
             .hover(move |s| {
                 s.bg(theme.control_hover)
                     .border_color(theme.accent.opacity(0.5))
@@ -1614,12 +1629,15 @@ impl Shell {
         label: impl Into<SharedString>,
     ) -> Button {
         let theme = self.theme;
+        // An empty label must not become a child: it would take a gap and push the icon of an
+        // icon-only button off center.
+        let label = label.into();
         self.control(id)
             .overflow_hidden()
             .child(kit::shade(gpui::black().opacity(0.2), dither::Edge::Bottom))
             .child(kit::glint(gpui::white().opacity(0.3), dither::Edge::Top))
             .child(icon(glyph).size(px(13.)))
-            .child(label.into())
+            .when(!label.is_empty(), |b| b.child(label))
             .bg(theme.accent)
             .border_color(theme.accent)
             .text_color(theme.on_accent)
@@ -1637,12 +1655,13 @@ impl Shell {
         label: impl Into<SharedString>,
         tone: Hsla,
     ) -> Button {
+        let label = label.into();
         self.control(id)
             .overflow_hidden()
             .child(kit::shade(tone.opacity(0.3), dither::Edge::Bottom))
             .child(kit::glint(tone.opacity(0.6), dither::Edge::Bottom))
             .child(icon(glyph).size(px(13.)))
-            .child(label.into())
+            .when(!label.is_empty(), |b| b.child(label))
             .bg(tone.opacity(0.09))
             .border_color(tone.opacity(0.45))
             .text_color(tone)

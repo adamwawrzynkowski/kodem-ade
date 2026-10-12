@@ -608,7 +608,7 @@ impl Shell {
             ("Provider, account and model", "⇧ ⌘ M"),
             ("Reasoning effort", "⇧ ⌘ E"),
             ("Access mode", "⇧ ⌘ A"),
-            ("Cycle access modes that ask or plan", "⇧ Tab"),
+            ("Switch build and plan, or cycle Codex access", "⇧ Tab"),
             ("Copy diff selection", "⌘ C"),
             ("Toggle sidebar", "⌘ B"),
             ("Toggle changes", "⌘ D"),
