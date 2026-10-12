@@ -48,6 +48,7 @@ impl Store {
         }
         db.execute_batch("CREATE TABLE IF NOT EXISTS agent_message_order(transcript TEXT NOT NULL, id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(transcript,id)); COMMIT;")?;
         retire_removed_providers(&db)?;
+        repair_settings_collections(&db)?;
         fs::set_permissions(
             root.join("workspace.sqlite"),
             fs::Permissions::from_mode(0o600),
@@ -919,11 +920,20 @@ fn retire_removed_providers(db: &Connection) -> Result<()> {
             continue;
         }
         let mut settings: serde_json::Value = serde_json::from_str(&saved)?;
-        if let Some(preferences) = settings["provider_preferences"].as_object_mut() {
+        // `get_mut` leaves out a key that the saved settings lack. Indexing for a mutable
+        // value would add the key as `null`, which a list or a map does not parse from.
+        if let Some(preferences) = settings
+            .get_mut("provider_preferences")
+            .and_then(serde_json::Value::as_object_mut)
+        {
             preferences.remove(provider);
         }
-        // Every provider has a registered default account, so the removed one has an entry.
-        if let Some(accounts) = settings["accounts"].as_array_mut() {
+        // Every provider has a registered default account, so the removed one has an entry
+        // in settings that hold accounts.
+        if let Some(accounts) = settings
+            .get_mut("accounts")
+            .and_then(serde_json::Value::as_array_mut)
+        {
             accounts.retain(|account| account["provider"] != provider);
         }
         if settings["agent_defaults"]["provider"] == provider
@@ -931,6 +941,38 @@ fn retire_removed_providers(db: &Connection) -> Result<()> {
         {
             fields.remove("agent_defaults");
         }
+        db.execute(
+            "UPDATE settings SET json=?1 WHERE id=1",
+            [serde_json::to_string(&settings)?],
+        )?;
+    }
+    Ok(())
+}
+
+// Fields of the saved settings that hold a list or a map.
+const SETTINGS_COLLECTIONS: [&str; 2] = ["accounts", "provider_preferences"];
+
+// Removes a `null` from a list or map field of the saved settings, so that the field takes its
+// default again. An earlier form of `retire_removed_providers` wrote such a `null` into
+// settings that lacked the field, and settings with it do not parse.
+fn repair_settings_collections(db: &Connection) -> Result<()> {
+    let saved: Option<String> = db
+        .query_row("SELECT json FROM settings WHERE id=1", [], |row| row.get(0))
+        .optional()?;
+    let Some(saved) = saved else {
+        return Ok(());
+    };
+    let mut settings: serde_json::Value = serde_json::from_str(&saved)?;
+    let Some(fields) = settings.as_object_mut() else {
+        return Ok(());
+    };
+    let count = fields.len();
+    for name in SETTINGS_COLLECTIONS {
+        if fields.get(name).is_some_and(serde_json::Value::is_null) {
+            fields.remove(name);
+        }
+    }
+    if fields.len() != count {
         db.execute(
             "UPDATE settings SET json=?1 WHERE id=1",
             [serde_json::to_string(&settings)?],
