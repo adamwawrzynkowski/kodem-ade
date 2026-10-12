@@ -943,12 +943,15 @@ impl Shell {
                                 || a.complete != b.complete
                                 || a.file_edits != b.file_edits
                             {
-                                let row = if b.kind == MessageKind::Tool {
+                                // A tool item can open or fold the parent tray of its
+                                // stretch, which sizes every row of the stretch.
+                                let rows = if b.kind == MessageKind::Tool {
                                     tool_rows_start(&view.messages, index)
+                                        ..tool_rows_end(&view.messages, index)
                                 } else {
-                                    index
+                                    index..index + 1
                                 };
-                                self.chat_scroll.remeasure_items(row..index + 1);
+                                self.chat_scroll.remeasure_items(rows);
                             }
                         }
                     } else {
@@ -1820,6 +1823,15 @@ fn tool_rows_start(messages: &[Message], end: usize) -> usize {
     let mut row = end.min(messages.len());
     while row > 0 && messages[row - 1].kind == MessageKind::Tool {
         row -= 1;
+    }
+    row
+}
+
+// Returns the row after the tool rows that start at `start`.
+fn tool_rows_end(messages: &[Message], start: usize) -> usize {
+    let mut row = start.min(messages.len());
+    while row < messages.len() && messages[row].kind == MessageKind::Tool {
+        row += 1;
     }
     row
 }

@@ -4,11 +4,11 @@
 //! stays vivid at low dot coverage, mono labels, hairline edges, and dot-matrix dithering in
 //! place of gradients, glows and blurred glass.
 use gpui::*;
-/// Proportional interface and prose typeface: the bundled sans-serif companion of the mono
-/// face, so that prose and labels share one design.
-pub const SANS: &str = "Geist";
+/// Proportional interface and prose typeface: a bundled humanist sans-serif. It is a different
+/// design from the mono face, so that prose and code are easy to tell apart.
+pub const SANS: &str = "Fira Sans";
 /// Code, metadata, counters, button and instrument labels.
-pub const MONO: &str = "Geist Mono";
+pub const MONO: &str = "IBM Plex Mono";
 /// Padding on all four sides of user-message bubbles.
 pub const MESSAGE_PADDING: f32 = 11.;
 /// Corner radius for user-message bubbles.

@@ -1,11 +1,15 @@
 //! The work trail: a run of tool calls under one summary line, with each call, its output and
 //! its diff one click away, and each thought in a tray of its own between the runs.
 //!
+//! Runs and thoughts that follow one another without a reply between them are one stretch of
+//! work. A stretch of more than one tray has a parent tray over all of them, which folds the
+//! whole stretch into one line. Its trays stay foldable inside it.
+//!
 //! A tray is open while its turn can still add to it and folds when the work moves on. Failed
-//! calls stay visible while their run is folded.
+//! calls stay visible while their run or their stretch is folded.
 use super::*;
-use crate::tool_output::{self, ToolView};
-use std::rc::Rc;
+use crate::tool_output::{self, EditSummary, ToolView};
+use std::{ops::Range, rc::Rc};
 
 /// Lines of an edit shown before the rest is folded behind a control.
 const DIFF_PREVIEW_LINES: usize = 40;
@@ -53,9 +57,69 @@ fn is_call(message: &Message) -> bool {
     message.kind == MessageKind::Tool && !is_thought(message)
 }
 
+// Returns the stretch of tool rows around `index`: the thoughts and the runs of calls that
+// follow one another without another message between them.
+fn work_rows(transcript: &[Message], index: usize) -> Range<usize> {
+    let mut start = index.min(transcript.len());
+    while start > 0 && transcript[start - 1].kind == MessageKind::Tool {
+        start -= 1;
+    }
+    let mut end = index.min(transcript.len());
+    while end < transcript.len() && transcript[end].kind == MessageKind::Tool {
+        end += 1;
+    }
+    start..end
+}
+
+// Counts the trays of a stretch of tool rows. Each thought is one tray, and so is each run of
+// calls.
+fn tray_count(messages: &[Message]) -> usize {
+    let mut count = 0;
+    let mut in_run = false;
+    for message in messages {
+        let call = is_call(message);
+        if !call || !in_run {
+            count += 1;
+        }
+        in_run = call;
+    }
+    count
+}
+
+// Names what a run or a stretch did in one line: its calls by kind, its thoughts, its edits.
+fn work_label(calls: &[Rc<ToolView>], thoughts: usize, edits: &EditSummary) -> String {
+    let mut parts = Vec::new();
+    let summary = tool_output::summary(calls);
+    if !summary.is_empty() {
+        parts.push(summary);
+    }
+    if thoughts > 0 {
+        parts.push(format!(
+            "{thoughts} {}",
+            if thoughts == 1 { "thought" } else { "thoughts" },
+        ));
+    }
+    if edits.files > 0 {
+        parts.push(format!(
+            "edited {} {}",
+            edits.files,
+            if edits.files == 1 { "file" } else { "files" },
+        ));
+    }
+    let mut label = parts.join(" · ");
+    if let Some(first) = label.get(..1) {
+        label = first.to_uppercase() + &label[1..];
+    }
+    if label.is_empty() {
+        label = "Worked".into();
+    }
+    label
+}
+
 impl Shell {
-    /// Renders one tool run's summary and individually expandable calls at its first transcript
-    /// row, or the tray of one thought at the row of that thought.
+    /// Renders the tray of one transcript row of tool work: the run of calls that starts at the
+    /// row, or the thought of the row. The first row of a stretch of several trays also carries
+    /// the parent tray of the stretch, and a folded parent hides the rows under it.
     pub(super) fn tool_calls(
         &mut self,
         conversation: &Conversation,
@@ -65,21 +129,176 @@ impl Shell {
         let Some(transcript) = self.conversation_messages(conversation) else {
             return div().into_any_element();
         };
-        if transcript.get(index).is_some_and(is_thought) {
-            let message = transcript[index].clone();
-            return self.thought_tray(conversation, &message, index, cx);
+        let rows = work_rows(transcript, index);
+        let Some(first) = transcript.get(rows.start) else {
+            return div().into_any_element();
+        };
+        if tray_count(&transcript[rows.clone()]) < 2 {
+            return match self.work_tray(conversation, index, false, cx) {
+                Some(tray) => div()
+                    .w_full()
+                    .min_w_0()
+                    .px_5()
+                    .py(px(2.))
+                    .child(tray)
+                    .into_any_element(),
+                None => div().into_any_element(),
+            };
         }
-        if index > 0 && is_call(&transcript[index - 1]) {
+        let key = format!("work:{}:{}", first.task_id, first.id);
+        let running = transcript[rows.clone()].iter().any(|message| {
+            tool_output::view(message).status == ToolStatus::Running
+                && self.conversation_message_active(conversation, message)
+        });
+        let open = self.tray_open(conversation, &key, rows.end, running);
+        let header = (index == rows.start)
+            .then(|| self.work_header(conversation, rows.clone(), &key, open, running, cx));
+        let t = self.theme;
+        // Each row draws its own part of the rail, so the trays of a stretch read as one list
+        // under their parent.
+        let tray = self.work_tray(conversation, index, !open, cx).map(|tray| {
+            div()
+                .ml(px(11.))
+                .pl(px(6.))
+                .py(px(2.))
+                .border_l_1()
+                .border_color(t.border)
+                .child(tray)
+        });
+        if header.is_none() && tray.is_none() {
             return div().into_any_element();
         }
+        div()
+            .w_full()
+            .min_w_0()
+            .px_5()
+            .when(header.is_some(), |row| row.pt(px(2.)))
+            .children(header)
+            .children(tray)
+            .into_any_element()
+    }
+
+    // The parent tray of a stretch of work: what all of its runs and thoughts did, in one line.
+    fn work_header(
+        &self,
+        conversation: &Conversation,
+        rows: Range<usize>,
+        key: &str,
+        open: bool,
+        running: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let t = self.theme;
+        let messages = self
+            .conversation_messages(conversation)
+            .and_then(|transcript| transcript.get(rows.clone()))
+            .unwrap_or_default();
+        let views: Vec<Rc<ToolView>> = messages.iter().map(tool_output::view).collect();
+        let (thoughts, calls): (Vec<_>, Vec<_>) = views
+            .iter()
+            .cloned()
+            .partition(|view| view.category == ToolCategory::Thinking);
+        let edits = tool_output::edit_summary(messages);
+        let label = work_label(&calls, thoughts.len(), &edits);
+        let elapsed: u64 = views.iter().filter_map(|view| view.duration_ms).sum();
+        let failures = calls
+            .iter()
+            .filter(|view| view.status == ToolStatus::Failed)
+            .count();
+        let toggle_conversation = conversation.clone();
+        let toggle_key = key.to_owned();
+        self.control(SharedString::from(key.to_owned()))
+            .w_full()
+            .h_auto()
+            .min_h(px(28.))
+            .py(px(4.))
+            .px(px(6.))
+            .gap(px(8.))
+            .justify_start()
+            .flex_wrap()
+            .bg(gpui::transparent_black())
+            .border_color(gpui::transparent_black())
+            .text_color(t.muted)
+            .hover(move |s| s.bg(t.selected).text_color(t.text))
+            .accessibility_label(format!(
+                "{} {label}",
+                if open { "Collapse" } else { "Expand" },
+            ))
+            .child(
+                icon(if open {
+                    "chevron-down"
+                } else {
+                    "chevron-right"
+                })
+                .size(px(12.))
+                .text_color(t.muted),
+            )
+            // The parent is brighter than the trays under it, which use the muted label.
+            .child(caps(&label, t).text_color(t.text))
+            .when_some(edits.lines.filter(|_| edits.files > 0), |button, lines| {
+                button.child(kit::diffstat(lines.added, lines.removed, t))
+            })
+            .when(failures > 0, |button| {
+                button.child(kit::chip(format!("{failures} FAILED"), t.removed))
+            })
+            .when(running, |button| {
+                button.child(dither::pulse(t.accent, cx.reduce_motion()))
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(8.))
+                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+            )
+            .when(!running && elapsed >= 1000, |button| {
+                button.child(figure(tool_output::duration(elapsed), t.subtle))
+            })
+            .on_click(cx.listener(move |s, _, _, cx| {
+                s.set_tray(&toggle_conversation, &toggle_key, !open, rows.clone(), cx)
+            }))
+            .into_any_element()
+    }
+
+    // Returns the tray that starts at a row: a thought, or the run of calls whose first call
+    // is the row. With `failures_only`, the parent of the row is folded, and only the failed
+    // calls of a run remain.
+    fn work_tray(
+        &mut self,
+        conversation: &Conversation,
+        index: usize,
+        failures_only: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let transcript = self.conversation_messages(conversation)?;
+        let message = transcript.get(index)?;
+        if is_thought(message) {
+            if failures_only {
+                return None;
+            }
+            let message = message.clone();
+            return Some(self.thought_tray(conversation, &message, index, cx));
+        }
+        if index > 0 && is_call(&transcript[index - 1]) {
+            return None;
+        }
+        self.tool_run(conversation, index, failures_only, cx)
+    }
+
+    // One run of calls: its summary line and its individually expandable calls.
+    fn tool_run(
+        &mut self,
+        conversation: &Conversation,
+        index: usize,
+        failures_only: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let transcript = self.conversation_messages(conversation)?;
         let length = transcript[index..]
             .iter()
             .take_while(|message| is_call(message))
             .count();
         let messages = &transcript[index..index + length];
-        let Some(first) = messages.first() else {
-            return div().into_any_element();
-        };
+        let first = messages.first()?;
         let t = self.theme;
         let views: Vec<Rc<ToolView>> = messages.iter().map(tool_output::view).collect();
         let group_key = format!("tool-group:{}:{}", first.task_id, first.id);
@@ -88,7 +307,8 @@ impl Shell {
                 && self.conversation_message_active(conversation, message)
         });
         // The run opens only itself: its calls stay one line each until they are clicked.
-        let expanded = self.tray_open(conversation, &group_key, index + length, running.is_some());
+        let expanded = !failures_only
+            && self.tray_open(conversation, &group_key, index + length, running.is_some());
         let edits = tool_output::edit_summary(messages);
         // A folded run still shows what went wrong. Only the calls on screen are copied out of
         // the transcript, which is borrowed until here.
@@ -98,22 +318,10 @@ impl Shell {
             .filter(|(_, view)| expanded || view.status == ToolStatus::Failed)
             .map(|(message, view)| (message.clone(), view.clone()))
             .collect();
-        let mut label = tool_output::summary(&views);
-        if edits.files > 0 {
-            let edited = format!(
-                "edited {} {}",
-                edits.files,
-                if edits.files == 1 { "file" } else { "files" },
-            );
-            label = if label.is_empty() {
-                format!("E{}", &edited[1..])
-            } else {
-                format!("{label} · {edited}")
-            };
+        if failures_only && shown.is_empty() {
+            return None;
         }
-        if label.is_empty() {
-            label = "Worked".into();
-        }
+        let label = work_label(&views, 0, &edits);
         let elapsed: u64 = views.iter().filter_map(|view| view.duration_ms).sum();
         let failures = views
             .iter()
@@ -167,7 +375,13 @@ impl Shell {
                     })
             })
             .on_click(cx.listener(move |s, _, _, cx| {
-                s.set_tray(&group_conversation, &toggle_key, !expanded, index, cx)
+                s.set_tray(
+                    &group_conversation,
+                    &toggle_key,
+                    !expanded,
+                    index..index + 1,
+                    cx,
+                )
             }));
         if let Some(position) = running {
             let view = &views[position];
@@ -182,17 +396,25 @@ impl Shell {
                         .child(format!("{} {}", verb(view.category), view.title)),
                 );
         }
-        let mut group = div().w_full().min_w_0().px_5().py(px(2.)).child(summary);
+        // Under a folded parent the run has no line of its own, and the rail of the parent
+        // already leads its failed calls.
+        let mut group = div()
+            .w_full()
+            .min_w_0()
+            .when(!failures_only, |group| group.child(summary));
         let mut calls = div()
-            .ml(px(11.))
-            .pl(px(11.))
-            .pt(px(2.))
-            .pb(px(4.))
-            .border_l_1()
-            .border_color(t.border)
             .flex()
             .flex_col()
-            .gap(px(2.));
+            .gap(px(2.))
+            .when(!failures_only, |calls| {
+                calls
+                    .ml(px(11.))
+                    .pl(px(11.))
+                    .pt(px(2.))
+                    .pb(px(4.))
+                    .border_l_1()
+                    .border_color(t.border)
+            });
         let any_shown = !shown.is_empty();
         for (message, view) in &shown {
             calls = calls.child(self.tool_call(conversation, message, view, index, cx));
@@ -200,7 +422,7 @@ impl Shell {
         if any_shown {
             group = group.child(calls);
         }
-        group.into_any_element()
+        Some(group.into_any_element())
     }
 
     // Reports whether a tray is open. A tray follows its work unless the user set it by hand: it
@@ -216,18 +438,19 @@ impl Shell {
         })
     }
 
-    // Opens or folds a tray by hand. The choice holds after the tray's work ends.
+    // Opens or folds a tray by hand. The choice holds after the tray's work ends. `rows` are
+    // the transcript rows whose height the tray decides.
     fn set_tray(
         &mut self,
         conversation: &Conversation,
         key: &str,
         open: bool,
-        index: usize,
+        rows: Range<usize>,
         cx: &mut Context<Self>,
     ) {
         self.tray_choices.insert(key.to_owned(), open);
         if let Some(scroll) = self.conversation_scroll(conversation) {
-            scroll.remeasure_items(index..index + 1);
+            scroll.remeasure_items(rows);
         }
         cx.notify();
     }
@@ -317,9 +540,15 @@ impl Shell {
                 header.child(figure(tool_output::duration(ms), t.subtle))
             })
             .on_click(cx.listener(move |s, _, _, cx| {
-                s.set_tray(&tray_conversation, &toggle_key, !expanded, index, cx)
+                s.set_tray(
+                    &tray_conversation,
+                    &toggle_key,
+                    !expanded,
+                    index..index + 1,
+                    cx,
+                )
             }));
-        let mut tray = div().w_full().min_w_0().px_5().py(px(2.)).child(header);
+        let mut tray = div().w_full().min_w_0().child(header);
         if expanded && !view.output.is_empty() {
             tray = tray.child(
                 div()
@@ -334,7 +563,7 @@ impl Shell {
                     .child(self.message_blocks(
                         &format!("tool-thought:{message_key}"),
                         crate::markdown::blocks(&view.output),
-                        false,
+                        self.message_arriving(conversation, message),
                         cx,
                     )),
             );
@@ -532,7 +761,7 @@ impl Shell {
                 language,
                 if full { body } else { &excerpt },
                 Some(280.),
-                false,
+                self.message_arriving(conversation, message),
                 cx,
             ));
             if truncated {

@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 /// Name of the effect anchor on the queue tray, where chips for queued messages land.
 pub(super) const OUTBOX_ANCHOR: &str = "outbox";
+/// Most height of the list of next messages in the composer: about three folded messages and
+/// the start of a fourth. More messages scroll, so the draft keeps its place.
+const OUTBOX_HEIGHT: f32 = 128.;
 
 impl Shell {
     /// Tracks only newly added draft context and stops requesting frames once it settles.
@@ -494,7 +497,8 @@ impl Shell {
             .into_any_element()
     }
 
-    /// Displays durable queued work and recoverable delivery failures above the composer.
+    /// Displays durable queued work and recoverable delivery failures as a row of the composer.
+    /// Its header keeps its place and its messages scroll, so the draft stays in reach.
     pub(super) fn outgoing_tray(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let Some(view) = self.view.as_ref().filter(|v| !v.outgoing.is_empty()) else {
             return div().into_any_element();
@@ -518,49 +522,51 @@ impl Shell {
             && outgoing.iter().any(|m| m.state == DeliveryState::Queued);
         let task_id = task.id.clone();
         let count = outgoing.len();
+        // The header keeps its place above the messages, which scroll under it.
+        let header = div().px(px(8.)).pt(px(6.)).pb(px(4.)).child(
+            // The tray header reads as a section header: label, count, state, dotted rule.
+            div()
+                .relative()
+                .h(px(24.))
+                .flex_shrink_0()
+                .px(px(6.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(fx::anchor(OUTBOX_ANCHOR))
+                .child(icon("arrow-down").size(px(12.)).text_color(t.subtle))
+                .child(caps("Next messages", t).text_color(t.muted))
+                .child(figure(count.to_string(), t.muted))
+                .when(paused, |d| d.child(kit::chip("PAUSED", t.warning)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(8.))
+                        .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+                )
+                .when(paused, |d| {
+                    d.child(
+                        self.ghost("resume-queue", "arrow-right", "Resume")
+                            .h(px(24.))
+                            .disabled(task.state == RunState::DeliveryUnknown)
+                            .on_click(cx.listener(move |s, _, _, _| {
+                                s.send(core::Request::ResumeQueue {
+                                    task_id: task_id.clone(),
+                                })
+                            })),
+                    )
+                }),
+        );
         let mut tray = div()
             .id("outgoing-tray")
             .relative()
-            .max_h(px(220.))
+            .max_h(px(OUTBOX_HEIGHT))
             .overflow_y_scroll()
-            .p(px(6.))
+            .px(px(8.))
+            .pb(px(8.))
             .flex()
             .flex_col()
-            .gap(px(4.))
-            .child(
-                // The tray header reads as a section header: label, count, state, dotted rule.
-                div()
-                    .relative()
-                    .h(px(24.))
-                    .flex_shrink_0()
-                    .px(px(6.))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(fx::anchor(OUTBOX_ANCHOR))
-                    .child(icon("arrow-down").size(px(12.)).text_color(t.subtle))
-                    .child(caps("Next messages", t).text_color(t.muted))
-                    .child(figure(count.to_string(), t.muted))
-                    .when(paused, |d| d.child(kit::chip("PAUSED", t.warning)))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(8.))
-                            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
-                    )
-                    .when(paused, |d| {
-                        d.child(
-                            self.ghost("resume-queue", "arrow-right", "Resume")
-                                .h(px(24.))
-                                .disabled(task.state == RunState::DeliveryUnknown)
-                                .on_click(cx.listener(move |s, _, _, _| {
-                                    s.send(core::Request::ResumeQueue {
-                                        task_id: task_id.clone(),
-                                    })
-                                })),
-                        )
-                    }),
-            );
+            .gap(px(4.));
         for (index, outgoing) in outgoing.into_iter().enumerate() {
             let id = outgoing.id.clone();
             let task_id = task.id.clone();
@@ -759,7 +765,14 @@ impl Shell {
                 },
             );
         }
-        kit::card(t).mb(px(8.)).child(tray).into_any_element()
+        div()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(tray)
+            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
+            .into_any_element()
     }
 }
 

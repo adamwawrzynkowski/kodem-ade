@@ -23,20 +23,26 @@ fn main() {
         .with_assets(icons::Assets)
         .run(|cx| {
             if let Err(error) = cx.text_system().add_fonts(vec![
-                Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-Regular.ttf")),
-                Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-Medium.ttf")),
-                Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-SemiBold.ttf")),
-                Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-Bold.ttf")),
-                Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-Italic.ttf")),
-                Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist-BoldItalic.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/FiraSans-Regular.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/FiraSans-Medium.ttf")),
                 Cow::Borrowed(include_bytes!(
-                    "../../../assets/fonts/GeistMono-Regular.ttf"
+                    "../../../assets/fonts/FiraSans-SemiBold.ttf"
                 )),
-                Cow::Borrowed(include_bytes!("../../../assets/fonts/GeistMono-Medium.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/FiraSans-Bold.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/FiraSans-Italic.ttf")),
                 Cow::Borrowed(include_bytes!(
-                    "../../../assets/fonts/GeistMono-SemiBold.ttf"
+                    "../../../assets/fonts/FiraSans-BoldItalic.ttf"
                 )),
-                Cow::Borrowed(include_bytes!("../../../assets/fonts/GeistMono-Bold.ttf")),
+                Cow::Borrowed(include_bytes!(
+                    "../../../assets/fonts/IBMPlexMono-Regular.ttf"
+                )),
+                Cow::Borrowed(include_bytes!(
+                    "../../../assets/fonts/IBMPlexMono-Medium.ttf"
+                )),
+                Cow::Borrowed(include_bytes!(
+                    "../../../assets/fonts/IBMPlexMono-SemiBold.ttf"
+                )),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/IBMPlexMono-Bold.ttf")),
             ]) {
                 eprintln!("Could not load bundled fonts: {error}");
             }

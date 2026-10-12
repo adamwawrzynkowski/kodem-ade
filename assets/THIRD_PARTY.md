@@ -16,7 +16,7 @@ Codex and its packaged helper tools are a separate prerequisite downloaded from 
 | OpenAI provider logo | Simple Icons 15.0.0; see [source record](licenses/openai-icon-source.txt). | [CC0](licenses/simple-icons.txt) |
 | Anthropic logo for the Claude Code provider | Simple Icons 16.35.0; see [source record](licenses/anthropic-icon-source.txt). The notice covers copyright, not trademark permission. | [CC0](licenses/simple-icons.txt) |
 | Native text input | `gpui-pre` 0.3.4's GPUI input example, adapted to GPUI-CE 0.2.2. Kodem adds multiline layout, wrapping, read-only selection, syntax colors and task draft integration. | [GPUI license](licenses/GPUI-APACHE.txt), Apache-2.0 |
-| Geist Mono Regular, Medium, SemiBold and Bold | [Geist upstream](https://github.com/vercel/geist-font); static font files, unchanged | [SIL Open Font License](licenses/geistmono-OFL.txt) |
-| Geist Regular, Medium, SemiBold, Bold, Italic and Bold Italic | [Geist upstream](https://github.com/vercel/geist-font), release 1.7.2; static font files, unchanged | [SIL Open Font License](licenses/geistmono-OFL.txt), the one license text of the Geist project |
+| Fira Sans Regular, Medium, SemiBold, Bold, Italic and Bold Italic | [Google Fonts repository](https://github.com/google/fonts/tree/e345593da2a4d596212542edbd28f2ed08fe6cbe/ofl/firasans), version 4.203; static font files, unchanged | [SIL Open Font License](licenses/firasans-OFL.txt) |
+| IBM Plex Mono Regular, Medium, SemiBold and Bold | [Google Fonts repository](https://github.com/google/fonts/tree/01d5d9f05246fb7090a8403b81257535cb1a088b/ofl/ibmplexmono), version 2.3; static font files, unchanged | [SIL Open Font License](licenses/ibmplexmono-OFL.txt) |
 
 Characters that the bundled fonts lack fall back to macOS system fonts, which are not bundled. The original complete GPUI Kit library is not linked: its GPUI-pre type graph is incompatible with this application's GPUI-CE renderer.

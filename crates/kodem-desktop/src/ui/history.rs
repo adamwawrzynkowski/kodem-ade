@@ -235,16 +235,7 @@ impl Shell {
             .flex()
             .flex_col()
             .gap(px(7.))
-            .child(
-                dither::Dither::new(dither::DitherField::Fade {
-                    from: dither::Edge::Bottom,
-                    start: 0.22,
-                    end: -0.3,
-                })
-                .color(t.dot)
-                .grid(2., 1.)
-                .layer(),
-            )
+            .child(dither::edge_shade(t.dot, 0.22, 0.))
             .child(if sent.is_empty() {
                 line(t.muted, 13.).child(if files == 1 {
                     "1 attachment".to_string()

@@ -289,7 +289,7 @@ fn paint_dots(
     grid: Grid,
     tile: (u32, u32),
     content: Option<u64>,
-    radius: f32,
+    radii: Corners<f32>,
     source: &dyn Fn(i32, i32) -> Option<Hsla>,
 ) {
     if grid.columns == 0 || grid.rows == 0 {
@@ -314,11 +314,11 @@ fn paint_dots(
             dot: ((grid.dot * scale).round() as u32).clamp(1, device_cell as u32),
         };
         if let Some(image) = sprite(window, cx, key, source) {
-            paint_sprite(window, image, bounds, tile, grid.cell, radius);
+            paint_sprite(window, image, bounds, tile, grid.cell, radii);
             return;
         }
     }
-    paint_quads(window, grid, radius, source);
+    paint_quads(window, grid, radii, source);
 }
 
 // Repeats a sprite across `bounds` and rounds the corners that coincide with the grid's corners.
@@ -328,7 +328,7 @@ fn paint_sprite(
     bounds: Bounds<Pixels>,
     tile: (u32, u32),
     cell: f32,
-    radius: f32,
+    radii: Corners<f32>,
 ) {
     let (tile_width, tile_height) = (tile.0 as f32 * cell, tile.1 as f32 * cell);
     let (left, top) = (f32::from(bounds.left()), f32::from(bounds.top()));
@@ -340,17 +340,17 @@ fn paint_sprite(
             let region = Bounds::new(point(px(x), px(y)), size(px(tile_width), px(tile_height)));
             let (first_column, last_column) = (x <= left, x + tile_width >= right);
             let (first_row, last_row) = (y <= top, y + tile_height >= bottom);
-            let corner = |rounded: bool| px(if rounded { radius } else { 0. });
-            let radii = Corners {
-                top_left: corner(first_column && first_row),
-                top_right: corner(last_column && first_row),
-                bottom_right: corner(last_column && last_row),
-                bottom_left: corner(first_column && last_row),
+            let corner = |rounded: bool, radius: f32| px(if rounded { radius } else { 0. });
+            let tile_radii = Corners {
+                top_left: corner(first_column && first_row, radii.top_left),
+                top_right: corner(last_column && first_row, radii.top_right),
+                bottom_right: corner(last_column && last_row, radii.bottom_right),
+                bottom_left: corner(first_column && last_row, radii.bottom_left),
             };
             let _ = window.paint_image(
                 region.intersect(&bounds),
                 region,
-                radii,
+                tile_radii,
                 image.clone(),
                 0,
                 false,
@@ -365,7 +365,7 @@ fn paint_sprite(
 fn paint_quads(
     window: &mut Window,
     grid: Grid,
-    radius: f32,
+    radii: Corners<f32>,
     source: &dyn Fn(i32, i32) -> Option<Hsla>,
 ) {
     let bounds = grid.bounds();
@@ -386,7 +386,7 @@ fn paint_quads(
                         (row as f32 + 0.5) * cell,
                         width,
                         height,
-                        radius,
+                        radii,
                     ) {
                     source(column, row)
                 } else {
@@ -704,7 +704,7 @@ fn paint_shadow(
             grid,
             (grid.columns, grid.rows),
             Some(content.finish()),
-            0.,
+            Corners::default(),
             &source,
         );
     }
@@ -1050,7 +1050,7 @@ struct PaintSpec {
     dot: f32,
     toned: bool,
     hover_only: bool,
-    corner_radius: f32,
+    corner_radii: Corners<f32>,
     /// Whether the field advances with the clock on this frame.
     moving: bool,
     time: f32,
@@ -1067,24 +1067,25 @@ fn tone(intensity: f32) -> f32 {
     }
 }
 
-fn outside_rounded_corner(x: f32, y: f32, width: f32, height: f32, radius: f32) -> bool {
-    if radius <= 0. {
+fn outside_rounded_corner(x: f32, y: f32, width: f32, height: f32, radii: Corners<f32>) -> bool {
+    let left = x < width / 2.;
+    let (top, bottom) = if left {
+        (radii.top_left, radii.bottom_left)
+    } else {
+        (radii.top_right, radii.bottom_right)
+    };
+    // A grid shorter than its radius keeps the top corner's arc over its whole height.
+    let (radius, corner_y) = if y < top {
+        (top, top)
+    } else if y > height - bottom {
+        (bottom, height - bottom)
+    } else {
+        return false;
+    };
+    let corner_x = if left { radius } else { width - radius };
+    if (x < corner_x) != left {
         return false;
     }
-    let corner_x = if x < radius {
-        radius
-    } else if x > width - radius {
-        width - radius
-    } else {
-        return false;
-    };
-    let corner_y = if y < radius {
-        radius
-    } else if y > height - radius {
-        height - radius
-    } else {
-        return false;
-    };
     let (dx, dy) = (x - corner_x, y - corner_y);
     dx * dx + dy * dy > radius * radius
 }
@@ -1143,7 +1144,7 @@ fn paint_grid(bounds: Bounds<Pixels>, spec: &PaintSpec, window: &mut Window, cx:
             grid,
             (grid.columns, grid.rows),
             None,
-            spec.corner_radius,
+            spec.corner_radii,
             &source,
         );
         return;
@@ -1162,7 +1163,7 @@ fn paint_grid(bounds: Bounds<Pixels>, spec: &PaintSpec, window: &mut Window, cx:
         grid,
         tile,
         Some(content.finish()),
-        spec.corner_radius,
+        spec.corner_radii,
         &source,
     );
 }
@@ -1177,7 +1178,7 @@ pub(super) struct Dither {
     toned: bool,
     animated: bool,
     hover_only: bool,
-    corner_radius: f32,
+    corner_radii: Corners<f32>,
 }
 
 impl Dither {
@@ -1191,7 +1192,7 @@ impl Dither {
             toned: false,
             animated: false,
             hover_only: false,
-            corner_radius: 0.,
+            corner_radii: Corners::default(),
         }
     }
 
@@ -1228,7 +1229,13 @@ impl Dither {
 
     /// Skips dots outside rounded corners of this radius.
     pub(super) fn corner_radius(mut self, radius: f32) -> Self {
-        self.corner_radius = radius;
+        self.corner_radii = Corners::all(radius);
+        self
+    }
+
+    /// Skips dots outside rounded corners, with one radius for each corner.
+    pub(super) fn corner_radii(mut self, radii: Corners<f32>) -> Self {
+        self.corner_radii = radii;
         self
     }
 
@@ -1250,7 +1257,7 @@ impl RenderOnce for Dither {
             dot: self.dot,
             toned: self.toned,
             hover_only: self.hover_only,
-            corner_radius: self.corner_radius,
+            corner_radii: self.corner_radii,
             moving,
             time: if moving { clock_seconds() } else { 0. },
         };
@@ -1416,13 +1423,15 @@ fn paint_bar(
         grid,
         (grid.columns, grid.rows),
         Some(content.finish()),
-        0.,
+        Corners::default(),
         &source,
     );
 }
 
 /// Sweeps a dot-matrix packet across a thin band at the top of its parent while an agent works.
-pub(super) fn scanner(color: Hsla) -> Div {
+///
+/// `radii` are the parent's corners that the band touches, so that no dot shows outside them.
+pub(super) fn scanner(color: Hsla, radii: Corners<f32>) -> Div {
     div().absolute().top_0().left_0().right_0().h(px(4.)).child(
         Dither::new(DitherField::Sweep {
             width: 0.16,
@@ -1431,26 +1440,74 @@ pub(super) fn scanner(color: Hsla) -> Div {
         })
         .color(color)
         .grid(2., 1.)
+        .corner_radii(radii)
         .animated(),
     )
 }
 
-/// Shades a rounded row: grain that fades to the right when selected, a moving flow while active.
+/// Height of the dots that shade the bottom edge of a surface.
+const EDGE_SHADE: f32 = 16.;
+/// Width of the grain at the leading edge of a selected row.
+const SELECTION_GRAIN: f32 = 64.;
+
+/// Shades the bottom edge of a rounded surface with dots that thin out upward, from `density`.
+///
+/// The band has a fixed height, so the dots stay in the padding of the surface and do not
+/// spread behind its text on a tall surface. Add it to a relatively positioned surface before
+/// its content.
+pub(super) fn edge_shade(color: Hsla, density: f32, radius: f32) -> Div {
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .bottom_0()
+        .h(px(EDGE_SHADE))
+        .max_h_full()
+        .child(
+            Dither::new(DitherField::Fade {
+                from: Edge::Bottom,
+                start: density,
+                end: 0.,
+            })
+            .color(color)
+            .grid(2., 1.)
+            .corner_radii(Corners {
+                bottom_left: radius,
+                bottom_right: radius,
+                ..Corners::default()
+            }),
+        )
+}
+
+/// Shades a rounded row: grain at its leading edge when selected, a moving flow while active.
 pub(super) fn row_wash(color: Hsla, radius: f32, selected: bool, active: bool) -> Div {
     div()
         .absolute()
         .inset_0()
         .when(selected, |layer| {
+            // The grain has a fixed width, so it thins out before the text of a wide row.
             layer.child(
-                Dither::new(DitherField::Fade {
-                    from: Edge::Left,
-                    start: 0.62,
-                    end: -0.12,
-                })
-                .color(color.opacity(0.3))
-                .grid(2., 1.)
-                .corner_radius(radius)
-                .layer(),
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(px(SELECTION_GRAIN))
+                    .max_w_full()
+                    .child(
+                        Dither::new(DitherField::Fade {
+                            from: Edge::Left,
+                            start: 0.62,
+                            end: 0.,
+                        })
+                        .color(color.opacity(0.3))
+                        .grid(2., 1.)
+                        .corner_radii(Corners {
+                            top_left: radius,
+                            bottom_left: radius,
+                            ..Corners::default()
+                        }),
+                    ),
             )
         })
         .when(active, |layer| {

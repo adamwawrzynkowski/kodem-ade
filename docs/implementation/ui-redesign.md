@@ -223,3 +223,33 @@ The user asked for fonts that fit better. Prose and titles used the macOS system
 
 Not verified: the look, and line lengths in tight rows, because Geist is slightly wider than the system font. Verified by compilation, formatting and Clippy only.
 
+
+## Twelfth follow-up, 12 October 2026
+
+The user asked for four things in two requests.
+
+Masks and task rows. The scanner band of the activity strip showed dots outside the composer's rounded leading corner. The dither painters now take one radius for each corner (`Dither::corner_radii`), and the scanner follows the inside of that corner when the strip is the composer's first row. A task card in the sidebar leads with a 30-point project tile (36 points at first; the user found that a little too big) that spans its two lines (`sidebar::project_tile`), so tasks of different projects are easy to tell apart in a flat list. The tile always shows the project; the state marker of the task moved in front of its title.
+
+Text on dithered surfaces. Cards, message bubbles and history entries shaded a share of their height with dots, so a tall surface had dots behind its text. They now use `dither::edge_shade`, a band of 16 points along the bottom edge. The grain of a selected row (`dither::row_wash`) has a fixed width of 64 points instead of 84% of the row. The chat background did not change.
+
+Arriving text. Only an incomplete reply of the agent formed out of dither. `Shell::message_arriving` now decides this for every message of an agent: an incomplete message of a running thread, or a complete one in the first 1.5 seconds after its creation. Thoughts and tool output use it too. `StreamingText::append` queues up to 576 letters and starts them one after another, so a text that comes whole forms in a sweep and no more than 96 letters form at the same time.
+
+Fonts. Fira Sans 4.203 replaces Geist and IBM Plex Mono 2.3 replaces Geist Mono (`theme::SANS`, `theme::MONO`). The two faces are of different designs. The static files come unchanged from the Google Fonts repository; `assets/THIRD_PARTY.md` records the revisions. Which elements use the mono face did not change.
+
+Not verified: the look of any of these changes. Verified by compilation, formatting and Clippy, and by a temporary test of the timing of the sweep.
+
+## Thirteenth follow-up, 12 October 2026
+
+The user asked for the next messages to live in the prompt field. The tray was a card of its own above the composer, so the tab of the context and usage meters stood in the gap between the two. `Shell::outgoing_tray` is now a row of the composer, between the question panel and the draft context, and the meter tab is always the top of the whole surface. The header of the row keeps its place. Its messages scroll in a list of at most 128 points (`OUTBOX_HEIGHT`, earlier 220 for the whole card), so a long queue or an opened message does not move the draft or its toolbar.
+
+Not verified: the look. Verified by compilation, formatting and Clippy only.
+
+## Fourteenth follow-up, 12 October 2026
+
+The user asked for a parent over the runs of commands, which folds all of them when they are finished, and gave a screenshot of MonoCode as the model. A long turn was a list of one-line trays: a run, a thought, a run, a thought. Runs and thoughts that follow one another without another message between them are now one stretch of work (`tool_calls::work_rows`). A stretch of two or more trays has a parent tray at its first row (`Shell::work_header`): it counts the calls by kind, the thoughts and the edited files, and it shows the edit totals, the failures and the summed duration. The parent follows the same rule as the other trays (`Shell::tray_open`): open while a call in it runs or while it ends the transcript of a working conversation, folded afterwards, and a choice by hand holds. The trays under it keep their own state and are drawn after a rail. A failed call stays visible under a folded parent. A stretch of one tray has no parent.
+
+The transcript list still has one row for each message. Each row draws its own tray and its part of the rail, and a folded parent leaves the rows under it empty, so a long stretch is not one tall list item. A change of a tool message now measures every row of its stretch again (`tool_rows_end`).
+
+A reply of the agent between two tools ends a stretch, so commentary is never folded away.
+
+Not verified: the look. Verified by compilation, formatting and Clippy only.

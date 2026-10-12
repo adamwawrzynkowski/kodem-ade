@@ -11,7 +11,13 @@ use unicode_segmentation::UnicodeSegmentation;
 /// letters form in less than half the time.
 const SETTLE: Duration = Duration::from_millis(260);
 const TYPED_SETTLE: Duration = Duration::from_millis(110);
+/// Most letters that form at the same time.
 const MAX_LETTERS: usize = 96;
+/// Most streamed letters that wait for their turn. A block that arrives whole forms from its
+/// start to its end in a sweep of this many letters; older letters are there at once.
+const MAX_QUEUED: usize = MAX_LETTERS * 6;
+/// Longest time by which the last letter of a small chunk starts after the chunk arrived.
+const LEAD: Duration = Duration::from_millis(120);
 
 pub(super) struct StreamingText {
     letters: VecDeque<(Range<usize>, Instant)>,
@@ -174,21 +180,36 @@ impl StreamingText {
             .grapheme_indices(true)
             .rev()
             .take_while(|(start, letter)| start + letter.len() > old.len())
-            .take(MAX_LETTERS)
+            .take(MAX_QUEUED)
             .collect::<Vec<_>>();
         let first = tail.last().map_or(new.len(), |(start, _)| *start);
         self.letters.retain(|(range, _)| range.end <= first);
-        let start = self
+        if tail.is_empty() {
+            return;
+        }
+        let count = tail.len() as u32;
+        // A large chunk takes longer than a small one, so that its letters start one after
+        // another and no more than MAX_LETTERS of them form at the same time.
+        let lead = (SETTLE / MAX_LETTERS as u32 * count).max(LEAD);
+        let step = Duration::from_millis(8).min(lead / count);
+        let mut start = self
             .letters
             .back()
-            .map_or(now, |(_, time)| (*time).max(now));
-        let step = Duration::from_secs_f32(0.008_f32.min(0.12 / tail.len().max(1) as f32));
-        for (index, (offset, letter)) in tail.into_iter().rev().enumerate() {
-            let time = (start + step * index as u32).min(now + Duration::from_millis(120));
-            self.letters
-                .push_back((offset..offset + letter.len(), time));
+            .map_or(now, |(_, time)| (*time + step).max(now));
+        // Letters that still wait must not hold the new ones back: when the queue is longer
+        // than the lead, every letter moves earlier and the oldest ones are there at once.
+        let late = (start + step * (count - 1)).saturating_duration_since(now + lead);
+        if !late.is_zero() {
+            for (_, time) in &mut self.letters {
+                *time = time.checked_sub(late).unwrap_or(*time);
+            }
+            start = start.checked_sub(late).unwrap_or(start);
         }
-        while self.letters.len() > MAX_LETTERS {
+        for (index, (offset, letter)) in tail.into_iter().rev().enumerate() {
+            self.letters
+                .push_back((offset..offset + letter.len(), start + step * index as u32));
+        }
+        while self.letters.len() > MAX_QUEUED {
             self.letters.pop_front();
         }
     }
@@ -236,9 +257,17 @@ impl StreamingText {
         }
     }
 
-    /// Returns the byte spans painted by the reveal overlay, including edits in the middle of text.
-    pub(super) fn ranges(&self) -> impl Iterator<Item = Range<usize>> + '_ {
-        self.letters.iter().map(|(range, _)| range.clone())
+    /// Returns the byte spans painted by the reveal overlay, including edits in the middle of
+    /// text. Letters that touch share one span.
+    pub(super) fn ranges(&self) -> Vec<Range<usize>> {
+        let mut spans: Vec<Range<usize>> = Vec::new();
+        for (range, _) in &self.letters {
+            match spans.last_mut() {
+                Some(last) if last.end == range.start => last.end = range.end,
+                _ => spans.push(range.clone()),
+            }
+        }
+        spans
     }
 
     /// Drops settled letters so idle text no longer requests animation frames.

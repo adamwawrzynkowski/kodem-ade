@@ -464,17 +464,11 @@ pub(super) fn card(theme: Theme) -> Div {
         .border_1()
         .border_color(theme.border)
         .bg(theme.raised)
-        .child(
-            Dither::new(DitherField::Fade {
-                from: Edge::Bottom,
-                start: 0.22,
-                end: -0.3,
-            })
-            .color(theme.dot)
-            .grid(2., 1.)
-            .corner_radius(crate::theme::RADIUS_SURFACE)
-            .layer(),
-        )
+        .child(dither::edge_shade(
+            theme.dot,
+            0.22,
+            crate::theme::RADIUS_SURFACE,
+        ))
 }
 
 /// A content block: an inset surface with a hairline edge for code, output, a diff or a table.

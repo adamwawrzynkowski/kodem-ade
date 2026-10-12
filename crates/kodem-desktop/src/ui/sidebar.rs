@@ -9,6 +9,11 @@ pub(super) fn thread_anchor(task_id: &str) -> SharedString {
     SharedString::from(format!("thread:{task_id}"))
 }
 
+/// Side of the tile that leads a task card. It spans the title and the line under it.
+const TASK_TILE: f32 = 30.;
+/// Size of a glyph in that tile.
+const TASK_TILE_GLYPH: f32 = 17.;
+
 impl Shell {
     /// Builds the attention-first thread feed with status, branch and saved review metadata.
     pub(super) fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -578,35 +583,44 @@ impl Shell {
         let active = section == Section::Working;
         let blocked = task.is_blocked();
         let unread = section == Section::Ready;
-        let leading = if needs_input {
-            motion::active_icon("shield", t.warning, false, cx.reduce_motion())
-        } else if active {
-            dither::pulse(t.accent, cx.reduce_motion())
-        } else if blocked {
-            icon("circle-x")
-                .size(px(13.))
-                .text_color(t.removed)
-                .into_any_element()
-        } else if unread {
-            kit::marker(t.added).into_any_element()
-        } else {
-            match (task.kind, project) {
-                (TaskKind::Coding, Some(project)) => project_icon(project, t),
-                // A review shows what it examines; a chat has no project to show.
-                (TaskKind::Review, _) => {
-                    icon(match task.review_scope.as_ref().map(|s| &s.target) {
-                        Some(ReviewTarget::Branch { .. }) => "branch",
-                        _ => "git-pull-request",
-                    })
-                    .size(px(13.))
-                    .text_color(project.map_or(t.accent, |project| project_tint(project, t)))
-                    .into_any_element()
-                }
-                _ => icon("chat")
-                    .size(px(13.))
-                    .text_color(t.subtle)
-                    .into_any_element(),
+        // The tile always names the project, so tasks of different projects stay apart in a
+        // flat list. The state of the task leads its title instead.
+        let tile = match (task.kind, project) {
+            (TaskKind::Coding, Some(project)) => {
+                project_tile(project, t, TASK_TILE, TASK_TILE_GLYPH)
             }
+            // A review shows what it examines; a chat has no project to show.
+            (TaskKind::Review, _) => glyph_tile(
+                match task.review_scope.as_ref().map(|s| &s.target) {
+                    Some(ReviewTarget::Branch { .. }) => "branch",
+                    _ => "git-pull-request",
+                },
+                project.map_or(t.accent, |project| project_tint(project, t)),
+                TASK_TILE,
+                TASK_TILE_GLYPH,
+            ),
+            _ => glyph_tile("chat", t.subtle, TASK_TILE, TASK_TILE_GLYPH),
+        };
+        let state = if needs_input {
+            Some(motion::active_icon(
+                "shield",
+                t.warning,
+                false,
+                cx.reduce_motion(),
+            ))
+        } else if active {
+            Some(dither::pulse(t.accent, cx.reduce_motion()))
+        } else if blocked {
+            Some(
+                icon("circle-x")
+                    .size(px(13.))
+                    .text_color(t.removed)
+                    .into_any_element(),
+            )
+        } else if unread {
+            Some(kit::marker(t.added).into_any_element())
+        } else {
+            None
         };
         let status = if needs_input {
             kit::chip("INPUT", t.warning).into_any_element()
@@ -652,7 +666,6 @@ impl Shell {
         };
         let mut meta = div()
             .h(px(16.))
-            .pl(px(22.))
             .flex()
             .items_center()
             .gap(px(6.))
@@ -748,8 +761,8 @@ impl Shell {
             .px(px(8.))
             .py(px(if self.settings.comfortable { 9. } else { 6. }))
             .flex()
-            .flex_col()
-            .gap(px(2.))
+            .items_center()
+            .gap(px(10.))
             .rounded(px(radius))
             .border_1()
             .border_color(gpui::transparent_black())
@@ -762,46 +775,57 @@ impl Shell {
             // The open task carries an edge in its tone, not an outline.
             .when(selected, |row| row.child(kit::selection_edge(tone)))
             .child(fx::anchor(thread_anchor(&id)))
+            .child(div().relative().flex_shrink_0().child(tile))
             .child(
                 div()
                     .relative()
-                    .h(px(20.))
+                    .flex_1()
+                    .min_w_0()
                     .flex()
-                    .items_center()
-                    .gap(px(8.))
+                    .flex_col()
+                    .gap(px(2.))
                     .child(
                         div()
-                            .size(px(14.))
-                            .flex_shrink_0()
+                            .h(px(20.))
                             .flex()
                             .items_center()
-                            .justify_center()
-                            .child(leading),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_size(px(13.))
-                            .font_weight(if selected || unread || needs_input {
-                                FontWeight::MEDIUM
-                            } else {
-                                FontWeight::NORMAL
+                            .gap(px(8.))
+                            .when_some(state, |d, state| {
+                                d.child(
+                                    div()
+                                        .size(px(14.))
+                                        .flex_shrink_0()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(state),
+                                )
                             })
-                            .text_color(if selected || active || needs_input || unread {
-                                t.text
-                            } else {
-                                t.text.opacity(0.86)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(13.))
+                                    .font_weight(if selected || unread || needs_input {
+                                        FontWeight::MEDIUM
+                                    } else {
+                                        FontWeight::NORMAL
+                                    })
+                                    .text_color(if selected || active || needs_input || unread {
+                                        t.text
+                                    } else {
+                                        t.text.opacity(0.86)
+                                    })
+                                    .text_ellipsis()
+                                    .child(task.title.clone()),
+                            )
+                            .when(task.pinned, |d| {
+                                d.child(icon("pin").size(px(11.)).text_color(t.accent))
                             })
-                            .text_ellipsis()
-                            .child(task.title.clone()),
+                            .child(div().flex_shrink_0().child(status)),
                     )
-                    .when(task.pinned, |d| {
-                        d.child(icon("pin").size(px(11.)).text_color(t.accent))
-                    })
-                    .child(div().flex_shrink_0().child(status)),
+                    .child(meta),
             )
-            .child(meta.relative())
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |s, event: &MouseDownEvent, window, cx| {
@@ -837,15 +861,21 @@ impl Shell {
 }
 /// Returns a stable, distinct project glyph and tint without filesystem work during rendering.
 pub(super) fn project_icon(project: &Project, theme: Theme) -> AnyElement {
+    project_tile(project, theme, 16., 11.)
+}
+
+// Returns the project's icon as a square tile of `size` points. A project without an image shows
+// a glyph of `glyph_size` points.
+fn project_tile(project: &Project, theme: Theme, size: f32, glyph_size: f32) -> AnyElement {
     if let ProjectIcon::Image(path) = &project.icon {
         return img(path.clone())
-            .size(px(16.))
+            .size(px(size))
             .rounded(px(crate::theme::RADIUS_SMALL))
             .flex_shrink_0()
             .object_fit(ObjectFit::Contain)
             .with_fallback(move || {
                 icon("file")
-                    .size(px(16.))
+                    .size(px(size))
                     .text_color(theme.accent)
                     .into_any_element()
             })
@@ -878,9 +908,13 @@ pub(super) fn project_icon(project: &Project, theme: Theme) -> AnyElement {
         ][hash as usize % 8]
     };
     let glyph = project.icon.glyph().unwrap_or(glyph);
-    let tint = project_tint(project, theme);
+    glyph_tile(glyph, project_tint(project, theme), size, glyph_size)
+}
+
+// Returns a square tile of `size` points with a glyph of `glyph_size` points in one tint.
+fn glyph_tile(glyph: &'static str, tint: Hsla, size: f32, glyph_size: f32) -> AnyElement {
     div()
-        .size(px(16.))
+        .size(px(size))
         .rounded(px(crate::theme::RADIUS_SMALL))
         .flex_shrink_0()
         .flex()
@@ -890,7 +924,7 @@ pub(super) fn project_icon(project: &Project, theme: Theme) -> AnyElement {
         .border_1()
         .border_color(tint.opacity(0.36))
         .bg(tint.opacity(0.08))
-        .child(icon(glyph).size(px(11.)).text_color(tint))
+        .child(icon(glyph).size(px(glyph_size)).text_color(tint))
         .into_any_element()
 }
 

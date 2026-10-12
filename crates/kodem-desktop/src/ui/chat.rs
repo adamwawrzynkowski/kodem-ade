@@ -665,7 +665,6 @@ impl Shell {
             .max_w(px(900.))
             .mx_auto()
             .when(!empty, |d| d.px(px(20.)).pb(px(10.)));
-        wrapper = wrapper.child(self.outgoing_tray(cx));
         let mut attachments = div()
             .id("composer-context")
             .max_h(px(160.))
@@ -795,6 +794,8 @@ impl Shell {
                     .child(self.activity_strip(cx))
                     .child(self.plan_strip(cx))
                     .child(self.question_panel(cx))
+                    // The next messages are a row of the composer, right above the draft.
+                    .child(self.outgoing_tray(cx))
             })
             .when(has_context, |d| {
                 d.child(div().px(px(12.)).pt(px(10.)).child(attachments))

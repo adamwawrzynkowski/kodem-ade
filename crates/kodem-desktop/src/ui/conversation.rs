@@ -2,6 +2,10 @@
 use super::*;
 use crate::markdown;
 
+/// How long after its creation a message that came whole still counts as arriving, in
+/// milliseconds.
+const WHOLE_ARRIVAL_MS: u64 = 1500;
+
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum Conversation {
     Main,
@@ -79,6 +83,24 @@ impl Shell {
                                 .is_some_and(|suffix| suffix.starts_with(':'))
                         })
                 }),
+        }
+    }
+
+    /// Reports whether the text of an agent's message arrives now, so that its letters form out
+    /// of dither. A message that came whole counts for a moment after its creation.
+    pub(super) fn message_arriving(&self, conversation: &Conversation, message: &Message) -> bool {
+        if message.kind == MessageKind::User {
+            return false;
+        }
+        if message.complete {
+            return now().saturating_sub(message.created) < WHOLE_ARRIVAL_MS;
+        }
+        match conversation {
+            Conversation::Main => self
+                .view
+                .as_ref()
+                .is_some_and(|view| view.task.state == RunState::Running),
+            Conversation::Subagent(_) => self.conversation_message_active(conversation, message),
         }
     }
 
@@ -183,17 +205,7 @@ impl Shell {
                 .border_color(t.edge)
                 .rounded(px(crate::theme::MESSAGE_RADIUS))
                 .p(px(crate::theme::MESSAGE_PADDING))
-                .child(
-                    dither::Dither::new(dither::DitherField::Fade {
-                        from: dither::Edge::Bottom,
-                        start: 0.3,
-                        end: -0.25,
-                    })
-                    .color(t.dot)
-                    .grid(2., 1.)
-                    .corner_radius(crate::theme::MESSAGE_RADIUS)
-                    .layer(),
-                );
+                .child(dither::edge_shade(t.dot, 0.3, crate::theme::MESSAGE_RADIUS));
         } else if message.kind != MessageKind::Assistant {
             let (name, glyph, color) = match message.kind {
                 MessageKind::Error => ("Error", "circle-x", t.removed),
@@ -246,22 +258,12 @@ impl Shell {
                 div()
                     .relative()
                     .text_size(px(self.settings.font_size - 1.))
-                    .child(
-                        self.message_blocks(
-                            &format!("message:{message_key}"),
-                            markdown::blocks(&message.text),
-                            message.kind == MessageKind::Assistant
-                                && !message.complete
-                                && match conversation {
-                                    Conversation::Main => self
-                                        .view
-                                        .as_ref()
-                                        .is_some_and(|view| view.task.state == RunState::Running),
-                                    Conversation::Subagent(_) => message_active,
-                                },
-                            cx,
-                        ),
-                    ),
+                    .child(self.message_blocks(
+                        &format!("message:{message_key}"),
+                        markdown::blocks(&message.text),
+                        self.message_arriving(conversation, &message),
+                        cx,
+                    )),
             );
         }
         if !user {

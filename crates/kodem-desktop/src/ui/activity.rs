@@ -125,12 +125,24 @@ impl Shell {
                 );
             }
         }
+        // The strip is the composer's first row unless the subagents strip is above it. The
+        // scanner then follows the inside of the composer's rounded leading corner.
+        let scanner_radii = Corners {
+            top_left: if view.task.subagents.is_empty() {
+                motion::COMPOSER_RADIUS - 1.
+            } else {
+                0.
+            },
+            ..Corners::default()
+        };
         div()
             .relative()
             .w_full()
             .flex_shrink_0()
             .bg(t.inset)
-            .when(!waiting, |d| d.child(dither::scanner(t.accent)))
+            .when(!waiting, |d| {
+                d.child(dither::scanner(t.accent, scanner_radii))
+            })
             .child(
                 div()
                     .w_full()

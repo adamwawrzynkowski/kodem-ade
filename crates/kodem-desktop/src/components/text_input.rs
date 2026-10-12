@@ -1505,6 +1505,7 @@ fn shape(
         Vec::new()
     });
     let runs = if input.streaming.start().is_some() {
+        let revealing = input.streaming.ranges();
         let mut offset = 0;
         runs.into_iter()
             .flat_map(|run| {
@@ -1513,9 +1514,8 @@ fn shape(
                 offset = end;
                 let mut segments = Vec::new();
                 let mut cursor = start;
-                for range in input
-                    .streaming
-                    .ranges()
+                for range in revealing
+                    .iter()
                     .filter(|range| range.end > start && range.start < end)
                 {
                     let low = range.start.max(start);
