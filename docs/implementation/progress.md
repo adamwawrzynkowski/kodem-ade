@@ -302,3 +302,23 @@ The five sounds keep their names and are new audio from `scripts/notification-so
 Checked with a locked `cargo build` of the workspace, `cargo fmt --all -- --check` and Clippy, which reports the six warnings that the code had before this change and no new one. Temporary tests, removed afterward, checked that a folder import makes no copy and resolves the path, that `discard` and a failed batch leave the folder and remove only private copies, that the prompt names the folder, that the foreground mark is read back as written and is absent by default, and that the host binary binds, lets a second starter exit, accepts `Shutdown` and exits with success from its thread. The level of each sound file was measured.
 
 Not checked: whether macOS shows the banner while Kodem is active, the sound of the new files, and the appearance of Settings and of the folder card, because app visual testing is prohibited and no sound was played. The queue of the delegate was read from the disassembly of UserNotifications on this macOS version, not from Apple's documentation. The tracked licensing snapshot was stale before this change and was not refreshed; no external package was added. No commit or push was made.
+
+## Shorter, softer notification sounds
+
+Recorded on 12 October 2026. The user did not like any of the five sounds and asked for sounds that are pleasant and not too long. The sounds keep their names and files and are new audio from `scripts/notification-sounds.py`.
+
+The earlier sounds were plain sine partials with fundamentals between 780 and 2100 Hz, attacks of 1.5 to 4 ms and a reverb of four combs. They stayed within 40 dB of their loudest moment for 0.47 to 1.64 s. The new ones have fundamentals between 440 and 1480 Hz, attacks of 4 to 8 ms, overtones that fade before the body of a note, and a room of eight damped combs with a tail of about 0.4 s. They are quiet after 0.37 to 0.78 s.
+
+| Sound | Design | Length | Quiet after |
+| --- | --- | --- | --- |
+| Chime (default) | Two electric-piano notes that rise a fifth, D5 to A5 (`tine`) | 0.85 s | 0.74 s |
+| Bell | One small bell on F#5 with a low hum and a slow shimmer | 0.95 s | 0.63 s |
+| Glass | B5 and F#6 struck 45 ms apart | 0.60 s | 0.44 s |
+| Pulse | Two rounded pops on E5, the second softer (`pop`) | 0.50 s | 0.38 s |
+| Ascend | A quick A major arpeggio on a wooden bar, A4 to A5 | 0.90 s | 0.78 s |
+
+The files are stereo: the dry sound is in the middle and only the tail of the room differs between the ears. The peak stays at -1 dBFS and the loudest 200 ms are between -10 and -12 dBFS, so the sounds are about as loud as before. `levels` now also reports when a sound becomes quiet.
+
+Checked with `cargo check` of the workspace, which embeds the files, and `cargo fmt --all -- --check`. A temporary script, removed afterward, measured each file: no energy of note above 3 kHz (0.13% at most, before up to 5.7%), a largest step between two samples of 0.18 of full scale (before up to 0.39), and a start and an end at zero.
+
+Not checked: the sound of the files. No sound was played, so whether they are pleasant is a judgment for the user. The designs follow measured properties only.
