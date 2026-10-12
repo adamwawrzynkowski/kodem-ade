@@ -165,20 +165,13 @@ pub fn summary(views: &[Rc<ToolView>]) -> String {
         format!("{count} {}", if count == 1 { one } else { many })
     };
     let mut parts = Vec::new();
-    let thoughts = count(ToolCategory::Thinking);
     let commands = count(ToolCategory::Command);
     let reads = count(ToolCategory::Read);
     let searches = count(ToolCategory::Search);
     let fetches = count(ToolCategory::Fetch);
     let agents = count(ToolCategory::Agent);
-    let other = views.len()
-        - thoughts
-        - commands
-        - reads
-        - searches
-        - fetches
-        - agents
-        - count(ToolCategory::Edit);
+    let other =
+        views.len() - commands - reads - searches - fetches - agents - count(ToolCategory::Edit);
     if commands > 0 {
         parts.push(format!("ran {}", plural(commands, "command", "commands")));
     }
@@ -196,9 +189,6 @@ pub fn summary(views: &[Rc<ToolView>]) -> String {
     }
     if other > 0 {
         parts.push(plural(other, "tool call", "tool calls"));
-    }
-    if parts.is_empty() && thoughts > 0 {
-        parts.push("thought".into());
     }
     let mut text = parts.join(" · ");
     if let Some(first) = text.get(..1) {

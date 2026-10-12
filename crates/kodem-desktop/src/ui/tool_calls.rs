@@ -1,5 +1,8 @@
-//! The work trail: a run of tool calls folded into one summary line, with each call, its output
-//! and its diff one click away. Failed calls stay visible while the run is folded.
+//! The work trail: a run of tool calls under one summary line, with each call, its output and
+//! its diff one click away, and each thought in a tray of its own between the runs.
+//!
+//! A tray is open while its turn can still add to it and folds when the work moves on. Failed
+//! calls stay visible while their run is folded.
 use super::*;
 use crate::tool_output::{self, ToolView};
 use std::rc::Rc;
@@ -37,8 +40,22 @@ fn verb(category: ToolCategory) -> &'static str {
     }
 }
 
+// A thought has a tray of its own, so it also ends the run of calls before it.
+fn is_thought(message: &Message) -> bool {
+    message.kind == MessageKind::Tool
+        && message
+            .tool
+            .as_ref()
+            .is_some_and(|tool| tool.category == ToolCategory::Thinking)
+}
+
+fn is_call(message: &Message) -> bool {
+    message.kind == MessageKind::Tool && !is_thought(message)
+}
+
 impl Shell {
-    /// Renders one tool run's summary and individually expandable calls at its first transcript row.
+    /// Renders one tool run's summary and individually expandable calls at its first transcript
+    /// row, or the tray of one thought at the row of that thought.
     pub(super) fn tool_calls(
         &mut self,
         conversation: &Conversation,
@@ -48,12 +65,16 @@ impl Shell {
         let Some(transcript) = self.conversation_messages(conversation) else {
             return div().into_any_element();
         };
-        if index > 0 && transcript[index - 1].kind == MessageKind::Tool {
+        if transcript.get(index).is_some_and(is_thought) {
+            let message = transcript[index].clone();
+            return self.thought_tray(conversation, &message, index, cx);
+        }
+        if index > 0 && is_call(&transcript[index - 1]) {
             return div().into_any_element();
         }
         let length = transcript[index..]
             .iter()
-            .take_while(|m| m.kind == MessageKind::Tool)
+            .take_while(|message| is_call(message))
             .count();
         let messages = &transcript[index..index + length];
         let Some(first) = messages.first() else {
@@ -62,11 +83,12 @@ impl Shell {
         let t = self.theme;
         let views: Vec<Rc<ToolView>> = messages.iter().map(tool_output::view).collect();
         let group_key = format!("tool-group:{}:{}", first.task_id, first.id);
-        let expanded = self.folded.contains(&group_key);
         let running = messages.iter().zip(&views).rposition(|(message, view)| {
             view.status == ToolStatus::Running
                 && self.conversation_message_active(conversation, message)
         });
+        // The run opens only itself: its calls stay one line each until they are clicked.
+        let expanded = self.tray_open(conversation, &group_key, index + length, running.is_some());
         let edits = tool_output::edit_summary(messages);
         // A folded run still shows what went wrong. Only the calls on screen are copied out of
         // the transcript, which is borrowed until here.
@@ -145,7 +167,7 @@ impl Shell {
                     })
             })
             .on_click(cx.listener(move |s, _, _, cx| {
-                s.toggle_tool_detail(&group_conversation, &toggle_key, index, cx)
+                s.set_tray(&group_conversation, &toggle_key, !expanded, index, cx)
             }));
         if let Some(position) = running {
             let view = &views[position];
@@ -179,6 +201,145 @@ impl Shell {
             group = group.child(calls);
         }
         group.into_any_element()
+    }
+
+    // Reports whether a tray is open. A tray follows its work unless the user set it by hand: it
+    // is open while a call in it runs, and while it ends the transcript of a working
+    // conversation, where the turn can still add to it. `end` is the row after the tray.
+    fn tray_open(&self, conversation: &Conversation, key: &str, end: usize, running: bool) -> bool {
+        self.tray_choices.get(key).copied().unwrap_or_else(|| {
+            running
+                || (self.conversation_working(conversation)
+                    && self
+                        .conversation_messages(conversation)
+                        .is_some_and(|messages| messages.len() == end))
+        })
+    }
+
+    // Opens or folds a tray by hand. The choice holds after the tray's work ends.
+    fn set_tray(
+        &mut self,
+        conversation: &Conversation,
+        key: &str,
+        open: bool,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.tray_choices.insert(key.to_owned(), open);
+        if let Some(scroll) = self.conversation_scroll(conversation) {
+            scroll.remeasure_items(index..index + 1);
+        }
+        cx.notify();
+    }
+
+    // One thought: its first sentence while folded, its text while open.
+    fn thought_tray(
+        &mut self,
+        conversation: &Conversation,
+        message: &Message,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let t = self.theme;
+        let view = tool_output::view(message);
+        let message_key = format!("{}:{}", message.task_id, message.id);
+        let key = format!("thought:{message_key}");
+        let active = view.status == ToolStatus::Running
+            && self.conversation_message_active(conversation, message);
+        let expanded = self.tray_open(conversation, &key, index + 1, active);
+        let title: String = view
+            .title
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .take(200)
+            .collect();
+        let label = if active { "Thinking" } else { "Thought" };
+        let tray_conversation = conversation.clone();
+        let toggle_key = key.clone();
+        let header = self
+            .control(SharedString::from(key))
+            .w_full()
+            .h_auto()
+            .min_h(px(28.))
+            .py(px(4.))
+            .px(px(6.))
+            .gap(px(8.))
+            .justify_start()
+            .bg(gpui::transparent_black())
+            .border_color(gpui::transparent_black())
+            .text_color(t.muted)
+            .hover(move |s| s.bg(t.selected).text_color(t.text))
+            .accessibility_label(format!(
+                "{} thought: {title}",
+                if expanded { "Collapse" } else { "Expand" },
+            ))
+            .child(
+                icon(if expanded {
+                    "chevron-down"
+                } else {
+                    "chevron-right"
+                })
+                .size(px(12.))
+                .text_color(t.subtle),
+            )
+            .child(if active {
+                dither::pulse(t.accent, cx.reduce_motion())
+            } else {
+                icon(glyph(ToolCategory::Thinking))
+                    .size(px(13.))
+                    .text_color(t.subtle)
+                    .into_any_element()
+            })
+            .child(caps(label, t).text_color(t.muted))
+            // The open tray shows the whole thought, so its header does not repeat the start.
+            .when(!expanded, |header| {
+                header.child(
+                    div()
+                        .flex_shrink(1.)
+                        .min_w_0()
+                        .text_ellipsis()
+                        .font_family(crate::theme::SANS)
+                        .font_weight(FontWeight::NORMAL)
+                        .text_size(px(12.))
+                        .italic()
+                        .child(title),
+                )
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(8.))
+                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+            )
+            .when_some(view.duration_ms.filter(|ms| *ms >= 1000), |header, ms| {
+                header.child(figure(tool_output::duration(ms), t.subtle))
+            })
+            .on_click(cx.listener(move |s, _, _, cx| {
+                s.set_tray(&tray_conversation, &toggle_key, !expanded, index, cx)
+            }));
+        let mut tray = div().w_full().min_w_0().px_5().py(px(2.)).child(header);
+        if expanded && !view.output.is_empty() {
+            tray = tray.child(
+                div()
+                    .ml(px(11.))
+                    .pl(px(17.))
+                    .pt(px(2.))
+                    .pb(px(6.))
+                    .border_l_1()
+                    .border_color(t.border)
+                    .text_size(px(self.settings.font_size - 2.))
+                    .text_color(t.muted)
+                    .child(self.message_blocks(
+                        &format!("tool-thought:{message_key}"),
+                        crate::markdown::blocks(&view.output),
+                        false,
+                        cx,
+                    )),
+            );
+        }
+        tray.into_any_element()
     }
 
     fn toggle_tool_detail(
@@ -287,9 +448,6 @@ impl Shell {
                     .when(literal, |d| {
                         d.font_family(crate::theme::MONO).text_size(px(11.5))
                     })
-                    .when(view.category == ToolCategory::Thinking, |d| {
-                        d.italic().text_color(t.muted)
-                    })
                     .child(title.clone()),
             )
             .child(
@@ -364,22 +522,7 @@ impl Shell {
         if !view.diff.is_empty() {
             details = details.child(self.inline_diff(conversation, message, view, group_index, cx));
         }
-        if view.category == ToolCategory::Thinking {
-            details = details.child(
-                div()
-                    .pl(px(10.))
-                    .border_l_2()
-                    .border_color(t.border)
-                    .text_size(px(self.settings.font_size - 2.))
-                    .text_color(t.muted)
-                    .child(self.message_blocks(
-                        &format!("tool-thought:{message_key}"),
-                        crate::markdown::blocks(&view.output),
-                        false,
-                        cx,
-                    )),
-            );
-        } else if !view.output.is_empty() {
+        if !view.output.is_empty() {
             let (body, language) = (&view.output, view.language);
             let (excerpt, truncated) = tool_output::preview(body);
             let full_key = format!("tool-full:{message_key}");

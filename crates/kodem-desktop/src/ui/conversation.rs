@@ -34,6 +34,22 @@ impl Shell {
         }
     }
 
+    /// Reports that this conversation's thread works on a turn, which can still add messages.
+    pub(super) fn conversation_working(&self, conversation: &Conversation) -> bool {
+        match conversation {
+            Conversation::Main => self
+                .view
+                .as_ref()
+                .is_some_and(|view| view.task.state.active()),
+            Conversation::Subagent(thread) => self
+                .agent_popup
+                .as_ref()
+                .filter(|popup| &popup.thread_id == thread)
+                .and_then(|popup| popup.view.as_ref())
+                .is_some_and(|view| view.agent.state.active()),
+        }
+    }
+
     /// Reports activity in this message's thread, independent of the main task's state.
     pub(super) fn conversation_message_active(
         &self,

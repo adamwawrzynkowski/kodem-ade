@@ -183,6 +183,8 @@ pub struct Shell {
     /// Sequence number of the sent message whose history tick is under the pointer.
     history_hover: Option<u64>,
     folded: HashSet<String>,
+    /// Tool runs and thoughts the user opened or folded by hand; the others follow their work.
+    tray_choices: HashMap<String, bool>,
     collapsed_changes: HashSet<String>,
     text_views: HashMap<String, (Entity<TextInput>, Subscription)>,
     chat_selection: Entity<crate::components::text_document::TextDocument>,
@@ -447,6 +449,7 @@ impl Shell {
             follow: true,
             history_hover: None,
             folded: HashSet::new(),
+            tray_choices: HashMap::new(),
             collapsed_changes: HashSet::new(),
             text_views: HashMap::new(),
             chat_selection: cx.new(|_| Default::default()),
@@ -864,14 +867,10 @@ impl Shell {
                                 previous_count..previous_count,
                                 view.messages.len() - previous_count,
                             );
-                            // A new tool item extends the summary rendered at the group's first row.
-                            if view.messages[previous_count].kind == MessageKind::Tool {
-                                let mut row = previous_count;
-                                while row > 0 && view.messages[row - 1].kind == MessageKind::Tool {
-                                    row -= 1;
-                                }
-                                self.chat_scroll.remeasure_items(row..previous_count + 1);
-                            }
+                            // A new tool item extends the summary rendered at the group's first
+                            // row, and any new item folds the trays that ended the transcript.
+                            let row = tool_rows_start(&view.messages, previous_count);
+                            self.chat_scroll.remeasure_items(row..previous_count + 1);
                         }
                         for (index, (a, b)) in
                             current.messages.iter().zip(&view.messages).enumerate()
@@ -880,14 +879,11 @@ impl Shell {
                                 || a.complete != b.complete
                                 || a.file_edits != b.file_edits
                             {
-                                let mut row = index;
-                                if b.kind == MessageKind::Tool {
-                                    while row > 0
-                                        && view.messages[row - 1].kind == MessageKind::Tool
-                                    {
-                                        row -= 1;
-                                    }
-                                }
+                                let row = if b.kind == MessageKind::Tool {
+                                    tool_rows_start(&view.messages, index)
+                                } else {
+                                    index
+                                };
                                 self.chat_scroll.remeasure_items(row..index + 1);
                             }
                         }
@@ -898,6 +894,22 @@ impl Shell {
                         self.chat_scroll.scroll_to_end();
                     } else {
                         self.chat_scroll.scroll_to(anchor);
+                    }
+                }
+                // The trays that end the transcript open when a turn starts and fold when it
+                // ends, also when no message changed with it.
+                if let Some(current) = &self.view
+                    && current.task.id == view.task.id
+                    && current.task.state.active() != view.task.state.active()
+                {
+                    let end = view.messages.len();
+                    let row = tool_rows_start(&view.messages, end);
+                    if row < end {
+                        let at_end = self.chat_scroll.is_scrolled_to_end().unwrap_or(self.follow);
+                        self.chat_scroll.remeasure_items(row..end);
+                        if at_end {
+                            self.chat_scroll.scroll_to_end();
+                        }
                     }
                 }
                 // A result that arrives while its task is open is read as it arrives.
@@ -1706,6 +1718,16 @@ pub(super) fn line_totals(
         .gap(px(5.))
         .child(figure(format!("+{added}"), theme.added))
         .child(figure(format!("−{removed}"), theme.removed))
+}
+
+// Returns the first of the tool rows that end before `end`, or `end` when the row before it is
+// not a tool row. A change at `end` can resize every tray in that stretch.
+fn tool_rows_start(messages: &[Message], end: usize) -> usize {
+    let mut row = end.min(messages.len());
+    while row > 0 && messages[row - 1].kind == MessageKind::Tool {
+        row -= 1;
+    }
+    row
 }
 
 // Polls refresh the tail; explicit page requests extend the retained prefix.

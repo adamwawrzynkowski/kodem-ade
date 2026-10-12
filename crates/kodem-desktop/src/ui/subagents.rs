@@ -229,8 +229,10 @@ impl Shell {
                 anchor.item_ix = index;
             }
         }
+        // The trays that end the transcript fold when the agent stops, so that also measures again.
         let changed = popup.view.as_ref().is_none_or(|old| {
             old.messages.len() != view.messages.len()
+                || old.agent.state.active() != view.agent.state.active()
                 || old.messages.iter().zip(&view.messages).any(|(a, b)| {
                     a.id != b.id
                         || a.seq != b.seq
