@@ -135,6 +135,36 @@ pub(super) fn dissolve(
         .into_any_element()
 }
 
+/// Clears a Bayer dissolve in `color` from over a surface whose content was replaced in place,
+/// such as a pane after its workspace changed. The surface keeps the layout its caller gave it.
+///
+/// A new `id` plays the dissolve again. `block` is the dot size; large blocks keep the dot
+/// count low on wide panes.
+pub(super) fn switched(
+    id: impl Into<ElementId>,
+    surface: Div,
+    color: Hsla,
+    block: f32,
+) -> AnyElement {
+    surface
+        .with_animation(
+            id,
+            Animation::new(Duration::from_millis(240)).with_easing(ease_out_cubic),
+            move |surface, delta| {
+                if delta >= 1. {
+                    return surface;
+                }
+                surface.child(
+                    dither::Dither::new(dither::DitherField::Dissolve(delta))
+                        .color(color)
+                        .grid(block, block)
+                        .layer(),
+                )
+            },
+        )
+        .into_any_element()
+}
+
 /// A menu that dissolves in beside its trigger; `upward` menus rise into place.
 pub(super) fn popover(
     id: impl Into<ElementId>,
@@ -200,8 +230,6 @@ pub(super) fn system_reduce_motion() -> bool {
     }
 }
 
-/// Width of the collapsed sidebar rail, in points.
-pub(super) const SIDEBAR_RAIL: f32 = 54.;
 /// A height no smaller than the terminal panel, which its opening grows toward.
 pub(super) const TERMINAL_REACH: f32 = 300.;
 
@@ -226,7 +254,8 @@ impl Shell {
     // Returns how far the sidebar, the changes panel and the terminal should be open.
     fn reveal_targets(&self) -> [f32; 3] {
         let open = |shown: bool| if shown { 1. } else { 0. };
-        let task = self.selected.is_some();
+        // A chat has no checkout, so it has no changes panel and no terminal.
+        let task = self.has_checkout();
         [
             open(!self.settings.collapsed),
             // In a narrow window the changes panel replaces the chat and does not slide.

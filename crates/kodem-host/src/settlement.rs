@@ -1,8 +1,10 @@
 //! Observes merged branches without blocking workspace polling or modifying repository refs.
 use super::*;
 
+// Only a coding task has a branch of its own that can merge.
 fn eligible(task: &Task) -> bool {
-    !task.archived
+    task.kind == TaskKind::Coding
+        && !task.archived
         && task.settled.is_none()
         && !task.state.active()
         && !task.needs_input()

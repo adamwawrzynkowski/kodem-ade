@@ -507,6 +507,61 @@ pub(crate) fn claim_next(host: &Shared, task_id: &str) -> Result<Option<Outgoing
     Ok(Some(message))
 }
 
+/// Rules of a review session. The session cannot be asked to break them: Codex runs it in its
+/// read-only sandbox, and Claude Code runs it without its file-editing tools.
+const REVIEW_RULES: &str = "\
+You are reviewing code in Kodem's Review workspace. This session is a local, read-only review.
+
+Rules:
+- Do not change anything. Do not edit, create, move or delete files. Do not run a command that writes to the working tree, the index, a branch, a tag or the Git configuration, such as commit, add, checkout, switch, restore, reset, stash, merge, rebase, cherry-pick, apply, fetch or pull.
+- Do not publish anything. Do not push. Do not create, edit or submit a pull request, a pull-request comment, a review, an issue or any other remote content, with `gh`, `git`, an API call or any other tool. The review stays on this machine.
+- Use read-only commands only, such as `git diff`, `git log`, `git show`, `git blame`, file reads and searches.
+- When a fix is needed, describe it and do not apply it. The user sends the findings to another task that applies fixes.";
+
+/// How a review reports, so that the findings can be handed to the task that fixes them.
+const REVIEW_REPORT: &str = "\
+Check correctness, regressions, error handling, security, performance and consistency with the conventions of this codebase. Do not report a style preference that the codebase does not follow.
+
+Report the findings as a numbered list, most severe first. Give each finding: its severity (critical, major, minor or nit), its location as `path:line`, what is wrong, why it matters, and a concrete fix. End with a short verdict. If there are no findings, say so.";
+
+/// Instructions of a conversation that has no project.
+const CHAT_RULES: &str = "\
+This is a general conversation in Kodem's Chat workspace. It has no project: the working directory is an empty scratch folder that belongs to this chat alone. Answer questions, explain, compare, brainstorm and write as a helpful assistant. Search the web when an answer depends on current or external information, and name the sources you used. Do not assume that a repository exists, and do not create files unless the user asks for one.";
+
+/// Returns the standing instructions of a task's provider session, which its kind decides.
+///
+/// They are given when a provider process starts, so they also hold after a resume.
+pub(crate) fn instructions(task: &Task) -> Option<String> {
+    match task.kind {
+        TaskKind::Coding => None,
+        TaskKind::Chat => Some(CHAT_RULES.into()),
+        TaskKind::Review => {
+            let scope = match (&task.review_scope, &task.baseline) {
+                (Some(scope), Some(merge_base)) => format!(
+                    "The working directory is a temporary detached worktree at the reviewed commit {head}. The changes under review are those of {target} compared with `{base}`: run `git diff {merge_base}...HEAD`. Review only those changes, and read the surrounding code as needed to judge them.",
+                    head = scope.head,
+                    target = scope.target.label(),
+                    base = scope.base,
+                ),
+                _ => "Review the changes that the user names.".into(),
+            };
+            Some(format!("{REVIEW_RULES}\n\n{scope}\n\n{REVIEW_REPORT}"))
+        }
+    }
+}
+
+/// Sets the access that every review runs with, whatever the composer last chose.
+///
+/// Codex gets its read-only sandbox. Claude Code asks before each command that is not read-only;
+/// its sessions for reviews start without the tools that edit files.
+pub(crate) fn pin_review_access(task: &mut Task) {
+    task.access = AccessMode::ReadOnly;
+    task.provider_access = match task.provider {
+        Provider::Claude => Some("default".into()),
+        Provider::Codex => None,
+    };
+}
+
 /// Returns the options owned by this task rather than another provider's defaults.
 pub(crate) fn preferences(task: &Task) -> AgentPreferences {
     AgentPreferences {
@@ -817,7 +872,8 @@ pub(crate) fn complete_turn(
     error: Option<String>,
 ) -> Result<()> {
     let task = host.lock().unwrap().store.task(task_id)?;
-    let capture = task.state.active().then(|| {
+    // A chat has no checkout to capture.
+    let capture = (task.state.active() && task.kind.has_project()).then(|| {
         kodem_core::git::capture(
             &task,
             if task.baseline.is_some() {
@@ -827,9 +883,9 @@ pub(crate) fn complete_turn(
             },
         )
     });
-    let branch = task
-        .state
-        .active()
+    // Only a coding task follows the branch of its checkout. A review keeps the name of the
+    // branch it examines, and its worktree is detached.
+    let branch = (task.state.active() && task.kind == TaskKind::Coding)
         .then(|| kodem_core::git::branch(&task.cwd));
     let mut h = host.lock().unwrap();
     let mut task = h.store.task(task_id)?;

@@ -158,6 +158,13 @@ impl TextInput {
         input.composer = true;
         input
     }
+    /// Replaces the hint that shows while the input is empty.
+    pub fn set_placeholder(&mut self, placeholder: &str, cx: &mut Context<Self>) {
+        if self.placeholder.as_ref() != placeholder {
+            self.placeholder = placeholder.to_owned().into();
+            cx.notify();
+        }
+    }
     /// Returns the slash token at a collapsed caret outside an IME composition.
     pub fn slash_query(&self) -> Option<(Range<usize>, String)> {
         if !self.composer || self.marked_range.is_some() || !self.selected_range.is_empty() {

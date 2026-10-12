@@ -86,8 +86,32 @@ pub(super) fn initial_runtime() -> RuntimeInfo {
     }
 }
 
-// The CLI reports `default` for the mode its flag also accepts as `manual`.
+/// Web tools a chat uses without asking; searching and reading pages is what a chat is for.
+const CHAT_TOOLS: [&str; 2] = ["WebSearch", "WebFetch"];
+/// What a review session starts without: the tools that edit files, and the commands that
+/// publish or record changes. A denied rule also overrides a rule of the user that allows it.
+const REVIEW_BLOCKED_TOOLS: [&str; 13] = [
+    "Edit",
+    "Write",
+    "NotebookEdit",
+    "Bash(git push:*)",
+    "Bash(git commit:*)",
+    "Bash(gh pr comment:*)",
+    "Bash(gh pr review:*)",
+    "Bash(gh pr edit:*)",
+    "Bash(gh pr merge:*)",
+    "Bash(gh pr close:*)",
+    "Bash(gh pr create:*)",
+    "Bash(gh issue:*)",
+    "Bash(gh api:*)",
+];
+
+// The CLI reports `default` for the mode its flag also accepts as `manual`. A review always asks
+// before a command that is not read-only.
 fn access_of(task: &Task) -> String {
+    if task.kind == TaskKind::Review {
+        return "default".into();
+    }
     match task.provider_access.as_deref() {
         None | Some("manual") => "default".into(),
         Some(access) => access.into(),
@@ -262,6 +286,7 @@ impl Session {
                 (Conversation::New(id.clone()), id, false)
             }
         };
+        let instructions = provider::instructions(task);
         let (transport, initialized) = Transport::start(&Launch {
             cwd: &task.cwd,
             account,
@@ -271,6 +296,15 @@ impl Session {
             conversation,
             light: false,
             compact: Some(compact),
+            instructions: instructions.as_deref(),
+            allowed_tools: match task.kind {
+                TaskKind::Chat => &CHAT_TOOLS,
+                TaskKind::Coding | TaskKind::Review => &[],
+            },
+            disallowed_tools: match task.kind {
+                TaskKind::Review => &REVIEW_BLOCKED_TOOLS,
+                TaskKind::Coding | TaskKind::Chat => &[],
+            },
         })?;
         Ok(Self {
             transport,
@@ -444,7 +478,8 @@ pub(super) fn run(
         owner.dispatch()?;
         if branch_refresh.elapsed() >= Duration::from_secs(5) {
             branch_refresh = Instant::now();
-            if owner.running {
+            // Only a coding task follows the branch of its checkout.
+            if owner.running && task.kind == TaskKind::Coding {
                 let branch = kodem_core::git::branch(&task.cwd);
                 let h = host.lock().unwrap();
                 let mut task = h.store.task(task_id)?;
@@ -562,7 +597,8 @@ impl Owner<'_> {
         self.session.access = mode.to_owned();
         let h = self.host.lock().unwrap();
         let mut task = h.store.task(self.task_id)?;
-        if access_of(&task) != mode {
+        // A review keeps its pinned mode; the next turn sets the session back to it.
+        if task.kind != TaskKind::Review && access_of(&task) != mode {
             task.provider_access = Some(mode.to_owned());
             h.store.save_task(&task)?;
         }
@@ -1509,6 +1545,9 @@ fn probe(cwd: &Path, account: &Account, light: bool) -> Result<(Transport, Value
         conversation: Conversation::Ephemeral,
         light,
         compact: None,
+        instructions: None,
+        allowed_tools: &[],
+        disallowed_tools: &[],
     })
 }
 

@@ -6,6 +6,7 @@ mod browser;
 mod change_tree;
 mod chat;
 mod chrome;
+mod code_review;
 mod composition;
 mod controls;
 mod conversation;
@@ -33,6 +34,7 @@ mod subagents;
 mod tool_calls;
 mod updates;
 mod usage;
+mod workspaces;
 use crate::icons::icon;
 use crate::{
     bridge,
@@ -82,7 +84,10 @@ actions!(
         GoToTask6,
         GoToTask7,
         GoToTask8,
-        GoToTask9
+        GoToTask9,
+        ShowCoding,
+        ShowChat,
+        ShowReview
     ]
 );
 #[derive(Clone, PartialEq)]
@@ -134,6 +139,16 @@ pub struct Shell {
     last_update_check: std::time::Instant,
     focus: FocusHandle,
     workspace: Option<Workspace>,
+    /// The open workspace. An open task is always of this kind.
+    mode: TaskKind,
+    /// The task that was open in each workspace when the window left it.
+    mode_tasks: HashMap<TaskKind, String>,
+    /// The start-screen draft of each workspace that is not open.
+    mode_drafts: HashMap<TaskKind, workspaces::StartDraft>,
+    /// First message of a task that is being created with a prompt the composer does not hold.
+    launch_draft: Option<String>,
+    review: code_review::ReviewSetup,
+    review_filter: Entity<TextInput>,
     view: Option<TaskView>,
     agent_popup: Option<subagents::AgentPopup>,
     selected: Option<String>,
@@ -250,6 +265,7 @@ impl Shell {
         let search = cx.new(|cx| TextInput::new("Search tasks…", cx));
         let palette_input =
             cx.new(|cx| TextInput::composer("Type a command or search threads…", cx));
+        let review_filter = cx.new(|cx| TextInput::new("Filter…", cx));
         let subscriptions = vec![
             cx.observe_window_bounds(window, |s, window, cx| {
                 let placement = window.window_bounds();
@@ -316,6 +332,7 @@ impl Shell {
                 cx.notify();
             }),
             cx.observe(&aux, |_, _, cx| cx.notify()),
+            cx.observe(&review_filter, |_, _, cx| cx.notify()),
         ];
         cx.spawn(async move |this, cx| {
             loop {
@@ -374,15 +391,15 @@ impl Shell {
                             s.poll_pending = true;
                             let _ = s.tx.send(bridge::Command::Poll(
                                 s.selected.clone(),
-                                s.show_terminal,
+                                s.show_terminal && s.has_checkout(),
                                 s.agent_popup.as_ref().map(|p| p.thread_id.clone()),
                             ));
                         }
-                        if s.host_connected && s.selected.is_some() && s.changes_refresh.due() {
+                        if s.host_connected && s.has_checkout() && s.changes_refresh.due() {
                             s.refresh_task_changes();
                         }
                         if s.host_connected
-                            && s.selected.is_some()
+                            && s.has_checkout()
                             && (s.show_review || s.reviewing_file)
                             && !s.historical_diff
                             && s.diff_refresh.due()
@@ -404,6 +421,12 @@ impl Shell {
             last_update_check: std::time::Instant::now(),
             focus,
             workspace: None,
+            mode: TaskKind::default(),
+            mode_tasks: HashMap::new(),
+            mode_drafts: HashMap::new(),
+            launch_draft: None,
+            review: Default::default(),
+            review_filter,
             view: None,
             agent_popup: None,
             selected: None,
@@ -601,6 +624,12 @@ impl Shell {
                     }
                     return;
                 }
+                if matches!(reply.request, core::Request::ReviewTargets { .. }) {
+                    // The picker shows why its lists are empty; no notice covers the window.
+                    self.review_targets_failed(&reply.request, e);
+                    cx.notify();
+                    return;
+                }
                 if matches!(reply.request, core::Request::ComposerCatalog { .. }) {
                     self.receive_slash_catalog(
                         &reply.request,
@@ -645,8 +674,14 @@ impl Shell {
                 {
                     viewer.update(cx, |v, cx| v.context_failed(cx));
                 }
-                if matches!(reply.request, core::Request::CreateTask { .. }) {
+                if matches!(
+                    reply.request,
+                    core::Request::CreateTask { .. }
+                        | core::Request::CreateChat { .. }
+                        | core::Request::CreateReview { .. }
+                ) {
                     self.creating_task = false;
+                    self.launch_draft = None;
                     self.new_submission_origin = None;
                 }
                 if matches!(reply.request, core::Request::ImportAttachments { .. }) {
@@ -703,6 +738,11 @@ impl Shell {
                     self.show_review = self.settings.show_review;
                     self.show_terminal = self.settings.show_terminal;
                     self.split = self.settings.split_diff;
+                    self.mode = self.settings.mode;
+                    if self.mode == TaskKind::Review {
+                        self.comparison = Comparison::Baseline;
+                    }
+                    self.sync_placeholder(cx);
                     self.theme = Theme::with_accent(self.settings.light, self.settings.accent);
                     let selected = self
                         .settings
@@ -737,7 +777,10 @@ impl Shell {
             }
             Response::Account(account) => self.account_added(&account, cx),
             Response::Project(project) => {
-                if self.selected.is_some() {
+                // A chat has no project, so a repository opens in Agentic Coding.
+                if self.mode == TaskKind::Chat {
+                    self.enter_mode(TaskKind::Coding, cx);
+                } else if self.selected.is_some() {
                     self.open_empty_chat(cx);
                 }
                 self.selected_project = Some(project.id);
@@ -747,10 +790,25 @@ impl Shell {
             Response::Created(task) => {
                 self.new_worktree_override = None;
                 self.new_preferences = None;
-                self.selected_project = Some(task.project_id.clone());
+                let submit = std::mem::take(&mut self.creating_task);
+                // A task made for another workspace opens there, such as the task that fixes
+                // the findings of a review.
+                if task.kind != self.mode {
+                    self.enter_mode(task.kind, cx);
+                }
+                if task.kind.has_project() {
+                    self.selected_project = Some(task.project_id.clone());
+                }
+                if task.kind == TaskKind::Review {
+                    self.review.pick = None;
+                }
+                // The first message is the start screen's draft, unless the task was made with
+                // a prompt of its own. Then the start screen keeps its draft and attachments.
+                let launched = self.launch_draft.take();
+                let from_composer = launched.is_none();
+                let draft = launched.unwrap_or_else(|| std::mem::take(&mut self.empty_draft));
                 // The new task leaves the composer as a chip and lands in the thread feed.
-                let label = self
-                    .empty_draft
+                let label = draft
                     .lines()
                     .find(|line| !line.trim().is_empty())
                     .unwrap_or("New task")
@@ -763,18 +821,17 @@ impl Shell {
                     Duration::ZERO,
                     cx,
                 );
-                if !self.empty_draft.is_empty() {
-                    let draft = std::mem::take(&mut self.empty_draft);
+                if !draft.is_empty() {
                     self.send(core::Request::EditTask {
                         task_id: task.id.clone(),
                         edit: TaskEdit::Draft(draft),
                     });
                 }
-                if !self.pending_attachments.is_empty() {
+                if from_composer && !self.pending_attachments.is_empty() {
                     let paths = std::mem::take(&mut self.pending_attachments);
                     self.import_attachments(task.id.clone(), paths);
                 }
-                if std::mem::take(&mut self.creating_task) {
+                if submit {
                     self.auto_submit_task = Some(task.id.clone());
                 }
                 self.input
@@ -783,6 +840,7 @@ impl Shell {
                 self.panel = Panel::None;
                 self.send(core::Request::Hello);
             }
+            Response::ReviewTargets(targets) => self.receive_review_targets(targets),
             Response::SubagentThread(view) => {
                 self.update_agent_popup(
                     view,
@@ -1236,11 +1294,23 @@ impl Shell {
         self.answering.clear();
         self.auto_submit_task = None;
         self.new_submission_origin = None;
+        self.sync_placeholder(cx);
     }
     fn select_task(&mut self, id: String, cx: &mut Context<Self>) {
         self.agent_popup = None;
         if self.creating_task {
             return;
+        }
+        // A task opens in the workspace of its kind.
+        let kind = self
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.tasks.iter().find(|task| task.id == id))
+            .map(|task| task.kind);
+        if let Some(kind) = kind
+            && kind != self.mode
+        {
+            self.enter_mode(kind, cx);
         }
         if self.selected.is_none() && self.auto_submit_task.as_ref() != Some(&id) {
             self.empty_draft = self.input.read(cx).text();
@@ -1291,9 +1361,17 @@ impl Shell {
             task_id: id,
             before: None,
         });
-        self.refresh_diff();
-        self.refresh_task_changes();
+        if self.has_checkout() {
+            self.refresh_diff();
+            self.refresh_task_changes();
+        }
+        self.sync_placeholder(cx);
         cx.notify();
+    }
+    /// Reports that a task is open and works in a Git checkout. A chat has none, so it has no
+    /// changes, files or terminal.
+    pub(super) fn has_checkout(&self) -> bool {
+        self.selected.is_some() && self.mode.has_project()
     }
     fn save_window_placement(&self) {
         if let Err(error) = crate::window_state::save(self.window_placement) {
@@ -1492,7 +1570,10 @@ impl Shell {
         let Some(absolute) = absolute else {
             return;
         };
-        if let Ok(relative) = absolute.strip_prefix(root) {
+        // A chat has no checkout to browse, so its references open in their own application.
+        if self.has_checkout()
+            && let Ok(relative) = absolute.strip_prefix(root)
+        {
             self.panel = Panel::Files;
             self.send(core::Request::Files {
                 task_id: view.task.id.clone(),
@@ -1533,7 +1614,11 @@ impl Shell {
     }
 
     /// Returns the project that the open task belongs to, or that a new task will start in.
+    /// A chat has no project.
     pub(super) fn composer_project(&self) -> Option<&Project> {
+        if !self.mode.has_project() {
+            return None;
+        }
         let workspace = self.workspace.as_ref()?;
         let id = self
             .view
@@ -1802,6 +1887,9 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-7", GoToTask7, None),
         KeyBinding::new("cmd-8", GoToTask8, None),
         KeyBinding::new("cmd-9", GoToTask9, None),
+        KeyBinding::new("alt-cmd-1", ShowCoding, None),
+        KeyBinding::new("alt-cmd-2", ShowChat, None),
+        KeyBinding::new("alt-cmd-3", ShowReview, None),
         KeyBinding::new("escape", Cancel, None),
         KeyBinding::new("cmd-q", Quit, None),
     ]);
@@ -1828,6 +1916,10 @@ pub fn init(cx: &mut App) {
             name: "View".into(),
             items: vec![
                 MenuItem::action("Command Palette", CommandPalette),
+                MenuItem::separator(),
+                MenuItem::action("Agentic Coding", ShowCoding),
+                MenuItem::action("Chat", ShowChat),
+                MenuItem::action("Review", ShowReview),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
                 MenuItem::action("Toggle Changes", ToggleReview),

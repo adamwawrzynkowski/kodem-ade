@@ -3,9 +3,13 @@ impl Shell {
     fn titlebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let project = self.composer_project();
-        let name = project
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| "Workspace".into());
+        let name = project.map(|p| p.name.clone()).unwrap_or_else(|| {
+            if self.mode.has_project() {
+                "Workspace".into()
+            } else {
+                self.mode.label().into()
+            }
+        });
         let (running, waiting) = self.workspace.as_ref().map_or((0, 0), |w| {
             w.tasks
                 .iter()
@@ -33,14 +37,16 @@ impl Shell {
             .when(self.reveals.sidebar > 0., |d| {
                 d.child(
                     div()
-                        .w(px(motion::SIDEBAR_RAIL.max(80.)
-                            + (self.settings.sidebar_width
-                                - motion::SIDEBAR_RAIL.max(80.))
+                        // The section ends above the sidebar's trailing edge. While the sidebar
+                        // slides, it shrinks toward the room of the window controls.
+                        .w(px(WINDOW_CONTROLS
+                            + (workspaces::RAIL + 1. + self.settings.sidebar_width
+                                - WINDOW_CONTROLS)
                                 * self.reveals.sidebar))
                         .overflow_hidden()
                         .h_full()
                         .flex_shrink_0()
-                        .pl(px(80.))
+                        .pl(px(WINDOW_CONTROLS))
                         .pr(px(8.))
                         .flex()
                         .items_center()
@@ -88,7 +94,7 @@ impl Shell {
             .flex_1()
             .px(px(14.))
             .when(self.reveals.sidebar <= 0., |d| {
-                d.pl(px(80.)).child(
+                d.pl(px(WINDOW_CONTROLS)).child(
                     self.icon_button("expand-sidebar", "panel-left", "Show sidebar · ⌘B")
                         .on_click(cx.listener(|s, _, _, cx| {
                             s.settings.collapsed = false;
@@ -101,10 +107,14 @@ impl Shell {
                 project
                     .map(|project| sidebar::project_icon(project, t))
                     .unwrap_or_else(|| {
-                        icon("folder-closed")
-                            .size(px(14.))
-                            .text_color(t.accent)
-                            .into_any_element()
+                        icon(if self.mode.has_project() {
+                            "folder-closed"
+                        } else {
+                            self.mode.icon()
+                        })
+                        .size(px(14.))
+                        .text_color(t.accent)
+                        .into_any_element()
                     }),
             )
             .child(
@@ -116,7 +126,8 @@ impl Shell {
                     .text_ellipsis()
                     .child(name),
             );
-        if let Some(view) = &self.view {
+        if let Some(view) = self.view.as_ref().filter(|_| self.mode.has_project()) {
+            let review = view.task.kind == TaskKind::Review;
             project_path = project_path
                 .child(figure("/", t.subtle))
                 .child(icon("branch").size(px(12.)).text_color(t.subtle))
@@ -129,11 +140,12 @@ impl Shell {
                         .text_ellipsis()
                         .child(view.task.branch.clone()),
                 )
-                .when(view.task.owns_worktree, |d| {
+                .when(view.task.owns_worktree && !review, |d| {
                     d.child(kit::chip("WORKTREE", t.info))
-                });
+                })
+                .when(review, |d| d.child(kit::chip("READ ONLY", t.info)));
         }
-        let enabled = self.selected.is_some();
+        let enabled = self.has_checkout();
         let readout = div()
             .flex()
             .items_center()
@@ -402,7 +414,7 @@ impl Render for Shell {
                 cx.notify();
             }))
             .on_action(cx.listener(|s, _: &ToggleTerminal, _, cx| {
-                if s.selected.is_some() {
+                if s.has_checkout() {
                     s.show_terminal = !s.show_terminal;
                     s.save_settings();
                     cx.notify();
@@ -436,6 +448,9 @@ impl Render for Shell {
                 cx.listener(|s, _: &ChooseAccess, w, cx| s.open_agent_menu(Panel::Access, w, cx)),
             )
             .on_action(cx.listener(|s, _: &CycleAccess, _, cx| s.cycle_access(cx)))
+            .on_action(cx.listener(|s, _: &ShowCoding, _, cx| s.set_mode(TaskKind::Coding, cx)))
+            .on_action(cx.listener(|s, _: &ShowChat, _, cx| s.set_mode(TaskKind::Chat, cx)))
+            .on_action(cx.listener(|s, _: &ShowReview, _, cx| s.set_mode(TaskKind::Review, cx)))
             .on_action(cx.listener(|s, _: &GoToTask1, _, cx| s.go_to_task(0, cx)))
             .on_action(cx.listener(|s, _: &GoToTask2, _, cx| s.go_to_task(1, cx)))
             .on_action(cx.listener(|s, _: &GoToTask3, _, cx| s.go_to_task(2, cx)))
@@ -459,7 +474,8 @@ impl Render for Shell {
             .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
             .on_mouse_move(cx.listener(|s, event: &MouseMoveEvent, _, cx| {
                 if s.dragging_sidebar {
-                    s.settings.sidebar_width = f32::from(event.position.x).clamp(220., 420.);
+                    s.settings.sidebar_width =
+                        (f32::from(event.position.x) - workspaces::RAIL - 1.).clamp(220., 420.);
                     cx.notify();
                 }
                 if s.dragging_review {
@@ -480,15 +496,14 @@ impl Render for Shell {
                 }),
             );
         root = root.child(self.titlebar(cx));
+        let rail = self.workspace_rail(cx);
         let sidebar = self.sidebar(cx);
         let sidebar_open = self.reveals.sidebar;
         // While the sidebar slides it is clipped to its current width, held at its trailing
         // edge so that it moves in from the side.
         let sidebar = if sidebar_open > 0. && sidebar_open < 1. {
             div()
-                .w(px(motion::SIDEBAR_RAIL
-                    + (self.settings.sidebar_width - motion::SIDEBAR_RAIL)
-                        * sidebar_open))
+                .w(px(self.settings.sidebar_width * sidebar_open))
                 .h_full()
                 .flex_shrink_0()
                 .flex()
@@ -500,23 +515,42 @@ impl Render for Shell {
             sidebar
         };
         let narrow_review = self.show_review
-            && self.selected.is_some()
+            && self.has_checkout()
             && self.window_width <= 1100.
             && !(self.reviewing_file
                 && self.settings.diff_placement == DiffPlacement::Conversation);
-        let chat = self.chat(window, cx);
+        // The content of a workspace that just opened clears out of a dissolve.
+        let chat = motion::switched(
+            ("workspace-enter", self.mode as usize),
+            div()
+                .relative()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(self.chat(window, cx)),
+            t.canvas,
+            5.,
+        );
         let mut body = div()
             .flex()
             .flex_1()
             .min_h_0()
-            .child(sidebar)
+            .child(rail)
+            // The rail and the sidebar are one surface, so a dotted rule separates them.
+            .when(sidebar_open > 0., |d| {
+                d.child(dither::DottedRule::vertical(t.subtle.opacity(0.5)))
+                    .child(sidebar)
+            })
             .child(div().w(px(1.)).flex_shrink_0().h_full().bg(t.border))
             .when(!narrow_review, |d| d.child(chat));
         let mut handles = Vec::new();
         if sidebar_open >= 1. {
             handles.push(
                 self.resize_handle("sidebar-divider", self.dragging_sidebar)
-                    .left(px(self.settings.sidebar_width - RESIZE_REACH))
+                    .left(px(
+                        workspaces::RAIL + 1. + self.settings.sidebar_width - RESIZE_REACH
+                    ))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|s, _, _, cx| {
@@ -531,7 +565,7 @@ impl Render for Shell {
             body = body
                 .child(div().w(px(1.)).flex_shrink_0().h_full().bg(t.border))
                 .child(self.review(cx, false));
-        } else if review_open > 0. && self.selected.is_some() && self.window_width > 1100. {
+        } else if review_open > 0. && self.has_checkout() && self.window_width > 1100. {
             // The review pane is as wide as `review` makes it; the divider sits before it.
             let width = self.settings.review_width.min(self.window_width * 0.55);
             let review = self.review(cx, false);
@@ -595,6 +629,9 @@ impl Render for Shell {
 
 /// Half the width of a pane divider's hit area, in points.
 const RESIZE_REACH: f32 = 5.;
+
+/// Width at the leading end of the title bar that the window controls take, in points.
+const WINDOW_CONTROLS: f32 = 80.;
 
 impl Shell {
     // The hit area of a pane divider: wide enough to grab, with a line that lights up under

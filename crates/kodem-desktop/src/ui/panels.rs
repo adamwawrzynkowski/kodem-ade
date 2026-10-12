@@ -74,7 +74,11 @@ impl Shell {
                                 .text_size(px(13.))
                                 .line_height(relative(1.45))
                                 .text_color(theme.muted)
-                                .child("Delete this thread and its local conversation history? This cannot be undone. Project files and the worktree stay on disk."),
+                                .child(match task.kind {
+                                    TaskKind::Coding => "Delete this thread and its local conversation history? This cannot be undone. Project files and the worktree stay on disk.",
+                                    TaskKind::Chat => "Delete this chat, its local conversation history and its scratch folder? This cannot be undone.",
+                                    TaskKind::Review => "Delete this review and its local conversation history? This cannot be undone. Its detached worktree is removed. The project, its branches and the pull request stay as they are.",
+                                }),
                         );
                     if let Some(error) = &self.error {
                         content =

@@ -3,8 +3,9 @@
 //! The feed leads with what needs a person: tasks waiting for input or blocked by a failure,
 //! then running tasks, then finished results that were not opened yet. Everything else follows
 //! in the chosen order. Settled work leaves the feed for one list of its own, which is not
-//! grouped by project, and a project without open tasks has no group.
-use kodem_core::{Settings, Task, Workspace};
+//! grouped by project, and a project without open tasks has no group. A feed holds the tasks of
+//! one workspace: agentic coding, chats or reviews.
+use kodem_core::{Settings, Task, TaskKind, Workspace};
 use std::collections::HashMap;
 
 /// A group of tasks that share a state the user acts on.
@@ -52,7 +53,8 @@ pub enum Row {
     },
     Task {
         index: usize,
-        project: usize,
+        /// Index of the owning project; absent for a chat, which has none.
+        project: Option<usize>,
         id: String,
     },
     Empty(&'static str),
@@ -78,6 +80,8 @@ impl Row {
 }
 
 pub struct Filter<'a> {
+    /// The workspace whose tasks are listed.
+    pub kind: TaskKind,
     pub project: Option<&'a str>,
     pub query: &'a str,
     pub archived: bool,
@@ -90,7 +94,7 @@ pub struct Feed {
     pub settled: Vec<Row>,
 }
 
-type Entry<'a> = (usize, usize, &'a Task);
+type Entry<'a> = (usize, Option<usize>, &'a Task);
 
 /// Filters and sorts task identities without cloning drafts, questions or captured context.
 pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> Feed {
@@ -105,14 +109,22 @@ pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> F
         .iter()
         .enumerate()
         .filter_map(|(index, task)| {
-            let (project, name) = projects.get(task.project_id.as_str())?;
+            if task.kind != filter.kind {
+                return None;
+            }
+            let project = projects.get(task.project_id.as_str());
+            // A task of a removed project is hidden with it. A chat has no project.
+            if filter.kind.has_project() && project.is_none() {
+                return None;
+            }
+            let project_filter = filter.project.filter(|_| filter.kind.has_project());
             (task.archived == filter.archived
-                && filter.project.is_none_or(|id| id == task.project_id)
+                && project_filter.is_none_or(|id| id == task.project_id)
                 && (filter.query.is_empty()
                     || task.title.to_lowercase().contains(filter.query)
                     || task.branch.to_lowercase().contains(filter.query)
-                    || name.contains(filter.query)))
-            .then_some((index, *project, task))
+                    || project.is_some_and(|(_, name)| name.contains(filter.query))))
+            .then_some((index, project.map(|(index, _)| *index), task))
         })
         .collect();
     tasks.sort_by(|(_, _, a), (_, _, b)| {
@@ -155,10 +167,12 @@ pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> F
     }
     let (rest, settled): (Vec<_>, Vec<_>) =
         rest.into_iter().partition(|(_, _, task)| !collapses(task));
-    if settings.group_tasks_by_project {
+    if settings.group_tasks_by_project && filter.kind.has_project() {
         let mut groups: HashMap<usize, Vec<Entry<'_>>> = HashMap::new();
         for task in rest {
-            groups.entry(task.1).or_default().push(task);
+            if let Some(project) = task.1 {
+                groups.entry(project).or_default().push(task);
+            }
         }
         let mut project_order: Vec<_> = groups.keys().copied().collect();
         project_order.sort_by_key(|index| workspace.projects[*index].name.to_lowercase());
@@ -187,15 +201,32 @@ pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> F
         rows.extend(rest.into_iter().map(task_row));
     }
     if rows.is_empty() {
-        rows.push(Row::Empty(if workspace.projects.is_empty() {
-            "Open a repository to start a task."
-        } else if !settled.is_empty() {
-            "No open tasks."
-        } else if !filter.query.is_empty() {
-            "No matching tasks."
-        } else {
-            "No tasks here yet."
-        }));
+        rows.push(Row::Empty(
+            if filter.kind.has_project() && workspace.projects.is_empty() {
+                match filter.kind {
+                    TaskKind::Review => "Open a repository to review its changes.",
+                    TaskKind::Coding | TaskKind::Chat => "Open a repository to start a task.",
+                }
+            } else if !settled.is_empty() {
+                match filter.kind {
+                    TaskKind::Coding => "No open tasks.",
+                    TaskKind::Chat => "No open chats.",
+                    TaskKind::Review => "No open reviews.",
+                }
+            } else if !filter.query.is_empty() {
+                match filter.kind {
+                    TaskKind::Coding => "No matching tasks.",
+                    TaskKind::Chat => "No matching chats.",
+                    TaskKind::Review => "No matching reviews.",
+                }
+            } else {
+                match filter.kind {
+                    TaskKind::Coding => "No tasks here yet.",
+                    TaskKind::Chat => "No chats yet. Ask anything to start one.",
+                    TaskKind::Review => "No reviews yet. Pick a pull request or a branch.",
+                }
+            },
+        ));
     }
     Feed {
         open: rows,

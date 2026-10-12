@@ -63,11 +63,13 @@ impl Shell {
     /// Sends the composition. While a turn runs, `alternate` delivers it the way that is not the
     /// configured default: steering instead of queueing, or the reverse.
     pub(super) fn submit_with(&mut self, alternate: bool, cx: &mut Context<Self>) {
+        // A review starts from its picked target, so its start screen needs no text.
+        let starting_review = self.mode == TaskKind::Review && self.selected.is_none();
         if self.agent_popup.is_some()
             || self.panel != Panel::None
             || self.pasting_images > 0
             || self.submitted_draft.is_some()
-            || !self.has_composer_content(cx)
+            || (!starting_review && !self.has_composer_content(cx))
         {
             return;
         }
@@ -142,31 +144,46 @@ impl Shell {
         cx.notify();
     }
 
-    /// Creates one task and submits its first message after the draft and attachments load.
+    /// Creates one task of the open workspace and submits its first message after the draft
+    /// and attachments load.
     fn create_composer_task(&mut self, cx: &mut Context<Self>) {
         if self.creating_task || self.selected.is_some() || self.pasting_images > 0 {
             return;
         }
-        if let Some(project) = self.workspace.as_ref().and_then(|w| {
-            w.projects
-                .iter()
-                .find(|p| Some(&p.id) == self.selected_project.as_ref())
-                .or(w.projects.first())
-        }) {
-            self.new_submission_origin = self
-                .input
-                .read(cx)
-                .text_bounds()
-                .map(|bounds| bounds.origin);
-            self.empty_draft = self.input.read(cx).text();
-            self.creating_task = true;
-            self.send(core::Request::CreateTask {
-                project_id: project.id.clone(),
-                worktree: self.composer_worktree(),
+        let request = match self.mode {
+            TaskKind::Review => {
+                self.start_review(cx);
+                return;
+            }
+            TaskKind::Chat => core::Request::CreateChat {
                 preferences: self.composer_preferences(),
-            });
-            cx.notify();
-        }
+            },
+            TaskKind::Coding => {
+                let Some(project) = self.workspace.as_ref().and_then(|w| {
+                    w.projects
+                        .iter()
+                        .find(|p| Some(&p.id) == self.selected_project.as_ref())
+                        .or(w.projects.first())
+                }) else {
+                    return;
+                };
+                core::Request::CreateTask {
+                    project_id: project.id.clone(),
+                    worktree: self.composer_worktree(),
+                    preferences: self.composer_preferences(),
+                    base: None,
+                }
+            }
+        };
+        self.new_submission_origin = self
+            .input
+            .read(cx)
+            .text_bounds()
+            .map(|bounds| bounds.origin);
+        self.empty_draft = self.input.read(cx).text();
+        self.creating_task = true;
+        self.send(request);
+        cx.notify();
     }
 
     /// Imports dropped or chosen paths through the host without blocking the UI.

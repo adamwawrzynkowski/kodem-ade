@@ -602,6 +602,7 @@ impl Shell {
             ("Next or previous task", "⌃ Tab / ⌃ ⇧ Tab / ⇧ ⌘ ] / ⇧ ⌘ ["),
             ("Go to a task in the feed", "⌘ 1 – ⌘ 9"),
             ("Next task that needs you", "⌥ ⌘ A"),
+            ("Agentic Coding, Chat or Review", "⌥ ⌘ 1 / ⌥ ⌘ 2 / ⌥ ⌘ 3"),
             ("Send message", "Return"),
             ("Send the other way during a turn", "⌘ Return"),
             ("New line in prompt", "⇧ Return"),

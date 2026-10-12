@@ -181,13 +181,16 @@ fn start_at(
                     continue;
                 }
                 // Account operations and catalog discovery do not depend on task mutations.
-                // Provider latency must not block Send, Stop, or conversation polling.
+                // Provider latency must not block Send, Stop, or conversation polling. Listing
+                // review targets and starting a review can wait for GitHub and a fetch.
                 if matches!(
                     request,
                     Request::ComposerCatalog { .. }
                         | Request::ConnectRuntime { .. }
                         | Request::RefreshUsage { .. }
                         | Request::ConsumeUsageReset { .. }
+                        | Request::ReviewTargets { .. }
+                        | Request::CreateReview { .. }
                 ) {
                     let root = root.clone();
                     let replies = replies.clone();

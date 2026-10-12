@@ -658,12 +658,17 @@ impl Shell {
                 None,
             );
         }
-        let project = self.composer_project();
-        if let Some(chosen) = self
-            .new_preferences
-            .clone()
-            .or_else(|| project?.defaults.clone())
-        {
+        self.starting_preferences(self.composer_project(), self.new_preferences.clone())
+    }
+
+    /// Returns the options that a new task in `project` starts with: `chosen` when the user
+    /// picked options for this draft, then the project's default, then the options used last.
+    pub(super) fn starting_preferences(
+        &self,
+        project: Option<&Project>,
+        chosen: Option<AgentPreferences>,
+    ) -> AgentPreferences {
+        if let Some(chosen) = chosen.or_else(|| project?.defaults.clone()) {
             return self.with_model(chosen, Some(project.map(|project| project.id.as_str())));
         }
         // Nothing was chosen for this draft or pinned to this project: start from the last used
@@ -888,7 +893,9 @@ impl Shell {
     /// Steps to the next access mode that still asks or only plans. Modes that remove approval
     /// are left to an explicit choice in the menu.
     pub(super) fn cycle_access(&mut self, cx: &mut Context<Self>) {
+        // A review is read-only; it has no access mode to step through.
         if self.panel != Panel::None
+            || self.mode == TaskKind::Review
             || self.view.as_ref().is_some_and(|view| {
                 view.task.state.active() || view.task.state == RunState::DeliveryUnknown
             })
@@ -1009,11 +1016,12 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let anchor = if matches!(panel, Panel::Access | Panel::Mode) {
-            ACCESS_ANCHOR
-        } else {
-            AGENT_ANCHOR
-        };
+        let access = matches!(panel, Panel::Access | Panel::Mode);
+        // A review is read-only; its composer has no access or mode menu.
+        if access && self.mode == TaskKind::Review {
+            return;
+        }
+        let anchor = if access { ACCESS_ANCHOR } else { AGENT_ANCHOR };
         let viewport = window.viewport_size();
         self.menu_anchor = Some(fx::anchor_bounds(anchor, cx).unwrap_or(Bounds::new(
             point(viewport.width / 2. + px(240.), viewport.height - px(140.)),

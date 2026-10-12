@@ -200,6 +200,7 @@ impl Shell {
                         continue;
                     }
                     let selected = self.comparison == comparison;
+                    let label = self.comparison_label(&comparison, label);
                     menu = menu.child(
                         self.menu_row(("comparison-option", i), glyph, label, selected)
                             .h(px(28.))
@@ -361,47 +362,48 @@ impl Shell {
                 if let Some(view) = self.view.clone() {
                     let id = view.task.id.clone();
                     let title = view.task.title.clone();
-                    menu = menu.child(menu_title("Task", None, t)).child(
-                        self.ghost("menu-rename", "edit", "Rename task")
-                            .w_full()
-                            .justify_start()
-                            .on_click(cx.listener(move |s, _, _, cx| {
-                                s.aux.update(cx, |i, cx| i.set_text(title.clone(), cx));
-                                s.panel = Panel::Rename;
-                                cx.notify();
-                            })),
-                    );
+                    menu = menu
+                        .child(menu_title(view.task.kind.noun(), None, t))
+                        .child(
+                            self.ghost("menu-rename", "edit", "Rename")
+                                .w_full()
+                                .justify_start()
+                                .on_click(cx.listener(move |s, _, _, cx| {
+                                    s.aux.update(cx, |i, cx| i.set_text(title.clone(), cx));
+                                    s.panel = Panel::Rename;
+                                    cx.notify();
+                                })),
+                        );
                     let pinned = view.task.pinned;
                     let pin_id = id.clone();
                     menu = menu.child(
-                        self.ghost(
-                            "menu-pin",
-                            "pin",
-                            if pinned { "Unpin task" } else { "Pin task" },
-                        )
-                        .w_full()
-                        .justify_start()
-                        .on_click(cx.listener(move |s, _, _, cx| {
-                            s.send(core::Request::EditTask {
-                                task_id: pin_id.clone(),
-                                edit: TaskEdit::Pin(!pinned),
-                            });
-                            s.panel = Panel::None;
-                            cx.notify();
-                        })),
+                        self.ghost("menu-pin", "pin", if pinned { "Unpin" } else { "Pin" })
+                            .w_full()
+                            .justify_start()
+                            .on_click(cx.listener(move |s, _, _, cx| {
+                                s.send(core::Request::EditTask {
+                                    task_id: pin_id.clone(),
+                                    edit: TaskEdit::Pin(!pinned),
+                                });
+                                s.panel = Panel::None;
+                                cx.notify();
+                            })),
                     );
+                    // A check runs a command in the task's checkout, which a chat does not have.
                     menu = menu
                         .child(separator(t))
-                        .child(
-                            self.ghost("menu-check", "check-square", "Run a check")
-                                .w_full()
-                                .justify_start()
-                                .on_click(cx.listener(|s, _, _, cx| {
-                                    s.aux.update(cx, |i, cx| i.set_text(String::new(), cx));
-                                    s.panel = Panel::Check;
-                                    cx.notify();
-                                })),
-                        )
+                        .when(view.task.kind.has_project(), |menu| {
+                            menu.child(
+                                self.ghost("menu-check", "check-square", "Run a check")
+                                    .w_full()
+                                    .justify_start()
+                                    .on_click(cx.listener(|s, _, _, cx| {
+                                        s.aux.update(cx, |i, cx| i.set_text(String::new(), cx));
+                                        s.panel = Panel::Check;
+                                        cx.notify();
+                                    })),
+                            )
+                        })
                         .child(
                             self.ghost("menu-resources", "code", "Skills & MCP")
                                 .w_full()
@@ -428,11 +430,7 @@ impl Shell {
                         self.ghost(
                             "menu-archive",
                             "archive",
-                            if archived {
-                                "Restore task"
-                            } else {
-                                "Archive task"
-                            },
+                            if archived { "Restore" } else { "Archive" },
                         )
                         .w_full()
                         .justify_start()

@@ -440,6 +440,136 @@ impl UsageLimits {
         self.spend_control_reached == Some(true) || self.rate_limit_reached_type.is_some()
     }
 }
+/// What a task is for. The kind selects the workspace that lists the task and the rules of its
+/// provider session.
+#[derive(
+    Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
+pub enum TaskKind {
+    /// Agentic work in a project checkout.
+    #[default]
+    Coding,
+    /// A conversation without a project.
+    Chat,
+    /// A local, read-only review of a pull request or a branch.
+    Review,
+}
+impl TaskKind {
+    pub const ALL: [Self; 3] = [Self::Coding, Self::Chat, Self::Review];
+    /// Returns the name of the workspace that lists tasks of this kind.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Coding => "Agentic Coding",
+            Self::Chat => "Chat",
+            Self::Review => "Review",
+        }
+    }
+    /// Returns the bundled icon of the workspace.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Coding => "code",
+            Self::Chat => "chat",
+            Self::Review => "git-pull-request",
+        }
+    }
+    /// Returns what one task of this kind is called in the interface.
+    pub fn noun(self) -> &'static str {
+        match self {
+            Self::Coding => "task",
+            Self::Chat => "chat",
+            Self::Review => "review",
+        }
+    }
+    /// Reports whether tasks of this kind belong to a project and work in a Git checkout.
+    pub fn has_project(self) -> bool {
+        self != Self::Chat
+    }
+}
+/// A pull request or a branch chosen for review.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum ReviewTarget {
+    PullRequest {
+        number: u64,
+        title: String,
+        /// Head branch; a pull request from a fork names its owner first, as `owner:branch`.
+        head: String,
+        base: String,
+        url: String,
+    },
+    Branch {
+        /// Name shown to the user, such as `feature/x` or `origin/feature/x`.
+        name: String,
+        /// Full reference name, such as `refs/heads/feature/x`.
+        reference: String,
+    },
+}
+impl ReviewTarget {
+    /// Returns a short name of the target for titles and rows.
+    pub fn label(&self) -> String {
+        match self {
+            Self::PullRequest { number, .. } => format!("PR #{number}"),
+            Self::Branch { name, .. } => name.clone(),
+        }
+    }
+    /// Returns the name of the branch whose commits are reviewed.
+    pub fn head(&self) -> &str {
+        match self {
+            Self::PullRequest { head, .. } => head,
+            Self::Branch { name, .. } => name,
+        }
+    }
+}
+/// A review target with what it resolved to when the review started.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ReviewScope {
+    pub target: ReviewTarget,
+    /// Reviewed commit. The task's baseline is its merge base with `base`.
+    pub head: String,
+    /// Name of the branch that the target is compared with.
+    pub base: String,
+}
+/// An open pull request of a project, as GitHub CLI reports it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PullRequestSummary {
+    pub number: u64,
+    pub title: String,
+    pub head: String,
+    pub base: String,
+    pub author: String,
+    pub draft: bool,
+    /// Wall-clock milliseconds of the last update; zero when unknown.
+    pub updated: u64,
+    pub additions: u64,
+    pub deletions: u64,
+    pub url: String,
+}
+/// A local or remote-tracking branch of a project.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BranchSummary {
+    pub name: String,
+    pub reference: String,
+    pub remote: bool,
+    /// The branch that the project's checkout is on.
+    pub current: bool,
+    pub commit: String,
+    pub subject: String,
+    pub author: String,
+    /// Wall-clock milliseconds of the last commit.
+    pub updated: u64,
+}
+/// What can be reviewed in one project. Pull requests need GitHub CLI; branches do not.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ReviewTargets {
+    pub project_id: String,
+    /// Branch that reviewed branches are compared with; absent when the repository has none.
+    pub default_branch: Option<String>,
+    pub branches: Vec<BranchSummary>,
+    pub pull_requests: Vec<PullRequestSummary>,
+    /// Why pull requests could not be listed, such as a missing or signed-out GitHub CLI.
+    pub pull_request_error: Option<String>,
+    /// The checkout has uncommitted changes, which a review of its branch does not include.
+    pub dirty: bool,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Task {
     #[serde(default)]
@@ -457,7 +587,13 @@ pub struct Task {
     pub plan: Vec<PlanStep>,
     #[serde(default)]
     pub provider_access: Option<String>,
+    #[serde(default)]
+    pub kind: TaskKind,
+    /// What a review task examines; absent for the other kinds.
+    #[serde(default)]
+    pub review_scope: Option<ReviewScope>,
     pub id: String,
+    /// Owning project; empty for a chat, which has none.
     pub project_id: String,
     pub title: String,
     #[serde(default)]
@@ -898,6 +1034,8 @@ pub struct Settings {
     pub group_tasks_by_project: bool,
     pub collapsed_projects: std::collections::HashSet<String>,
     pub selected_task: Option<String>,
+    /// The workspace that was open last.
+    pub mode: TaskKind,
     /// When each task was last open in the window, in wall-clock milliseconds. A finished task
     /// whose result is newer than this is still unread.
     pub viewed: std::collections::BTreeMap<String, u64>,
@@ -927,6 +1065,7 @@ impl Default for Settings {
             group_tasks_by_project: false,
             collapsed_projects: Default::default(),
             selected_task: None,
+            mode: TaskKind::default(),
             viewed: Default::default(),
             diff_placement: DiffPlacement::default(),
             send_mode: SendMode::default(),
@@ -1461,6 +1600,23 @@ pub enum Request {
         project_id: String,
         worktree: bool,
         preferences: AgentPreferences,
+        /// Commit that the new worktree starts from instead of the project's current commit.
+        #[serde(default)]
+        base: Option<String>,
+    },
+    /// Starts a conversation that has no project.
+    CreateChat {
+        preferences: AgentPreferences,
+    },
+    /// Lists the pull requests and branches of a project that can be reviewed.
+    ReviewTargets {
+        project_id: String,
+    },
+    /// Starts a local, read-only review in a detached worktree at the target's head.
+    CreateReview {
+        project_id: String,
+        target: ReviewTarget,
+        preferences: AgentPreferences,
     },
     Task {
         task_id: String,
@@ -1630,6 +1786,7 @@ pub enum Response {
     Project(Project),
     Account(Account),
     Created(Task),
+    ReviewTargets(ReviewTargets),
     Diff(DiffSnapshot),
     TaskChanges {
         task_id: String,

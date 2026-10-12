@@ -10,6 +10,7 @@ enum Action {
     NewTask,
     OpenProject,
     OpenTask(String),
+    Workspace(TaskKind),
     NextAttention,
     Models,
     Reasoning,
@@ -151,7 +152,18 @@ impl Shell {
                 action,
             });
         };
-        add("plus", "New task", "", "⌘N", "Actions", Action::NewTask);
+        add(
+            "plus",
+            match self.mode {
+                TaskKind::Coding => "New task",
+                TaskKind::Chat => "New chat",
+                TaskKind::Review => "New review",
+            },
+            "",
+            "⌘N",
+            "Actions",
+            Action::NewTask,
+        );
         add(
             "folder-open",
             "Open repository…",
@@ -252,14 +264,33 @@ impl Shell {
                 "This task",
                 Action::Archive(!task.archived),
             );
-            add(
-                "file-text",
-                "Browse project files",
-                "",
-                "",
-                "This task",
-                Action::Files,
-            );
+            // A chat has no checkout to browse.
+            if self.has_checkout() {
+                add(
+                    "file-text",
+                    "Browse project files",
+                    "",
+                    "",
+                    "This task",
+                    Action::Files,
+                );
+            }
+        }
+        for (mode, keys) in [
+            (TaskKind::Coding, "⌥⌘1"),
+            (TaskKind::Chat, "⌥⌘2"),
+            (TaskKind::Review, "⌥⌘3"),
+        ] {
+            if mode != self.mode {
+                add(
+                    mode.icon(),
+                    &format!("Open {}", mode.label()),
+                    "",
+                    keys,
+                    "Workspaces",
+                    Action::Workspace(mode),
+                );
+            }
         }
         let preferences = self.composer_preferences();
         let model = self.model_name(&preferences);
@@ -279,14 +310,17 @@ impl Shell {
             "Agent",
             Action::Reasoning,
         );
-        add(
-            "shield",
-            "Change access mode…",
-            "",
-            "⇧⌘A",
-            "Agent",
-            Action::Access,
-        );
+        // A review is read-only, so it has no access mode to change.
+        if self.mode != TaskKind::Review {
+            add(
+                "shield",
+                "Change access mode…",
+                "",
+                "⇧⌘A",
+                "Agent",
+                Action::Access,
+            );
+        }
         add(
             "code",
             "Skills, instructions and MCP",
@@ -332,13 +366,21 @@ impl Shell {
                     "loader"
                 } else if task.is_blocked() {
                     "circle-x"
+                } else if task.kind == TaskKind::Review {
+                    task.kind.icon()
                 } else {
                     "chat"
+                };
+                // A chat has neither a project nor a branch, so it names its workspace.
+                let detail = if task.kind.has_project() {
+                    format!("{project} / {}", task.branch)
+                } else {
+                    task.kind.label().to_owned()
                 };
                 add(
                     glyph,
                     &task.title,
-                    &format!("{project} / {}", task.branch),
+                    &detail,
                     "",
                     "Threads",
                     Action::OpenTask(task.id.clone()),
@@ -435,6 +477,7 @@ impl Shell {
             Action::NewTask => self.new_task(&NewTask, window, cx),
             Action::OpenProject => self.open_project(&OpenProject, window, cx),
             Action::OpenTask(id) => self.select_task(id, cx),
+            Action::Workspace(mode) => self.set_mode(mode, cx),
             Action::NextAttention => self.select_next_attention(cx),
             Action::Models => self.open_agent_menu(Panel::Models, window, cx),
             Action::Reasoning => self.open_agent_menu(Panel::Reasoning, window, cx),

@@ -264,3 +264,19 @@ The skill catalog adds a typed skill attachment instead of editing prompt text. 
 A temporary nonvisual test passed explicit skill versus ordinary file importing, frozen content after source changes, model-payload skill invocation, queue persistence across database reopen, restoration without adding editor text, invalid skill rejection, and deletion of imported copies without deleting the source. Verification code, executable and fixture files were removed afterward. Workspace Clippy with warnings denied passed. Computer History status remained unavailable with error -1743; the current code and supplied screenshot were used. No app was launched, controlled or visually tested.
 
 Debug `20260910T000118Z-125448d-dirty` and release `20260910T000209Z-125448d-dirty` builds passed. Release is installed at `/Applications/Kodem.app`. Installed executables, plist, icon and build metadata match the release package; strict signature verification passed. There are no generated backup, staging or rollback copies in Applications. Formatting and git diff --check passed. No app visual testing, commit or push was performed.
+
+
+## Workspaces: Agentic Coding, Chat and Review
+
+Recorded on 12 October 2026. A rail of three icons on the window's leading edge swaps the window between workspaces. Tasks have a kind (`TaskKind`); the thread feed, keyboard navigation and the start screen follow the open workspace, and a task always opens in the workspace of its kind. Each workspace keeps its open task and the draft of its start screen. Protocol 27 adds `CreateChat`, `ReviewTargets`, `CreateReview`, the `base` commit of `CreateTask`, and the saved workspace in `Settings.mode`. The task kinds and their session rules are in [provider integration](providers.md#task-kinds-and-session-rules); the rail's visual rules are in [dithered interface](../design/dithered-interface.md).
+
+The collapsed sidebar no longer has a rail of its own: it closes completely, and the workspace rail holds its buttons. The title bar's leading section and the sidebar's resize handle account for the rail's width.
+
+Checks that ran:
+
+- Workspace `cargo check`, `cargo fmt --all -- --check` and Clippy. Clippy reports the six warnings that the code had before this change and no new one.
+- A temporary unit test, removed afterward, ran the review helpers against a temporary repository with a bare remote: branch listing without the default branch and without a duplicate remote-tracking branch, the uncommitted-changes flag, a branch review, a pull request review fetched through `refs/pull/<n>/head`, removal of the temporary references, an unchanged checkout and index in the project, a fix worktree that starts at the reviewed commit, worktree removal, and refusal of an unknown branch, a branch without new commits, a foreign remote and a base name that is an option.
+- Claude Code 2.1.296 completed its control handshake, without a model turn, with `--append-system-prompt`, `--allowedTools` and the `--disallowedTools` rules that a review uses.
+- The JSON schema of Codex 0.153.4's app-server lists `developerInstructions` on `thread/start` and `thread/resume`, and `web_search` with the value `live` in its configuration.
+
+Not checked: the appearance and pointer behavior of the rail and the Review start screen, because app visual testing is prohibited; a real provider turn of a chat or a review; `gh pr list` against a repository on GitHub (in the test repository it reported that no remote points to GitHub, which the picker shows); and whether Codex accepts a thread in a directory that is not a Git repository. No commit or push was made.

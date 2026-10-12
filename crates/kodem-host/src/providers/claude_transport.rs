@@ -62,6 +62,12 @@ pub(super) struct Launch<'a> {
     pub(super) light: bool,
     /// When the CLI compacts by itself; absent leaves its own configuration in effect.
     pub(super) compact: Option<CompactRule>,
+    /// Standing instructions added to the CLI's own system prompt.
+    pub(super) instructions: Option<&'a str>,
+    /// Tools the session may use without asking.
+    pub(super) allowed_tools: &'a [&'a str],
+    /// Tools the session starts without.
+    pub(super) disallowed_tools: &'a [&'a str],
 }
 
 pub(super) struct Transport {
@@ -119,6 +125,20 @@ impl Transport {
         };
         if launch.light {
             command.arg("--strict-mcp-config");
+        }
+        if let Some(instructions) = launch.instructions {
+            command.args(["--append-system-prompt", instructions]);
+        }
+        // Each rule is one argument, because a rule such as `Bash(git push:*)` holds
+        // punctuation of its own. Only options follow, so the CLI reads no other argument as a
+        // tool name.
+        if !launch.allowed_tools.is_empty() {
+            command.arg("--allowedTools").args(launch.allowed_tools);
+        }
+        if !launch.disallowed_tools.is_empty() {
+            command
+                .arg("--disallowedTools")
+                .args(launch.disallowed_tools);
         }
         // The CLI reads both variables at start: a share of its context window in percent, and
         // a switch that turns off automatic compaction while `/compact` keeps working.

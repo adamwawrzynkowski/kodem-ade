@@ -25,27 +25,43 @@ fn side_header(label: &str, tone: Hsla, theme: Theme) -> Div {
 }
 
 impl Shell {
+    /// Returns the name of a comparison for the open task. The baseline of a review is the
+    /// merge base of what it examines, so that comparison holds the reviewed changes.
+    pub(super) fn comparison_label(
+        &self,
+        comparison: &Comparison,
+        label: &'static str,
+    ) -> &'static str {
+        if self.mode == TaskKind::Review && *comparison == Comparison::Baseline {
+            "Reviewed changes"
+        } else {
+            label
+        }
+    }
+
     /// Builds the file browser, snapshot diff and contextual feedback editor.
     pub(super) fn review(&mut self, cx: &mut Context<Self>, center: bool) -> AnyElement {
         let t = self.theme;
+        // The workspace rail, the sidebar when it is open, and the rules between the panes.
+        let leading = workspaces::RAIL
+            + if self.settings.collapsed {
+                2.
+            } else {
+                self.settings.sidebar_width + 3.
+            };
         let width = if center {
-            (self.window_width - self.settings.sidebar_width - self.settings.review_width).max(360.)
+            (self.window_width - leading - self.settings.review_width).max(360.)
         } else if self.window_width <= 1100. {
-            self.window_width
-                - if self.settings.collapsed {
-                    54.
-                } else {
-                    self.settings.sidebar_width
-                }
-                - 2.
+            self.window_width - leading
         } else {
             self.settings.review_width.min(self.window_width * 0.55)
         };
         let count = self.diff.as_ref().map_or(0, |d| d.files.len());
-        let (_, label, glyph) = COMPARISONS
+        let (comparison, label, glyph) = COMPARISONS
             .iter()
             .find(|(comparison, _, _)| *comparison == self.comparison)
             .unwrap();
+        let label = self.comparison_label(comparison, label);
         let mut panel = div()
             .relative()
             .id(if center {
@@ -77,7 +93,7 @@ impl Shell {
                                 if self.historical_diff {
                                     "Saved task diff"
                                 } else {
-                                    *label
+                                    label
                                 },
                             )
                             .px(px(7.))

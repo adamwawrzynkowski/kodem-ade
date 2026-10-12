@@ -65,6 +65,9 @@ impl Shell {
             if let Some(account_notice) = self.account_notice(cx) {
                 panel = panel.child(account_notice);
             }
+            if let Some(review_actions) = self.review_actions(cx) {
+                panel = panel.child(review_actions);
+            }
             let mut timeline = div()
                 .id("conversation-stage")
                 .relative()
@@ -110,8 +113,16 @@ impl Shell {
                             .flex_1()
                             .pb(px(self.composer_height))
                             .child(kit::empty_state(
-                                "This task is empty",
-                                "Describe the change below. The conversation and its code review stay together in this task.",
+                                match self.mode {
+                                    TaskKind::Coding => "This task is empty",
+                                    TaskKind::Chat => "This chat is empty",
+                                    TaskKind::Review => "This review has not started",
+                                },
+                                match self.mode {
+                                    TaskKind::Coding => "Describe the change below. The conversation and its code review stay together in this task.",
+                                    TaskKind::Chat => "Ask a question below. A chat has no project and can search the web.",
+                                    TaskKind::Review => "Send a message below to start it. A review reads the code and changes nothing.",
+                                },
                                 dither::DitherField::Wave {
                                     level: 0.5,
                                     amplitude: 0.08,
@@ -234,6 +245,9 @@ impl Shell {
                             .pt(px(48.))
                             .pb(px(32.))
                             .child(self.empty_chat_greeting(cx))
+                            .when(self.mode == TaskKind::Review, |column| {
+                                column.child(self.review_picker(cx))
+                            })
                             .children(
                                 self.account_notice(cx)
                                     .map(|notice| div().mx(px(-20.)).child(notice)),
@@ -244,7 +258,7 @@ impl Shell {
             );
         }
         let terminal_open = self.reveals.terminal;
-        if terminal_open > 0. && self.selected.is_some() {
+        if terminal_open > 0. && self.has_checkout() {
             let terminal = self.terminal_panel(window, cx);
             panel = panel.child(if terminal_open < 1. {
                 // While the terminal slides it is clipped to its current height and grows up
@@ -423,23 +437,65 @@ impl Shell {
         )
     }
 
+    // The heading of a start screen: a greeting, then what the workspace starts. Agentic Coding
+    // and Review name the project the work happens in, as a control that changes it.
     fn empty_chat_greeting(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let name = self
-            .composer_project()
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| "a project".into());
+        let (label, lead, tail) = match self.mode {
+            TaskKind::Coding => (
+                format!("Hello, {}", self.greeting_name),
+                "What should we build in",
+                "?",
+            ),
+            TaskKind::Chat => (
+                format!("Hello, {}", self.greeting_name),
+                "What is on your mind?",
+                "",
+            ),
+            TaskKind::Review => (
+                "Local review · read-only".to_owned(),
+                "Review changes in",
+                "",
+            ),
+        };
+        let project = self.mode.has_project().then(|| {
+            let name = self
+                .composer_project()
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "a project".into());
+            self.control("greeting-project")
+                .h_auto()
+                .px(px(5.))
+                .py(px(1.))
+                .border_color(t.accent.opacity(0.35))
+                .bg(t.accent_bg)
+                .hover(move |b| b.bg(t.accent.opacity(0.22)))
+                .font_family(crate::theme::SANS)
+                .text_size(px(24.))
+                .line_height(relative(1.25))
+                .font_weight(FontWeight::MEDIUM)
+                .max_w_full()
+                .min_w_0()
+                .text_ellipsis()
+                .text_color(t.accent)
+                .accessibility_label("Choose project")
+                .child(name)
+                .child(icon("chevrons-up-down").size(px(16.)))
+                .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
+                    if !s.creating_task {
+                        s.menu_anchor = Some(*bounds);
+                        s.panel = Panel::ChatProjects;
+                        cx.notify();
+                    }
+                }))
+        });
         div()
             .w_full()
             .mb(px(20.))
             .flex()
             .flex_col()
             .gap(px(14.))
-            .child(kit::section_header(
-                format!("Hello, {}", self.greeting_name),
-                None,
-                t,
-            ))
+            .child(kit::section_header(label, None, t))
             .child(
                 div()
                     .flex()
@@ -449,42 +505,14 @@ impl Shell {
                     .text_size(px(24.))
                     .line_height(relative(1.25))
                     .font_weight(FontWeight::MEDIUM)
-                    .child("What should we build in")
-                    .child(
-                        self.control("greeting-project")
-                            .h_auto()
-                            .px(px(5.))
-                            .py(px(1.))
-                            .border_color(t.accent.opacity(0.35))
-                            .bg(t.accent_bg)
-                            .hover(move |b| b.bg(t.accent.opacity(0.22)))
-                            .font_family(crate::theme::SANS)
-                            .text_size(px(24.))
-                            .line_height(relative(1.25))
-                            .font_weight(FontWeight::MEDIUM)
-                            .max_w_full()
-                            .min_w_0()
-                            .text_ellipsis()
-                            .text_color(t.accent)
-                            .accessibility_label("Choose project")
-                            .child(name)
-                            .child(icon("chevrons-up-down").size(px(16.)))
-                            .on_click_with_bounds(cx.listener(
-                                |s, bounds: &Bounds<Pixels>, _, cx| {
-                                    if !s.creating_task {
-                                        s.menu_anchor = Some(*bounds);
-                                        s.panel = Panel::ChatProjects;
-                                        cx.notify();
-                                    }
-                                },
-                            )),
-                    )
-                    .child("?"),
+                    .child(lead)
+                    .children(project)
+                    .when(!tail.is_empty(), |heading| heading.child(tail)),
             )
             .into_any_element()
     }
 
-    // The keys that are worth learning first, shown under the composer of a new task.
+    // The keys that are worth learning first, shown under the composer of a start screen.
     fn shortcut_hints(&self) -> AnyElement {
         let t = self.theme;
         let mut hints = div()
@@ -494,23 +522,68 @@ impl Shell {
             .items_center()
             .gap_x(px(16.))
             .gap_y(px(8.));
-        for (keys, label) in [
-            ("⌘K", "Commands and threads"),
-            ("/", "Provider commands"),
-            ("⇧⇥", "Plan or build"),
-            ("⇧⌘M", "Model and account"),
-            ("⌥⌘A", "Next task that needs you"),
-        ] {
+        let keys: &[(&str, &str)] = match self.mode {
+            TaskKind::Coding => &[
+                ("⌘K", "Commands and threads"),
+                ("/", "Provider commands"),
+                ("⇧⇥", "Plan or build"),
+                ("⇧⌘M", "Model and account"),
+                ("⌥⌘A", "Next task that needs you"),
+            ],
+            TaskKind::Chat => &[
+                ("⏎", "Send"),
+                ("⇧⏎", "New line"),
+                ("⇧⌘M", "Model and account"),
+                ("⌘K", "Commands and threads"),
+                ("⌥⌘1", "Agentic Coding"),
+            ],
+            TaskKind::Review => &[
+                ("⏎", "Start review"),
+                ("⇧⌘M", "Model and account"),
+                ("⌘K", "Commands and threads"),
+                ("⌥⌘1", "Agentic Coding"),
+            ],
+        };
+        for (keys, label) in keys {
             hints = hints.child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .child(kit::keycap(keys, t))
+                    .child(kit::keycap(*keys, t))
                     .child(caps(label, t)),
             );
         }
-        hints.into_any_element()
+        // What the workspace does with a message, where that differs from a coding task.
+        let rule = match self.mode {
+            TaskKind::Coding => None,
+            TaskKind::Chat => Some("A chat has no project. It can search the web and read pages."),
+            TaskKind::Review => Some(
+                "A review runs on this machine in a detached worktree. It changes no file, and it does not push or comment.",
+            ),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .child(hints)
+            .when_some(rule, |column, rule| {
+                column.child(
+                    div()
+                        .mt(px(14.))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(kit::marker(t.info))
+                        .child(
+                            div()
+                                .font_family(crate::theme::MONO)
+                                .text_size(px(11.))
+                                .text_color(t.subtle)
+                                .child(rule),
+                        ),
+                )
+            })
+            .into_any_element()
     }
 
     fn composer(&mut self, empty: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -520,7 +593,15 @@ impl Shell {
         let unknown = task
             .as_ref()
             .is_some_and(|v| v.state == RunState::DeliveryUnknown);
-        let has_project = self.composer_project().is_some();
+        let mode = self.mode;
+        // What a start screen needs before it can create its task.
+        let ready = match mode {
+            TaskKind::Coding => self.composer_project().is_some(),
+            TaskKind::Chat => true,
+            TaskKind::Review => self.review_project().is_some() && self.review.pick.is_some(),
+        };
+        // A review starts from its picked target; the draft only adds focus notes.
+        let needs_content = !(empty && mode == TaskKind::Review);
         let preferences = self.composer_preferences();
         let runtime = self.selected_runtime();
         let selected_model = runtime
@@ -718,8 +799,12 @@ impl Shell {
             .when(has_context, |d| {
                 d.child(div().px(px(12.)).pt(px(10.)).child(attachments))
             });
+        // A new review names what it examines in a row above the draft.
+        if empty && mode == TaskKind::Review {
+            editor = editor.child(self.review_pick_status());
+        }
         // A new task says where it will work in a row above the draft.
-        if empty {
+        if empty && mode == TaskKind::Coding {
             let worktree = self.composer_worktree();
             let status = div().px(px(8.)).pt(px(6.)).flex().items_center().child(
                 self.ghost(
@@ -846,7 +931,23 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(2.))
-            .when(has_modes, |d| {
+            // A review is read-only: it has neither a mode nor an approval rule to choose.
+            .when(mode == TaskKind::Review, |d| {
+                d.child(
+                    div()
+                        .id("composer-read-only")
+                        .px(px(4.))
+                        .child(kit::chip("READ ONLY", t.info))
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| Hint {
+                                text: "A review changes no file, and it does not push or comment. Codex runs it in its read-only sandbox. Claude Code runs it without its editing tools and asks before a command that is not read-only.".into(),
+                                theme: t,
+                            })
+                            .into()
+                        }),
+                )
+            })
+            .when(has_modes && mode != TaskKind::Review, |d| {
                 d.child(
                     self.chip_button("composer-mode")
                         .selected(self.panel == Panel::Mode)
@@ -861,21 +962,25 @@ impl Shell {
                         })),
                 )
             })
-            .child(
-                self.chip_button("composer-access")
-                    .selected(self.panel == Panel::Access)
-                    .accessibility_label("Approvals")
-                    // The rule waits for build mode while the agent only plans.
-                    .when(planning, |b| b.text_color(t.subtle))
-                    .child(fx::anchor(model_picker::ACCESS_ANCHOR))
-                    .child(icon(model_picker::access_glyph(&access_id)).size(px(13.)))
-                    .child(access_label)
-                    .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
-                        s.menu_anchor = Some(*bounds);
-                        s.panel = Panel::Access;
-                        cx.notify();
-                    })),
-            );
+            .when(mode != TaskKind::Review, |d| {
+                d.child(
+                    self.chip_button("composer-access")
+                        .selected(self.panel == Panel::Access)
+                        .accessibility_label("Approvals")
+                        // The rule waits for build mode while the agent only plans.
+                        .when(planning, |b| b.text_color(t.subtle))
+                        .child(fx::anchor(model_picker::ACCESS_ANCHOR))
+                        .child(icon(model_picker::access_glyph(&access_id)).size(px(13.)))
+                        .child(access_label)
+                        .on_click_with_bounds(cx.listener(
+                            |s, bounds: &Bounds<Pixels>, _, cx| {
+                                s.menu_anchor = Some(*bounds);
+                                s.panel = Panel::Access;
+                                cx.notify();
+                            },
+                        )),
+                )
+            });
         let steering = active
             && runtime.steering
             && task.as_ref().is_none_or(|t| t.pending_completion.is_none());
@@ -922,9 +1027,9 @@ impl Shell {
         let blocked = unknown
             || importing
             || self.creating_task
-            || (empty && !has_project)
+            || (empty && !ready)
             || self.submitted_draft.is_some()
-            || !has_content;
+            || (needs_content && !has_content);
         // While a turn runs, an empty draft offers to stop it and a draft offers to send it.
         let stop_only = active && !has_content;
         if active && has_content {
@@ -949,7 +1054,11 @@ impl Shell {
                 "Queue for the next turn · Enter"
             }
         } else if empty {
-            "Create task and send message · Enter"
+            match mode {
+                TaskKind::Coding => "Create task and send message · Enter",
+                TaskKind::Chat => "Start chat and send message · Enter",
+                TaskKind::Review => "Start review · Enter",
+            }
         } else {
             "Send message · Enter"
         };
@@ -1049,12 +1158,12 @@ impl Shell {
                 }
             } else if active {
                 &[("⏎", "queue"), ("⇧⏎", "newline")]
+            } else if mode == TaskKind::Review {
+                &[("⏎", "send"), ("⇧⏎", "newline")]
+            } else if has_modes {
+                &[("⏎", "send"), ("⇧⏎", "newline"), ("⇧⇥", "plan")]
             } else {
-                if has_modes {
-                    &[("⏎", "send"), ("⇧⏎", "newline"), ("⇧⇥", "plan")]
-                } else {
-                    &[("⏎", "send"), ("⇧⏎", "newline"), ("⇧⇥", "access")]
-                }
+                &[("⏎", "send"), ("⇧⏎", "newline"), ("⇧⇥", "access")]
             };
             let mut footer = div()
                 .pt(px(7.))
@@ -1062,12 +1171,22 @@ impl Shell {
                 .flex()
                 .items_center()
                 .gap(px(6.))
-                .child(icon("branch").size(px(11.)).text_color(t.subtle))
+                .child(
+                    icon(match mode {
+                        TaskKind::Coding => "branch",
+                        TaskKind::Chat | TaskKind::Review => mode.icon(),
+                    })
+                    .size(px(11.))
+                    .text_color(t.subtle),
+                )
                 .child(caps(
-                    if task.as_ref().is_some_and(|v| v.owns_worktree) {
-                        "Isolated worktree"
-                    } else {
-                        "Current checkout"
+                    match mode {
+                        TaskKind::Chat => "No project",
+                        TaskKind::Review => "Detached review worktree",
+                        TaskKind::Coding if task.as_ref().is_some_and(|v| v.owns_worktree) => {
+                            "Isolated worktree"
+                        }
+                        TaskKind::Coding => "Current checkout",
                     },
                     t,
                 ))
@@ -1204,7 +1323,7 @@ fn state_chip(task: &core::Task, t: Theme) -> Div {
 }
 
 /// Returns an inline notice card with a dithered marker and an uppercase source label.
-fn notice(t: Theme, color: Hsla, label: &str) -> Div {
+pub(super) fn notice(t: Theme, color: Hsla, label: &str) -> Div {
     kit::block(t)
         .w_auto()
         .flex_shrink_0()

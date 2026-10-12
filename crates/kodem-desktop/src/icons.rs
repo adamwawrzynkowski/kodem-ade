@@ -54,6 +54,7 @@ impl AssetSource for Assets {
             "folder-closed",
             "folder-open",
             "gauge",
+            "git-pull-request",
             "globe",
             "info",
             "keyboard",
@@ -91,6 +92,7 @@ impl AssetSource for Assets {
             "user",
             "users",
             "wrap-text",
+            "wrench",
             "zap",
         ))
     }

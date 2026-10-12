@@ -12,6 +12,24 @@ The desktop sends `ConnectRuntime { provider }` to inspect an integration and `S
 
 The design compared a universal typed session-event interface with native provider drivers. The native drivers were selected because the protocols differ in when a turn is acknowledged: Codex answers `turn/start` before the turn completes, while Claude Code echoes the message identity in its event stream. A universal interface would require migrating the existing event decoder without removing those lifecycle differences. Shared queue claiming, uncertainty handling and review capture were retained from the other candidate to keep delivery rules consistent.
 
+## Task kinds and session rules
+
+A task has a kind: `Coding`, `Chat` or `Review` (`TaskKind`). Old task records have no kind and read as `Coding`. The kind decides the working directory, the standing instructions and the tool rules of the provider session. `provider::instructions` returns the instructions, and both drivers give them when a provider process starts, so they also hold after a resume.
+
+| Kind | Working directory | Claude Code | Codex |
+| --- | --- | --- | --- |
+| `Coding` | The project checkout or a task worktree | No added instructions or tool rules | No added instructions |
+| `Chat` | `chats/<task>` in the data directory, empty, one per chat | `--append-system-prompt`; `--allowedTools WebSearch WebFetch` | `developerInstructions`; `config.web_search = "live"` |
+| `Review` | `reviews/<task>`: a detached worktree at the reviewed commit | `--append-system-prompt`; permission mode `default`; `--disallowedTools` with `Edit`, `Write`, `NotebookEdit` and the Bash rules for `git push`, `git commit` and the `gh` commands that write | `developerInstructions`; `AccessMode::ReadOnly`, which is the read-only sandbox without network access and approval policy `never` |
+
+The host pins the access of a review (`provider::pin_review_access`) when it creates the task and after every edit, and it rejects `TaskEdit::Access` and `TaskEdit::ProviderAccess` for a review. `claude::access_of` returns `default` for a review whatever the record holds, and a mode that the CLI reports for a review is not saved. Options of a chat or a review do not become the options of new tasks: only a `Coding` task saves them with `Store::save_task_preferences`.
+
+`CreateReview` resolves its target in `kodem-core/src/git/review.rs`. A pull request is fetched from the remote whose address ends with the owner and repository of the pull request's URL, into `refs/kodem/reviews/<task>/head` and `/base`; the references are deleted once the worktree exists, because the detached worktree keeps the commits reachable. A branch is resolved from local references without a fetch. The merge base of the head and the base branch becomes `Task.baseline`, so `Comparison::Baseline` captures the reviewed changes with the existing capture code. The fetch can update the remote-tracking reference of the base branch, as any `git fetch` does. `DeleteTask` removes a review's worktree with `git worktree remove --force` and a chat's folder, and only at the path the host derives from the task's identity.
+
+Only a `Coding` task follows the branch of its checkout and takes part in merge-based settlement. A chat has no checkout, so `complete_turn` captures no diff for it.
+
+`CreateTask` takes an optional `base` commit for a new worktree. The desktop uses it for the task that fixes a review's findings: its branch starts at the reviewed commit.
+
 ## Capabilities and persistence
 
 Settings stores both the last selected provider and each provider's last model, reasoning and access. Delayed window-layout saves preserve these host-owned preferences. The model picker, composer and sidebar use the same provider identity and logo. Model changes clear old context occupancy.

@@ -119,13 +119,8 @@ impl Shell {
     fn catalog_context(&self) -> CatalogContext {
         CatalogContext {
             task_id: self.selected.clone(),
-            project_id: self.selected_project.clone().or_else(|| {
-                self.workspace
-                    .as_ref()?
-                    .projects
-                    .first()
-                    .map(|p| p.id.clone())
-            }),
+            // A new chat has no project; its catalog comes from the user's own configuration.
+            project_id: self.composer_project().map(|project| project.id.clone()),
             provider: self.composer_preferences().provider,
             account: self.composer_preferences().account,
             model: self.composer_preferences().model,
@@ -135,8 +130,8 @@ impl Shell {
     /// Synchronizes completions with the caret without treating paths or IME text as commands.
     pub(super) fn sync_slash(&mut self, cx: &mut Context<Self>) {
         let slash = self.input.read(cx).slash_query();
-        // Mentions list the open task's files, so they need a task.
-        let mention = slash.is_none() && self.view.is_some();
+        // Mentions list the open task's files, so they need a task with a checkout.
+        let mention = slash.is_none() && self.view.is_some() && self.has_checkout();
         let token = slash.or_else(|| {
             mention
                 .then(|| self.input.read(cx).mention_query())
@@ -320,7 +315,8 @@ impl Shell {
             )
             .chain(self.selected_runtime().files.then_some(Choice::Attach))
             .collect();
-        if self.view.is_some() {
+        // Files and changes belong to a checkout, which a chat does not have.
+        if self.view.is_some() && self.has_checkout() {
             choices.extend([Choice::Files, Choice::Diff]);
         }
         choices.retain(|choice| {

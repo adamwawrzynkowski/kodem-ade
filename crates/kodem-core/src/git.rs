@@ -15,9 +15,13 @@ use std::{
 };
 const MAX_FILE: u64 = 2 * 1024 * 1024;
 mod repositories;
+mod review;
 pub use repositories::{repositories, repository_baselines};
+pub use review::{PreparedReview, discard_review, prepare_review, review_targets};
 
-fn git_process(cwd: &Path) -> Result<Command> {
+// Finder's PATH can omit installed tools. Git's filters and credential helpers, and GitHub CLI,
+// need the augmented PATH too, even when Git itself is already discoverable.
+fn search_path() -> Result<OsString> {
     let mut paths: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect())
         .unwrap_or_default();
@@ -41,15 +45,14 @@ fn git_process(cwd: &Path) -> Result<Command> {
             paths.push(path);
         }
     }
-    // Finder's PATH can omit installed tools. Git's filters and credential helpers
-    // need the augmented PATH too, even when Git itself is already discoverable.
+    std::env::join_paths(paths).context("Build Git PATH")
+}
+
+fn git_process(cwd: &Path) -> Result<Command> {
     let mut command = Command::new("git");
     command
         .current_dir(cwd)
-        .env(
-            "PATH",
-            std::env::join_paths(paths).context("Build Git PATH")?,
-        )
+        .env("PATH", search_path()?)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .args(["--no-pager", "-c", "core.quotepath=false"])
@@ -168,11 +171,18 @@ pub fn branch_merged(project: &Path, task: &Task) -> bool {
         .any(|target| query(project, &["merge-base", "--is-ancestor", &tip, &target]).is_ok())
 }
 /// Creates an isolated task worktree on a new branch, preserving the original checkout.
-pub fn worktree(project: &Path, root: &Path, id: &str) -> Result<PathBuf> {
+///
+/// The branch starts at `start` when it names a commit, otherwise at the project's current commit.
+pub fn worktree(project: &Path, root: &Path, id: &str, start: Option<&str>) -> Result<PathBuf> {
     ensure!(
         head(project).is_some(),
         "Create an initial commit before making a task worktree, or choose the current checkout"
     );
+    let start = match start {
+        Some(start) => resolve_commit(project, start)
+            .context("The commit to start the worktree from is not in this repository")?,
+        None => "HEAD".to_owned(),
+    };
     fs::create_dir_all(root)?;
     let path = root.join(id);
     let b = format!("kodem/{}", &id[..8]);
@@ -184,7 +194,7 @@ pub fn worktree(project: &Path, root: &Path, id: &str) -> Result<PathBuf> {
             OsStr::new("-b"),
             OsStr::new(&b),
             path.as_os_str(),
-            OsStr::new("HEAD"),
+            OsStr::new(&start),
         ],
     )?;
     Ok(path)

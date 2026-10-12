@@ -62,6 +62,13 @@ fn open(
     if let Some(limit) = limit {
         params["config"]["model_auto_compact_token_limit"] = json!(limit);
     }
+    if let Some(instructions) = instructions(&task) {
+        params["developerInstructions"] = json!(instructions);
+    }
+    // A chat answers from the live web. The search is Codex's own tool, outside the sandbox.
+    if task.kind == TaskKind::Chat {
+        params["config"]["web_search"] = json!("live");
+    }
     if let Some(model) = model {
         params["model"] = json!(model);
     }
@@ -108,11 +115,12 @@ fn compact(
 }
 
 pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>) -> Result<()> {
-    let (cwd, account) = {
+    let (cwd, account, follows_branch) = {
         let h = host.lock().unwrap();
         let task = h.store.task(task_id)?;
         let account = accounts::for_task(&h, &task)?;
-        (task.cwd, account)
+        // Only a coding task follows the branch of its checkout.
+        (task.cwd, account, task.kind == TaskKind::Coding)
     };
     let mut items: HashMap<String, Message> = HashMap::new();
     let event_host = host.clone();
@@ -134,7 +142,7 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
     loop {
         if branch_refresh.elapsed() >= Duration::from_secs(5) {
             branch_refresh = Instant::now();
-            if host.lock().unwrap().store.task(task_id)?.state.active() {
+            if follows_branch && host.lock().unwrap().store.task(task_id)?.state.active() {
                 let branch = kodem_core::git::branch(&cwd);
                 let h = host.lock().unwrap();
                 let mut task = h.store.task(task_id)?;
@@ -453,8 +461,7 @@ fn ingest(
     }
     let observed_branch = if method == "turn/started" {
         let task = host.lock().unwrap().store.task(task_id)?;
-        task.state
-            .active()
+        (task.state.active() && task.kind == TaskKind::Coding)
             .then(|| kodem_core::git::branch(&task.cwd))
     } else {
         None
@@ -1503,7 +1510,8 @@ pub(crate) fn composer_catalog(
                 .context("Project is no longer available")?;
             (project.path, false)
         } else {
-            anyhow::bail!("Select a project to load its Codex skills");
+            // A new chat has no project; it lists the skills of the user's own configuration.
+            (std::env::current_dir()?, false)
         }
     };
     let mut result = ComposerCatalog::default();

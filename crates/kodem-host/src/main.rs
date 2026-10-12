@@ -257,7 +257,9 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 .store
                 .tasks()?
                 .into_iter()
-                .filter(|task| projects.iter().any(|p| p.id == task.project_id))
+                .filter(|task| {
+                    !task.kind.has_project() || projects.iter().any(|p| p.id == task.project_id)
+                })
                 .collect();
             Ok(Response::Workspace(Workspace {
                 notification_delivery: h.notifications.status(),
@@ -399,66 +401,84 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             project_id,
             worktree,
             preferences: defaults,
+            base,
         } => {
             provider::validate_preferences(&host.lock().unwrap(), &defaults)?;
-            let p = host
-                .lock()
-                .unwrap()
-                .store
-                .projects()?
-                .into_iter()
-                .find(|p| p.id == project_id)
-                .context("Project not found")?;
+            ensure!(
+                base.is_none() || worktree,
+                "A task that starts from another commit needs its own worktree"
+            );
+            let p = project(host, &project_id)?;
             let id = new_id();
             let cwd = if worktree {
-                git::worktree(&p.path, &root.join("worktrees"), &id)?
+                git::worktree(&p.path, &root.join("worktrees"), &id, base.as_deref())?
             } else {
                 p.path
             };
-            let baseline = git::head(&cwd);
-            let repository_baselines = git::repository_baselines(&cwd)?;
-            let branch = git::branch(&cwd);
-            let task = Task {
-                subagents: Vec::new(),
-                pending_completion: None,
-                provider: defaults.provider,
-                account: defaults.account.clone(),
-                plan: Vec::new(),
-                provider_access: defaults.provider_access.clone(),
-                id,
-                project_id,
-                title: "New task".into(),
-                title_pending: true,
-                cwd,
-                owns_worktree: worktree,
-                baseline,
-                repository_baselines,
-                branch,
-                provider_thread: None,
-                active_turn: None,
-                state: RunState::Idle,
-                draft: String::new(),
-                model: defaults.model.clone(),
-                effort: defaults.effort.clone(),
-                access: defaults.access,
-                review: None,
-                context_usage: None,
-                pinned: false,
-                settled: None,
-                branch_merged: false,
-                archived: false,
-                created: now(),
-                updated: now(),
-                last_started: None,
-                feedback: Vec::new(),
-                attachments: Vec::new(),
-                error: None,
-                questions: Vec::new(),
-            };
+            let mut task = new_task(id, TaskKind::Coding, project_id, cwd, &defaults);
+            task.owns_worktree = worktree;
+            task.baseline = git::head(&task.cwd);
+            task.repository_baselines = git::repository_baselines(&task.cwd)?;
+            task.branch = git::branch(&task.cwd);
             host.lock()
                 .unwrap()
                 .store
                 .save_task_preferences(&task, defaults)?;
+            Ok(Response::Created(task))
+        }
+        Request::CreateChat {
+            preferences: defaults,
+        } => {
+            provider::validate_preferences(&host.lock().unwrap(), &defaults)?;
+            let id = new_id();
+            // Each chat has a scratch directory of its own, so chats never share a checkout.
+            let cwd = chat_directory(root, &id);
+            fs::create_dir_all(&cwd)?;
+            let mut task = new_task(id, TaskKind::Chat, String::new(), cwd, &defaults);
+            task.title = "New chat".into();
+            host.lock().unwrap().store.save_task(&task)?;
+            Ok(Response::Created(task))
+        }
+        Request::ReviewTargets { project_id } => {
+            let p = project(host, &project_id)?;
+            Ok(Response::ReviewTargets(git::review_targets(
+                &project_id,
+                &p.path,
+            )?))
+        }
+        Request::CreateReview {
+            project_id,
+            target,
+            preferences: defaults,
+        } => {
+            provider::validate_preferences(&host.lock().unwrap(), &defaults)?;
+            let p = project(host, &project_id)?;
+            let id = new_id();
+            let prepared = git::prepare_review(&p.path, &review_directory(root), &id, &target)?;
+            let mut task = new_task(id, TaskKind::Review, project_id, prepared.cwd, &defaults);
+            task.title = match &target {
+                ReviewTarget::PullRequest { number, title, .. } => {
+                    format!("Review PR #{number}: {title}")
+                }
+                ReviewTarget::Branch { name, .. } => format!("Review {name}"),
+            };
+            task.title_pending = false;
+            task.owns_worktree = true;
+            // The merge base is the task's baseline, so "Since task" shows the reviewed changes.
+            task.baseline = Some(prepared.merge_base);
+            task.branch = target.head().to_owned();
+            task.review_scope = Some(ReviewScope {
+                target,
+                head: prepared.head,
+                base: prepared.base,
+            });
+            provider::pin_review_access(&mut task);
+            // A review's pinned access must not become the access of new tasks.
+            let saved = host.lock().unwrap().store.save_task(&task);
+            if let Err(error) = saved {
+                let _ = git::discard_review(Some(&p.path), &task.cwd);
+                return Err(error);
+            }
             Ok(Response::Created(task))
         }
         Request::Task { task_id, before } => Ok(Response::Task(task_view(
@@ -482,6 +502,11 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                     || (t.state != RunState::DeliveryUnknown
                         && !h.store.has_uncertain_submission(&task_id)?),
                 "Reconcile uncertain delivery before changing provider options"
+            );
+            ensure!(
+                t.kind != TaskKind::Review
+                    || !matches!(&edit, TaskEdit::Access(_) | TaskEdit::ProviderAccess(_)),
+                "A review is read-only. Send its findings to Agentic Coding to change files."
             );
             let mut defaults = provider::preferences(&t);
             match edit {
@@ -576,7 +601,12 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                     t.context_usage = None;
                 }
             }
-            if preferences_changed {
+            if t.kind == TaskKind::Review {
+                provider::pin_review_access(&mut t);
+            }
+            // Only a coding task's options become the options of the next new task. A chat has
+            // no project to remember them for, and a review pins its access.
+            if preferences_changed && t.kind == TaskKind::Coding {
                 h.store.save_task_preferences(&t, defaults)?;
             } else {
                 h.store.save_task(&t)?;
@@ -584,23 +614,33 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             Ok(Response::Ok)
         }
         Request::DeleteTask { task_id } => {
-            let mut h = host.lock().unwrap();
-            ensure!(
-                !h.checks.contains(&task_id)
-                    && !h
-                        .terminals
-                        .get(&task_id)
-                        .is_some_and(|terminal| terminal.running()),
-                "Stop this task's check or terminal before deleting it"
-            );
-            h.store.delete_task(&task_id)?;
-            if let Some(session) = h.sessions.get(&task_id) {
-                let _ = session.send(provider::Control::Close);
-            }
-            h.requests.remove(&task_id);
-            h.activities.remove(&task_id);
-            h.compacted.remove(&task_id);
-            h.terminals.remove(&task_id);
+            let (task, project) = {
+                let mut h = host.lock().unwrap();
+                ensure!(
+                    !h.checks.contains(&task_id)
+                        && !h
+                            .terminals
+                            .get(&task_id)
+                            .is_some_and(|terminal| terminal.running()),
+                    "Stop this task's check or terminal before deleting it"
+                );
+                let task = h.store.task(&task_id)?;
+                let project = h
+                    .store
+                    .projects()?
+                    .into_iter()
+                    .find(|project| project.id == task.project_id);
+                h.store.delete_task(&task_id)?;
+                if let Some(session) = h.sessions.get(&task_id) {
+                    let _ = session.send(provider::Control::Close);
+                }
+                h.requests.remove(&task_id);
+                h.activities.remove(&task_id);
+                h.compacted.remove(&task_id);
+                h.terminals.remove(&task_id);
+                (task, project)
+            };
+            discard_scratch(root, &task, project.as_ref());
             Ok(Response::Ok)
         }
         Request::TaskChanges { task_id } => {
@@ -832,6 +872,10 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 let h = host.lock().unwrap();
                 (h.store.task(&task_id)?, h.store.snapshot(&snapshot_id)?)
             };
+            ensure!(
+                task.kind != TaskKind::Review,
+                "A review does not change the repository"
+            );
             git::stage(&task, &snapshot, file)?;
             Ok(Response::Ok)
         }
@@ -911,6 +955,95 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         }
     }
 }
+// Finds a registered project or reports that it was removed.
+fn project(host: &Shared, id: &str) -> Result<Project> {
+    host.lock()
+        .unwrap()
+        .store
+        .projects()?
+        .into_iter()
+        .find(|project| project.id == id)
+        .context("Project not found")
+}
+
+// Returns the scratch directory of one chat.
+fn chat_directory(root: &std::path::Path, id: &str) -> std::path::PathBuf {
+    root.join("chats").join(id)
+}
+
+// Returns the directory that holds the detached worktrees of reviews.
+fn review_directory(root: &std::path::Path) -> std::path::PathBuf {
+    root.join("reviews")
+}
+
+// Removes the directory that the host made for a deleted chat or review. Only a path the host
+// derives from the task's identity is removed; a failure leaves the directory behind.
+fn discard_scratch(root: &std::path::Path, task: &Task, project: Option<&Project>) {
+    match task.kind {
+        TaskKind::Coding => {}
+        TaskKind::Chat => {
+            if task.cwd == chat_directory(root, &task.id) {
+                let _ = fs::remove_dir_all(&task.cwd);
+            }
+        }
+        TaskKind::Review => {
+            if task.cwd == review_directory(root).join(&task.id) {
+                let _ =
+                    git::discard_review(project.map(|project| project.path.as_path()), &task.cwd);
+            }
+        }
+    }
+}
+
+// Returns an idle task with the chosen agent options and nothing else decided.
+fn new_task(
+    id: String,
+    kind: TaskKind,
+    project_id: String,
+    cwd: std::path::PathBuf,
+    defaults: &AgentPreferences,
+) -> Task {
+    Task {
+        subagents: Vec::new(),
+        pending_completion: None,
+        provider: defaults.provider,
+        account: defaults.account.clone(),
+        plan: Vec::new(),
+        provider_access: defaults.provider_access.clone(),
+        kind,
+        review_scope: None,
+        id,
+        project_id,
+        title: "New task".into(),
+        title_pending: true,
+        cwd,
+        owns_worktree: false,
+        baseline: None,
+        repository_baselines: Vec::new(),
+        branch: String::new(),
+        provider_thread: None,
+        active_turn: None,
+        state: RunState::Idle,
+        draft: String::new(),
+        model: defaults.model.clone(),
+        effort: defaults.effort.clone(),
+        access: defaults.access,
+        review: None,
+        context_usage: None,
+        pinned: false,
+        settled: None,
+        branch_merged: false,
+        archived: false,
+        created: now(),
+        updated: now(),
+        last_started: None,
+        feedback: Vec::new(),
+        attachments: Vec::new(),
+        error: None,
+        questions: Vec::new(),
+    }
+}
+
 // Called only after validate_answer has checked all question IDs and answer strings.
 fn answer_text(request: &InputRequest, response: &Value) -> String {
     fn literal(text: &str) -> String {

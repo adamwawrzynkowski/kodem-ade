@@ -13,47 +13,13 @@ impl Shell {
     /// Builds the attention-first thread feed with status, branch and saved review metadata.
     pub(super) fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        // The rail shows only once the sidebar has closed all the way; while it slides, the
-        // full sidebar is drawn and clipped.
+        self.sync_feed(cx);
+        // A closed sidebar draws nothing; the workspace rail holds its quick actions. While it
+        // slides, the full sidebar is drawn and clipped.
         if self.reveals.sidebar <= 0. {
-            return div()
-                .relative()
-                .w(px(motion::SIDEBAR_RAIL))
-                .flex_shrink_0()
-                .h_full()
-                .bg(t.sidebar)
-                .flex()
-                .flex_col()
-                .items_center()
-                .py(px(10.))
-                .gap(px(4.))
-                .child(
-                    self.icon_button("rail-new", "edit", "New task · ⌘N")
-                        .on_click(cx.listener(|s, _, w, cx| s.new_task(&NewTask, w, cx))),
-                )
-                .child(
-                    self.icon_button("rail-search", "search", "Search tasks · ⌘F")
-                        .on_click(cx.listener(|s, _, w, cx| s.open_search(w, cx))),
-                )
-                .child(
-                    self.icon_button("rail-palette", "command", "Command palette · ⌘K")
-                        .on_click(cx.listener(|s, _, w, cx| s.open_palette(w, cx))),
-                )
-                .child(
-                    self.icon_button("rail-open", "folder-open", "Open repository · ⌘O")
-                        .on_click(cx.listener(|s, _, w, cx| s.open_project(&OpenProject, w, cx))),
-                )
-                .child(div().flex_1())
-                .child(self.update_control(true, cx))
-                .child(
-                    self.icon_button("rail-settings", "settings", "Settings · ⌘,")
-                        .on_click(cx.listener(|s, _, _, cx| {
-                            s.panel = Panel::Settings;
-                            cx.notify();
-                        })),
-                )
-                .into_any_element();
+            return div().into_any_element();
         }
+        let mode = self.mode;
         let project_label = self
             .workspace
             .as_ref()
@@ -93,14 +59,56 @@ impl Shell {
                 )
                 .into_any_element()
         } else {
-            self.button("new-task", "plus", "New task")
+            self.button(
+                "new-task",
+                "plus",
+                match mode {
+                    TaskKind::Coding => "New task",
+                    TaskKind::Chat => "New chat",
+                    TaskKind::Review => "New review",
+                },
+            )
+            .flex_1()
+            .min_w_0()
+            .h(px(28.))
+            .justify_start()
+            .child(div().flex_1())
+            .child(kit::keycap("⌘N", t))
+            .on_click(cx.listener(|s, _, w, cx| s.new_task(&NewTask, w, cx)))
+            .into_any_element()
+        };
+        // A chat has no project, so its feed has a title where the others have a project filter.
+        let scope = if mode.has_project() {
+            self.ghost("project-filter", "folder-closed", "")
                 .flex_1()
                 .min_w_0()
-                .h(px(28.))
                 .justify_start()
-                .child(div().flex_1())
-                .child(kit::keycap("⌘N", t))
-                .on_click(cx.listener(|s, _, w, cx| s.new_task(&NewTask, w, cx)))
+                .px(px(6.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_ellipsis()
+                        .child(project_label),
+                )
+                .child(icon("chevrons-up-down").size(px(12.)))
+                .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
+                    s.menu_anchor = Some(*bounds);
+                    s.panel = Panel::Projects;
+                    cx.notify();
+                }))
+                .into_any_element()
+        } else {
+            div()
+                .flex_1()
+                .min_w_0()
+                .h(px(26.))
+                .px(px(6.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(icon(mode.icon()).size(px(13.)).text_color(t.muted))
+                .child(caps("Conversations", t).text_color(t.muted))
                 .into_any_element()
         };
         let mut panel = div()
@@ -145,28 +153,7 @@ impl Shell {
                     .flex()
                     .items_center()
                     .gap(px(2.))
-                    .child(
-                        self.ghost("project-filter", "folder-closed", "")
-                            .flex_1()
-                            .min_w_0()
-                            .justify_start()
-                            .px(px(6.))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_ellipsis()
-                                    .child(project_label),
-                            )
-                            .child(icon("chevrons-up-down").size(px(12.)))
-                            .on_click_with_bounds(cx.listener(
-                                |s, bounds: &Bounds<Pixels>, _, cx| {
-                                    s.menu_anchor = Some(*bounds);
-                                    s.panel = Panel::Projects;
-                                    cx.notify();
-                                },
-                            )),
-                    )
+                    .child(scope)
                     .child(
                         self.icon_button("sort-tasks", "settings-2", "Thread list settings")
                             .on_click_with_bounds(cx.listener(
@@ -177,54 +164,20 @@ impl Shell {
                                 },
                             )),
                     )
-                    .child(
-                        self.icon_button("add-project", "folder-open", "Open repository · ⌘O")
-                            .on_click(
-                                cx.listener(|s, _, w, cx| s.open_project(&OpenProject, w, cx)),
-                            ),
-                    ),
+                    .when(mode.has_project(), |row| {
+                        row.child(
+                            self.icon_button("add-project", "folder-open", "Open repository · ⌘O")
+                                .on_click(
+                                    cx.listener(|s, _, w, cx| s.open_project(&OpenProject, w, cx)),
+                                ),
+                        )
+                    }),
             )
             .child(
                 div()
                     .px(px(10.))
                     .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
             );
-        let query = self.search.read(cx).text().to_lowercase();
-        if self.sidebar_dirty {
-            if let Some(workspace) = &self.workspace {
-                let crate::thread_list::Feed {
-                    open: rows,
-                    settled,
-                } = crate::thread_list::rows(
-                    workspace,
-                    &self.settings,
-                    crate::thread_list::Filter {
-                        project: self.sidebar_project.as_deref(),
-                        query: &query,
-                        archived: self.show_archived,
-                    },
-                );
-                self.settled_rows = settled;
-                let changed = rows.len() != self.sidebar_rows.len()
-                    || rows
-                        .iter()
-                        .zip(&self.sidebar_rows)
-                        .any(|(a, b)| !a.same_item(b));
-                if changed {
-                    let mut anchor = self.sidebar_scroll.logical_scroll_top();
-                    if let Some(previous) = self.sidebar_rows.get(anchor.item_ix) {
-                        anchor.item_ix = rows
-                            .iter()
-                            .position(|row| row.same_item(previous))
-                            .unwrap_or(anchor.item_ix.min(rows.len().saturating_sub(1)));
-                    }
-                    self.sidebar_scroll.reset(rows.len());
-                    self.sidebar_scroll.scroll_to(anchor);
-                }
-                self.sidebar_rows = rows;
-            }
-            self.sidebar_dirty = false;
-        }
         let entity = cx.entity();
         let feed = list(self.sidebar_scroll.clone(), move |index, _, cx| {
             // List positions rows at its left edge; horizontal gutters belong inside each row.
@@ -246,7 +199,9 @@ impl Shell {
         let settled_tasks =
             (settled_open && !self.settled_rows.is_empty()).then(|| self.settled_tasks(cx));
         panel = panel
-            .child(
+            // The feed of a workspace that just opened clears out of a dissolve.
+            .child(motion::switched(
+                ("feed-enter", mode as usize),
                 div()
                     .relative()
                     .flex_1()
@@ -256,7 +211,9 @@ impl Shell {
                     .flex_col()
                     .child(fx::anchor(FEED_ANCHOR))
                     .child(feed),
-            )
+                t.sidebar,
+                4.,
+            ))
             .children(settled_header)
             .children(settled_tasks)
             .child(self.sidebar_usage(cx))
@@ -317,7 +274,50 @@ impl Shell {
             );
         panel.into_any_element()
     }
-    fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    // Rebuilds the rows of the open workspace's feed after its tasks, filter or order changed.
+    // The scroll position stays on the row it was on.
+    fn sync_feed(&mut self, cx: &mut Context<Self>) {
+        if !self.sidebar_dirty {
+            return;
+        }
+        self.sidebar_dirty = false;
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let query = self.search.read(cx).text().to_lowercase();
+        let crate::thread_list::Feed {
+            open: rows,
+            settled,
+        } = crate::thread_list::rows(
+            workspace,
+            &self.settings,
+            crate::thread_list::Filter {
+                kind: self.mode,
+                project: self.sidebar_project.as_deref(),
+                query: &query,
+                archived: self.show_archived,
+            },
+        );
+        self.settled_rows = settled;
+        let changed = rows.len() != self.sidebar_rows.len()
+            || rows
+                .iter()
+                .zip(&self.sidebar_rows)
+                .any(|(a, b)| !a.same_item(b));
+        if changed {
+            let mut anchor = self.sidebar_scroll.logical_scroll_top();
+            if let Some(previous) = self.sidebar_rows.get(anchor.item_ix) {
+                anchor.item_ix = rows
+                    .iter()
+                    .position(|row| row.same_item(previous))
+                    .unwrap_or(anchor.item_ix.min(rows.len().saturating_sub(1)));
+            }
+            self.sidebar_scroll.reset(rows.len());
+            self.sidebar_scroll.scroll_to(anchor);
+        }
+        self.sidebar_rows = rows;
+    }
+    pub(super) fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings.collapsed = false;
         self.search_visible = true;
         window.focus(&self.search.read(cx).focus_handle(cx), cx);
@@ -352,19 +352,31 @@ impl Shell {
         self.select_task(tasks[next as usize].clone(), cx);
     }
     /// Opens the next task after the open one that waits for the user or reported a failure.
+    /// The tasks of the open workspace come first, in feed order; then those of the others.
     pub(super) fn select_next_attention(&mut self, cx: &mut Context<Self>) {
         let Some(workspace) = &self.workspace else {
             return;
         };
-        let waiting: Vec<_> = self
+        let needs_attention = |task: &core::Task| {
+            !task.archived && Section::of(task, &self.settings) == Section::NeedsYou
+        };
+        let mut waiting: Vec<_> = self
             .feed_tasks(cx)
             .into_iter()
             .filter(|id| {
-                workspace.tasks.iter().any(|task| {
-                    &task.id == id && Section::of(task, &self.settings) == Section::NeedsYou
-                })
+                workspace
+                    .tasks
+                    .iter()
+                    .any(|task| &task.id == id && needs_attention(task))
             })
             .collect();
+        waiting.extend(
+            workspace
+                .tasks
+                .iter()
+                .filter(|task| task.kind != self.mode && needs_attention(task))
+                .map(|task| task.id.clone()),
+        );
         let after = self
             .selected
             .as_ref()
@@ -455,17 +467,17 @@ impl Shell {
     fn task_row(
         &self,
         index: usize,
-        project: usize,
+        project: Option<usize>,
         settled: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some((task, project)) = self
-            .workspace
-            .as_ref()
-            .and_then(|w| w.tasks.get(index).zip(w.projects.get(project)))
-        else {
+        let Some(workspace) = &self.workspace else {
             return div().into_any_element();
         };
+        let Some(task) = workspace.tasks.get(index) else {
+            return div().into_any_element();
+        };
+        let project = project.and_then(|project| workspace.projects.get(project));
         // List measures the root's height without its margins; keep the gap inside the row.
         div()
             .pb(px(2.))
@@ -552,7 +564,7 @@ impl Shell {
     fn task_card(
         &self,
         task: &core::Task,
-        project: &Project,
+        project: Option<&Project>,
         settled: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -578,7 +590,23 @@ impl Shell {
         } else if unread {
             kit::marker(t.added).into_any_element()
         } else {
-            project_icon(project, t)
+            match (task.kind, project) {
+                (TaskKind::Coding, Some(project)) => project_icon(project, t),
+                // A review shows what it examines; a chat has no project to show.
+                (TaskKind::Review, _) => {
+                    icon(match task.review_scope.as_ref().map(|s| &s.target) {
+                        Some(ReviewTarget::Branch { .. }) => "branch",
+                        _ => "git-pull-request",
+                    })
+                    .size(px(13.))
+                    .text_color(project.map_or(t.accent, |project| project_tint(project, t)))
+                    .into_any_element()
+                }
+                _ => icon("chat")
+                    .size(px(13.))
+                    .text_color(t.subtle)
+                    .into_any_element(),
+            }
         };
         let status = if needs_input {
             kit::chip("INPUT", t.warning).into_any_element()
@@ -611,6 +639,17 @@ impl Shell {
             Some((name, _)) => format!("{} · {name}", provider.label()),
             None => provider.label().to_owned(),
         };
+        // The second line names where the task works. A chat has no branch, so it names its
+        // model instead.
+        let place = if task.kind.has_project() {
+            task.branch.clone()
+        } else {
+            self.model_name(&AgentPreferences {
+                provider,
+                model: task.model.clone(),
+                ..AgentPreferences::default()
+            })
+        };
         let mut meta = div()
             .h(px(16.))
             .pl(px(22.))
@@ -642,10 +681,12 @@ impl Shell {
                     }),
             )
             // Settled tasks are never under a project header, so they name their project.
-            .when(
-                self.sidebar_project.is_none()
-                    && (settled || !self.settings.group_tasks_by_project),
-                |d| {
+            .when_some(
+                project.filter(|_| {
+                    self.sidebar_project.is_none()
+                        && (settled || !self.settings.group_tasks_by_project)
+                }),
+                |d, project| {
                     d.child(
                         div()
                             .flex_shrink_0()
@@ -656,13 +697,7 @@ impl Shell {
                     .child(div().flex_shrink_0().child("/"))
                 },
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_ellipsis()
-                    .child(task.branch.clone()),
-            );
+            .child(div().flex_1().min_w_0().text_ellipsis().child(place));
         if let Some(review) = task.review.as_ref().filter(|r| r.error.is_none()) {
             let snapshot = review.snapshot_id.clone();
             let task_id = id.clone();
