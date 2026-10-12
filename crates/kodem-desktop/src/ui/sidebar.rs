@@ -1,5 +1,6 @@
 use super::*;
 use crate::thread_list::{Row, Section};
+use dither::{Dither, DitherField};
 
 /// Name of the effect anchor on the thread feed, where chips for new tasks land.
 pub(super) const FEED_ANCHOR: &str = "thread-feed";
@@ -12,7 +13,7 @@ pub(super) fn thread_anchor(task_id: &str) -> SharedString {
 /// Side of the tile that leads a task card. It spans the title and the line under it.
 const TASK_TILE: f32 = 30.;
 /// Size of a glyph in that tile.
-const TASK_TILE_GLYPH: f32 = 17.;
+const TASK_TILE_GLYPH: f32 = 18.;
 
 impl Shell {
     /// Builds the attention-first thread feed with status, branch and saved review metadata.
@@ -864,13 +865,38 @@ pub(super) fn project_icon(project: &Project, theme: Theme) -> AnyElement {
     project_tile(project, theme, 16., 11.)
 }
 
+/// Returns the project's icon at the size that leads a task row.
+pub(super) fn project_task_tile(project: &Project, theme: Theme) -> AnyElement {
+    project_tile(project, theme, TASK_TILE, TASK_TILE_GLYPH)
+}
+
+// The glyphs that a project without a chosen icon can get. A project keeps its glyph while the
+// order and the length of this list stay the same.
+const AUTOMATIC_GLYPHS: [ProjectIcon; 8] = [
+    ProjectIcon::Code,
+    ProjectIcon::Cube,
+    ProjectIcon::Book,
+    ProjectIcon::Branch,
+    ProjectIcon::Terminal,
+    ProjectIcon::Folder,
+    ProjectIcon::Cog,
+    ProjectIcon::File,
+];
+// The glyph color of a tile: the paper white of the application icon.
+const TILE_PAPER: u32 = 0xefe8dc;
+
+// Returns the corner radius of a square tile of `size` points.
+fn tile_radius(size: f32) -> f32 {
+    (size * 0.27).round()
+}
+
 // Returns the project's icon as a square tile of `size` points. A project without an image shows
 // a glyph of `glyph_size` points.
 fn project_tile(project: &Project, theme: Theme, size: f32, glyph_size: f32) -> AnyElement {
     if let ProjectIcon::Image(path) = &project.icon {
         return img(path.clone())
             .size(px(size))
-            .rounded(px(crate::theme::RADIUS_SMALL))
+            .rounded(px(tile_radius(size)))
             .flex_shrink_0()
             .object_fit(ObjectFit::Contain)
             .with_fallback(move || {
@@ -881,50 +907,73 @@ fn project_tile(project: &Project, theme: Theme, size: f32, glyph_size: f32) -> 
             })
             .into_any_element();
     }
-    let hash = project
-        .path
-        .to_string_lossy()
-        .bytes()
-        .fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
-    let name = project.name.to_lowercase();
-    let glyph = if name.contains("unity") {
-        "cube"
-    } else if name.contains("kodem") {
-        "code"
-    } else if name.contains("liquid") {
-        "branch"
-    } else if name.contains("quill") {
-        "book"
-    } else {
-        [
-            "code",
-            "cube",
-            "book",
-            "branch",
-            "square-terminal",
-            "folder-open",
-            "settings-2",
-            "file-text",
-        ][hash as usize % 8]
-    };
-    let glyph = project.icon.glyph().unwrap_or(glyph);
+    let glyph = project.icon.glyph().unwrap_or_else(|| {
+        let name = project.name.to_lowercase();
+        let automatic = if name.contains("unity") {
+            ProjectIcon::Cube
+        } else if name.contains("kodem") {
+            ProjectIcon::Code
+        } else if name.contains("liquid") {
+            ProjectIcon::Branch
+        } else if name.contains("quill") {
+            ProjectIcon::Book
+        } else {
+            let hash = project
+                .path
+                .to_string_lossy()
+                .bytes()
+                .fold(2166136261u32, |h, b| (h ^ b as u32).wrapping_mul(16777619));
+            AUTOMATIC_GLYPHS[hash as usize % AUTOMATIC_GLYPHS.len()].clone()
+        };
+        automatic.glyph().unwrap_or_default()
+    });
     glyph_tile(glyph, project_tint(project, theme), size, glyph_size)
 }
 
-// Returns a square tile of `size` points with a glyph of `glyph_size` points in one tint.
+// Returns a square tile of `size` points with a glyph of `glyph_size` points. The tile is a dark
+// plate in both appearances, like an application icon, so that glyph tiles and image tiles look
+// alike in one list. The tint colors the plate, its edge and a glow of fine dots in its leading
+// top corner. The glyph is paper white.
 fn glyph_tile(glyph: &'static str, tint: Hsla, size: f32, glyph_size: f32) -> AnyElement {
+    let radius = tile_radius(size);
+    // The tint of the light appearance is too dark to read on the plate.
+    let mut glow = tint;
+    glow.lightness = glow.lightness.max(0.66);
+    let mut plate = tint;
+    plate.saturation = plate.saturation.min(0.4);
+    plate.lightness = 0.055;
     div()
+        .relative()
         .size(px(size))
-        .rounded(px(crate::theme::RADIUS_SMALL))
+        .rounded(px(radius))
         .flex_shrink_0()
         .flex()
         .items_center()
         .justify_center()
-        // The tint and edge of a chip, so project tiles match status tiles.
+        .overflow_hidden()
         .border_1()
-        .border_color(tint.opacity(0.36))
-        .bg(tint.opacity(0.08))
-        .child(icon(glyph).size(px(glyph_size)).text_color(tint))
+        .border_color(glow.opacity(0.3))
+        .bg(plate)
+        .child(
+            Dither::new(DitherField::Glow {
+                x: 0.,
+                y: 0.,
+                radius: 0.75,
+                strength: 0.85,
+            })
+            .color(glow.opacity(0.45))
+            .grid(1., 1.)
+            // The layer lies inside the one-point edge of the plate.
+            .corner_radius(radius - 1.)
+            .layer(),
+        )
+        .child(
+            div().relative().child(
+                icon(glyph)
+                    .size(px(glyph_size))
+                    .text_color(rgb_to_hsla(rgb(TILE_PAPER))),
+            ),
+        )
         .into_any_element()
 }
 

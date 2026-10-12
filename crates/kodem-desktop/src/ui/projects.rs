@@ -210,6 +210,9 @@ impl Shell {
                                         s.aux.update(cx, |input, cx| {
                                             input.set_text(editing.name.clone(), cx)
                                         });
+                                        s.icon_filter.update(cx, |input, cx| {
+                                            input.set_text(String::new(), cx)
+                                        });
                                         s.editing_project = Some(editing.clone());
                                         s.error = None;
                                         s.panel = Panel::CustomizeProject;
@@ -321,23 +324,7 @@ impl Shell {
                 })),
             );
         }
-        let icons = div().flex().flex_wrap().gap(px(4.)).children(
-            ProjectIcon::ALL.into_iter().enumerate().map(|(i, choice)| {
-                self.choice_row(("project-icon", i), project.icon == choice)
-                    .h(px(26.))
-                    .px(px(9.))
-                    .gap(px(5.))
-                    .border_color(t.border)
-                    .child(icon(choice.glyph().unwrap_or("refresh")).size(px(13.)))
-                    .child(choice.label())
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        if let Some(project) = &mut s.editing_project {
-                            project.icon = choice.clone();
-                        }
-                        cx.notify();
-                    }))
-            }),
-        );
+        let icons = self.icon_picker(&project, cx);
         div()
             .flex()
             .flex_col()
@@ -348,7 +335,7 @@ impl Shell {
                     .flex()
                     .items_center()
                     .gap(px(8.))
-                    .child(sidebar::project_icon(&project, t))
+                    .child(sidebar::project_task_tile(&project, t))
                     .child(
                         settings::input_frame(t)
                             .flex_1()
@@ -369,20 +356,50 @@ impl Shell {
                     .text_color(t.muted)
                     .child("Use a built-in icon or choose an image. Kodem saves its own copy."),
             )
-            .child(icons)
             .child(
-                div().flex().child(
-                    self.ghost("project-choose-image", "file", "Choose image…")
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        self.choice_row("project-icon-auto", project.icon == ProjectIcon::Auto)
+                            .h(px(26.))
+                            .px(px(9.))
+                            .gap(px(5.))
+                            .border_color(t.border)
+                            .child(icon("sparkles").size(px(13.)))
+                            .child(ProjectIcon::Auto.label())
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                if let Some(project) = &mut s.editing_project {
+                                    project.icon = ProjectIcon::Auto;
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        self.choice_row(
+                            "project-choose-image",
+                            matches!(project.icon, ProjectIcon::Image(_)),
+                        )
+                        .h(px(26.))
+                        .px(px(9.))
+                        .gap(px(5.))
+                        .border_color(t.border)
+                        .child(icon("file").size(px(13.)))
+                        .child("Choose image…")
                         .on_click(cx.listener(|s, _, _, cx| s.choose_project_icon(cx))),
-                ),
-            )
-            .when(matches!(project.icon, ProjectIcon::Image(_)), |d| {
-                d.child(
-                    div().text_size(px(12.)).text_color(t.muted).child(
-                        "Custom image selected. Choose a built-in icon above to replace it.",
+                    )
+                    .child(
+                        settings::input_frame(t)
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(26.))
+                            .border_color(t.border)
+                            .child(icon("search").size(px(12.)).text_color(t.subtle))
+                            .child(div().flex_1().min_w_0().child(self.icon_filter.clone())),
                     ),
-                )
-            })
+            )
+            .child(icons)
             .when_some(self.error.clone(), |d, error| {
                 d.child(settings::error_block("Error", error, t))
             })
@@ -422,6 +439,117 @@ impl Shell {
             )
             .into_any_element()
     }
+    // Returns the built-in icons that match the filter, in their groups, in a list that scrolls
+    // inside the dialog so that the actions under it stay in view.
+    fn icon_picker(&self, project: &Project, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let query = self.icon_filter.read(cx).text().trim().to_lowercase();
+        let tint = sidebar::project_tint(project, t);
+        let mut groups = div().flex().flex_col().gap(px(10.));
+        // The position of an icon in the whole table, so that a cell keeps its identity while
+        // the filter changes.
+        let mut index = 0usize;
+        let mut found = false;
+        for (group, choices) in ProjectIcon::GROUPS {
+            let whole_group = group.to_lowercase().contains(&query);
+            let mut cells = div().flex().flex_wrap().gap(px(2.));
+            let mut count = 0;
+            for choice in choices.iter() {
+                index += 1;
+                if !whole_group && !choice.label().to_lowercase().contains(&query) {
+                    continue;
+                }
+                count += 1;
+                let picked = choice.clone();
+                cells = cells.child(
+                    self.icon_choice(
+                        ("project-icon", index),
+                        choice,
+                        project.icon == *choice,
+                        tint,
+                    )
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        if let Some(project) = &mut s.editing_project {
+                            project.icon = picked.clone();
+                        }
+                        cx.notify();
+                    })),
+                );
+            }
+            if count > 0 {
+                found = true;
+                groups = groups.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(caps(group, t))
+                                .child(figure(count.to_string(), t.subtle)),
+                        )
+                        .child(cells),
+                );
+            }
+        }
+        if !found {
+            groups = groups.child(kit::empty_hint("No built-in icon has this name.", t));
+        }
+        div()
+            .id("project-icon-list")
+            .flex_shrink_0()
+            .max_h(px(236.))
+            .overflow_y_scroll()
+            .p(px(8.))
+            .rounded(px(crate::theme::RADIUS_CONTROL))
+            .bg(t.inset)
+            .border_1()
+            .border_color(t.border)
+            .child(groups)
+            .into_any_element()
+    }
+
+    // Returns one cell of the icon picker: a glyph that names itself in a tooltip. The chosen
+    // cell carries the tint of the project.
+    fn icon_choice(
+        &self,
+        id: impl Into<ElementId>,
+        choice: &ProjectIcon,
+        chosen: bool,
+        tint: Hsla,
+    ) -> Button {
+        let t = self.theme;
+        let label = choice.label();
+        self.control(id)
+            .size(px(28.))
+            .px_0()
+            .border_color(gpui::transparent_black())
+            .bg(gpui::transparent_black())
+            .text_color(t.muted)
+            .aria_selected(chosen)
+            .accessibility_label(label)
+            .tooltip(move |_, cx| {
+                cx.new(|_| Hint {
+                    text: label.into(),
+                    theme: t,
+                })
+                .into()
+            })
+            .child(icon(choice.glyph().unwrap_or_default()).size(px(16.)))
+            .when(chosen, |cell| {
+                cell.bg(tint.opacity(0.12))
+                    .border_color(tint.opacity(0.6))
+                    .text_color(tint)
+            })
+            .when(!chosen, |cell| {
+                cell.hover(move |cell| cell.bg(t.selected).text_color(t.text))
+            })
+            .on_press(move |position, cx| fx::ripple(position, t.muted, cx))
+    }
+
     fn choose_project_icon(&mut self, cx: &mut Context<Self>) {
         let Some(project_id) = self
             .editing_project

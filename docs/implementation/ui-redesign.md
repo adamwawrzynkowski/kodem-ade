@@ -253,3 +253,15 @@ The transcript list still has one row for each message. Each row draws its own t
 A reply of the agent between two tools ends a stretch, so commentary is never folded away.
 
 Not verified: the look. Verified by compilation, formatting and Clippy only.
+
+## Fifteenth follow-up, 12 October 2026
+
+The user asked for many more and better icons in the project configuration, and showed that the book and box tiles did not fit next to tiles that show an application icon.
+
+Tiles. `sidebar::glyph_tile` was a flat square in 8% of the tint with a tinted edge and a tinted outline glyph. It is now a dark plate with the corner radius of an application icon (27% of its side), in both appearances. The tint of the project colors the plate, its edge and a still `Glow` of one-point dots in the leading top corner. The glyph is paper white (`TILE_PAPER`). The tint of the light appearance is raised to a lightness of 0.66 for the edge and the glow, because the plate stays dark. Image tiles take the same radius. Review and chat tiles use the same plate, so one list has one kind of tile. The glyph of a task tile is 18 points (earlier 17).
+
+Icons. `kodem_core::project_icons` holds one table of 225 built-in glyphs in nine groups: Code, Systems, Apps, Business, Creative, Games, Science, World and Objects. `with_project_icons!` gives the table to `ProjectIcon` (variants, labels, assets and `GROUPS`) and to the desktop's asset source, which embeds `assets/icons/projects/<asset>.svg` for each row. A row without its file does not compile. The seven earlier variants keep their names, so saved projects load unchanged; their glyphs are redrawn (Book is an open book, Cube is a box). The vectors are Lucide 1.55.0 with a stroke of 2 and are separate from the interface icons in `assets/icons/`, which keep a stroke of 1.7. A project that follows the automatic choice keeps its kind of glyph (`AUTOMATIC_GLYPHS`).
+
+Picker. The project editor shows the tile at the size of a task row next to the name. The icon section has the automatic choice, the image choice and a search field in one row, and under them a list of at most 236 points with the groups and their counts (`Shell::icon_picker`). A cell is a 28-point glyph button with its name in a tooltip; the chosen cell carries the tint of the project. The search field matches the name of an icon or of a group.
+
+Not verified: the look in the application. A static drawing of the tile was compared with Kodem's icon before the code was written. Verified by compilation, formatting and Clippy, and by temporary tests: the saved forms of the earlier icons still load, and GPUI's renderer draws each of the 225 glyphs.

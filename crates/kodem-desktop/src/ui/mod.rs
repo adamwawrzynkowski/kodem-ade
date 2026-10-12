@@ -177,6 +177,8 @@ pub struct Shell {
     // Project chosen for the next task, independent of the currently viewed thread.
     selected_project: Option<String>,
     editing_project: Option<Project>,
+    // Narrows the built-in icons in the project editor by name.
+    icon_filter: Entity<TextInput>,
     greeting_name: String,
     show_review: bool,
     show_terminal: bool,
@@ -268,6 +270,7 @@ impl Shell {
         let palette_input =
             cx.new(|cx| TextInput::composer("Type a command or search threads…", cx));
         let review_filter = cx.new(|cx| TextInput::new("Filter…", cx));
+        let icon_filter = cx.new(|cx| TextInput::new("Search icons…", cx));
         let subscriptions = vec![
             cx.observe_window_bounds(window, |s, window, cx| {
                 let placement = window.window_bounds();
@@ -335,6 +338,7 @@ impl Shell {
             }),
             cx.observe(&aux, |_, _, cx| cx.notify()),
             cx.observe(&review_filter, |_, _, cx| cx.notify()),
+            cx.observe(&icon_filter, |_, _, cx| cx.notify()),
         ];
         cx.spawn(async move |this, cx| {
             loop {
@@ -453,6 +457,7 @@ impl Shell {
             settings_provider: Provider::default(),
             selected_project: None,
             editing_project: None,
+            icon_filter,
             greeting_name: user_first_name(),
             show_review: true,
             show_terminal: false,

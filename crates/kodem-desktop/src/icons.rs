@@ -15,9 +15,28 @@ macro_rules! embedded_icons {
         }
     };
 }
+// Expands the shared project glyph table into a lookup that embeds
+// `assets/icons/projects/<asset>.svg` for each row.
+macro_rules! embedded_project_glyphs {
+    ($($group:literal { $($variant:ident => ($asset:literal, $label:literal),)+ })+) => {
+        fn project_glyph(asset: &str) -> Option<&'static [u8]> {
+            match asset {
+                $($($asset => Some(
+                    include_bytes!(concat!("../../../assets/icons/projects/", $asset, ".svg"))
+                        .as_slice(),
+                ),)+)+
+                _ => None,
+            }
+        }
+    };
+}
+kodem_core::with_project_icons!(embedded_project_glyphs);
 pub struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
+        if let Some(asset) = path.strip_prefix("projects/") {
+            return Ok(project_glyph(asset).map(Cow::Borrowed));
+        }
         Ok(embedded_icons!(
             path,
             "archive",

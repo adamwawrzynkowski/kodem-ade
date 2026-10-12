@@ -1,4 +1,5 @@
 //! Persisted domain values and the versioned local IPC contract.
+pub use crate::project_icons::ProjectIcon;
 use serde::{Deserialize, Serialize};
 use std::{
     path::PathBuf,
@@ -248,59 +249,6 @@ impl AccentColor {
             (Self::Coral, true) => 0xa54d37,
             (Self::Red, false) => 0xe58387,
             (Self::Red, true) => 0xac3e48,
-        }
-    }
-}
-/// Project glyphs or an imported image stored by the local host.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ProjectIcon {
-    #[default]
-    Auto,
-    Folder,
-    Code,
-    Cube,
-    Book,
-    Branch,
-    Terminal,
-    File,
-    Image(PathBuf),
-}
-impl ProjectIcon {
-    pub const ALL: [Self; 8] = [
-        Self::Auto,
-        Self::Folder,
-        Self::Code,
-        Self::Cube,
-        Self::Book,
-        Self::Branch,
-        Self::Terminal,
-        Self::File,
-    ];
-    /// Returns the picker label for this icon.
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Auto => "Automatic",
-            Self::Folder => "Folder",
-            Self::Code => "Code",
-            Self::Cube => "Cube",
-            Self::Book => "Book",
-            Self::Branch => "Branch",
-            Self::Terminal => "Terminal",
-            Self::File => "File",
-            Self::Image(_) => "Custom image",
-        }
-    }
-    /// Returns the bundled asset, or lets the desktop choose its existing automatic glyph.
-    pub fn glyph(&self) -> Option<&'static str> {
-        match self {
-            Self::Auto | Self::Image(_) => None,
-            Self::Folder => Some("folder"),
-            Self::Code => Some("code"),
-            Self::Cube => Some("cube"),
-            Self::Book => Some("book"),
-            Self::Branch => Some("branch"),
-            Self::Terminal => Some("square-terminal"),
-            Self::File => Some("file-text"),
         }
     }
 }
