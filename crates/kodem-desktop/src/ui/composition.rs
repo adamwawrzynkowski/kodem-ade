@@ -386,8 +386,8 @@ impl Shell {
                 .min_w_0()
                 .child(
                     div()
-                        .font_family(crate::theme::MONO)
-                        .text_size(px(11.5))
+                        .font_family(crate::theme::mono())
+                        .text_size(text_px(11.5))
                         .text_ellipsis()
                         .child(
                             skill_name
@@ -463,8 +463,8 @@ impl Shell {
                 .flex_shrink(1.)
                 .min_w_0()
                 .text_ellipsis_start()
-                .font_family(crate::theme::MONO)
-                .text_size(px(11.))
+                .font_family(crate::theme::mono())
+                .text_size(text_px(11.))
                 .text_color(t.text)
                 .child(feedback.label.clone()),
             t.accent,
@@ -612,7 +612,7 @@ impl Shell {
                                 (index + 1).to_string(),
                             )
                             .h(px(22.))
-                            .text_size(px(10.5))
+                            .text_size(text_px(10.5))
                             .accessibility_label(format!("{} · {label}", index + 1))
                             .on_click(cx.listener(
                                 move |s, _, _, cx| {
@@ -629,7 +629,7 @@ impl Shell {
                                 .flex_1()
                                 .min_w_0()
                                 .text_ellipsis()
-                                .text_size(px(12.))
+                                .text_size(text_px(12.))
                                 .child(if outgoing.text.is_empty() {
                                     "Attached context".into()
                                 } else {
@@ -730,8 +730,8 @@ impl Shell {
                     d.child(
                         div()
                             .px(px(6.))
-                            .font_family(crate::theme::MONO)
-                            .text_size(px(11.))
+                            .font_family(crate::theme::mono())
+                            .text_size(text_px(11.))
                             .text_color(t.removed)
                             .child(error),
                     )
@@ -744,7 +744,13 @@ impl Shell {
                 );
                 row = row
                     .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
-                    .child(div().px(px(6.)).py(px(2.)).text_size(px(12.)).child(text));
+                    .child(
+                        div()
+                            .px(px(6.))
+                            .py(px(2.))
+                            .text_size(text_px(12.))
+                            .child(text),
+                    );
                 for attachment in &outgoing.attachments {
                     row = row.child(self.attachment_card(attachment, None, cx));
                 }

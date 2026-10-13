@@ -150,7 +150,7 @@ impl Shell {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .child(div().text_size(px(13.)).child(provider.label()))
+                            .child(div().text_size(text_px(13.)).child(provider.label()))
                             .child(kit::chip(status, tone))
                             .when(is_default && found == Found::Ready, |d| {
                                 d.child(kit::chip("NEW TASKS", t.muted))

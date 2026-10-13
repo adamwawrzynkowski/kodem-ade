@@ -14,6 +14,7 @@ const THUMB_WIDTH: f32 = 8.;
 const THUMB_HEIGHT: f32 = 16.;
 
 type SliderCallback = Rc<dyn Fn(&f32, &mut Window, &mut App)>;
+type ReleaseCallback = Rc<dyn Fn(&(), &mut Window, &mut App)>;
 type SwitchCallback = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 
 // Drag state that lives across renders of one slider.
@@ -36,6 +37,7 @@ pub(super) struct Slider {
     disabled: bool,
     label: SharedString,
     on_change: SliderCallback,
+    on_release: Option<ReleaseCallback>,
 }
 
 impl Slider {
@@ -57,6 +59,7 @@ impl Slider {
             disabled: false,
             label: SharedString::default(),
             on_change: Rc::new(on_change),
+            on_release: None,
         }
     }
 
@@ -69,6 +72,16 @@ impl Slider {
     /// Sets the name exposed to accessibility clients.
     pub(super) fn label(mut self, label: impl Into<SharedString>) -> Self {
         self.label = label.into();
+        self
+    }
+
+    /// Calls `handler` when the user settles on a value: at the end of a drag, and after each
+    /// change from the keyboard. A setting that must not change during a drag applies there.
+    pub(super) fn on_release(
+        mut self,
+        handler: impl Fn(&(), &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_release = Some(Rc::new(handler));
         self
     }
 }
@@ -90,8 +103,9 @@ fn value_fraction(value: f32, min: f32, max: f32) -> f32 {
 // Returns the stepped value under a horizontal pointer position. The thumb's center follows
 // the pointer, so the ends of the range sit half a thumb inside the track.
 fn value_at(x: Pixels, bounds: Bounds<Pixels>, min: f32, max: f32, step: f32) -> f32 {
-    let travel = (f32::from(bounds.size.width) - THUMB_WIDTH).max(1.);
-    let offset = f32::from(x) - f32::from(bounds.origin.x) - THUMB_WIDTH / 2.;
+    let thumb_width = f32::from(px(THUMB_WIDTH));
+    let travel = (f32::from(bounds.size.width) - thumb_width).max(1.);
+    let offset = f32::from(x) - f32::from(bounds.origin.x) - thumb_width / 2.;
     let fraction = (offset / travel).clamp(0., 1.);
     snap_value(min + fraction * (max - min), min, max, step)
 }
@@ -130,39 +144,42 @@ fn paint_thumb(
     let snap = |value: f32| (value * scale).round() / scale;
     let left = f32::from(bounds.origin.x);
     let top = f32::from(bounds.origin.y);
+    // The bounds are window pixels, so the parts of the slider are measured in them too.
+    let (thumb_width, thumb_height) = (f32::from(px(THUMB_WIDTH)), f32::from(px(THUMB_HEIGHT)));
+    let track_height = f32::from(px(TRACK_HEIGHT));
     if let Some(ticks) = ticks.filter(|ticks| *ticks > 1) {
-        let tick_top = snap(top + (height + TRACK_HEIGHT) / 2. + 2.);
+        let tick_top = snap(top + (height + track_height) / 2. + 2.);
         for tick in 0..ticks {
             let x =
-                left + THUMB_WIDTH / 2. + tick as f32 / (ticks - 1) as f32 * (width - THUMB_WIDTH)
+                left + thumb_width / 2. + tick as f32 / (ticks - 1) as f32 * (width - thumb_width)
                     - 0.5;
             window.paint_quad(fill(
-                Bounds::new(point(px(snap(x)), px(tick_top)), size(px(1.), px(2.))),
+                Bounds::new(
+                    point(gpui::px(snap(x)), gpui::px(tick_top)),
+                    size(gpui::px(1.), gpui::px(2.)),
+                ),
                 theme.subtle.opacity(0.7),
             ));
         }
     }
     let thumb = Bounds::new(
         point(
-            px(snap(left + fraction * (width - THUMB_WIDTH))),
-            px(snap(top + (height - THUMB_HEIGHT) / 2.)),
+            gpui::px(snap(left + fraction * (width - thumb_width))),
+            gpui::px(snap(top + (height - thumb_height) / 2.)),
         ),
-        size(px(THUMB_WIDTH), px(THUMB_HEIGHT)),
+        size(gpui::px(thumb_width), gpui::px(thumb_height)),
     );
     window.paint_quad(
         fill(thumb, theme.text)
             .corner_radii(px(2.5))
-            .border_widths(px(1.))
+            .border_widths(gpui::px(1.))
             .border_color(theme.accent),
     );
 }
 
 impl RenderOnce for Slider {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = cx
-            .try_global::<Theme>()
-            .copied()
-            .unwrap_or(Theme::new(false));
+        let theme = cx.try_global::<Theme>().copied().unwrap_or_default();
         let drag = window.use_keyed_state(
             ElementId::Name(SharedString::from(format!("{}-drag", self.id))),
             cx,
@@ -182,7 +199,9 @@ impl RenderOnce for Slider {
         let ticks = (steps <= MAX_TICKS).then(|| steps.round() as usize + 1);
         let disabled = self.disabled;
         let on_change = self.on_change;
+        let on_release = self.on_release;
         let key_change = on_change.clone();
+        let key_release = on_release.clone();
         let press_focus = focus.clone();
         div()
             .id(ElementId::Name(self.id.clone()))
@@ -211,6 +230,9 @@ impl RenderOnce for Slider {
                         let next = snap_value(next, min, max, step);
                         if next != value {
                             key_change(&next, window, cx);
+                            if let Some(release) = &key_release {
+                                release(&(), window, cx);
+                            }
                         }
                     },
                 )
@@ -256,21 +278,28 @@ impl RenderOnce for Slider {
                         });
                         let move_drag = drag.clone();
                         let move_change = on_change.clone();
+                        let move_release = on_release.clone();
                         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                             if !phase.bubble() || !move_drag.read(cx).dragging {
                                 return;
                             }
                             if !event.dragging() {
                                 move_drag.update(cx, |drag, _| drag.dragging = false);
+                                if let Some(release) = &move_release {
+                                    release(&(), window, cx);
+                                }
                                 return;
                             }
                             let next = value_at(event.position.x, bounds, min, max, step);
                             emit_value(&move_drag, next, &move_change, window, cx);
                         });
                         let up_drag = drag.clone();
-                        window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                        window.on_mouse_event(move |_: &MouseUpEvent, phase, window, cx| {
                             if phase.bubble() && up_drag.read(cx).dragging {
                                 up_drag.update(cx, |drag, _| drag.dragging = false);
+                                if let Some(release) = &on_release {
+                                    release(&(), window, cx);
+                                }
                             }
                         });
                     },
@@ -351,10 +380,7 @@ impl Switch {
 
 impl RenderOnce for Switch {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = cx
-            .try_global::<Theme>()
-            .copied()
-            .unwrap_or(Theme::new(false));
+        let theme = cx.try_global::<Theme>().copied().unwrap_or_default();
         let checked = self.checked;
         let (track_width, track_height, thumb_size) = (36., 20., 14.);
         // The thumb is positioned inside the one-point border, so the free space is measured

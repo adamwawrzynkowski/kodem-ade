@@ -3,6 +3,15 @@ use super::*;
 use crate::components::text_input::{SelectionInput, TextInput};
 use std::ops::Range;
 
+/// Width of one character of a diff line at the default code size, in window pixels.
+const CELL_WIDTH: f32 = 7.5;
+
+// Returns the height of one diff row. It follows the interface scale, and never gets tighter
+// than a line of code at the code size.
+fn row_height() -> Pixels {
+    px(24.).max(code_px(Settings::CODE_FONT_SIZE) * 1.6)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Position {
     row: usize,
@@ -82,7 +91,6 @@ pub(super) struct DiffView {
     split: bool,
     wrap: bool,
     theme: Theme,
-    light: bool,
     list: ListState,
     horizontal: ScrollHandle,
     text: Option<TextSelection>,
@@ -97,7 +105,10 @@ pub(super) struct DiffView {
     subscriptions: HashMap<(usize, u8), Subscription>,
     autoscroll_running: bool,
     focus: FocusHandle,
+    /// Width of the longest line at the default code size.
     text_width: f32,
+    /// Height of the rows that the list was last laid out with.
+    row_height: Pixels,
 }
 impl EventEmitter<ContextRequested> for DiffView {}
 impl DiffView {
@@ -108,7 +119,6 @@ impl DiffView {
         split: bool,
         wrap: bool,
         theme: Theme,
-        light: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         let delta = &snapshot.files[file];
@@ -123,7 +133,7 @@ impl DiffView {
             })
             .max()
             .unwrap_or(0) as f32
-            * 7.5;
+            * CELL_WIDTH;
         let comment = cx.new(|cx| TextInput::new("Add context for the agent…", cx));
         Self {
             snapshot: snapshot.id.clone(),
@@ -133,9 +143,8 @@ impl DiffView {
             split,
             wrap,
             theme,
-            light,
             list: ListState::new(delta.lines.len(), ListAlignment::Top, px(240.))
-                .with_uniform_item_height(px(24.)),
+                .with_uniform_item_height(row_height()),
             horizontal: ScrollHandle::new(),
             text: None,
             gutter: None,
@@ -150,6 +159,7 @@ impl DiffView {
             autoscroll_running: false,
             focus: cx.focus_handle(),
             text_width,
+            row_height: row_height(),
         }
     }
     /// Identifies the immutable file currently displayed.
@@ -162,11 +172,16 @@ impl DiffView {
         split: bool,
         wrap: bool,
         theme: Theme,
-        light: bool,
         cx: &mut Context<Self>,
     ) {
         let layout_changed = self.split != split || self.wrap != wrap;
-        let changed = layout_changed || self.light != light;
+        let changed = layout_changed || self.theme != theme;
+        // A new interface scale or code size changes the height of every row.
+        let row_height = row_height();
+        if self.row_height != row_height {
+            self.row_height = row_height;
+            self.reset_list();
+        }
         if self.split != split {
             self.text = None;
             self.drag = None;
@@ -174,7 +189,6 @@ impl DiffView {
         self.split = split;
         self.wrap = wrap;
         self.theme = theme;
-        self.light = light;
         if layout_changed {
             self.list.remeasure();
             self.horizontal.set_offset(point(px(0.), px(0.)));
@@ -220,8 +234,10 @@ impl DiffView {
     }
     fn reset_list(&self) {
         let top = self.list.logical_scroll_top();
-        self.list
-            .reset_with_uniform_height(self.lines.len() + usize::from(self.comment_open), px(24.));
+        self.list.reset_with_uniform_height(
+            self.lines.len() + usize::from(self.comment_open),
+            row_height(),
+        );
         self.list.scroll_to(top);
     }
     fn visible(&self, row: usize, column: u8) -> bool {
@@ -317,7 +333,7 @@ impl DiffView {
         let input = cx.new(|cx| {
             let mut input = TextInput::readonly(text, cx);
             input.delegate_selection();
-            input.code(&self.extension, self.light);
+            input.code(&self.extension, self.theme.id);
             input
         });
         self.subscriptions.insert(
@@ -498,7 +514,7 @@ impl DiffView {
         let t = self.theme;
         if !self.visible(row, column) {
             return div()
-                .min_h(px(24.))
+                .min_h(row_height())
                 .flex_1()
                 .min_w_0()
                 .bg(t.inset)
@@ -506,7 +522,7 @@ impl DiffView {
         }
         let input = self.row_input(row, column, cx);
         input.update(cx, |input, _| {
-            input.code(&self.extension, self.light);
+            input.code(&self.extension, self.theme.id);
             input.set_wrap(self.wrap);
         });
         let selected = self.range().is_some_and(|(a, b)| row >= a && row <= b);
@@ -538,14 +554,14 @@ impl DiffView {
             )
             .relative()
             .flex()
-            .min_h(px(24.))
-            .when(!self.wrap, |d| d.h(px(24.)))
+            .min_h(row_height())
+            .when(!self.wrap, |d| d.h(row_height()))
             // Virtual rows are layout roots: auto width uses the input's 400px intrinsic fallback.
             .when(column == 0, |d| d.w_full())
             .flex_1()
             .min_w_0()
-            .font_family(crate::theme::MONO)
-            .text_size(px(12.))
+            .font_family(crate::theme::mono())
+            .text_size(code_px(Settings::CODE_FONT_SIZE))
             .bg(if selected {
                 t.accent.opacity(0.1)
             } else {
@@ -571,7 +587,7 @@ impl DiffView {
                 div()
                     .id(("line-gutter", row * 3 + column as usize))
                     .w(px(if column == 0 { 102. } else { 66. }))
-                    .min_h(px(24.))
+                    .min_h(row_height())
                     .pt(px(3.))
                     .flex_shrink_0()
                     .pl_2()
@@ -623,14 +639,14 @@ impl DiffView {
         }
         let row = self.actual_row(item);
         if row >= self.lines.len() {
-            return div().h(px(24.)).into_any_element();
+            return div().h(row_height()).into_any_element();
         }
         if self.split {
             div()
                 .w_full()
                 .flex()
-                .min_h(px(24.))
-                .when(!self.wrap, |d| d.h(px(24.)))
+                .min_h(row_height())
+                .when(!self.wrap, |d| d.h(row_height()))
                 .child(self.cell(row, 1, cx))
                 .child(self.cell(row, 2, cx))
                 .into_any_element()
@@ -672,8 +688,8 @@ impl DiffView {
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scroll()
-                            .font_family(crate::theme::SANS)
-                            .text_size(px(13.))
+                            .font_family(crate::theme::sans())
+                            .text_size(text_px(13.))
                             .child(self.comment.clone()),
                     )
                     .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
@@ -744,8 +760,8 @@ fn action_button(
         .gap(px(5.))
         .rounded(px(crate::theme::RADIUS_CONTROL))
         .border_1()
-        .font_family(crate::theme::MONO)
-        .text_size(px(11.5))
+        .font_family(crate::theme::mono())
+        .text_size(text_px(11.5))
         .cursor_pointer()
         .styles(|s| s.disabled(|s| s.opacity(0.4).cursor_default()))
         .focus_visible(move |s| s.border_color(theme.accent.opacity(0.7)))
@@ -784,12 +800,15 @@ impl Render for DiffView {
         let entity = cx.entity();
         let bounds_entity = entity.clone();
         let pointer_entity = entity.clone();
+        // The text is as wide as its characters at the code size; the gutters follow the
+        // interface scale. The sum is in window pixels.
+        let text_width = self.text_width * f32::from(code_px(1.));
         let width = if self.wrap {
             0.
         } else if self.split {
-            (self.text_width + 66.) * 2.
+            (text_width + f32::from(px(66.))) * 2.
         } else {
-            self.text_width + 102.
+            text_width + f32::from(px(102.))
         };
         div()
             .id("diff-document")
@@ -850,7 +869,7 @@ impl Render for DiffView {
                             entity.update(cx, |view, cx| view.render_row(row, cx))
                         })
                         .w_full()
-                        .min_w(px(width))
+                        .min_w(gpui::px(width))
                         .h_full(),
                     ),
             )

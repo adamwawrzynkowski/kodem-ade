@@ -114,7 +114,7 @@ pub struct TextInput {
     completion_open: bool,
     delegated_selection: bool,
     wrap: bool,
-    syntax: Option<(String, bool)>,
+    syntax: Option<(String, kodem_core::ThemeId)>,
     colors: Vec<(Range<usize>, [u8; 3])>,
     prose: Option<(Vec<crate::markdown::Span>, crate::theme::Theme)>,
     streaming: super::streaming_text::StreamingText,
@@ -268,8 +268,8 @@ impl TextInput {
         if self.composer {
             self.streaming = Default::default();
         }
-        if let Some((extension, light)) = &self.syntax {
-            self.colors = crate::syntax::spans(&self.content, extension, *light);
+        if let Some((extension, theme)) = &self.syntax {
+            self.colors = crate::syntax::spans(&self.content, extension, *theme);
         }
         cx.notify();
     }
@@ -294,17 +294,18 @@ impl TextInput {
         input.readonly = true;
         input
     }
-    /// Configures wrapping and syntax colors for a captured code block.
-    pub fn code(&mut self, extension: &str, light: bool) {
+    /// Configures wrapping and syntax colors for a captured code block, in the code colors
+    /// of `theme`.
+    pub fn code(&mut self, extension: &str, theme: kodem_core::ThemeId) {
         self.prose = None;
         self.wrap = false;
         if self
             .syntax
             .as_ref()
-            .is_none_or(|(old, old_light)| old != extension || *old_light != light)
+            .is_none_or(|(old, old_theme)| old != extension || *old_theme != theme)
         {
-            self.syntax = Some((extension.into(), light));
-            self.colors = crate::syntax::spans(&self.content, extension, light);
+            self.syntax = Some((extension.into(), theme));
+            self.colors = crate::syntax::spans(&self.content, extension, theme);
         }
     }
     /// Sets whether text wraps to its available width without changing syntax colors.
@@ -1074,7 +1075,7 @@ impl Element for TextElement {
     ) -> PrepaintState {
         // Caret and selection follow the app accent published by the workspace.
         let accent = cx.try_global::<crate::theme::Theme>().map_or_else(
-            || crate::theme::Theme::new(false).accent,
+            || crate::theme::Theme::default().accent,
             |theme| theme.accent,
         );
         let input = self.input.read(cx);
@@ -1430,7 +1431,7 @@ fn shape(
                     styled.font.style = gpui::FontStyle::Italic;
                 }
                 if span.style.code {
-                    styled.font.family = crate::theme::MONO.into();
+                    styled.font.family = crate::theme::mono().into();
                 }
                 // Code reads in the text color; only a reference that opens something is tinted.
                 if span.style.reference {

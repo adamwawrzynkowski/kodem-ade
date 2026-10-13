@@ -361,8 +361,8 @@ impl Shell {
                     .py(px(10.))
                     .flex()
                     .gap(px(8.))
-                    .font_family(crate::theme::MONO)
-                    .text_size(px(11.))
+                    .font_family(crate::theme::mono())
+                    .text_size(text_px(11.))
                     .text_color(t.removed)
                     .child(kit::chip("ERROR", t.removed))
                     .child(div().flex_1().min_w_0().child(error)),
@@ -448,8 +448,8 @@ impl Shell {
                         )
                         .child(
                             div()
-                                .font_family(crate::theme::MONO)
-                                .text_size(px(11.5))
+                                .font_family(crate::theme::mono())
+                                .text_size(text_px(11.5))
                                 .text_color(t.muted)
                                 .child(details),
                         ),
@@ -494,11 +494,12 @@ impl Shell {
                 .tab_group()
                 .size_full()
                 .p(px(16.))
-                .pt(px(44.))
+                // The native window controls stay accessible above the transcript.
+                .pt(gpui::px(chrome::TITLE_BAR) + px(4.))
                 .bg(t.sidebar)
                 .text_color(t.text)
-                .font_family(crate::theme::SANS)
-                .text_size(px(self.settings.font_size - 1.))
+                .font_family(crate::theme::sans())
+                .text_size(text_px(13.))
                 .line_height(relative(1.5))
                 .on_action(cx.listener(|s, _: &Cancel, window, cx| s.close_agent(window, cx)))
                 .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))

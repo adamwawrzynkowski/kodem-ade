@@ -48,8 +48,8 @@ impl Shell {
                                 div()
                                     .min_w_0()
                                     .text_ellipsis_start()
-                                    .font_family(crate::theme::MONO)
-                                    .text_size(px(11.))
+                                    .font_family(crate::theme::mono())
+                                    .text_size(text_px(11.))
                                     .child(label),
                             )
                             .on_click(cx.listener(move |s, _, _, _| {
@@ -81,7 +81,7 @@ impl Shell {
         if let Some((path, text)) = self.file_text.clone() {
             let extension = path.rsplit('.').next().unwrap_or("");
             let input = self.readonly(format!("viewer:{path}"), text, cx);
-            input.update(cx, |i, _| i.code(extension, self.settings.light));
+            input.update(cx, |i, _| i.code(extension, self.theme.id));
             let reference = path.clone();
             preview = preview
                 .child(
@@ -90,8 +90,8 @@ impl Shell {
                             .flex_shrink(1.)
                             .min_w_0()
                             .text_ellipsis_start()
-                            .font_family(crate::theme::MONO)
-                            .text_size(px(11.5))
+                            .font_family(crate::theme::mono())
+                            .text_size(text_px(11.5))
                             .text_color(t.text)
                             .child(path),
                         t.info,
@@ -122,8 +122,8 @@ impl Shell {
                         .min_h_0()
                         .overflow_scroll()
                         .p(px(14.))
-                        .font_family(crate::theme::MONO)
-                        .text_size(px(12.))
+                        .font_family(crate::theme::mono())
+                        .text_size(code_px(Settings::CODE_FONT_SIZE))
                         .child(input),
                 );
         } else {

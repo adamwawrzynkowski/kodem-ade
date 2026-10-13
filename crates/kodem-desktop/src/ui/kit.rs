@@ -105,8 +105,8 @@ pub(super) fn chip(label: impl Into<SharedString>, tone: Hsla) -> Div {
         .border_color(tone.opacity(0.36))
         .bg(tone.opacity(0.08))
         .text_color(tone)
-        .font_family(crate::theme::MONO)
-        .text_size(px(10.5))
+        .font_family(crate::theme::mono())
+        .text_size(text_px(10.5))
         .line_height(relative(1.))
         .child(label.into())
 }
@@ -124,8 +124,8 @@ pub(super) fn keycap(keys: impl Into<SharedString>, theme: Theme) -> Div {
         .border_color(theme.border)
         .bg(theme.inset)
         .text_color(theme.subtle)
-        .font_family(crate::theme::MONO)
-        .text_size(px(10.))
+        .font_family(crate::theme::mono())
+        .text_size(text_px(10.))
         .line_height(relative(1.))
         .child(keys.into())
 }
@@ -292,7 +292,7 @@ pub(super) fn glow_header(
                         .gap(px(2.))
                         .child(
                             div()
-                                .text_size(px(14.))
+                                .text_size(text_px(14.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text)
                                 .text_ellipsis()
@@ -300,8 +300,8 @@ pub(super) fn glow_header(
                         )
                         .child(
                             div()
-                                .font_family(crate::theme::MONO)
-                                .text_size(px(11.))
+                                .font_family(crate::theme::mono())
+                                .text_size(text_px(11.))
                                 .text_color(theme.subtle)
                                 .text_ellipsis()
                                 .child(detail),
@@ -341,7 +341,7 @@ pub(super) fn empty_state(
         )
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(text_px(13.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text)
                 .child(title.into()),
@@ -351,7 +351,7 @@ pub(super) fn empty_state(
                 div()
                     .max_w(px(340.))
                     .text_center()
-                    .text_size(px(12.))
+                    .text_size(text_px(12.))
                     .text_color(theme.subtle)
                     .child(detail),
             )
@@ -389,8 +389,8 @@ pub(super) fn empty_hint(text: impl Into<SharedString>, theme: Theme) -> Div {
         )
         .child(
             div()
-                .font_family(crate::theme::MONO)
-                .text_size(px(11.))
+                .font_family(crate::theme::mono())
+                .text_size(text_px(11.))
                 .text_color(theme.subtle)
                 .text_center()
                 .child(text.into()),
@@ -418,8 +418,8 @@ pub(super) fn loader_row(label: impl Into<SharedString>, theme: Theme) -> Div {
         )
         .child(
             div()
-                .font_family(crate::theme::MONO)
-                .text_size(px(11.))
+                .font_family(crate::theme::mono())
+                .text_size(text_px(11.))
                 .text_color(theme.muted)
                 .child(label.into()),
         )

@@ -97,7 +97,7 @@ impl Shell {
                                 },
                             )
                             .px(px(7.))
-                            .text_size(px(12.))
+                            .text_size(text_px(12.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(t.text)
                             .accessibility_label("Choose changes comparison")
@@ -138,8 +138,8 @@ impl Shell {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .font_family(crate::theme::MONO)
-                                    .text_size(px(11.))
+                                    .font_family(crate::theme::mono())
+                                    .text_size(text_px(11.))
                                     .text_color(t.muted)
                                     .child(
                                         "New changes available. Your selected revision is preserved.",
@@ -173,8 +173,8 @@ impl Shell {
                                     .py(px(6.))
                                     .flex()
                                     .gap(px(8.))
-                                    .font_family(crate::theme::MONO)
-                                    .text_size(px(11.))
+                                    .font_family(crate::theme::mono())
+                                    .text_size(text_px(11.))
                                     .text_color(t.muted)
                                     .child(kit::chip(repo.label.to_uppercase(), t.warning))
                                     .child(div().flex_1().min_w_0().child(notice.clone())),
@@ -280,8 +280,8 @@ impl Shell {
                                     .flex_shrink(1.)
                                     .min_w_0()
                                     .text_ellipsis_start()
-                                    .font_family(crate::theme::MONO)
-                                    .text_size(px(10.5))
+                                    .font_family(crate::theme::mono())
+                                    .text_size(text_px(10.5))
                                     .text_color(t.muted)
                                     .child(root.display().to_string()),
                             )
@@ -314,8 +314,8 @@ impl Shell {
                             .flex_shrink(1.)
                             .min_w_0()
                             .text_ellipsis_start()
-                            .font_family(crate::theme::MONO)
-                            .text_size(px(11.5))
+                            .font_family(crate::theme::mono())
+                            .text_size(text_px(11.5))
                             .text_color(t.text)
                             .child(file.label.clone()),
                         t.info,
@@ -410,8 +410,8 @@ impl Shell {
                                     .py(px(7.))
                                     .flex()
                                     .gap(px(8.))
-                                    .font_family(crate::theme::MONO)
-                                    .text_size(px(11.))
+                                    .font_family(crate::theme::mono())
+                                    .text_size(text_px(11.))
                                     .text_color(t.muted)
                                     .child(kit::chip("NOTE", t.info))
                                     .child(div().flex_1().min_w_0().child(notice.clone())),
@@ -431,7 +431,6 @@ impl Shell {
                             self.split,
                             self.settings.wrap_diff,
                             t,
-                            self.settings.light,
                             cx,
                         )
                     });
@@ -455,13 +454,7 @@ impl Shell {
                 }
                 if let Some(view) = &self.diff_view {
                     view.update(cx, |view, cx| {
-                        view.configure(
-                            self.split,
-                            self.settings.wrap_diff,
-                            t,
-                            self.settings.light,
-                            cx,
-                        )
+                        view.configure(self.split, self.settings.wrap_diff, t, cx)
                     });
                     panel = panel.child(view.clone());
                 }
@@ -491,8 +484,8 @@ impl Shell {
                                 div()
                                     .min_w_0()
                                     .text_ellipsis()
-                                    .font_family(crate::theme::MONO)
-                                    .text_size(px(10.5))
+                                    .font_family(crate::theme::mono())
+                                    .text_size(text_px(10.5))
                                     .text_color(t.subtle)
                                     .child("Select to copy · drag line numbers to comment"),
                             ),

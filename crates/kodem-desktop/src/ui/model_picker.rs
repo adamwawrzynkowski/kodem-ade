@@ -19,8 +19,8 @@ impl Shell {
             .gap(px(8.))
             .justify_start()
             .overflow_hidden()
-            .font_family(crate::theme::SANS)
-            .text_size(px(12.5))
+            .font_family(crate::theme::sans())
+            .text_size(text_px(12.5))
             .font_weight(FontWeight::NORMAL)
             .border_color(gpui::transparent_black())
             .bg(gpui::transparent_black())
@@ -94,8 +94,8 @@ impl Shell {
                                 .flex_1()
                                 .min_w_0()
                                 .text_ellipsis()
-                                .font_family(crate::theme::MONO)
-                                .text_size(px(10.5))
+                                .font_family(crate::theme::mono())
+                                .text_size(text_px(10.5))
                                 .text_color(t.subtle)
                                 .child(if model.name == model.id {
                                     String::new()
@@ -178,7 +178,7 @@ impl Shell {
                 content = content.child(
                     div()
                         .p_2()
-                        .text_size(px(11.5))
+                        .text_size(text_px(11.5))
                         .text_color(t.muted)
                         .child("Choose a model first to see its supported reasoning levels."),
                 );
@@ -296,7 +296,7 @@ impl Shell {
                     div()
                         .px(px(8.))
                         .py(px(4.))
-                        .text_size(px(11.))
+                        .text_size(text_px(11.))
                         .text_color(t.subtle)
                         .child("Plan mode is on. This rule applies when the task returns to build mode."),
                 );
@@ -305,7 +305,7 @@ impl Shell {
                 content = content.child(
                     div()
                         .p_2()
-                        .text_size(px(11.5))
+                        .text_size(text_px(11.5))
                         .text_color(t.muted)
                         .child("Refresh the provider to load its access modes."),
                 );
@@ -328,7 +328,7 @@ impl Shell {
                 div()
                     .px_2()
                     .py_1()
-                    .text_size(px(11.))
+                    .text_size(text_px(11.))
                     .text_color(t.muted)
                     .child("These controls unlock after pending work finishes and delivery is confirmed."),
             );
@@ -371,7 +371,7 @@ impl Shell {
                 content = content.child(
                     div()
                         .p_2()
-                        .text_size(px(11.))
+                        .text_size(text_px(11.))
                         .text_color(t.removed)
                         .child(error),
                 );
@@ -455,8 +455,8 @@ impl Shell {
                         .flex_1()
                         .min_w_0()
                         .text_ellipsis()
-                        .font_family(crate::theme::MONO)
-                        .text_size(px(10.5))
+                        .font_family(crate::theme::mono())
+                        .text_size(text_px(10.5))
                         .text_color(t.subtle)
                         .map(|identity| match state.status.email.as_deref() {
                             Some(email) => identity.child(self.censored_email(
@@ -496,7 +496,7 @@ impl Shell {
                 div()
                     .px(px(8.))
                     .py(px(4.))
-                    .text_size(px(11.))
+                    .text_size(text_px(11.))
                     .text_color(t.subtle)
                     .child(if limited {
                         "This task's account reached its usage limit. Moving the conversation to another account would get around the limit, which the provider's terms do not allow. Wait for the reset."
@@ -616,7 +616,7 @@ impl Shell {
                     .when(!detail.is_empty(), |d| {
                         d.child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(text_px(11.))
                                 .line_height(relative(1.3))
                                 .text_color(t.muted)
                                 .child(detail),

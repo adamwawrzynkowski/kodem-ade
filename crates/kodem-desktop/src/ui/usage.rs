@@ -133,7 +133,7 @@ impl Shell {
                     .flex_1()
                     .min_w_0()
                     .text_ellipsis()
-                    .text_size(px(11.))
+                    .text_size(text_px(11.))
                     .text_color(t.muted)
                     .child(name),
             )
@@ -186,7 +186,7 @@ impl Shell {
         } else {
             section = section.child(
                 div()
-                    .text_size(px(11.5))
+                    .text_size(text_px(11.5))
                     .text_color(t.muted)
                     .child("The provider has not reported context usage for this task yet."),
             );
@@ -220,7 +220,7 @@ impl Shell {
                 .when(busy, |section| {
                     section.child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(text_px(11.))
                             .text_color(t.subtle)
                             .child("Compact now is available when the current turn finishes."),
                     )
@@ -315,7 +315,7 @@ impl Shell {
                     div()
                         .px(px(8.))
                         .pb(px(6.))
-                        .text_size(px(11.5))
+                        .text_size(text_px(11.5))
                         .text_color(t.muted)
                         .child(
                             "Account quotas are unavailable through this provider's CLI. Session cost and context appear when the provider reports them.",
@@ -397,13 +397,18 @@ impl Shell {
                     .when(runtime.usage_resets, |d| {
                         d.child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(text_px(11.))
                                 .text_color(t.subtle)
                                 .child("A reset uses one banked reset on eligible usage limits."),
                         )
                     })
                     .when_some(actions.message, |d, message| {
-                        d.child(div().text_size(px(11.5)).text_color(t.text).child(message))
+                        d.child(
+                            div()
+                                .text_size(text_px(11.5))
+                                .text_color(t.text)
+                                .child(message),
+                        )
                     }),
             )
             .into_any_element()
@@ -497,8 +502,8 @@ fn hint_card(theme: Theme) -> Div {
         .flex()
         .flex_col()
         .gap(px(8.))
-        .font_family(crate::theme::SANS)
-        .text_size(px(12.))
+        .font_family(crate::theme::sans())
+        .text_size(text_px(12.))
         .text_color(theme.text)
         .bg(theme.raised)
         .border_1()
@@ -630,7 +635,7 @@ fn usage_details(usage: Option<&UsageLimits>, t: Theme) -> AnyElement {
         return details
             .child(
                 div()
-                    .text_size(px(11.5))
+                    .text_size(text_px(11.5))
                     .text_color(t.muted)
                     .child("Usage has not been reported yet."),
             )
@@ -663,7 +668,7 @@ fn usage_details(usage: Option<&UsageLimits>, t: Theme) -> AnyElement {
     if usage.primary.is_none() && usage.secondary.is_none() && usage.spend.is_none() {
         details = details.child(
             div()
-                .text_size(px(11.5))
+                .text_size(text_px(11.5))
                 .text_color(t.muted)
                 .child("Usage windows unavailable."),
         );

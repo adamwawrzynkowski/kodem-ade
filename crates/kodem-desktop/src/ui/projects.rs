@@ -2,9 +2,10 @@
 use super::*;
 
 impl Shell {
-    /// Builds the saved application accent picker.
+    /// Builds the saved application accent picker. The first choice is the theme's own accent.
     pub(super) fn accent_choices(&self, cx: &mut Context<Self>) -> AnyElement {
-        let light = self.settings.light;
+        let light = self.theme.light;
+        let own = Theme::new(self.settings.theme).accent;
         div()
             .flex()
             .flex_col()
@@ -12,16 +13,21 @@ impl Shell {
             .child(kit::section_header("Accent", None, self.theme))
             .child(div().flex().flex_wrap().gap(px(6.)).children(
                 AccentColor::ALL.into_iter().enumerate().map(|(i, color)| {
+                    let (tone, label) = if color == AccentColor::default() {
+                        (own, "Theme accent")
+                    } else {
+                        (crate::theme::accent_color(color, light), color.label())
+                    };
                     self.swatch(
                         ("accent-choice", i),
-                        crate::theme::accent_color(color, light),
-                        color.label(),
+                        tone,
+                        label,
                         self.settings.accent == color,
                         false,
                     )
                     .on_click(cx.listener(move |s, _, _, cx| {
                         s.settings.accent = color;
-                        s.theme = Theme::with_accent(s.settings.light, color);
+                        s.theme = Theme::with_accent(s.settings.theme, color);
                         s.save_settings();
                         cx.notify();
                     }))
@@ -185,15 +191,15 @@ impl Shell {
                                     .min_w_0()
                                     .child(
                                         div()
-                                            .text_size(px(13.))
+                                            .text_size(text_px(13.))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_ellipsis()
                                             .child(project.name),
                                     )
                                     .child(
                                         div()
-                                            .font_family(crate::theme::MONO)
-                                            .text_size(px(10.5))
+                                            .font_family(crate::theme::mono())
+                                            .text_size(text_px(10.5))
                                             .text_color(t.subtle)
                                             .text_ellipsis_start()
                                             .child(project.path.display().to_string()),
@@ -244,8 +250,8 @@ impl Shell {
                                     .flex_1()
                                     .min_w_0()
                                     .text_ellipsis()
-                                    .font_family(crate::theme::MONO)
-                                    .text_size(px(11.))
+                                    .font_family(crate::theme::mono())
+                                    .text_size(text_px(11.))
                                     .text_color(if has_default { t.text } else { t.muted })
                                     .child(summary),
                             )
@@ -291,7 +297,7 @@ impl Shell {
         let Some(project) = self.editing_project.clone() else {
             return div().into_any_element();
         };
-        let light = self.settings.light;
+        let light = self.theme.light;
         let mut colors = div().flex().flex_wrap().gap(px(6.)).child(
             self.swatch(
                 "project-color-default",
@@ -352,7 +358,7 @@ impl Shell {
             .child(div().mt(px(6.)).child(kit::section_header("Icon", None, t)))
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(text_px(12.))
                     .text_color(t.muted)
                     .child("Use a built-in icon or choose an image. Kodem saves its own copy."),
             )

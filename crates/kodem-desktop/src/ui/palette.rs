@@ -24,7 +24,7 @@ enum Action {
     Resources,
     Settings(usize),
     Setup,
-    Appearance(bool),
+    Theme(ThemeId),
     Interrupt,
     Compact,
     Rename,
@@ -421,18 +421,18 @@ impl Shell {
             "View",
             Action::ToggleArchived,
         );
-        add(
-            if self.settings.light { "moon" } else { "sun" },
-            if self.settings.light {
-                "Switch to the graphite appearance"
-            } else {
-                "Switch to the paper appearance"
-            },
-            "",
-            "",
-            "View",
-            Action::Appearance(!self.settings.light),
-        );
+        for theme in ThemeId::ALL {
+            if theme != self.settings.theme {
+                add(
+                    if theme.light() { "sun" } else { "moon" },
+                    &format!("Theme: {}", theme.label()),
+                    if theme.light() { "Light" } else { "Dark" },
+                    "",
+                    "View",
+                    Action::Theme(theme),
+                );
+            }
+        }
         for (section, glyph, label) in settings::SECTIONS {
             add(
                 glyph,
@@ -516,11 +516,7 @@ impl Shell {
             Action::Resources => self.open_resources(),
             Action::Settings(section) => self.open_settings(section),
             Action::Setup => self.open_setup(),
-            Action::Appearance(light) => {
-                self.settings.light = light;
-                self.theme = Theme::with_accent(light, self.settings.accent);
-                self.save_settings();
-            }
+            Action::Theme(theme) => self.set_theme(theme, cx),
             Action::Interrupt => {
                 if let Some(task_id) = &task_id {
                     self.send(core::Request::Interrupt {
@@ -615,7 +611,7 @@ impl Shell {
                                 .relative()
                                 .flex_shrink_0()
                                 .max_w(relative(0.62))
-                                .text_size(px(13.))
+                                .text_size(text_px(13.))
                                 .text_color(t.text)
                                 .text_ellipsis()
                                 .child(item.title.clone()),
@@ -625,8 +621,8 @@ impl Shell {
                                 .relative()
                                 .flex_1()
                                 .min_w_0()
-                                .font_family(crate::theme::MONO)
-                                .text_size(px(11.))
+                                .font_family(crate::theme::mono())
+                                .text_size(text_px(11.))
                                 .text_color(t.subtle)
                                 .text_ellipsis()
                                 .map(|detail| match &item.action {
@@ -680,7 +676,7 @@ impl Shell {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .text_size(px(14.))
+                                    .text_size(text_px(14.))
                                     .child(self.palette_input.clone()),
                             )
                             .child(kit::keycap("esc", t)),

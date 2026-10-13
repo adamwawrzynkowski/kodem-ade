@@ -6,6 +6,8 @@
 //! [`FxLayer`] paints every running effect, so only that layer renders on each animation frame.
 //! Nothing runs while reduced motion is on.
 use super::*;
+// Effects are painted over the window in window pixels, between measured anchors.
+use gpui::px;
 use std::{cell::RefCell, f32::consts::TAU, rc::Rc, time::Instant};
 
 /// Share of a flight spent popping up in place before it moves.
@@ -395,10 +397,7 @@ impl Render for FxLayer {
             anchors.extend(state.anchors.clone());
             (state.effects.clone(), anchors)
         };
-        let theme = cx
-            .try_global::<Theme>()
-            .copied()
-            .unwrap_or(Theme::new(false));
+        let theme = cx.try_global::<Theme>().copied().unwrap_or_default();
         let colors = FxColors {
             surface: theme.raised,
             text: theme.text,
@@ -616,7 +615,7 @@ fn paint_flight(
         px(text_size),
         &[TextRun {
             len: flight.label.len(),
-            font: font(crate::theme::MONO),
+            font: font(crate::theme::mono()),
             color: colors.text,
             background_color: None,
             underline: None,

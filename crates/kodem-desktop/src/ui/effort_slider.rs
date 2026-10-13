@@ -168,14 +168,14 @@ impl Render for EffortSlider {
                 div()
                     .flex()
                     .items_center()
-                    .text_size(px(11.))
+                    .text_size(text_px(11.))
                     .text_color(t.muted)
                     .justify_center()
                     .child(
                         div()
-                            .font_family(crate::theme::MONO)
-                            .text_size(px(12.))
-                            .letter_spacing(px(crate::theme::LABEL_TRACKING))
+                            .font_family(crate::theme::mono())
+                            .text_size(text_px(12.))
+                            .letter_spacing(text_px(crate::theme::LABEL_TRACKING))
                             .text_color(t.text)
                             .child(
                                 self.options
@@ -235,7 +235,10 @@ impl Render for EffortSlider {
                             },
                             move |bounds, _, window, _| {
                                 let center = bounds.left()
-                                    + px(slider_center(f32::from(bounds.size.width), progress));
+                                    + gpui::px(slider_center(
+                                        f32::from(bounds.size.width),
+                                        progress,
+                                    ));
                                 // An instrument fader: dithered empty track, solid level, machined cap.
                                 let track = Bounds::new(
                                     point(bounds.left(), bounds.center().y - px(5.)),
@@ -262,7 +265,7 @@ impl Render for EffortSlider {
                                 window.paint_quad(fill(filled, accent).corner_radii(px(2.)));
                                 for i in 0..stop_count {
                                     let x = bounds.left()
-                                        + px(slider_center(
+                                        + gpui::px(slider_center(
                                             f32::from(bounds.size.width),
                                             i as f32 / count,
                                         ));
@@ -318,12 +321,16 @@ impl Render for EffortSlider {
     }
 }
 
-// Shared pointer and paint geometry keeps the thumb, fill and stop positions aligned.
+/// Room between an end of the track and the first or last stop, in points.
+const TRACK_INSET: f32 = 14.;
+
+// Shared pointer and paint geometry keeps the thumb, fill and stop positions aligned. Both
+// take and return window pixels.
 fn slider_center(width: f32, progress: f32) -> f32 {
-    let inset = 14_f32.min(width * 0.5);
+    let inset = f32::from(px(TRACK_INSET)).min(width * 0.5);
     inset + (width - 2. * inset).max(0.) * progress.clamp(0., 1.)
 }
 fn slider_progress(width: f32, x: f32) -> f32 {
-    let inset = 14_f32.min(width * 0.5);
+    let inset = f32::from(px(TRACK_INSET)).min(width * 0.5);
     ((x - inset) / (width - 2. * inset).max(1.)).clamp(0., 1.)
 }

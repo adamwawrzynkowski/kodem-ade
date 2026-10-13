@@ -556,3 +556,32 @@ Checked with a locked `cargo build` of the workspace and `cargo fmt --all -- --c
 | The installed CLIs, Claude Code 2.1.296 and Codex 0.162.1, started with the configuration that Kodem passes | Claude Code reports the server `kodem` as connected with 4 tools through `mcp_status`. Codex lists `delegate_task`, `list_agents`, `task_cancel` and `task_status` through `mcpServerStatus/list`. No model request was made; both CLIs ran under the default account in a scratch directory. Passed. |
 
 Not checked, because each needs an authenticated turn: that an agent calls `delegate_task` when asked for a subagent on another model, a delegated turn from start to result, whether Codex asks for approval before it calls a tool of this server, a reading Claude Code task being held to the blocked tools, and Stop reaching a working delegated task. The transfer rows and the delegated tasks in the task list are not checked on screen. No commit or push was made.
+
+## Appearance: themes, typefaces, text sizes, interface scale and the light field (protocol 35)
+
+Recorded on 14 October 2026. [Dithered interface](../design/dithered-interface.md) describes the look; this section records what changed and how it was checked.
+
+| Part | Where |
+| --- | --- |
+| Saved choices | `kodem-core/src/model.rs`: `ThemeId`, `TextFont`, `CodeFont`, and `Settings.theme`, `text_font`, `code_font`, `code_font_size` and `ui_scale`. `Settings::from_json` turns the earlier light switch into Paper. `Store::write_settings` bounds the sizes and the scale |
+| Palettes | `theme.rs`: one `Palette` for each of fourteen themes; `Theme::new` derives edges, tints and dither inks from it |
+| Code colors | `syntax.rs`: a color theme built from eight colors for each classic theme; Graphite, Paper and both Solarized themes use the themes that syntect bundles |
+| Scale and text sizes | `theme.rs`: `apply_metrics`, `px`, `text_px`, `code_px`, `sans`, `mono`. In `ui`, `px` is a length at the interface scale; a length from a measured layout or the pointer uses `gpui::px` |
+| Settings page | `ui/settings.rs`: `theme_choices`, `text_font_choices`, `code_font_choices`, `scale_slider`. `Slider::on_release` applies the scale at the end of a drag |
+| Chat background | `ui/backdrop.rs`: four blurred lights and a veil over the reading column |
+
+The protocol number changes because a host from before this change would save settings without the new fields.
+
+Less than a full zoom, on purpose. The title bar keeps its height and the room for the window controls, because macOS draws them at one size. Dot pitches of dithered textures and the flying chips of the effect layer keep their size. The bundle gained Inter, JetBrains Mono and Fira Code as static files from their release archives, with their licence texts and rows in `assets/THIRD_PARTY.md`. The pickers list the bundled typefaces, the system font, and the typefaces from a fixed list that this Mac has.
+
+Checked with a locked `cargo build` of the workspace and `cargo fmt --all -- --check`. Clippy with `-D warnings` reports the six earlier findings and no new one. Temporary tests, removed afterward:
+
+| Check | Cases and result |
+| --- | --- |
+| Settings | A saved light switch selects Paper, a dark one Graphite, and a saved theme wins over the switch. A store bounds the scale to 0.6–1.4, the text size to 12–22 and the code size to 10–20, and refuses a scale that is not a number |
+| Palettes | Every theme, against its canvas, sidebar, raised and inset surfaces: text at 6.5:1 or more, muted text at 4.5:1 or more, subtle text at 3:1 or more in the twelve classic themes (Paper keeps its 2.9:1), and the accent and the four status colors at 3:1 or more. Graphite and Paper keep their earlier colors |
+| Code colors | Every theme colors a Rust sample completely with four or more colors. Monokai gives the expected color to a comment, a declaration, a function name, a number, a string and a type |
+| Scale | At 140% a length of 10 is 14 and text sizes stay; a text size of 21 and a code size of 18 scale their own text only |
+| Chat background | All themes, five states and six window sizes over 160 moments each, with the blur computed as the shader does: behind messages the tint stays below 6% on dark themes and 4% on light ones, text loses at most 15% of its contrast and stays at 6.7:1 or more, muted text at 4.8:1 or more. Each light is short enough for the shader's four samples |
+
+Not checked, because app control and screenshots are prohibited here: every screen at a scale other than 100%, the look of each theme and typeface, and the motion of the background.

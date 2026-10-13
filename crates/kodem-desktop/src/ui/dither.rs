@@ -10,6 +10,9 @@
 //! fields advance on a stepped clock of about twelve frames per second. The steps are
 //! part of the look and keep the redraw cost low. With reduced motion, fields render one frame.
 use super::*;
+// This module paints in window pixels: the dot pitch belongs to the texture and stays the same
+// at every interface scale. Only the sizes of whole elements and their corners follow the scale.
+use gpui::px;
 use std::{cell::RefCell, f32::consts::TAU, rc::Rc, sync::Arc, time::Instant};
 
 /// Cells per side of a cached texture tile; a multiple of the Bayer period.
@@ -144,14 +147,6 @@ pub(super) fn begin_frame() {
         bakery.frame += 1;
         bakery.spent = 0;
     });
-}
-
-/// Gives a view that paints outside the workspace's frame a baking budget of its own.
-///
-/// The budget is renewed when the workspace renders. A view that steps between those renders
-/// would otherwise find it spent and paint nothing until the workspace renders again.
-pub(super) fn renew_budget() {
-    BAKERY.with(|bakery| bakery.borrow_mut().spent = 0);
 }
 
 // Returns straight-alpha BGRA, the layout of GPUI's sprite atlas.
@@ -435,39 +430,6 @@ fn digest(color: Hsla, values: &[f32]) -> std::collections::hash_map::DefaultHas
     hasher
 }
 
-/// Returns the cached sprite of one column of dots, `rows` cells tall, or `None` while this
-/// frame's baking budget is spent. `lit` says which rows hold a dot, and `tag` names the rule
-/// that `lit` follows, so that equal columns share one sprite.
-///
-/// A field that changes along its columns only, such as a dithered gradient whose start differs
-/// per column, can be drawn as one sprite per column instead of one quad per dot.
-pub(super) fn column_sprite(
-    window: &mut Window,
-    cx: &mut App,
-    color: Hsla,
-    rows: u32,
-    (cell, dot): (f32, f32),
-    tag: (u8, u8, u8),
-    lit: &dyn Fn(i32) -> bool,
-) -> Option<Arc<RenderImage>> {
-    use std::hash::{Hash, Hasher};
-    let scale = window.scale_factor();
-    let device_cell = (cell * scale).round();
-    if device_cell < 1. || (cell * scale - device_cell).abs() > 0.01 {
-        return None;
-    }
-    let mut content = digest(color, &[]);
-    ("column", tag).hash(&mut content);
-    let key = SpriteKey {
-        content: content.finish(),
-        columns: 1,
-        rows,
-        cell: device_cell as u32,
-        dot: ((dot * scale).round() as u32).clamp(1, device_cell as u32),
-    };
-    sprite(window, cx, key, &|_, row| lit(row).then_some(color))
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Pattern {
     /// A flat density from 0 to 64.
@@ -624,7 +586,7 @@ pub(super) fn fade(color: Hsla, height: f32, solid_at_bottom: bool) -> Canvas<()
     .absolute()
     .left_0()
     .right_0()
-    .h(px(height))
+    .h(crate::theme::px(height))
 }
 
 /// Casts a dithered contact shadow below and right of its parent's rounded bounds.
@@ -632,6 +594,8 @@ pub(super) fn fade(color: Hsla, height: f32, solid_at_bottom: bool) -> Canvas<()
 /// Place it as the first child of a relatively positioned wrapper that has the same bounds as
 /// the floating surface, so the surface paints above it.
 pub(super) fn shadow(theme: Theme, radius: f32, depth: f32) -> impl IntoElement {
+    let scale = crate::theme::ui_scale();
+    let (radius, depth) = (radius * scale, depth * scale);
     canvas(
         |_, _, _| {},
         move |bounds, _, window, cx| paint_shadow(window, cx, bounds, radius, depth, theme.ink),
@@ -795,7 +759,7 @@ pub(super) fn pulse(color: Hsla, reduce_motion: bool) -> AnyElement {
             }
         },
     )
-    .size(px(13.))
+    .size(crate::theme::px(13.))
     .flex_shrink_0()
     .into_any_element()
 }
@@ -1250,6 +1214,8 @@ impl Dither {
 impl RenderOnce for Dither {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let moving = self.animated && self.field.timed() && !cx.reduce_motion();
+        // The corners belong to the surface that the dots shade, so they follow its scale.
+        let scale = crate::theme::ui_scale();
         let spec = PaintSpec {
             field: self.field,
             color: self.color,
@@ -1257,7 +1223,7 @@ impl RenderOnce for Dither {
             dot: self.dot,
             toned: self.toned,
             hover_only: self.hover_only,
-            corner_radii: self.corner_radii,
+            corner_radii: self.corner_radii.map(|radius| radius * scale),
             moving,
             time: if moving { clock_seconds() } else { 0. },
         };
@@ -1461,7 +1427,7 @@ pub(super) fn edge_shade(color: Hsla, density: f32, radius: f32) -> Div {
         .left_0()
         .right_0()
         .bottom_0()
-        .h(px(EDGE_SHADE))
+        .h(crate::theme::px(EDGE_SHADE))
         .max_h_full()
         .child(
             Dither::new(DitherField::Fade {
@@ -1492,7 +1458,7 @@ pub(super) fn row_wash(color: Hsla, radius: f32, selected: bool, active: bool) -
                     .top_0()
                     .bottom_0()
                     .left_0()
-                    .w(px(SELECTION_GRAIN))
+                    .w(crate::theme::px(SELECTION_GRAIN))
                     .max_w_full()
                     .child(
                         Dither::new(DitherField::Fade {
@@ -1519,7 +1485,7 @@ pub(super) fn row_wash(color: Hsla, radius: f32, selected: bool, active: bool) -
                     .top_0()
                     .bottom_0()
                     .right_0()
-                    .w(px(132.))
+                    .w(crate::theme::px(132.))
                     .max_w_full()
                     .child(
                         Dither::new(

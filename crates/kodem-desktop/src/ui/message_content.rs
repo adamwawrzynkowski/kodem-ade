@@ -101,7 +101,7 @@ impl Shell {
                         .gap(px(6.))
                         .child(
                             div()
-                                .text_size(px(self.settings.font_size + extra))
+                                .text_size(text_px(Settings::FONT_SIZE + extra))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(self.message_prose(
                                     &key,
@@ -201,20 +201,24 @@ impl Shell {
                             None => match start {
                                 Some(start) => div()
                                     .pt(px(2.))
-                                    .font_family(crate::theme::MONO)
-                                    .text_size(px(self.settings.font_size - 3.))
+                                    .font_family(crate::theme::mono())
+                                    .text_size(text_px(11.))
                                     .text_color(t.subtle)
                                     .child(format!("{}.", start.saturating_add(index as u64)))
                                     .into_any_element(),
                                 // A square pixel bullet, vertically centered on the first line.
                                 None if depth == 0 => div()
-                                    .mt(px(self.settings.font_size * 0.775 - 2.))
+                                    .mt(gpui::px(
+                                        f32::from(text_px(Settings::FONT_SIZE)) * 0.775 - 2.,
+                                    ))
                                     .size(px(4.))
                                     .bg(t.subtle)
                                     .into_any_element(),
                                 // A list inside a list has an open bullet.
                                 None => div()
-                                    .mt(px(self.settings.font_size * 0.775 - 2.5))
+                                    .mt(gpui::px(
+                                        f32::from(text_px(Settings::FONT_SIZE)) * 0.775 - 2.5,
+                                    ))
                                     .size(px(5.))
                                     .border_1()
                                     .border_color(t.subtle)
@@ -264,14 +268,15 @@ impl Shell {
                                 })
                                 .max()
                                 .unwrap_or(0) as f32
-                                * (self.settings.font_size - 2.)
+                                * f32::from(text_px(12.))
                                 * 0.55
                                 + 24.
                         })
                         .map(|width| width.clamp(120., 300.))
                         .collect();
                     let mut table = div()
-                        .w(px(widths.iter().sum()))
+                        // The widths follow the text size, so they are window pixels.
+                        .w(gpui::px(widths.iter().sum()))
                         .min_w_full()
                         .flex()
                         .flex_col();
@@ -283,7 +288,7 @@ impl Shell {
                         }
                         let mut line = div().flex().when(row_index == 0, |d| {
                             d.bg(t.header)
-                                .font_family(crate::theme::MONO)
+                                .font_family(crate::theme::mono())
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(t.muted)
                                 .border_b_1()
@@ -292,14 +297,12 @@ impl Shell {
                         for (col, cell) in row.into_iter().enumerate() {
                             line = line.child(
                                 div()
-                                    .w(px(widths.get(col).copied().unwrap_or(120.)))
+                                    .w(gpui::px(widths.get(col).copied().unwrap_or(120.)))
                                     .flex_shrink_0()
                                     .flex_grow(1.)
                                     .px_3()
                                     .py(px(if row_index == 0 { 5. } else { 7. }))
-                                    .when(row_index == 0, |d| {
-                                        d.text_size(px(self.settings.font_size - 3.))
-                                    })
+                                    .when(row_index == 0, |d| d.text_size(text_px(11.)))
                                     .child(self.message_prose(
                                         &format!("{key}:{row_index}:{col}"),
                                         cell,
@@ -359,13 +362,13 @@ impl Shell {
     ) -> AnyElement {
         let t = self.theme;
         let input = self.readonly_streaming(format!("code:{key}"), text.to_owned(), streaming, cx);
-        input.update(cx, |input, _| input.code(language, self.settings.light));
+        input.update(cx, |input, _| input.code(language, self.theme.id));
         let width = text
             .lines()
             .map(|line| line.chars().count())
             .max()
             .unwrap_or(0) as f32
-            * (self.settings.font_size - 2.)
+            * f32::from(code_px(Settings::CODE_FONT_SIZE))
             * 0.64
             + 24.;
         let copied = text.to_owned();
@@ -410,10 +413,10 @@ impl Shell {
                     })
                     .px(px(12.))
                     .py(px(10.))
-                    .font_family(crate::theme::MONO)
-                    .text_size(px(self.settings.font_size - 2.))
+                    .font_family(crate::theme::mono())
+                    .text_size(code_px(Settings::CODE_FONT_SIZE))
                     .line_height(relative(1.5))
-                    .child(div().min_w_full().w(px(width)).child(input)),
+                    .child(div().min_w_full().w(gpui::px(width)).child(input)),
             )
             .into_any_element()
     }

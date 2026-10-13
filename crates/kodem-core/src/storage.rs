@@ -378,7 +378,7 @@ impl Store {
             .db
             .query_row("SELECT json FROM settings WHERE id=1", [], |r| r.get(0))
             .optional()?;
-        Ok(s.map(|s| serde_json::from_str(&s))
+        Ok(s.map(|s| Settings::from_json(&s))
             .transpose()?
             .unwrap_or_default())
     }
@@ -540,13 +540,22 @@ impl Store {
     }
     fn write_settings(&self, s: &Settings) -> Result<()> {
         ensure!(
-            s.sidebar_width.is_finite() && s.review_width.is_finite() && s.font_size.is_finite(),
+            s.sidebar_width.is_finite()
+                && s.review_width.is_finite()
+                && s.font_size.is_finite()
+                && s.code_font_size.is_finite()
+                && s.ui_scale.is_finite(),
             "Invalid layout value"
         );
         let mut s = s.clone();
         s.sidebar_width = s.sidebar_width.clamp(220., 420.);
         s.review_width = s.review_width.clamp(320., 900.);
-        s.font_size = s.font_size.clamp(12., 22.);
+        let (smallest, largest) = Settings::FONT_SIZE_RANGE;
+        s.font_size = s.font_size.clamp(smallest, largest);
+        let (smallest, largest) = Settings::CODE_FONT_SIZE_RANGE;
+        s.code_font_size = s.code_font_size.clamp(smallest, largest);
+        let (smallest, largest) = Settings::UI_SCALE_RANGE;
+        s.ui_scale = s.ui_scale.clamp(smallest, largest);
         self.db.execute(
             "INSERT INTO settings VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET json=excluded.json",
             [serde_json::to_string(&s)?],

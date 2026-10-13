@@ -60,7 +60,7 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .gap(px(5.))
-                    .text_size(px(11.5))
+                    .text_size(text_px(11.5))
                     .text_color(t.muted)
                     .child(
                         "Add only accounts that are your own, for example a personal and a work account. Do not share an account with anyone.",
@@ -105,8 +105,8 @@ impl Shell {
                     .items_center()
                     .gap(px(7.))
                     .cursor_pointer()
-                    .font_family(crate::theme::MONO)
-                    .text_size(px(11.5))
+                    .font_family(crate::theme::mono())
+                    .text_size(text_px(11.5))
                     .text_color(if chosen { t.text } else { t.muted })
                     .when(!chosen, |cell| cell.hover(move |cell| cell.bg(t.selected)))
                     .child(icon(candidate.icon()).size(px(13.)))
@@ -152,10 +152,15 @@ impl Shell {
         }
         if provider.home_variable().is_none() {
             return body
-                .child(div().text_size(px(12.)).text_color(t.muted).child(format!(
-                    "{} has one account, which its own CLI manages.",
-                    provider.label()
-                )))
+                .child(
+                    div()
+                        .text_size(text_px(12.))
+                        .text_color(t.muted)
+                        .child(format!(
+                            "{} has one account, which its own CLI manages.",
+                            provider.label()
+                        )),
+                )
                 .into_any_element();
         }
         if self.accounts.adding {
@@ -174,7 +179,7 @@ impl Shell {
                     .child(
                         div()
                             .relative()
-                            .text_size(px(11.5))
+                            .text_size(text_px(11.5))
                             .text_color(t.muted)
                             .child(format!(
                                 "Name it after how you use it, for example Work or Personal. Terminal then opens `{}` for this account.",
@@ -285,7 +290,7 @@ impl Shell {
                             .child(
                                 div()
                                     .min_w_0()
-                                    .text_size(px(13.))
+                                    .text_size(text_px(13.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_ellipsis()
                                     .child(account.name.clone()),
@@ -299,8 +304,8 @@ impl Shell {
                         div()
                             .flex()
                             .gap(px(7.))
-                            .font_family(crate::theme::MONO)
-                            .text_size(px(11.))
+                            .font_family(crate::theme::mono())
+                            .text_size(text_px(11.))
                             .text_color(t.subtle)
                             .when_some(email, |line, email| {
                                 line.child(self.censored_email(provider, &account.id, email, cx))
@@ -363,7 +368,7 @@ impl Shell {
                 card = card.child(
                     div()
                         .relative()
-                        .text_size(px(11.5))
+                        .text_size(text_px(11.5))
                         .text_color(t.removed)
                         .child("This account reached a usage limit. Move its tasks to another account from the composer, or wait for the reset."),
                 );
@@ -412,7 +417,7 @@ impl Shell {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .text_size(px(11.5))
+                        .text_size(text_px(11.5))
                         .text_color(t.muted)
                         .child("Remove this account and delete its configuration directory?"),
                 )
@@ -539,8 +544,8 @@ impl Shell {
         .child(
             div()
                 .relative()
-                .font_family(crate::theme::MONO)
-                .text_size(px(10.5))
+                .font_family(crate::theme::mono())
+                .text_size(text_px(10.5))
                 .text_color(t.subtle)
                 .text_ellipsis()
                 .child(directory),
@@ -564,8 +569,8 @@ const ACCOUNT_COLORS: [AccentColor; 6] = [
 fn limit_column(label: String, used_percent: Option<i32>, caption: String, t: Theme) -> Div {
     let column = div().flex_1().min_w_0().flex().flex_col().gap(px(4.));
     let caption = div()
-        .font_family(crate::theme::MONO)
-        .text_size(px(10.5))
+        .font_family(crate::theme::mono())
+        .text_size(text_px(10.5))
         .text_color(t.subtle)
         .child(caption);
     let Some(used) = used_percent.map(|percent| percent.clamp(0, 100)) else {

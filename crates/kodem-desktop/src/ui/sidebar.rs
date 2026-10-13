@@ -48,7 +48,7 @@ impl Shell {
                 .bg(t.inset)
                 .border_1()
                 .border_color(t.accent.opacity(0.5))
-                .font_family(crate::theme::MONO)
+                .font_family(crate::theme::mono())
                 .child(icon("search").size(px(13.)).text_color(t.muted))
                 .child(div().flex_1().min_w_0().child(self.search.clone()))
                 .child(
@@ -127,7 +127,7 @@ impl Shell {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .text_size(px(12.))
+            .text_size(text_px(12.))
             .child(
                 div()
                     .px(px(10.))
@@ -670,8 +670,8 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(6.))
-            .font_family(crate::theme::MONO)
-            .text_size(px(10.5))
+            .font_family(crate::theme::mono())
+            .text_size(text_px(10.5))
             .text_color(if selected { t.muted } else { t.subtle })
             .child(
                 div()
@@ -806,7 +806,7 @@ impl Shell {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .text_size(px(13.))
+                                    .text_size(text_px(13.))
                                     .font_weight(if selected || unread || needs_input {
                                         FontWeight::MEDIUM
                                     } else {

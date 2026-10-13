@@ -34,6 +34,12 @@ fn main() {
                 Cow::Borrowed(include_bytes!(
                     "../../../assets/fonts/FiraSans-BoldItalic.ttf"
                 )),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/Inter-Regular.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/Inter-Medium.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/Inter-Bold.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/Inter-Italic.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/Inter-BoldItalic.ttf")),
                 Cow::Borrowed(include_bytes!(
                     "../../../assets/fonts/IBMPlexMono-Regular.ttf"
                 )),
@@ -44,6 +50,24 @@ fn main() {
                     "../../../assets/fonts/IBMPlexMono-SemiBold.ttf"
                 )),
                 Cow::Borrowed(include_bytes!("../../../assets/fonts/IBMPlexMono-Bold.ttf")),
+                Cow::Borrowed(include_bytes!(
+                    "../../../assets/fonts/JetBrainsMono-Regular.ttf"
+                )),
+                Cow::Borrowed(include_bytes!(
+                    "../../../assets/fonts/JetBrainsMono-Medium.ttf"
+                )),
+                Cow::Borrowed(include_bytes!(
+                    "../../../assets/fonts/JetBrainsMono-SemiBold.ttf"
+                )),
+                Cow::Borrowed(include_bytes!(
+                    "../../../assets/fonts/JetBrainsMono-Bold.ttf"
+                )),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/FiraCode-Regular.ttf")),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/FiraCode-Medium.ttf")),
+                Cow::Borrowed(include_bytes!(
+                    "../../../assets/fonts/FiraCode-SemiBold.ttf"
+                )),
+                Cow::Borrowed(include_bytes!("../../../assets/fonts/FiraCode-Bold.ttf")),
             ]) {
                 eprintln!("Could not load bundled fonts: {error}");
             }

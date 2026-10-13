@@ -25,6 +25,14 @@ const SLIDER_COLUMN: f32 = 220.;
 const CONTROL_COLUMN: f32 = 340.;
 /// Step of a compaction threshold slider, in percent.
 const THRESHOLD_STEP: f32 = 5.;
+/// Step of the interface scale slider, in percent.
+const SCALE_STEP: f32 = 5.;
+/// Cards in one row of the theme picker and of a font picker.
+const PICKER_COLUMNS: u16 = 3;
+/// Space between the cards of a picker.
+const PICKER_GAP: f32 = 8.;
+/// Height of the miniature workspace in a theme card.
+const THEME_PREVIEW: f32 = 86.;
 /// Name of the switch that turns on Artifacts in Claude Code sessions.
 const ARTIFACTS_LABEL: &str = "Artifacts, /design and /slides";
 /// What the Artifacts switch does and what it needs.
@@ -102,7 +110,7 @@ pub(super) fn error_block(label: &str, message: impl Into<SharedString>, theme: 
             div()
                 .px(px(12.))
                 .py(px(9.))
-                .text_size(px(12.))
+                .text_size(text_px(12.))
                 .line_height(relative(1.45))
                 .text_color(theme.text)
                 .child(message.into()),
@@ -120,7 +128,7 @@ pub(super) fn setting_group(label: &str, count: Option<usize>, theme: Theme) -> 
 /// Returns a short explanation in prose below a group header or between rows.
 pub(super) fn note(text: impl Into<SharedString>, theme: Theme) -> Div {
     div()
-        .text_size(px(12.))
+        .text_size(text_px(12.))
         .line_height(relative(1.45))
         .text_color(theme.muted)
         .child(text.into())
@@ -159,6 +167,104 @@ fn compact_level(label: &str, rule: CompactRule, own: bool, theme: Theme) -> Div
         .child(caps(label, theme).text_color(theme.muted))
         .child(div().flex_1())
         .child(kit::chip(rule_label(rule), rule_tone(rule, own, theme)))
+}
+
+// One line of the miniature workspace in a theme card: a short bar in a color of the theme.
+fn preview_bar(width: f32, color: Hsla) -> Div {
+    div()
+        .h(px(3.))
+        .w(px(width))
+        .flex_shrink_0()
+        .rounded(px(1.5))
+        .bg(color)
+}
+
+// Draws a miniature workspace in the colors of `theme`: the sidebar with a chosen task, a few
+// lines in the accent and the status colors, and the composer.
+fn theme_preview(theme: Theme) -> Div {
+    let line = || div().flex().items_center().gap(px(4.));
+    div()
+        .h(px(THEME_PREVIEW))
+        .flex()
+        .overflow_hidden()
+        .bg(theme.canvas)
+        .child(
+            div()
+                .w(px(42.))
+                .h_full()
+                .flex_shrink_0()
+                .p(px(6.))
+                .flex()
+                .flex_col()
+                .gap(px(5.))
+                .bg(theme.sidebar)
+                .border_r_1()
+                .border_color(theme.border)
+                .child(preview_bar(16., theme.text))
+                .child(
+                    div()
+                        .h(px(9.))
+                        .w_full()
+                        .flex()
+                        .rounded(px(2.))
+                        .overflow_hidden()
+                        .bg(theme.accent_bg)
+                        .child(div().w(px(2.)).h_full().bg(theme.accent)),
+                )
+                .child(preview_bar(24., theme.subtle))
+                .child(preview_bar(18., theme.subtle)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .p(px(8.))
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(
+                    line()
+                        .child(preview_bar(22., theme.accent))
+                        .child(preview_bar(38., theme.text)),
+                )
+                .child(
+                    line()
+                        .pl(px(8.))
+                        .child(preview_bar(16., theme.info))
+                        .child(preview_bar(26., theme.added))
+                        .child(preview_bar(14., theme.warning)),
+                )
+                .child(
+                    line()
+                        .pl(px(8.))
+                        .child(preview_bar(20., theme.removed))
+                        .child(preview_bar(32., theme.muted)),
+                )
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .h(px(18.))
+                        .px(px(5.))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .rounded(px(crate::theme::RADIUS_SMALL))
+                        .bg(theme.raised)
+                        .border_1()
+                        .border_color(theme.edge)
+                        .child(preview_bar(34., theme.subtle))
+                        .child(div().size(px(8.)).rounded(px(2.)).bg(theme.accent)),
+                ),
+        )
+}
+
+// Lays out the cards of a picker in rows of equal columns.
+fn picker_grid(cards: Vec<AnyElement>) -> Div {
+    div()
+        .grid()
+        .grid_cols(PICKER_COLUMNS)
+        .gap(px(PICKER_GAP))
+        .children(cards)
 }
 
 impl Shell {
@@ -215,136 +321,326 @@ impl Shell {
             .into_any_element()
     }
 
-    /// Saves the dark or light appearance and applies it at once.
-    pub(super) fn set_light(&mut self, light: bool, cx: &mut Context<Self>) {
-        self.settings.light = light;
-        self.theme = Theme::with_accent(light, self.settings.accent);
+    /// Saves the theme and applies it at once.
+    pub(super) fn set_theme(&mut self, theme: ThemeId, cx: &mut Context<Self>) {
+        self.settings.theme = theme;
+        self.theme = Theme::with_accent(theme, self.settings.accent);
         self.save_settings();
         cx.notify();
     }
 
-    /// Returns the setting that chooses the dark or the light appearance.
+    /// Returns the setting that chooses between the dark and the light default theme. The
+    /// theme picker in Settings has the other themes.
     pub(super) fn appearance_setting(&self, cx: &mut Context<Self>) -> AnyElement {
         self.setting_row(
             "Appearance",
-            "Graphite in the dark appearance, paper in the light one.",
+            "Graphite is the dark theme and Paper the light one. Settings has more themes.",
             self.segmented(
                 "theme-choice",
                 [(false, "Dark"), (true, "Light")],
-                &self.settings.light,
-                Self::set_light,
+                &self.theme.light,
+                |s, light, cx| {
+                    s.set_theme(
+                        if light {
+                            ThemeId::Paper
+                        } else {
+                            ThemeId::Graphite
+                        },
+                        cx,
+                    )
+                },
                 cx,
             ),
         )
     }
 
+    // Returns one card of the theme picker: a miniature workspace in the theme's colors over
+    // the theme's name. The chosen card carries the accent edge and a check mark.
+    fn theme_card(&self, theme: ThemeId, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let chosen = self.settings.theme == theme;
+        let index = ThemeId::ALL
+            .iter()
+            .position(|candidate| *candidate == theme)
+            .unwrap_or_default();
+        Button::new(("theme-card", index))
+            .relative()
+            .min_w_0()
+            .flex_col()
+            .items_stretch()
+            .justify_start()
+            .overflow_hidden()
+            .rounded(px(crate::theme::RADIUS_SURFACE))
+            .border_1()
+            .border_color(if chosen { t.accent } else { t.border })
+            .accessibility_label(theme.label())
+            .aria_selected(chosen)
+            .focus_visible(move |card| card.border_color(t.accent.opacity(0.7)))
+            .when(!chosen, |card| {
+                card.cursor_pointer()
+                    .hover(move |card| card.border_color(t.edge))
+                    .on_press(move |position, cx| fx::ripple(position, t.muted, cx))
+                    .on_click(cx.listener(move |s, _, _, cx| s.set_theme(theme, cx)))
+            })
+            .child(theme_preview(Theme::with_accent(
+                theme,
+                self.settings.accent,
+            )))
+            .child(
+                div()
+                    .relative()
+                    .h(px(28.))
+                    .px(px(9.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .bg(t.raised)
+                    .border_t_1()
+                    .border_color(t.border)
+                    .when(chosen, |footer| footer.child(chosen_layer(t.accent, 0.)))
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .font_family(crate::theme::sans())
+                            .text_size(text_px(12.))
+                            .line_height(relative(1.3))
+                            .text_color(if chosen { t.text } else { t.muted })
+                            .text_ellipsis()
+                            .child(theme.label()),
+                    )
+                    .when(chosen, |footer| {
+                        footer.child(
+                            icon("check")
+                                .size(px(12.))
+                                .flex_shrink_0()
+                                .text_color(t.accent),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+
+    // Builds the theme picker: the dark themes, then the light ones, as cards in a grid.
+    fn theme_choices(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let mut picker = setting_group("Theme", Some(ThemeId::ALL.len()), t);
+        for (label, light) in [("Dark", false), ("Light", true)] {
+            picker = picker
+                .child(caps(label, t).pt(px(12.)).pb(px(6.)).text_color(t.muted))
+                .child(picker_grid(
+                    ThemeId::ALL
+                        .into_iter()
+                        .filter(|theme| theme.light() == light)
+                        .map(|theme| self.theme_card(theme, cx))
+                        .collect(),
+                ));
+        }
+        picker.into_any_element()
+    }
+
+    // Returns one card of a font picker: the name of the typeface, set in that typeface.
+    fn font_card(&self, id: impl Into<ElementId>, family: &'static str, chosen: bool) -> Button {
+        let t = self.theme;
+        self.choice_row(id, chosen)
+            .min_w_0()
+            .h(px(34.))
+            .border_color(if chosen {
+                t.accent.opacity(0.45)
+            } else {
+                t.border
+            })
+            .font_family(family)
+            .font_weight(FontWeight::NORMAL)
+            .text_size(text_px(13.))
+            .when(chosen, |card| card.cursor_default())
+    }
+
+    // Returns the label of a font card. It keeps its place above the layer of a chosen card
+    // and shortens with an ellipsis in a narrow card.
+    fn font_label(label: &'static str) -> Div {
+        div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .line_height(relative(1.3))
+            .text_ellipsis()
+            .child(label)
+    }
+
+    // Builds the picker of the typeface for the interface and prose. It lists the bundled
+    // typeface, the system one and the others that this Mac has.
+    fn text_font_choices(&self, cx: &mut Context<Self>) -> Div {
+        let chosen = self.settings.text_font;
+        picker_grid(
+            TextFont::ALL
+                .into_iter()
+                .enumerate()
+                .filter(|(_, font)| {
+                    font.built_in()
+                        || *font == chosen
+                        || self.installed_fonts.contains(font.family())
+                })
+                .map(|(index, font)| {
+                    self.font_card(("text-font", index), font.family(), font == chosen)
+                        .accessibility_label(font.label())
+                        .child(Self::font_label(font.label()))
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            s.settings.text_font = font;
+                            s.save_settings();
+                            cx.notify();
+                        }))
+                        .into_any_element()
+                })
+                .collect(),
+        )
+        .pt(px(10.))
+    }
+
+    // Builds the picker of the monospace typeface for code and labels. It lists the bundled
+    // typeface and the others that this Mac has.
+    fn code_font_choices(&self, cx: &mut Context<Self>) -> Div {
+        let chosen = self.settings.code_font;
+        picker_grid(
+            CodeFont::ALL
+                .into_iter()
+                .enumerate()
+                .filter(|(_, font)| {
+                    font.built_in()
+                        || *font == chosen
+                        || self.installed_fonts.contains(font.family())
+                })
+                .map(|(index, font)| {
+                    self.font_card(("code-font", index), font.family(), font == chosen)
+                        .accessibility_label(font.family())
+                        .child(Self::font_label(font.family()))
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            s.settings.code_font = font;
+                            s.save_settings();
+                            cx.notify();
+                        }))
+                        .into_any_element()
+                })
+                .collect(),
+        )
+        .pt(px(10.))
+    }
+
+    // Returns the slider of the interface scale with its percent readout. A drag shows the new
+    // value and applies it on release: a scale that followed the pointer would move the slider
+    // under it.
+    fn scale_slider(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (smallest, largest) = Settings::UI_SCALE_RANGE;
+        let percent = (self
+            .pending_scale
+            .unwrap_or(self.settings.ui_scale)
+            .clamp(smallest, largest)
+            * 100.)
+            .round();
+        self.slider_control(
+            controls::Slider::new(
+                "ui-scale",
+                percent,
+                smallest * 100.,
+                largest * 100.,
+                SCALE_STEP,
+                cx.listener(|s, value: &f32, _, cx| {
+                    s.pending_scale = Some(value / 100.);
+                    cx.notify();
+                }),
+            )
+            .on_release(cx.listener(|s, _: &(), _, cx| {
+                if let Some(scale) = s.pending_scale.take() {
+                    let (smallest, largest) = Settings::UI_SCALE_RANGE;
+                    s.settings.ui_scale = scale.clamp(smallest, largest);
+                    s.save_settings();
+                    cx.notify();
+                }
+            }))
+            .label("Interface scale"),
+            format!("{percent}%"),
+            self.theme.text,
+        )
+    }
+
     fn appearance_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let mut themes = div().pt(px(10.)).flex().gap(px(12.));
-        for (i, light) in [false, true].into_iter().enumerate() {
-            let preview = Theme::with_accent(light, self.settings.accent);
-            let chosen = self.settings.light == light;
-            themes = themes.child(
-                div()
-                    .id(("theme-preview", i))
-                    .flex_1()
-                    .h(px(96.))
-                    .p(px(6.))
-                    .flex()
-                    .gap(px(6.))
-                    .bg(preview.canvas)
-                    .rounded(px(crate::theme::RADIUS_SURFACE))
-                    .border_1()
-                    .border_color(if chosen { t.text } else { t.border })
-                    .when(!chosen, |d| d.hover(move |d| d.border_color(t.edge)))
-                    .cursor_pointer()
-                    .child(
-                        div()
-                            .w(px(34.))
-                            .rounded(px(2.))
-                            .bg(preview.sidebar)
-                            .p(px(4.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.))
-                            .child(div().h(px(3.)).w(px(14.)).bg(preview.text))
-                            .child(
-                                div()
-                                    .h(px(8.))
-                                    .w_full()
-                                    .rounded(px(1.))
-                                    .bg(preview.selected),
-                            )
-                            .child(div().h(px(3.)).w(px(20.)).bg(preview.subtle))
-                            .child(div().h(px(3.)).w(px(16.)).bg(preview.subtle)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .pt_2()
-                            .child(div().h(px(4.)).w(px(48.)).bg(preview.muted))
-                            .child(div().h(px(3.)).w_full().bg(preview.border))
-                            .child(div().h(px(3.)).w(relative(0.7)).bg(preview.border))
-                            .child(div().flex_1())
-                            .child(
-                                div()
-                                    .h(px(22.))
-                                    .px(px(4.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_end()
-                                    .bg(preview.raised)
-                                    .border_1()
-                                    .border_color(preview.edge)
-                                    .rounded(px(3.))
-                                    .child(div().size(px(10.)).rounded(px(2.)).bg(preview.accent)),
-                            ),
-                    )
-                    .on_click(cx.listener(move |s, _, _, cx| s.set_light(light, cx))),
-            );
-        }
+        let (smallest_text, largest_text) = Settings::FONT_SIZE_RANGE;
+        let (smallest_code, largest_code) = Settings::CODE_FONT_SIZE_RANGE;
         div()
             .flex()
             .flex_col()
             .gap(px(GROUP_GAP))
             .child(self.section_title(
                 "Appearance",
-                "Set the workspace's contrast and reading size.",
+                "Set the theme, the typefaces and the size of the interface.",
             ))
-            .child(
-                setting_group("Theme", None, t)
-                    .child(themes)
-                    .child(self.appearance_setting(cx)),
-            )
+            .child(self.theme_choices(cx))
             .child(self.accent_choices(cx))
             .child(
-                setting_group("Reading", None, t)
+                setting_group("Text", None, t)
+                    .child(self.text_font_choices(cx))
                     .child(
                         self.setting_row(
-                            "Conversation text",
-                            "Size of messages and prompt text.",
+                            "Text size",
+                            "Size of the interface, messages and prompt text.",
                             self.slider_control(
                                 controls::Slider::new(
                                     "font-size",
                                     self.settings.font_size,
-                                    12.,
-                                    22.,
+                                    smallest_text,
+                                    largest_text,
                                     1.,
-                                    cx.listener(|s, value: &f32, _, cx| {
-                                        s.settings.font_size = value.clamp(12., 22.);
+                                    cx.listener(move |s, value: &f32, _, cx| {
+                                        s.settings.font_size =
+                                            value.clamp(smallest_text, largest_text);
                                         s.save_settings();
                                         cx.notify();
                                     }),
                                 )
-                                .label("Conversation text size"),
+                                .label("Text size"),
                                 format!("{} PT", self.settings.font_size),
                                 t.text,
                             ),
                         ),
-                    )
+                    ),
+            )
+            .child(
+                setting_group("Code", None, t)
+                    .child(self.code_font_choices(cx))
+                    .child(
+                        self.setting_row(
+                            "Code size",
+                            "Size of code blocks, diffs, files and terminal output.",
+                            self.slider_control(
+                                controls::Slider::new(
+                                    "code-font-size",
+                                    self.settings.code_font_size,
+                                    smallest_code,
+                                    largest_code,
+                                    1.,
+                                    cx.listener(move |s, value: &f32, _, cx| {
+                                        s.settings.code_font_size =
+                                            value.clamp(smallest_code, largest_code);
+                                        s.save_settings();
+                                        cx.notify();
+                                    }),
+                                )
+                                .label("Code size"),
+                                format!("{} PT", self.settings.code_font_size),
+                                t.text,
+                            ),
+                        ),
+                    ),
+            )
+            .child(
+                setting_group("Interface", None, t)
+                    .child(self.setting_row(
+                        "Interface scale",
+                        "Size of spacing, controls and icons. Text keeps the sizes set above.",
+                        self.scale_slider(cx),
+                    ))
                     .child(self.setting_row(
                         "Task density",
                         "Adjust the spacing between task rows.",
@@ -671,7 +967,7 @@ impl Shell {
                     .flex()
                     .items_center()
                     .gap(px(10.))
-                    .child(div().flex_shrink_0().text_size(px(13.)).child(label))
+                    .child(div().flex_shrink_0().text_size(text_px(13.)).child(label))
                     .child(
                         div()
                             .flex_1()
@@ -745,7 +1041,7 @@ impl Shell {
                     .child(
                         div()
                             .flex_shrink_0()
-                            .text_size(px(16.))
+                            .text_size(text_px(16.))
                             .line_height(relative(1.3))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(title.to_owned()),
@@ -874,7 +1170,7 @@ impl Shell {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(div().text_size(px(13.)).child(label.to_owned()))
+                            .child(div().text_size(text_px(13.)).child(label.to_owned()))
                             .child(note(detail.to_owned(), t)),
                     )
                     .child(
@@ -1040,8 +1336,8 @@ impl Shell {
             models = models.child(
                 self.choice_row(("settings-model", index), chosen)
                     .w_full()
-                    .font_family(crate::theme::SANS)
-                    .text_size(px(12.5))
+                    .font_family(crate::theme::sans())
+                    .text_size(text_px(12.5))
                     .font_weight(FontWeight::NORMAL)
                     .child(icon(provider.icon()).size(px(13.)))
                     .child(model.name.clone())
@@ -1152,9 +1448,9 @@ impl Shell {
                                 .child(mode.name.clone())
                                 .child(
                                     div()
-                                        .font_family(crate::theme::SANS)
+                                        .font_family(crate::theme::sans())
                                         .font_weight(FontWeight::NORMAL)
-                                        .text_size(px(12.))
+                                        .text_size(text_px(12.))
                                         .line_height(relative(1.4))
                                         .text_color(t.muted)
                                         .child(mode.description.clone()),
@@ -1480,7 +1776,7 @@ impl Shell {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .text_size(px(12.5))
+                            .text_size(text_px(12.5))
                             .text_ellipsis()
                             .child(model.name.clone()),
                     )

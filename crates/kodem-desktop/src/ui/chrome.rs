@@ -24,9 +24,12 @@ impl Shell {
                     }
                 })
         });
+        let scale = crate::theme::ui_scale();
         let mut header = div()
             .relative()
-            .h(px(40.))
+            // The title bar and the room for the window controls are window pixels: macOS
+            // draws the controls at one size at every interface scale.
+            .h(gpui::px(TITLE_BAR))
             .flex_shrink_0()
             .flex()
             .items_center()
@@ -39,14 +42,16 @@ impl Shell {
                     div()
                         // The section ends above the sidebar's trailing edge. While the sidebar
                         // slides, it shrinks toward the room of the window controls.
-                        .w(px(WINDOW_CONTROLS
-                            + (workspaces::RAIL + 1. + self.settings.sidebar_width
-                                - WINDOW_CONTROLS)
-                                * self.reveals.sidebar))
+                        .w(gpui::px(
+                            WINDOW_CONTROLS
+                                + ((workspaces::RAIL + 1. + self.settings.sidebar_width) * scale
+                                    - WINDOW_CONTROLS)
+                                    * self.reveals.sidebar,
+                        ))
                         .overflow_hidden()
                         .h_full()
                         .flex_shrink_0()
-                        .pl(px(WINDOW_CONTROLS))
+                        .pl(gpui::px(WINDOW_CONTROLS))
                         .pr(px(8.))
                         .flex()
                         .items_center()
@@ -61,8 +66,8 @@ impl Shell {
                                 .gap(px(7.))
                                 .child(
                                     div()
-                                        .font_family(crate::theme::MONO)
-                                        .text_size(px(12.5))
+                                        .font_family(crate::theme::mono())
+                                        .text_size(text_px(12.5))
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(t.text)
                                         .child("Kodem"),
@@ -94,7 +99,7 @@ impl Shell {
             .flex_1()
             .px(px(14.))
             .when(self.reveals.sidebar <= 0., |d| {
-                d.pl(px(WINDOW_CONTROLS)).child(
+                d.pl(gpui::px(WINDOW_CONTROLS)).child(
                     self.icon_button("expand-sidebar", "panel-left", "Show sidebar · ⌘B")
                         .on_click(cx.listener(|s, _, _, cx| {
                             s.settings.collapsed = false;
@@ -121,7 +126,7 @@ impl Shell {
                 div()
                     .flex_shrink_0()
                     .max_w(px(220.))
-                    .text_size(px(13.))
+                    .text_size(text_px(13.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_ellipsis()
                     .child(name),
@@ -134,8 +139,8 @@ impl Shell {
                 .child(
                     div()
                         .min_w_0()
-                        .font_family(crate::theme::MONO)
-                        .text_size(px(11.))
+                        .font_family(crate::theme::mono())
+                        .text_size(text_px(11.))
                         .text_color(t.muted)
                         .text_ellipsis()
                         .child(view.task.branch.clone()),
@@ -304,7 +309,7 @@ impl Shell {
                             .bg(t.raised)
                             .border_1()
                             .border_color(t.removed.opacity(0.5))
-                            .text_size(px(12.))
+                            .text_size(text_px(12.))
                             .child(div().pt(px(3.)).child(kit::marker(t.removed)))
                             .child(
                                 div()
@@ -343,8 +348,8 @@ impl Shell {
                             .bg(t.raised)
                             .border_1()
                             .border_color(toast.tone.opacity(0.5))
-                            .font_family(crate::theme::MONO)
-                            .text_size(px(11.5))
+                            .font_family(crate::theme::mono())
+                            .text_size(text_px(11.5))
                             .child(kit::marker(toast.tone))
                             .child(toast.text.clone()),
                     ),
@@ -361,7 +366,19 @@ impl Shell {
 }
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.window_width = f32::from(window.viewport_size().width);
+        // The saved scale, text sizes and typefaces apply before any length is built. The
+        // window root and the layers beside this view are cached, so a change redraws them.
+        if crate::theme::apply_metrics(&self.settings) {
+            // Every row of the lists has a new height.
+            self.chat_scroll.remeasure();
+            self.sidebar_scroll.remeasure();
+            window.on_next_frame(|window, _| window.refresh());
+        }
+        // Spacing that is given in rems follows the interface scale with the rem.
+        window.set_rem_size(gpui::px(BASE_REM) * crate::theme::ui_scale());
+        // Widths that the layout compares with its breakpoints and saved pane sizes are in
+        // points of the interface scale.
+        self.window_width = f32::from(window.viewport_size().width) / crate::theme::ui_scale();
         backdrop::begin_frame(window, cx);
         self.sync_reveals(cx);
         self.sync_censor();
@@ -390,13 +407,13 @@ impl Render for Shell {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .font_family(crate::theme::SANS)
-            .text_size(px(self.settings.font_size - 1.))
+            .font_family(crate::theme::sans())
+            .text_size(text_px(13.))
             .line_height(relative(1.5))
             .font_weight(FontWeight::NORMAL)
             .text_color(t.text)
             // No fill: the window root paints the backdrop color, and the chat surface with its
-            // dot field lies beneath this view.
+            // light field lies beneath this view.
             .on_action(cx.listener(Self::open_project))
             .on_action(cx.listener(Self::new_task))
             .on_action(cx.listener(Self::submit))
@@ -474,14 +491,14 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
             .on_mouse_move(cx.listener(|s, event: &MouseMoveEvent, _, cx| {
+                // The pointer is in window pixels; the saved widths are in points.
+                let pointer = f32::from(event.position.x) / crate::theme::ui_scale();
                 if s.dragging_sidebar {
-                    s.settings.sidebar_width =
-                        (f32::from(event.position.x) - workspaces::RAIL - 1.).clamp(220., 420.);
+                    s.settings.sidebar_width = (pointer - workspaces::RAIL - 1.).clamp(220., 420.);
                     cx.notify();
                 }
                 if s.dragging_review {
-                    s.settings.review_width =
-                        (s.window_width - f32::from(event.position.x)).clamp(360., 900.);
+                    s.settings.review_width = (s.window_width - pointer).clamp(360., 900.);
                     cx.notify();
                 }
             }))
@@ -631,8 +648,14 @@ impl Render for Shell {
 /// Half the width of a pane divider's hit area, in points.
 const RESIZE_REACH: f32 = 5.;
 
-/// Width at the leading end of the title bar that the window controls take, in points.
+/// Width at the leading end of the title bar that the window controls take, in window pixels.
 const WINDOW_CONTROLS: f32 = 80.;
+
+/// Height of the title bar, in window pixels.
+pub(super) const TITLE_BAR: f32 = 40.;
+
+/// Size of a rem at an interface scale of 100%, in window pixels.
+const BASE_REM: f32 = 16.;
 
 impl Shell {
     // The hit area of a pane divider: wide enough to grab, with a line that lights up under
@@ -683,15 +706,12 @@ impl Stage {
 
 impl Render for Stage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx
-            .try_global::<Theme>()
-            .copied()
-            .unwrap_or(Theme::new(false));
+        let theme = cx.try_global::<Theme>().copied().unwrap_or_default();
         div()
             .relative()
             .size_full()
             .bg(theme.backdrop)
-            // Cached like the workspace: the field renders on its own steps, not on every
+            // Cached like the workspace: the field renders on its own frames, not on every
             // frame of a scroll or of an effect.
             .child(
                 AnyView::from(self.backdrop.clone()).cached(

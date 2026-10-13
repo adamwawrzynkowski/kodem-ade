@@ -64,7 +64,8 @@ impl Shell {
         let current = turns.iter().rposition(|index| *index <= top).unwrap_or(0);
         // The list's height comes from the frame before. A long conversation shows the ticks
         // around the turn in view.
-        let height = f32::from(self.chat_scroll.viewport_bounds().size.height);
+        let height =
+            f32::from(self.chat_scroll.viewport_bounds().size.height) / crate::theme::ui_scale();
         let capacity = if height > 0. {
             (((height - 2. * MARGIN) / PITCH).floor() as usize).max(1)
         } else {
@@ -223,7 +224,7 @@ impl Shell {
         let line = |color: Hsla, size: f32| {
             div()
                 .min_w_0()
-                .text_size(px(size))
+                .text_size(text_px(size))
                 .line_height(relative(1.4))
                 .text_color(color)
                 .line_clamp(2)
@@ -251,7 +252,7 @@ impl Shell {
         match openings.next() {
             Some(opening) => body = body.child(line(t.muted, 12.5).child(opening)),
             None if last && view.task.state == RunState::Running => {
-                body = body.child(div().text_size(px(12.5)).child(motion::gleam(
+                body = body.child(div().text_size(text_px(12.5)).child(motion::gleam(
                     "Working…",
                     t,
                     cx.reduce_motion(),
@@ -283,7 +284,7 @@ impl Shell {
                 div()
                     .relative()
                     .overflow_hidden()
-                    .font_family(crate::theme::SANS)
+                    .font_family(crate::theme::sans())
                     .bg(t.raised)
                     .border_1()
                     .border_color(t.edge)

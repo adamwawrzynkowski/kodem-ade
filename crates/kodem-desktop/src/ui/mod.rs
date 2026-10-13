@@ -44,7 +44,7 @@ use crate::{
         Button,
         text_input::{CompletionInput, ReferenceInput, SubmitInput, TextInput},
     },
-    theme::Theme,
+    theme::{Theme, code_px, px, text_px},
 };
 pub use chrome::Stage;
 use conversation::Conversation;
@@ -161,6 +161,10 @@ pub struct Shell {
     _subscriptions: Vec<Subscription>,
     settings: Settings,
     theme: Theme,
+    /// The interface scale under a drag of its slider. It applies when the drag ends.
+    pending_scale: Option<f32>,
+    /// Families of the fonts on this Mac, for the font pickers. Empty until they are listed.
+    installed_fonts: HashSet<String>,
     panel: Panel,
     /// Bounds of the control that opened the current menu. The menu opens above or below it.
     menu_anchor: Option<Bounds<Pixels>>,
@@ -425,6 +429,20 @@ impl Shell {
             }
         })
         .detach();
+        // Listing every font of the system takes a moment, so it runs off the main thread. The
+        // font pickers show the bundled fonts until it ends.
+        let text_system = cx.text_system().clone();
+        cx.spawn(async move |this, cx| {
+            let names = cx
+                .background_executor()
+                .spawn(async move { text_system.all_font_names() })
+                .await;
+            let _ = this.update(cx, |s, cx| {
+                s.installed_fonts = names.into_iter().collect();
+                cx.notify();
+            });
+        })
+        .detach();
         let mut shell = Self {
             tx,
             update_state: crate::updater::State::Idle,
@@ -446,7 +464,9 @@ impl Shell {
             search,
             _subscriptions: subscriptions,
             settings: Settings::default(),
-            theme: Theme::new(false),
+            theme: Theme::default(),
+            pending_scale: None,
+            installed_fonts: HashSet::new(),
             panel: Panel::None,
             menu_anchor: None,
             usage_actions: std::collections::BTreeMap::new(),
@@ -774,7 +794,7 @@ impl Shell {
                         self.comparison = Comparison::Baseline;
                     }
                     self.sync_placeholder(cx);
-                    self.theme = Theme::with_accent(self.settings.light, self.settings.accent);
+                    self.theme = Theme::with_accent(self.settings.theme, self.settings.accent);
                     let selected = self
                         .settings
                         .selected_task
@@ -1700,8 +1720,8 @@ impl Shell {
             .border_1()
             .border_color(theme.edge)
             .text_color(theme.text)
-            .font_family(crate::theme::MONO)
-            .text_size(px(11.5))
+            .font_family(crate::theme::mono())
+            .text_size(text_px(11.5))
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
             .styles(|s| s.disabled(|s| s.opacity(0.4).cursor_default()))
@@ -1826,12 +1846,12 @@ impl Shell {
 pub(super) fn caps(text: impl AsRef<str>, theme: Theme) -> Div {
     div()
         .flex_shrink_0()
-        .font_family(crate::theme::MONO)
-        .text_size(px(10.5))
+        .font_family(crate::theme::mono())
+        .text_size(text_px(10.5))
         .font_weight(FontWeight::MEDIUM)
-        .letter_spacing(px(crate::theme::LABEL_TRACKING))
+        .letter_spacing(text_px(crate::theme::LABEL_TRACKING))
         .text_color(theme.subtle)
-        .line_height(px(14.))
+        .line_height(text_px(14.))
         .child(text.as_ref().to_uppercase())
 }
 
@@ -1839,8 +1859,8 @@ pub(super) fn caps(text: impl AsRef<str>, theme: Theme) -> Div {
 pub(super) fn figure(text: impl Into<SharedString>, color: Hsla) -> Div {
     div()
         .flex_shrink_0()
-        .font_family(crate::theme::MONO)
-        .text_size(px(11.))
+        .font_family(crate::theme::mono())
+        .text_size(text_px(11.))
         .text_color(color)
         .child(text.into())
 }
@@ -1928,10 +1948,10 @@ impl Render for Hint {
             .child(dither::shadow(self.theme, 5., 3.))
             .child(
                 div()
-                    .font_family(crate::theme::MONO)
+                    .font_family(crate::theme::mono())
                     .px(px(8.))
                     .py(px(5.))
-                    .text_size(px(11.))
+                    .text_size(text_px(11.))
                     .line_height(relative(1.45))
                     .bg(self.theme.raised)
                     .text_color(self.theme.text)

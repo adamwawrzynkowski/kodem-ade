@@ -184,7 +184,7 @@ impl Shell {
             .flex_shrink_0()
             .items_center()
             .gap(px(5.))
-            .text_size(px(12.))
+            .text_size(text_px(12.))
             .text_color(color)
             .child(icon(agent.provider.icon()).size(px(12.)))
             .child(name)
@@ -333,7 +333,7 @@ impl Shell {
                     .items_center()
                     .gap(px(8.))
                     .mb(px(4.))
-                    .text_size(px(11.))
+                    .text_size(text_px(11.))
                     .child(if message_active {
                         motion::active_icon(glyph, color, false, cx.reduce_motion())
                     } else {
@@ -368,17 +368,14 @@ impl Shell {
             block = block.child(self.context_card(feedback, None, cx));
         }
         if !user || !message.text.is_empty() {
-            block = block.child(
-                div()
-                    .relative()
-                    .text_size(px(self.settings.font_size - 1.))
-                    .child(self.message_blocks(
-                        &format!("message:{message_key}"),
-                        markdown::blocks(&message.text),
-                        self.message_arriving(conversation, &message),
-                        cx,
-                    )),
-            );
+            block = block.child(div().relative().text_size(text_px(13.)).child(
+                self.message_blocks(
+                    &format!("message:{message_key}"),
+                    markdown::blocks(&message.text),
+                    self.message_arriving(conversation, &message),
+                    cx,
+                ),
+            ));
         }
         if !user {
             let copy = self
@@ -406,7 +403,7 @@ impl Shell {
                 block = block.child(div().flex().items_center().gap_2().mt_1().child(copy).when(
                     message_active,
                     |row| {
-                        row.child(div().text_size(px(10.)).text_color(t.subtle).child(
+                        row.child(div().text_size(text_px(10.)).text_color(t.subtle).child(
                             motion::gleam(
                                 if message.kind == MessageKind::Assistant {
                                     "Writing…"

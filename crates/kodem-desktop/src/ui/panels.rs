@@ -66,13 +66,13 @@ impl Shell {
                     content = content
                         .child(
                             div()
-                                .text_size(px(14.))
+                                .text_size(text_px(14.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(task.title.clone()),
                         )
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(text_px(13.))
                                 .line_height(relative(1.45))
                                 .text_color(theme.muted)
                                 .child(match task.kind {
@@ -133,13 +133,13 @@ impl Shell {
                     content = content
                         .child(
                             div()
-                                .text_size(px(14.))
+                                .text_size(text_px(14.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(project.name),
                         )
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(text_px(13.))
                                 .line_height(relative(1.45))
                                 .text_color(theme.muted)
                                 .child("Remove this project from Kodem? Files and chat history are kept. Open the repository again to restore it."),
@@ -238,7 +238,7 @@ impl Shell {
                                             .gap_2()
                                             .child(
                                                 div()
-                                                    .text_size(px(13.))
+                                                    .text_size(text_px(13.))
                                                     .font_weight(FontWeight::MEDIUM)
                                                     .child(resource.name),
                                             )
@@ -249,15 +249,15 @@ impl Shell {
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(12.))
+                                            .text_size(text_px(12.))
                                             .line_height(relative(1.4))
                                             .text_color(theme.muted)
                                             .child(resource.detail),
                                     )
                                     .child(
                                         div()
-                                            .font_family(crate::theme::MONO)
-                                            .text_size(px(10.5))
+                                            .font_family(crate::theme::mono())
+                                            .text_size(text_px(10.5))
                                             .text_color(theme.subtle)
                                             .text_ellipsis_start()
                                             .child(format!(
@@ -294,7 +294,7 @@ impl Shell {
                 content = content
                     .child(
                         div()
-                            .text_size(px(13.))
+                            .text_size(text_px(13.))
                             .line_height(relative(1.45))
                             .text_color(theme.muted)
                             .child("Runs in this task's checkout. The transcript records the command, revision and exit status."),
@@ -305,7 +305,7 @@ impl Shell {
                             .min_h(px(44.))
                             .py(px(8.))
                             .items_start()
-                            .font_family(crate::theme::MONO)
+                            .font_family(crate::theme::mono())
                             .child(div().text_color(theme.accent).child("$"))
                             .child(div().flex_1().min_w_0().child(self.aux.clone())),
                     )
@@ -427,8 +427,8 @@ impl Shell {
                 .child(
                     div()
                         .flex_1()
-                        .font_family(crate::theme::MONO)
-                        .text_size(px(12.))
+                        .font_family(crate::theme::mono())
+                        .text_size(text_px(12.))
                         .font_weight(FontWeight::MEDIUM)
                         .child(title.to_uppercase()),
                 )
@@ -499,9 +499,9 @@ impl Shell {
             .h(px(230.))
             .w_full()
             .overflow_hidden()
-            .font_family(crate::theme::MONO)
-            .text_size(px(12.))
-            .line_height(px(17.))
+            .font_family(crate::theme::mono())
+            .text_size(code_px(Settings::CODE_FONT_SIZE))
+            .line_height(code_px(17.))
             .px(px(14.))
             .py(px(8.))
             .on_mouse_down(MouseButton::Left, move |_, w, cx| w.focus(&focus, cx))
@@ -536,16 +536,21 @@ impl Shell {
                     w.prevent_default();
                 }
             })
-            .children(rows.into_iter().map(|line| div().h(px(17.)).child(line)));
+            .children(
+                rows.into_iter()
+                    .map(|line| div().h(code_px(17.)).child(line)),
+            );
+        // The panes are in points of the interface scale; a cell is as wide as a character of
+        // the code text.
         let cols = ((f32::from(window.viewport_size().width)
-            - self.settings.sidebar_width
-            - if self.show_review {
-                self.settings.review_width
-            } else {
-                0.
-            })
-            / 7.2)
-            .clamp(20., 400.) as u16;
+            - f32::from(px(self.settings.sidebar_width
+                + if self.show_review {
+                    self.settings.review_width
+                } else {
+                    0.
+                })))
+            / f32::from(code_px(7.2)))
+        .clamp(20., 400.) as u16;
         div()
             .border_t_1()
             .border_color(theme.border)

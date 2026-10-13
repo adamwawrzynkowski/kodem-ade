@@ -136,8 +136,8 @@ impl Shell {
             .items_center()
             .gap(px(7.))
             .cursor_pointer()
-            .font_family(crate::theme::MONO)
-            .text_size(px(11.5));
+            .font_family(crate::theme::mono())
+            .text_size(text_px(11.5));
         if let Some(i) = row.file {
             let file = &snapshot.files[i];
             let added = file
@@ -202,7 +202,7 @@ impl Shell {
                         .border_1()
                         .border_color(status_color.opacity(0.36))
                         .bg(status_color.opacity(0.08))
-                        .text_size(px(10.))
+                        .text_size(text_px(10.))
                         .line_height(relative(1.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(status_color)

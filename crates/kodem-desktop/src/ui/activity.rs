@@ -46,7 +46,7 @@ impl Shell {
             .flex()
             .flex_col()
             .gap(px(2.))
-            .text_size(px(12.));
+            .text_size(text_px(12.));
         let waiting = view.task.state == RunState::Waiting;
         if waiting || view.activities.is_empty() {
             let (label, glyph, spin) = if waiting {
@@ -113,8 +113,8 @@ impl Shell {
                                 .flex_1()
                                 .min_w_0()
                                 .text_ellipsis()
-                                .font_family(crate::theme::MONO)
-                                .text_size(px(11.))
+                                .font_family(crate::theme::mono())
+                                .text_size(text_px(11.))
                                 .text_color(t.subtle)
                                 .child(activity.detail.clone()),
                         )
@@ -239,9 +239,9 @@ impl Shell {
                             .flex_shrink(1.)
                             .min_w_0()
                             .text_ellipsis()
-                            .font_family(crate::theme::SANS)
+                            .font_family(crate::theme::sans())
                             .font_weight(FontWeight::NORMAL)
-                            .text_size(px(12.))
+                            .text_size(text_px(12.))
                             .text_color(t.muted)
                             .child(current.map_or_else(
                                 || "All steps done".to_owned(),
@@ -294,7 +294,7 @@ impl Shell {
                         .flex()
                         .items_start()
                         .gap(px(8.))
-                        .text_size(px(12.))
+                        .text_size(text_px(12.))
                         .child(
                             div()
                                 .size(px(16.))

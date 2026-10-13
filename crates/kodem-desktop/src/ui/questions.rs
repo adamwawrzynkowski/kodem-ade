@@ -85,7 +85,7 @@ impl Shell {
             .flex_col()
             .gap(px(10.))
             .text_color(t.text)
-            .text_size(px(12.));
+            .text_size(text_px(12.));
         for request in requests {
             panel = panel.child(if request.is_approval() {
                 self.approval_card(&request, cx)
@@ -170,8 +170,8 @@ impl Shell {
                     .overflow_y_scroll()
                     .px(px(12.))
                     .py(px(8.))
-                    .font_family(crate::theme::MONO)
-                    .text_size(px(11.5))
+                    .font_family(crate::theme::mono())
+                    .text_size(text_px(11.5))
                     .child(
                         request
                             .command()
@@ -291,7 +291,7 @@ impl Shell {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .text_size(px(12.5))
+                            .text_size(text_px(12.5))
                             .font_weight(FontWeight::MEDIUM)
                             .child(
                                 question["question"]
@@ -320,16 +320,16 @@ impl Shell {
                         .flex_col()
                         .gap_1()
                         .min_w_0()
-                        .font_family(crate::theme::SANS)
+                        .font_family(crate::theme::sans())
                         .font_weight(FontWeight::NORMAL)
-                        .text_size(px(12.5))
+                        .text_size(text_px(12.5))
                         .child(label.clone());
                     if let Some(description) =
                         option["description"].as_str().filter(|d| !d.is_empty())
                     {
                         caption = caption.child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(text_px(11.))
                                 .text_color(t.muted)
                                 .child(description.to_owned()),
                         );

@@ -509,11 +509,13 @@ impl Shell {
             .read(cx)
             .text_bounds()
             .map_or(260., |bounds| {
-                if empty {
-                    f32::from(window.viewport_size().height - bounds.bottom()) - 120.
+                // The measured room is in window pixels; the limits are in points.
+                let room = if empty {
+                    window.viewport_size().height - bounds.bottom()
                 } else {
-                    f32::from(bounds.top()) - 120.
-                }
+                    bounds.top()
+                };
+                f32::from(room) / crate::theme::ui_scale() - 120.
             })
             .clamp(96., 260.);
         let mut rows = div()
@@ -570,8 +572,8 @@ impl Shell {
                             .min_w_0()
                             .child(
                                 div()
-                                    .font_family(crate::theme::MONO)
-                                    .text_size(px(12.))
+                                    .font_family(crate::theme::mono())
+                                    .text_size(text_px(12.))
                                     .child(if path {
                                         name.to_owned()
                                     } else {
@@ -580,12 +582,12 @@ impl Shell {
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(text_px(11.))
                                     .text_color(t.muted)
                                     .text_ellipsis()
                                     .when(path, |d| {
-                                        d.font_family(crate::theme::MONO)
-                                            .text_size(px(10.5))
+                                        d.font_family(crate::theme::mono())
+                                            .text_size(text_px(10.5))
                                             .text_color(t.subtle)
                                     })
                                     .child(detail.to_owned()),
@@ -647,8 +649,8 @@ impl Shell {
                         div()
                             .px_3()
                             .py_2()
-                            .font_family(crate::theme::MONO)
-                            .text_size(px(11.))
+                            .font_family(crate::theme::mono())
+                            .text_size(text_px(11.))
                             .text_color(t.removed)
                             .max_h(px(48.))
                             .overflow_hidden()

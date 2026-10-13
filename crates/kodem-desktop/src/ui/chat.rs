@@ -18,12 +18,19 @@ impl Shell {
             .flex()
             .flex_col()
             .overflow_hidden()
-            // The surface and its dot field are painted beneath the workspace, in the mood of
+            // The surface and its light field are painted beneath the workspace, in the mood of
             // the open task.
             .child(backdrop::surface(
                 backdrop::Mood::of(self.view.as_ref().map(|view| &view.task)),
                 // The conversation and the new-task column are centered at these widths.
                 if self.view.is_some() { 900. } else { 780. },
+                // The composer of a conversation floats over the bottom of the surface. The
+                // composer of a new task is in the middle of it.
+                if self.view.is_some() {
+                    self.composer_height
+                } else {
+                    0.
+                },
             ));
         if let Some(view) = &self.view {
             self.chat_selection.update(cx, |doc, _| {
@@ -91,7 +98,7 @@ impl Shell {
             if center_diff {
                 timeline = timeline
                     .child(self.review(cx, true))
-                    .child(div().h(px(self.composer_height)).flex_shrink_0());
+                    .child(div().h(gpui::px(self.composer_height)).flex_shrink_0());
             } else {
                 if let Some(before) = view.before {
                     let id = view.task.id.clone();
@@ -111,7 +118,7 @@ impl Shell {
                     timeline = timeline.child(
                         div()
                             .flex_1()
-                            .pb(px(self.composer_height))
+                            .pb(gpui::px(self.composer_height))
                             .child(kit::empty_state(
                                 match self.mode {
                                     TaskKind::Coding => "This task is empty",
@@ -143,7 +150,8 @@ impl Shell {
                             // The conversation ends where the composer begins. Nothing covers
                             // the area around the composer, so the background shows down to
                             // the bottom of the chat.
-                            .pb(px((self.composer_height - COMPOSER_LEAD).max(0.)))
+                            .pb((gpui::px(self.composer_height) - px(COMPOSER_LEAD))
+                                .max(gpui::px(0.)))
                             .child(
                                 div()
                                     .relative()
@@ -304,12 +312,12 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(10.))
-            // The header is chrome: it keeps a solid fill over the dot field behind the chat.
+            // The header is chrome: it keeps a solid fill over the light field behind the chat.
             .bg(self.theme.canvas)
             .child(
                 div()
                     .min_w_0()
-                    .text_size(px(13.))
+                    .text_size(text_px(13.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_ellipsis()
                     .child(task.title.clone()),
@@ -470,8 +478,8 @@ impl Shell {
                 .border_color(t.accent.opacity(0.35))
                 .bg(t.accent_bg)
                 .hover(move |b| b.bg(t.accent.opacity(0.22)))
-                .font_family(crate::theme::SANS)
-                .text_size(px(24.))
+                .font_family(crate::theme::sans())
+                .text_size(text_px(24.))
                 .line_height(relative(1.25))
                 .font_weight(FontWeight::MEDIUM)
                 .max_w_full()
@@ -502,7 +510,7 @@ impl Shell {
                     .flex_wrap()
                     .items_baseline()
                     .gap(px(7.))
-                    .text_size(px(24.))
+                    .text_size(text_px(24.))
                     .line_height(relative(1.25))
                     .font_weight(FontWeight::MEDIUM)
                     .child(lead)
@@ -576,8 +584,8 @@ impl Shell {
                         .child(kit::marker(t.info))
                         .child(
                             div()
-                                .font_family(crate::theme::MONO)
-                                .text_size(px(11.))
+                                .font_family(crate::theme::mono())
+                                .text_size(text_px(11.))
                                 .text_color(t.subtle)
                                 .child(rule),
                         ),
@@ -714,8 +722,8 @@ impl Shell {
                                 .flex_1()
                                 .min_w_0()
                                 .text_ellipsis()
-                                .font_family(crate::theme::MONO)
-                                .text_size(px(11.))
+                                .font_family(crate::theme::mono())
+                                .text_size(text_px(11.))
                                 .child(
                                     (if skill {
                                         path.parent().and_then(|p| p.file_name())
@@ -845,7 +853,7 @@ impl Shell {
                 .min_h(px(if empty { 92. } else { 56. }))
                 .max_h(px(180.))
                 .overflow_y_scroll()
-                .text_size(px(self.settings.font_size - 1.))
+                .text_size(text_px(13.))
                 .text_color(t.text)
                 .child(self.input.clone()),
         );
@@ -1260,8 +1268,9 @@ const METER_TAB_ROUNDING: f32 = 6.;
 // composer.
 fn paint_meter_tab(bounds: Bounds<Pixels>, surface: Hsla, edge: Hsla, window: &mut Window) {
     let radius = px(motion::COMPOSER_RADIUS);
-    // The edge runs through pixel centers, which keeps a one-point stroke sharp.
-    let half = px(0.5);
+    // The edge runs through pixel centers, which keeps a one-pixel stroke sharp. The stroke
+    // stays one window pixel wide at every interface scale.
+    let half = gpui::px(0.5);
     // The foot starts at the tab's leading edge, where the composer's own edge ends.
     let (left, right) = (bounds.left(), bounds.right() - half);
     let (top, bottom) = (bounds.top() + half, bounds.bottom());
@@ -1269,10 +1278,12 @@ fn paint_meter_tab(bounds: Bounds<Pixels>, surface: Hsla, edge: Hsla, window: &m
     let head = point(foot.x + px(METER_TAB_SLANT), top);
     // A step of the rounding along the slant.
     let rise = f32::from(bottom - top);
-    let length = (METER_TAB_SLANT * METER_TAB_SLANT + rise * rise).sqrt();
+    let slant = f32::from(px(METER_TAB_SLANT));
+    let rounding = f32::from(px(METER_TAB_ROUNDING));
+    let length = (slant * slant + rise * rise).sqrt();
     let along = point(
-        px(METER_TAB_SLANT / length * METER_TAB_ROUNDING),
-        px(-rise / length * METER_TAB_ROUNDING),
+        gpui::px(slant / length * rounding),
+        gpui::px(-rise / length * rounding),
     );
     // `base` is where the foot starts: on the composer's edge for the stroke, so that the two
     // lines join, and at the tab's bottom for the fill, so that it covers that edge.
@@ -1296,12 +1307,12 @@ fn paint_meter_tab(bounds: Bounds<Pixels>, surface: Hsla, edge: Hsla, window: &m
     // whole tab, so the tab's own stroke is the only line there.
     window.paint_quad(fill(
         Bounds::new(
-            point(bounds.left(), bottom - px(1.)),
-            size(bounds.size.width - px(1.), px(1.)),
+            point(bounds.left(), bottom - gpui::px(1.)),
+            size(bounds.size.width - gpui::px(1.), gpui::px(1.)),
         ),
         surface,
     ));
-    let mut stroke = PathBuilder::stroke(px(1.));
+    let mut stroke = PathBuilder::stroke(gpui::px(1.));
     outline(&mut stroke, bottom - half);
     if let Ok(path) = stroke.build() {
         window.paint_path(path, edge);
@@ -1338,7 +1349,7 @@ pub(super) fn notice(t: Theme, color: Hsla, label: &str) -> Div {
         .flex()
         .items_center()
         .gap(px(10.))
-        .text_size(px(12.))
+        .text_size(text_px(12.))
         .child(kit::marker(color))
         .child(caps(label, t).text_color(color))
 }

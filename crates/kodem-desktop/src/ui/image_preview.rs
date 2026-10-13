@@ -59,8 +59,9 @@ impl Shell {
         let t = self.theme;
         // Outer margins, panel borders, toolbar and image padding leave this fit area.
         let viewport = window.viewport_size();
-        let width = (f32::from(viewport.width) - 58.).max(1.);
-        let height = (f32::from(viewport.height) - 134.).max(1.);
+        let scale = crate::theme::ui_scale();
+        let width = (f32::from(viewport.width) / scale - 58.).max(1.);
+        let height = (f32::from(viewport.height) / scale - 134.).max(1.);
         let image_width = width * preview.zoom;
         let image_height = height * preview.zoom;
 
@@ -82,8 +83,8 @@ impl Shell {
                         .flex_shrink(1.)
                         .min_w_0()
                         .text_ellipsis()
-                        .font_family(crate::theme::MONO)
-                        .text_size(px(11.5))
+                        .font_family(crate::theme::mono())
+                        .text_size(text_px(11.5))
                         .text_color(t.text)
                         .child(preview.name.clone()),
                     t.info,
@@ -171,11 +172,11 @@ impl Shell {
                 .flex_col()
                 .p(px(16.))
                 // Leave the native window controls accessible above the preview.
-                .pt(px(44.))
+                .pt(gpui::px(chrome::TITLE_BAR) + px(4.))
                 .bg(t.sidebar)
                 .text_color(t.text)
-                .font_family(crate::theme::SANS)
-                .text_size(px(12.))
+                .font_family(crate::theme::sans())
+                .text_size(text_px(12.))
                 .on_action(cx.listener(|s, _: &Cancel, window, cx| {
                     s.close_image_preview(window, cx);
                 }))

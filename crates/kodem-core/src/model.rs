@@ -143,6 +143,186 @@ pub struct Project {
     #[serde(default)]
     pub defaults: Option<AgentPreferences>,
 }
+/// Named color themes of the workspace. The window maps each one to its palette.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum ThemeId {
+    #[default]
+    Graphite,
+    Monokai,
+    Dracula,
+    OneDark,
+    Nord,
+    TokyoNight,
+    GruvboxDark,
+    Mocha,
+    SolarizedDark,
+    Paper,
+    Latte,
+    SolarizedLight,
+    GruvboxLight,
+    OneLight,
+}
+impl ThemeId {
+    /// Every theme in picker order: the dark themes, then the light ones.
+    pub const ALL: [Self; 14] = [
+        Self::Graphite,
+        Self::Monokai,
+        Self::Dracula,
+        Self::OneDark,
+        Self::Nord,
+        Self::TokyoNight,
+        Self::GruvboxDark,
+        Self::Mocha,
+        Self::SolarizedDark,
+        Self::Paper,
+        Self::Latte,
+        Self::SolarizedLight,
+        Self::GruvboxLight,
+        Self::OneLight,
+    ];
+    /// Returns the name shown in the theme picker.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Graphite => "Graphite",
+            Self::Monokai => "Monokai",
+            Self::Dracula => "Dracula",
+            Self::OneDark => "One Dark",
+            Self::Nord => "Nord",
+            Self::TokyoNight => "Tokyo Night",
+            Self::GruvboxDark => "Gruvbox Dark",
+            Self::Mocha => "Catppuccin Mocha",
+            Self::SolarizedDark => "Solarized Dark",
+            Self::Paper => "Paper",
+            Self::Latte => "Catppuccin Latte",
+            Self::SolarizedLight => "Solarized Light",
+            Self::GruvboxLight => "Gruvbox Light",
+            Self::OneLight => "One Light",
+        }
+    }
+    /// Reports whether the theme has light surfaces and dark text.
+    pub fn light(self) -> bool {
+        matches!(
+            self,
+            Self::Paper | Self::Latte | Self::SolarizedLight | Self::GruvboxLight | Self::OneLight
+        )
+    }
+}
+/// Typefaces for the interface and prose. Fira Sans and Inter are bundled; the others are macOS
+/// fonts or fonts that the user installed.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TextFont {
+    #[default]
+    FiraSans,
+    System,
+    Inter,
+    IbmPlexSans,
+    Geist,
+    HelveticaNeue,
+    AvenirNext,
+    Verdana,
+    Charter,
+    Georgia,
+}
+impl TextFont {
+    pub const ALL: [Self; 10] = [
+        Self::FiraSans,
+        Self::System,
+        Self::Inter,
+        Self::IbmPlexSans,
+        Self::Geist,
+        Self::HelveticaNeue,
+        Self::AvenirNext,
+        Self::Verdana,
+        Self::Charter,
+        Self::Georgia,
+    ];
+    /// Returns the name shown in the font picker.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::System => "SF Pro",
+            other => other.family(),
+        }
+    }
+    /// Returns the family name that the text system loads.
+    pub fn family(self) -> &'static str {
+        match self {
+            Self::FiraSans => "Fira Sans",
+            Self::System => ".SystemUIFont",
+            Self::Inter => "Inter",
+            Self::IbmPlexSans => "IBM Plex Sans",
+            Self::Geist => "Geist",
+            Self::HelveticaNeue => "Helvetica Neue",
+            Self::AvenirNext => "Avenir Next",
+            Self::Verdana => "Verdana",
+            Self::Charter => "Charter",
+            Self::Georgia => "Georgia",
+        }
+    }
+    /// Reports whether the font is always present: bundled with Kodem or the system font.
+    pub fn built_in(self) -> bool {
+        matches!(self, Self::FiraSans | Self::Inter | Self::System)
+    }
+}
+/// Monospace typefaces for code, diffs, terminal output and instrument labels. IBM Plex Mono,
+/// JetBrains Mono and Fira Code are bundled; the others are macOS fonts or fonts that the user
+/// installed.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CodeFont {
+    #[default]
+    IbmPlexMono,
+    JetBrainsMono,
+    FiraCode,
+    CascadiaCode,
+    SourceCodePro,
+    GeistMono,
+    Hack,
+    SfMono,
+    Menlo,
+    Monaco,
+    AndaleMono,
+    CourierNew,
+}
+impl CodeFont {
+    pub const ALL: [Self; 12] = [
+        Self::IbmPlexMono,
+        Self::JetBrainsMono,
+        Self::FiraCode,
+        Self::CascadiaCode,
+        Self::SourceCodePro,
+        Self::GeistMono,
+        Self::Hack,
+        Self::SfMono,
+        Self::Menlo,
+        Self::Monaco,
+        Self::AndaleMono,
+        Self::CourierNew,
+    ];
+    /// Returns the name shown in the font picker, which is also the family name that the text
+    /// system loads.
+    pub fn family(self) -> &'static str {
+        match self {
+            Self::IbmPlexMono => "IBM Plex Mono",
+            Self::JetBrainsMono => "JetBrains Mono",
+            Self::FiraCode => "Fira Code",
+            Self::CascadiaCode => "Cascadia Code",
+            Self::SourceCodePro => "Source Code Pro",
+            Self::GeistMono => "Geist Mono",
+            Self::Hack => "Hack",
+            Self::SfMono => "SF Mono",
+            Self::Menlo => "Menlo",
+            Self::Monaco => "Monaco",
+            Self::AndaleMono => "Andale Mono",
+            Self::CourierNew => "Courier New",
+        }
+    }
+    /// Reports whether the font is bundled with Kodem.
+    pub fn built_in(self) -> bool {
+        matches!(
+            self,
+            Self::IbmPlexMono | Self::JetBrainsMono | Self::FiraCode
+        )
+    }
+}
 /// Named accents with coordinated foreground colors for both appearances.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AccentColor {
@@ -1270,8 +1450,15 @@ pub struct Settings {
     pub review_width: f32,
     pub collapsed: bool,
     pub comfortable: bool,
+    /// Size of interface and prose text, in points. Every text size follows it in proportion.
     pub font_size: f32,
-    pub light: bool,
+    /// Size of code text, in points: code blocks, diffs, files and terminal output.
+    pub code_font_size: f32,
+    pub text_font: TextFont,
+    pub code_font: CodeFont,
+    /// Scale of the interface geometry: spacing, controls and icons. Text keeps its own sizes.
+    pub ui_scale: f32,
+    pub theme: ThemeId,
     pub accent: AccentColor,
     pub sort: Sort,
     pub group_tasks_by_project: bool,
@@ -1301,8 +1488,12 @@ impl Default for Settings {
             review_width: 520.,
             collapsed: false,
             comfortable: false,
-            font_size: 14.,
-            light: false,
+            font_size: Self::FONT_SIZE,
+            code_font_size: Self::CODE_FONT_SIZE,
+            text_font: TextFont::default(),
+            code_font: CodeFont::default(),
+            ui_scale: 1.,
+            theme: ThemeId::default(),
             accent: AccentColor::default(),
             sort: Sort::Recent,
             group_tasks_by_project: false,
@@ -1329,6 +1520,28 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    /// Default size of interface and prose text, in points.
+    pub const FONT_SIZE: f32 = 14.;
+    /// Smallest and largest size of interface and prose text.
+    pub const FONT_SIZE_RANGE: (f32, f32) = (12., 22.);
+    /// Default size of code text, in points.
+    pub const CODE_FONT_SIZE: f32 = 12.;
+    /// Smallest and largest size of code text.
+    pub const CODE_FONT_SIZE_RANGE: (f32, f32) = (10., 20.);
+    /// Smallest and largest interface scale.
+    pub const UI_SCALE_RANGE: (f32, f32) = (0.6, 1.4);
+    /// Reads saved settings. Settings from before the named themes hold a light switch only;
+    /// a light one selects Paper.
+    pub fn from_json(json: &str) -> serde_json::Result<Self> {
+        let mut value: serde_json::Value = serde_json::from_str(json)?;
+        if let Some(fields) = value.as_object_mut()
+            && !fields.contains_key("theme")
+            && fields.get("light").and_then(serde_json::Value::as_bool) == Some(true)
+        {
+            fields.insert("theme".into(), serde_json::to_value(ThemeId::Paper)?);
+        }
+        serde_json::from_value(value)
+    }
     /// Returns the key of an account's last model, in one project or in general.
     pub fn model_choice_key(
         provider: Provider,

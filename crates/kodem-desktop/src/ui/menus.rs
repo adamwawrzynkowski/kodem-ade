@@ -17,9 +17,6 @@ fn menu_title(label: &str, count: Option<usize>, theme: Theme) -> Div {
         .child(kit::section_header(label, count, theme))
 }
 
-/// Height of the title bar, which holds the window controls.
-const TITLE_BAR: f32 = 40.;
-
 impl Shell {
     // A menu item: an icon and a mono label. The chosen item of a set carries the accent tint,
     // wash, edge and a trailing check in place of a grey fill.
@@ -514,7 +511,7 @@ impl Shell {
                     .offset(point(px(0.), offset))
                     // The top margin is the title bar: no menu may cover the window controls.
                     .snap_to_window_with_margin(Edges {
-                        top: px(TITLE_BAR + 4.),
+                        top: gpui::px(chrome::TITLE_BAR) + px(4.),
                         right: px(8.),
                         bottom: px(8.),
                         left: px(8.),

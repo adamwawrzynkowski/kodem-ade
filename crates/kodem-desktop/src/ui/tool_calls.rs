@@ -523,9 +523,9 @@ impl Shell {
                         .flex_shrink(1.)
                         .min_w_0()
                         .text_ellipsis()
-                        .font_family(crate::theme::SANS)
+                        .font_family(crate::theme::sans())
                         .font_weight(FontWeight::NORMAL)
-                        .text_size(px(12.))
+                        .text_size(text_px(12.))
                         .italic()
                         .child(title),
                 )
@@ -558,7 +558,7 @@ impl Shell {
                     .pb(px(6.))
                     .border_l_1()
                     .border_color(t.border)
-                    .text_size(px(self.settings.font_size - 2.))
+                    .text_size(text_px(12.))
                     .text_color(t.muted)
                     .child(self.message_blocks(
                         &format!("tool-thought:{message_key}"),
@@ -642,9 +642,9 @@ impl Shell {
             .px(px(6.))
             .gap(px(8.))
             .justify_start()
-            .font_family(crate::theme::SANS)
+            .font_family(crate::theme::sans())
             .font_weight(FontWeight::NORMAL)
-            .text_size(px(12.))
+            .text_size(text_px(12.))
             .bg(gpui::transparent_black())
             .border_color(gpui::transparent_black())
             .text_color(t.muted)
@@ -675,7 +675,7 @@ impl Shell {
                     .text_ellipsis()
                     .text_color(t.text.opacity(0.9))
                     .when(literal, |d| {
-                        d.font_family(crate::theme::MONO).text_size(px(11.5))
+                        d.font_family(crate::theme::mono()).text_size(text_px(11.5))
                     })
                     .child(title.clone()),
             )
@@ -684,7 +684,7 @@ impl Shell {
                     .flex_1()
                     .min_w_0()
                     .text_ellipsis()
-                    .text_size(px(11.))
+                    .text_size(text_px(11.))
                     .text_color(t.subtle)
                     .child(view.detail.lines().next().unwrap_or_default().to_owned()),
             )
@@ -743,7 +743,7 @@ impl Shell {
         if !view.detail.is_empty() && view.detail.lines().count() > 1 {
             details = details.child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(text_px(12.))
                     .text_color(t.muted)
                     .child(view.detail.clone()),
             );
@@ -784,7 +784,7 @@ impl Shell {
                 );
             }
         } else if view.diff.is_empty() {
-            details = details.child(div().text_size(px(12.)).text_color(t.subtle).child(
+            details = details.child(div().text_size(text_px(12.)).text_color(t.subtle).child(
                 if active {
                     "Waiting for output…"
                 } else {
@@ -830,8 +830,8 @@ impl Shell {
         };
         let mut rows = div()
             .w_full()
-            .font_family(crate::theme::MONO)
-            .text_size(px(self.settings.font_size - 2.5))
+            .font_family(crate::theme::mono())
+            .text_size(code_px(11.5))
             .line_height(relative(1.5));
         for line in view.diff.iter().take(limit) {
             let (sign, color, background) = match line.kind {
@@ -905,8 +905,8 @@ impl Shell {
                         .flex_shrink(1.)
                         .min_w_0()
                         .text_ellipsis()
-                        .font_family(crate::theme::MONO)
-                        .text_size(px(11.))
+                        .font_family(crate::theme::mono())
+                        .text_size(text_px(11.))
                         .text_color(t.text)
                         .child(path),
                     t.info,
