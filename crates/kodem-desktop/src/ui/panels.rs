@@ -20,6 +20,7 @@ impl Shell {
             Panel::CustomizeProject => "Customize project",
             Panel::RemoveProject => "Remove project?",
             Panel::Settings => "Settings",
+            Panel::Setup => "Welcome to Kodem",
             Panel::Resources => "Skills, instructions & MCP",
             Panel::Files => "Files",
             Panel::Check => "Run a project check",
@@ -166,6 +167,20 @@ impl Shell {
             }
             Panel::Settings => {
                 content = content.p_0().gap_0().child(self.settings_panel(cx));
+            }
+            Panel::Setup => {
+                content = content
+                    .child(self.setup_panel(cx))
+                    .child(footer_rule(theme))
+                    .child(
+                        footer_actions().child(
+                            self.primary("setup-done", "check", "Start")
+                                .on_click(cx.listener(|s, _, _, cx| {
+                                    s.panel = Panel::None;
+                                    cx.notify();
+                                })),
+                        ),
+                    );
             }
             Panel::Resources => {
                 content = content.child(
@@ -362,6 +377,7 @@ impl Shell {
         let presentation = match self.panel {
             Panel::CustomizeProject => Some(("palette", "Name, accent and icon")),
             Panel::RemoveProject => Some(("trash-2", "Files and local history stay on disk")),
+            Panel::Setup => Some(("sparkles", "Check the providers and make the first choices")),
             Panel::Resources => Some(("code", "What the provider can use in this task")),
             Panel::Check => Some((
                 "square-terminal",

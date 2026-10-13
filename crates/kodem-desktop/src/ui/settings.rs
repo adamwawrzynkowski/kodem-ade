@@ -109,16 +109,16 @@ pub(super) fn error_block(label: &str, message: impl Into<SharedString>, theme: 
         )
 }
 
-// Starts a group of settings: a section header that its rows follow without a gap.
-fn setting_group(label: &str, count: Option<usize>, theme: Theme) -> Div {
+/// Starts a group of settings: a section header that its rows follow without a gap.
+pub(super) fn setting_group(label: &str, count: Option<usize>, theme: Theme) -> Div {
     div()
         .flex()
         .flex_col()
         .child(kit::section_header(label, count, theme))
 }
 
-// Returns a short explanation in prose below a group header or between rows.
-fn note(text: impl Into<SharedString>, theme: Theme) -> Div {
+/// Returns a short explanation in prose below a group header or between rows.
+pub(super) fn note(text: impl Into<SharedString>, theme: Theme) -> Div {
     div()
         .text_size(px(12.))
         .line_height(relative(1.45))
@@ -215,12 +215,27 @@ impl Shell {
             .into_any_element()
     }
 
-    // Saves the dark or light appearance and applies it at once.
-    fn set_light(&mut self, light: bool, cx: &mut Context<Self>) {
+    /// Saves the dark or light appearance and applies it at once.
+    pub(super) fn set_light(&mut self, light: bool, cx: &mut Context<Self>) {
         self.settings.light = light;
         self.theme = Theme::with_accent(light, self.settings.accent);
         self.save_settings();
         cx.notify();
+    }
+
+    /// Returns the setting that chooses the dark or the light appearance.
+    pub(super) fn appearance_setting(&self, cx: &mut Context<Self>) -> AnyElement {
+        self.setting_row(
+            "Appearance",
+            "Graphite in the dark appearance, paper in the light one.",
+            self.segmented(
+                "theme-choice",
+                [(false, "Dark"), (true, "Light")],
+                &self.settings.light,
+                Self::set_light,
+                cx,
+            ),
+        )
     }
 
     fn appearance_settings(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -302,17 +317,7 @@ impl Shell {
             .child(
                 setting_group("Theme", None, t)
                     .child(themes)
-                    .child(self.setting_row(
-                        "Appearance",
-                        "Graphite in the dark appearance, paper in the light one.",
-                        self.segmented(
-                            "theme-choice",
-                            [(false, "Dark"), (true, "Light")],
-                            &self.settings.light,
-                            Self::set_light,
-                            cx,
-                        ),
-                    )),
+                    .child(self.appearance_setting(cx)),
             )
             .child(self.accent_choices(cx))
             .child(
@@ -359,6 +364,27 @@ impl Shell {
             .into_any_element()
     }
 
+    /// Returns the setting that chooses where a new task works: the current checkout or a
+    /// worktree of its own.
+    pub(super) fn task_location_setting(&self, cx: &mut Context<Self>) -> AnyElement {
+        self.setting_row(
+            "Default task location",
+            "Use this for every new task. You can override it in the composer.",
+            self.segmented(
+                "default-task-location",
+                [(false, "Current checkout"), (true, "New worktree")],
+                &self.settings.default_worktree,
+                |s, worktree, cx| {
+                    s.settings.default_worktree = worktree;
+                    s.new_worktree_override = None;
+                    s.save_settings();
+                    cx.notify();
+                },
+                cx,
+            ),
+        )
+    }
+
     fn workspace_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         div()
@@ -368,22 +394,7 @@ impl Shell {
             .child(self.section_title("Workspace", "Choose how projects and tasks are arranged."))
             .child(
                 setting_group("Tasks", None, t)
-                    .child(self.setting_row(
-                        "Default task location",
-                        "Use this for every new task. You can override it in the composer.",
-                        self.segmented(
-                            "default-task-location",
-                            [(false, "Current checkout"), (true, "New worktree")],
-                            &self.settings.default_worktree,
-                            |s, worktree, cx| {
-                                s.settings.default_worktree = worktree;
-                                s.new_worktree_override = None;
-                                s.save_settings();
-                                cx.notify();
-                            },
-                            cx,
-                        ),
-                    ))
+                    .child(self.task_location_setting(cx))
                     .child(self.setting_row(
                         "Task order",
                         "Sort by the last update, the name, what needs you, or the creation time.",
@@ -455,6 +466,23 @@ impl Shell {
             .into_any_element()
     }
 
+    /// Returns the switch that turns all task notifications on or off. `detail` says where
+    /// the user selects the events.
+    pub(super) fn task_notifications_setting(
+        &self,
+        detail: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.notification_toggle(
+            "notifications-enabled",
+            ("Task notifications", detail),
+            self.settings.notifications.enabled,
+            false,
+            |n| &mut n.enabled,
+            cx,
+        )
+    }
+
     fn notification_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let delivery = self.workspace.as_ref().map(|w| &w.notification_delivery);
@@ -482,12 +510,8 @@ impl Shell {
             ))
             .child(
                 setting_group("Events", None, t)
-                    .child(self.notification_toggle(
-                        "notifications-enabled",
-                        ("Task notifications", "Send macOS notifications for the events selected below."),
-                        self.settings.notifications.enabled,
-                        false,
-                        |n| &mut n.enabled,
+                    .child(self.task_notifications_setting(
+                        "Send macOS notifications for the events selected below.",
                         cx,
                     ))
                     .child(self.notification_toggle(
@@ -830,7 +854,9 @@ impl Shell {
             .into_any_element()
     }
 
-    fn setting_row(&self, label: &str, detail: &str, control: AnyElement) -> AnyElement {
+    /// Returns one setting: its label over its description, beside its control and above a
+    /// dotted rule.
+    pub(super) fn setting_row(&self, label: &str, detail: &str, control: AnyElement) -> AnyElement {
         let t = self.theme;
         div()
             .flex()
@@ -864,8 +890,8 @@ impl Shell {
             .into_any_element()
     }
 
-    // Reports whether any account of the provider is signed in; unknown until one was checked.
-    fn provider_signed_in(&self, provider: Provider) -> Option<bool> {
+    /// Reports whether any account of the provider is signed in; unknown until one was checked.
+    pub(super) fn provider_signed_in(&self, provider: Provider) -> Option<bool> {
         let workspace = self.workspace.as_ref()?;
         workspace
             .accounts
@@ -1209,9 +1235,9 @@ impl Shell {
             .into_any_element()
     }
 
-    // Builds the switches for the Claude Code features that the CLI keeps off in a session that
-    // an application starts.
-    fn claude_feature_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Builds the switches for the Claude Code features that the CLI keeps off in a session
+    /// that an application starts.
+    pub(super) fn claude_feature_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         setting_group("Claude Code features", None, self.theme)
             .child(
                 self.setting_row(
@@ -1501,8 +1527,8 @@ impl Shell {
     }
 }
 
-// Returns where to get a provider's CLI when Kodem cannot find it.
-fn install_guide(provider: Provider) -> Option<(&'static str, &'static str)> {
+/// Returns where to get a provider's CLI when Kodem cannot find it.
+pub(super) fn install_guide(provider: Provider) -> Option<(&'static str, &'static str)> {
     match provider {
         Provider::Claude => Some((
             "Claude Code installation guide",

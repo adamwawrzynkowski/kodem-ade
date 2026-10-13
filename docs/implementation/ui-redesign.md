@@ -265,3 +265,15 @@ Icons. `kodem_core::project_icons` holds one table of 225 built-in glyphs in nin
 Picker. The project editor shows the tile at the size of a task row next to the name. The icon section has the automatic choice, the image choice and a search field in one row, and under them a list of at most 236 points with the groups and their counts (`Shell::icon_picker`). A cell is a 28-point glyph button with its name in a tooltip; the chosen cell carries the tint of the project. The search field matches the name of an icon or of a group.
 
 Not verified: the look in the application. A static drawing of the tile was compared with Kodem's icon before the code was written. Verified by compilation, formatting and Clippy, and by temporary tests: the saved forms of the earlier icons still load, and GPUI's renderer draws each of the 225 glyphs.
+
+## Setup dialog, 13 October 2026
+
+The user asked for an onboarding that holds the Artifacts switch, other useful settings and the configuration of the providers, and that finds what is already configured.
+
+`ui/onboarding.rs` builds the dialog `Panel::Setup`, "Welcome to Kodem". It opens once by itself when the first workspace arrives and `Settings.onboarded` is false. The flag is saved when the dialog opens and not when it closes, so each way to close the dialog is final. An installation that has saved settings from before this change has no flag, so it sees the dialog once. The command palette opens the dialog again with "Open setup".
+
+Providers. `Shell::open_setup` sends `ConnectRuntime` for each provider. A row derives its state from `RuntimeInfo` and from the sign-in state of the provider's accounts, and the dialog stores no state of its own: checking, not available with the host's reason, sign-in needed, installed, or ready. A provider that needs a sign-in has a Sign in button for the account that its new tasks use. A provider that is ready and is not the provider of new tasks has "Use for new tasks". A provider that did not start has its installation guide when there is one. "Check again" also sends `RefreshAccount` for each account that does not wait for a sign-in. While the dialog is open, a failed `ConnectRuntime` does not show the error banner, because the row of that provider shows the reason.
+
+Settings. The dialog shows the same rows as Settings and each row writes the same setting: the Claude Code features (`Shell::claude_feature_settings`), Appearance, Default task location and Task notifications. The three rows moved into `Shell::appearance_setting`, `Shell::task_location_setting` and `Shell::task_notifications_setting`, which both screens call.
+
+Not verified: the look in the application, and each provider state in a running window. Verified by compilation, formatting and Clippy.

@@ -1263,6 +1263,8 @@ pub struct Settings {
     /// Turns on Artifacts in Claude Code sessions, which the CLI keeps off outside its own
     /// terminal. The `/design` and `/slides` commands need them.
     pub claude_artifacts: bool,
+    /// The setup dialog opened once by itself. Later it opens only on request.
+    pub onboarded: bool,
     pub notifications: NotificationSettings,
     pub sidebar_width: f32,
     pub review_width: f32,
@@ -1316,6 +1318,7 @@ impl Default for Settings {
             access_choices: Default::default(),
             auto_compact: AutoCompact::default(),
             claude_artifacts: false,
+            onboarded: false,
             accounts: Vec::new(),
             default_worktree: false,
             show_review: true,

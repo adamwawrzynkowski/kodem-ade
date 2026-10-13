@@ -23,6 +23,7 @@ enum Action {
     Files,
     Resources,
     Settings(usize),
+    Setup,
     Appearance(bool),
     Interrupt,
     Compact,
@@ -442,6 +443,14 @@ impl Shell {
                 Action::Settings(section),
             );
         }
+        add(
+            "sparkles",
+            "Open setup",
+            "Providers, Claude Code features and first choices",
+            "",
+            "Settings",
+            Action::Setup,
+        );
         let query = &self.palette.query;
         if query.is_empty() {
             return items;
@@ -506,6 +515,7 @@ impl Shell {
             }
             Action::Resources => self.open_resources(),
             Action::Settings(section) => self.open_settings(section),
+            Action::Setup => self.open_setup(),
             Action::Appearance(light) => {
                 self.settings.light = light;
                 self.theme = Theme::with_accent(light, self.settings.accent);

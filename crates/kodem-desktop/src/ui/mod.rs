@@ -23,6 +23,7 @@ mod menus;
 mod message_content;
 mod model_picker;
 mod motion;
+mod onboarding;
 mod palette;
 mod panels;
 mod projects;
@@ -98,6 +99,7 @@ enum Panel {
     RemoveProject,
     ChatProjects,
     Settings,
+    Setup,
     Resources,
     Files,
     Check,
@@ -782,7 +784,12 @@ impl Shell {
                     if let Some(id) = selected {
                         self.select_task(id, cx)
                     }
-                    if self.selected.is_none()
+                    if !self.settings.onboarded {
+                        // The setup opens by itself only once, and it connects every provider.
+                        self.settings.onboarded = true;
+                        self.save_settings();
+                        self.open_setup();
+                    } else if self.selected.is_none()
                         && self.workspace.as_ref().is_some_and(|w| {
                             w.runtimes
                                 .get(&self.composer_preferences().provider)
@@ -1303,7 +1310,12 @@ impl Shell {
                 {
                     viewer.update(cx, |v, cx| v.context_failed(cx));
                 }
-                self.error = Some(e);
+                // The setup dialog reports a provider that did not start in that provider's row.
+                if self.panel != Panel::Setup
+                    || !matches!(reply.request, core::Request::ConnectRuntime { .. })
+                {
+                    self.error = Some(e);
+                }
             }
         }
         cx.notify();
