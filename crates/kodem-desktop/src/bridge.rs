@@ -1,6 +1,19 @@
 //! Blocking host transport kept outside GPUI's foreground executor.
 use kodem_core::{Request, Response, ipc};
-use std::sync::mpsc;
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
+    time::{Duration, Instant},
+};
+
+/// Shortest time between two watch requests, which bounds how often the window is updated.
+const WATCH_SPACING: Duration = Duration::from_millis(200);
+/// Wait before the next watch request after one failed.
+const WATCH_RETRY: Duration = Duration::from_millis(600);
 pub enum Command {
     Flush(mpsc::Sender<()>),
     PrepareUpdate {
@@ -15,7 +28,9 @@ pub enum Command {
         sources: Vec<kodem_core::AttachmentSource>,
         images: Vec<tempfile::TempPath>,
     },
-    Poll(Option<String>, bool, Option<String>),
+    /// The selected task, whether its terminal and a subagent are shown, and whether the
+    /// window already holds the conversation of the task, which a watcher then keeps current.
+    Poll(Option<String>, bool, Option<String>, bool),
 }
 pub struct Reply {
     pub request: Request,
@@ -23,16 +38,99 @@ pub struct Reply {
     pub connected: bool,
     pub result: Result<Response, String>,
 }
+/// Follows the conversation of the task that the window shows.
+///
+/// A watch request waits on the host until the task changes, so it has its own connection and
+/// thread: the ordered worker must stay free for Send and Stop. A request in flight cannot be
+/// cancelled. When the window turns to another task, the thread of the earlier one ends as soon
+/// as its request returns, and its answer is dropped.
+struct Watcher {
+    task: Option<String>,
+    generation: Arc<AtomicU64>,
+}
+impl Watcher {
+    fn new() -> Self {
+        Self {
+            task: None,
+            generation: Arc::new(AtomicU64::new(0)),
+        }
+    }
+    /// Follows `task`, or nothing. The same task as before keeps its watcher and its cursor.
+    fn follow(&mut self, root: &Path, task: Option<String>, replies: &mpsc::Sender<Reply>) {
+        if self.task == task {
+            return;
+        }
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.task = task.clone();
+        let Some(task_id) = task else {
+            return;
+        };
+        let (root, current, replies) = (root.to_owned(), self.generation.clone(), replies.clone());
+        std::thread::spawn(move || watch(&root, task_id, generation, &current, &replies));
+    }
+    /// Stops following without a host directory, as before an update or after a lost host.
+    fn stop(&mut self) {
+        if self.task.take().is_some() {
+            self.generation.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+impl Drop for Watcher {
+    // The watcher thread must not outlive the worker of a closed window.
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+// Asks the host for changes of one task until another generation takes over. The first request
+// has no cursor and is answered at once with the newest page; each later one carries the cursor
+// of the answer before it. A failure is not reported: the ordered worker shows a lost host and
+// reconnects, and the watcher only waits.
+fn watch(
+    root: &Path,
+    task_id: String,
+    generation: u64,
+    current: &AtomicU64,
+    replies: &mpsc::Sender<Reply>,
+) {
+    let mut after = None;
+    while current.load(Ordering::SeqCst) == generation {
+        let started = Instant::now();
+        let request = Request::Watch {
+            task_id: task_id.clone(),
+            after: after.clone(),
+        };
+        match ipc::request(root, &request) {
+            Ok(Response::Watched(start)) => {
+                if current.load(Ordering::SeqCst) != generation {
+                    return;
+                }
+                let (view, through) = start.into_parts();
+                after = Some(through);
+                let reply = Reply {
+                    request,
+                    poll_complete: false,
+                    connected: true,
+                    result: Ok(Response::Task(view)),
+                };
+                if replies.send(reply).is_err() {
+                    return;
+                }
+            }
+            _ => std::thread::sleep(WATCH_RETRY),
+        }
+        std::thread::sleep(WATCH_SPACING.saturating_sub(started.elapsed()));
+    }
+}
+
 /// Creates ordered interaction and repository workers for this window.
 pub fn start() -> (mpsc::Sender<Command>, mpsc::Receiver<Reply>) {
     start_at(ipc::data_dir().map_err(|e| format!("{e:#}")))
 }
-fn start_at(
-    root: Result<std::path::PathBuf, String>,
-) -> (mpsc::Sender<Command>, mpsc::Receiver<Reply>) {
+fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, mpsc::Receiver<Reply>) {
     let (tx, commands) = mpsc::channel();
     let (replies, rx) = mpsc::channel();
-    let (repository_tx, repository_rx) = mpsc::channel::<(std::path::PathBuf, Request)>();
+    let (repository_tx, repository_rx) = mpsc::channel::<(PathBuf, Request)>();
     let repository_replies = replies.clone();
     std::thread::spawn(move || {
         while let Ok((root, request)) = repository_rx.recv() {
@@ -52,8 +150,15 @@ fn start_at(
     });
     std::thread::spawn(move || {
         let mut paused = false;
+        let mut watcher = Watcher::new();
         while let Ok(command) = commands.recv() {
             let poll = matches!(command, Command::Poll(..));
+            // Each poll names the conversation to follow: the selected task once the window
+            // holds its first page, and nothing before that.
+            let watched = match &command {
+                Command::Poll(task, _, _, viewed) => Some(task.clone().filter(|_| *viewed)),
+                _ => None,
+            };
             // Keep clipboard files alive until the host has copied them, even if the window closes.
             let _clipboard_images;
             let requests = match command {
@@ -91,6 +196,9 @@ fn start_at(
                         }
                     });
                     paused = result.is_ok();
+                    if paused {
+                        watcher.stop();
+                    }
                     let _ = done.send(result);
                     continue;
                 }
@@ -111,13 +219,16 @@ fn start_at(
                     _clipboard_images = images;
                     vec![Request::ImportAttachments { task_id, sources }]
                 }
-                Command::Poll(task, terminal, agent) => {
+                Command::Poll(task, terminal, agent, viewed) => {
                     let mut r = vec![Request::Hello];
                     if let Some(task_id) = task {
-                        r.push(Request::Task {
-                            task_id: task_id.clone(),
-                            before: None,
-                        });
+                        // The watcher keeps a conversation current once the window holds it.
+                        if !viewed {
+                            r.push(Request::Task {
+                                task_id: task_id.clone(),
+                                before: None,
+                            });
+                        }
                         if let Some(thread_id) = agent {
                             r.push(Request::SubagentThread {
                                 task_id: task_id.clone(),
@@ -153,6 +264,7 @@ fn start_at(
             let root = match connection {
                 Ok(root) => root,
                 Err(error) => {
+                    watcher.stop();
                     if replies
                         .send(Reply {
                             request: requests.into_iter().next().unwrap(),
@@ -167,6 +279,9 @@ fn start_at(
                     continue;
                 }
             };
+            if let Some(task) = watched {
+                watcher.follow(root, task, &replies);
+            }
             let request_count = requests.len();
             for (index, request) in requests.into_iter().enumerate() {
                 // Preserve capture/reply order without making conversation actions wait for Git.

@@ -211,15 +211,31 @@ impl Codex {
     /// Starts and initializes one owned app-server process under the given account.
     ///
     /// The account is fixed for the life of the process; changing it requires a new one.
-    pub fn start(cwd: &Path, account: &Account, mut event: impl FnMut(Value)) -> Result<Self> {
+    pub fn start(cwd: &Path, account: &Account, event: impl FnMut(Value)) -> Result<Self> {
+        Self::start_with(cwd, account, &[], event)
+    }
+
+    /// Starts an app-server process as `start` does, with more configuration for this process.
+    ///
+    /// Each entry of `config` is one `key=value` override, whose value is read as TOML.
+    pub fn start_with(
+        cwd: &Path,
+        account: &Account,
+        config: &[String],
+        mut event: impl FnMut(Value),
+    ) -> Result<Self> {
         let executable = executable()?;
         let mut command = Command::new(executable);
         account.apply(&mut command);
-        let mut child = command
+        command
             .current_dir(cwd)
             .args(["app-server", "--stdio", "-c",
                 "features.default_mode_request_user_input=true", "-c",
-                "model_providers.kodem-http={name=\"OpenAI\",requires_openai_auth=true,supports_websockets=false}"])
+                "model_providers.kodem-http={name=\"OpenAI\",requires_openai_auth=true,supports_websockets=false}"]);
+        for entry in config {
+            command.args(["-c", entry.as_str()]);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

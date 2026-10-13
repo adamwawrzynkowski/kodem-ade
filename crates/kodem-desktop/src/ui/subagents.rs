@@ -55,7 +55,7 @@ fn state_tone(state: &RunState, theme: Theme) -> Hsla {
 impl Shell {
     /// Keeps child questions and approvals inside their own conversation.
     pub(super) fn request_in_current_thread(&self, request: &InputRequest) -> bool {
-        let thread = request.params["threadId"].as_str();
+        let thread = request.conversation();
         if let Some(popup) = &self.agent_popup {
             return thread == Some(&popup.thread_id);
         }
@@ -416,13 +416,13 @@ impl Shell {
             .as_ref()
             .into_iter()
             .flat_map(|v| &v.requests)
-            .filter(|r| self.request_in_current_thread(r) && r.method.ends_with("requestApproval"))
+            .filter(|r| self.request_in_current_thread(r) && r.is_approval())
             .cloned()
             .collect();
         for (index, request) in requests.iter().enumerate() {
             let details = self.readonly(
                 format!("agent-approval:{}", request.id),
-                serde_json::to_string_pretty(&request.params).unwrap_or_default(),
+                request.details(),
                 cx,
             );
             let permission = kit::block(t)
@@ -441,8 +441,8 @@ impl Shell {
                         .flex_col()
                         .gap(px(8.))
                         .child(
-                            request.params["reason"]
-                                .as_str()
+                            request
+                                .reason()
                                 .unwrap_or("Agent needs permission")
                                 .to_owned(),
                         )
@@ -455,21 +455,9 @@ impl Shell {
                         ),
                 )
                 .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)));
-            let decisions = request.params["availableDecisions"]
-                .as_array()
-                .cloned()
-                .unwrap_or_else(|| {
-                    vec![
-                        serde_json::json!("accept"),
-                        serde_json::json!("decline"),
-                        serde_json::json!("cancel"),
-                    ]
-                });
+            let decisions = request.decisions();
             let mut buttons = div().px(px(6.)).py(px(4.)).flex().flex_wrap().gap(px(6.));
             for (choice, decision) in decisions.into_iter().enumerate() {
-                let Some(decision) = decision.as_str().map(str::to_owned) else {
-                    continue;
-                };
                 let request = request.clone();
                 let label = match decision.as_str() {
                     "accept" => "Allow once",

@@ -1,5 +1,5 @@
 //! Maps Claude Code stream events onto Kodem transcripts, tool calls, plans and subagents.
-use crate::Shared;
+use crate::{Shared, provider::Streamed};
 use anyhow::Result;
 use kodem_core::*;
 use serde_json::Value;
@@ -348,7 +348,8 @@ pub(super) struct Transcript {
     task_id: String,
     roots: Vec<PathBuf>,
     scopes: HashMap<String, Scope>,
-    messages: HashMap<String, Message>,
+    /// Open text and thinking items, whose rows are written at a bounded rate.
+    messages: Streamed,
     tools: HashMap<String, Running>,
     /// Launch calls of background agents, by agent, kept open until the agent reports.
     background: HashMap<String, Running>,
@@ -384,7 +385,7 @@ impl Transcript {
             task_id: task_id.into(),
             roots,
             scopes: HashMap::new(),
-            messages: HashMap::new(),
+            messages: Streamed::new(),
             tools: HashMap::new(),
             background: HashMap::new(),
             finished: HashSet::new(),
@@ -412,6 +413,7 @@ impl Transcript {
     fn message(&self, transcript: &str, id: String, kind: MessageKind) -> Message {
         Message {
             seq: 0,
+            transfer: None,
             id,
             task_id: transcript.into(),
             kind,
@@ -484,6 +486,22 @@ impl Transcript {
         host.lock().unwrap().store.message(message)
     }
 
+    /// Writes the rows of streamed text that changed, so the next event sees them as they are.
+    pub(super) fn write_pending(&mut self, host: &Shared) -> Result<()> {
+        if self.messages.pending() {
+            self.messages.write(&host.lock().unwrap().store)?;
+        }
+        Ok(())
+    }
+
+    /// Writes streamed text that waited for the write interval and that no later event followed.
+    pub(super) fn write_due(&mut self, host: &Shared) -> Result<()> {
+        if self.messages.due() {
+            self.messages.write(&host.lock().unwrap().store)?;
+        }
+        Ok(())
+    }
+
     /// Applies one conversation event; events without transcript meaning are ignored.
     pub(super) fn ingest(&mut self, host: &Shared, event: &Value) -> Result<()> {
         match event["type"].as_str() {
@@ -523,7 +541,7 @@ impl Transcript {
                 let open = match block["type"].as_str() {
                     Some("text") => {
                         let message = self.message(&transcript, id.clone(), MessageKind::Assistant);
-                        self.messages.insert(id.clone(), message);
+                        self.messages.rows.insert(id.clone(), message);
                         if main {
                             self.activity(host, &id, ActivityKind::Responding, "");
                         }
@@ -541,7 +559,7 @@ impl Transcript {
                             title: "Thinking".into(),
                             ..ToolCall::default()
                         });
-                        self.messages.insert(id.clone(), message);
+                        self.messages.rows.insert(id.clone(), message);
                         if main {
                             self.activity(host, &id, ActivityKind::Reasoning, "");
                         }
@@ -577,11 +595,12 @@ impl Transcript {
                     .filter(|open| open.index == index)
                     .map(|open| open.id.clone());
                 if let (Some(text), Some(id)) = (text.filter(|text| !text.is_empty()), open)
-                    && let Some(message) = self.messages.get_mut(&id)
+                    && let Some(message) = self.messages.rows.get_mut(&id)
                 {
                     append_bounded(&mut message.text, text);
-                    let message = message.clone();
-                    self.store(host, &message)?;
+                    if self.messages.changed(&id) {
+                        self.messages.write(&host.lock().unwrap().store)?;
+                    }
                 }
             }
             Some("content_block_stop") => {
@@ -604,7 +623,7 @@ impl Transcript {
     // Completes a streamed text or thinking item; one that never produced text leaves no row.
     fn close(&mut self, host: &Shared, id: &str) -> Result<()> {
         self.clear_activity(host, id);
-        let Some(mut message) = self.messages.remove(id) else {
+        let Some(mut message) = self.messages.rows.remove(id) else {
             return Ok(());
         };
         if message.text.trim().is_empty() {
@@ -656,7 +675,7 @@ impl Transcript {
             }
             if let Some(id) = streamed {
                 // The complete block replaces deltas, which may have been truncated or lost.
-                if let Some(message) = self.messages.get_mut(&id) {
+                if let Some(message) = self.messages.rows.get_mut(&id) {
                     message.text.clear();
                     append_bounded(&mut message.text, text);
                     if let Some(tool) = &mut message.tool {
@@ -1122,6 +1141,7 @@ impl Transcript {
         let main = self.task_id.clone();
         let open: Vec<String> = self
             .messages
+            .rows
             .iter()
             .filter(|(_, message)| message.task_id == main)
             .map(|(id, _)| id.clone())

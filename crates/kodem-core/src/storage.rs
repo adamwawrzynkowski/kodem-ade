@@ -4,14 +4,60 @@ use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::{
+    cell::RefCell,
+    collections::VecDeque,
     fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
 
+/// How many transcript writes a store remembers for watchers.
+const RETAINED_CHANGES: usize = 1024;
+/// Most changed rows that one answer to a watcher carries, as one transcript page.
+const CHANGED_ROWS: usize = 100;
+
+// Transcript writes of this open store, newest last. A row that is written again and again
+// while it streams keeps one entry.
+#[derive(Default)]
+struct Changes {
+    rev: u64,
+    /// Newest revision that is no longer retained.
+    floor: u64,
+    rows: VecDeque<(u64, String, String)>,
+}
+
 pub struct Store {
     db: Connection,
     root: PathBuf,
+    /// Identity of this open store. Revisions of another one are not comparable.
+    epoch: String,
+    changes: RefCell<Changes>,
+}
+
+/// A change to the submissions ledger that belongs to one lifecycle step of a task.
+pub enum LedgerChange {
+    /// Marks a queued message as in flight and records it in the transcript.
+    Claim(OutgoingMessage),
+    /// Records the provider turn that acknowledged a message.
+    Confirm { id: String, turn: String },
+    /// Keeps a refused or uncertain message recoverable.
+    Fail {
+        id: String,
+        unknown: bool,
+        error: String,
+    },
+}
+
+/// Everything that one lifecycle step of a task stores.
+pub struct Commit<'a> {
+    pub task: &'a Task,
+    pub ledger: &'a [LedgerChange],
+    /// Runs that the step created or changed.
+    pub runs: &'a [Run],
+    /// Transcript rows that the step adds, written before the ledger changes.
+    pub messages: &'a [Message],
+    /// Publishes the final answer that was held until the whole agent tree settled.
+    pub release_completion: bool,
 }
 impl Store {
     /// Opens the local store, migrates its schema, and restricts access to the user.
@@ -46,7 +92,7 @@ impl Store {
                 "ALTER TABLE submissions ADD COLUMN payload TEXT; PRAGMA user_version=3;",
             )?;
         }
-        db.execute_batch("CREATE TABLE IF NOT EXISTS agent_message_order(transcript TEXT NOT NULL, id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(transcript,id)); COMMIT;")?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS agent_message_order(transcript TEXT NOT NULL, id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(transcript,id)); CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, ordinal INTEGER NOT NULL, json TEXT NOT NULL, UNIQUE(task_id,ordinal)); COMMIT;")?;
         retire_removed_providers(&db)?;
         repair_settings_collections(&db)?;
         fs::set_permissions(
@@ -56,7 +102,61 @@ impl Store {
         Ok(Self {
             db,
             root: root.to_owned(),
+            epoch: new_id(),
+            changes: RefCell::default(),
         })
+    }
+    /// Returns the identity of this open store and the revision of its newest transcript write.
+    pub fn revision(&self) -> (&str, u64) {
+        (&self.epoch, self.changes.borrow().rev)
+    }
+    /// Returns the rows of one transcript that were written after a revision of this store.
+    ///
+    /// `None` means that the rows are not known exactly or do not fit one answer: the revision
+    /// is older than the retained writes, or more rows changed than one page holds. The caller
+    /// then reads the newest page.
+    pub fn changed_messages(&self, transcript: &str, after: u64) -> Result<Option<Vec<Message>>> {
+        let ids: Vec<String> = {
+            let changes = self.changes.borrow();
+            if after < changes.floor || after > changes.rev {
+                return Ok(None);
+            }
+            let mut ids: Vec<String> = Vec::new();
+            for (rev, owner, id) in &changes.rows {
+                if *rev > after && owner == transcript && !ids.contains(id) {
+                    ids.push(id.clone());
+                }
+            }
+            ids
+        };
+        if ids.len() > CHANGED_ROWS {
+            return Ok(None);
+        }
+        let mut statement = self
+            .db
+            .prepare("SELECT seq,json FROM messages WHERE task_id=?1 AND id=?2")?;
+        let mut messages = Vec::new();
+        let mut bytes = 0usize;
+        for id in ids {
+            let row = statement
+                .query_row(params![transcript, id], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })
+                .optional()?;
+            // A row that was removed after its write is no news.
+            let Some((seq, json)) = row else {
+                continue;
+            };
+            bytes += json.len();
+            if bytes > 4 * 1024 * 1024 {
+                return Ok(None);
+            }
+            let mut message: Message = serde_json::from_str(&json)?;
+            message.seq = u64::try_from(seq)?;
+            messages.push(message);
+        }
+        messages.sort_by_key(|message| message.seq);
+        Ok(Some(messages))
     }
     /// Marks interrupted host-owned tasks without replaying external submissions.
     pub fn recover(&self) -> Result<()> {
@@ -74,6 +174,13 @@ impl Store {
                     }
                 }
                 self.save_task(&task)?;
+                // The run stays open: reconciliation can still prove its outcome.
+                if let Some(mut run) = self.latest_run(&task.id)?
+                    && run.ended.is_none()
+                {
+                    run.state = RunState::DeliveryUnknown;
+                    self.save_run(&run)?;
+                }
             } else if matches!(task.state, RunState::Idle | RunState::Completed)
                 && self
                     .outgoing(&task.id)?
@@ -248,6 +355,7 @@ impl Store {
             )?;
         }
         transaction.execute("DELETE FROM submissions WHERE task_id=?1", [id])?;
+        transaction.execute("DELETE FROM runs WHERE task_id=?1", [id])?;
         transaction.execute("DELETE FROM tasks WHERE id=?1", [id])?;
         transaction.execute(
             "INSERT INTO settings VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET json=excluded.json",
@@ -456,6 +564,22 @@ impl Store {
             "Message and attached context exceed 4 MiB"
         );
         self.db.execute("INSERT INTO messages(id,task_id,json) VALUES(?1,?2,?3) ON CONFLICT(task_id,id) DO UPDATE SET json=excluded.json",params![m.id,m.task_id,serde_json::to_string(m)?])?;
+        let mut changes = self.changes.borrow_mut();
+        changes.rev += 1;
+        let rev = changes.rev;
+        match changes.rows.back_mut() {
+            Some((last, transcript, id)) if *transcript == m.task_id && *id == m.id => *last = rev,
+            _ => {
+                changes
+                    .rows
+                    .push_back((rev, m.task_id.clone(), m.id.clone()));
+                if changes.rows.len() > RETAINED_CHANGES
+                    && let Some((dropped, ..)) = changes.rows.pop_front()
+                {
+                    changes.floor = dropped;
+                }
+            }
+        }
         Ok(())
     }
     /// Checks a transcript item before filling gaps from provider history.
@@ -741,18 +865,100 @@ impl Store {
         );
         Ok(())
     }
-    /// Claims one accepted message and records its transcript before external delivery.
-    pub fn claim_outgoing(&self, task: &Task, message: &OutgoingMessage) -> Result<()> {
+    /// Stores one lifecycle step of a task: its ledger changes, its transcript and the task.
+    ///
+    /// Nothing is stored when any part fails. A claimed message is recorded in the transcript
+    /// before its external delivery.
+    pub fn commit(&self, commit: &Commit) -> Result<()> {
+        let task = commit.task;
         let tx = self.db.unchecked_transaction()?;
-        ensure!(self.db.execute("UPDATE submissions SET state='pending' WHERE id=?1 AND task_id=?2 AND state='queued'", params![message.id,task.id])? == 1, "Message is no longer queued");
+        for message in commit.messages {
+            self.message(message)?;
+        }
+        for change in commit.ledger {
+            match change {
+                LedgerChange::Claim(message) => {
+                    ensure!(self.db.execute("UPDATE submissions SET state='pending' WHERE id=?1 AND task_id=?2 AND state='queued'", params![message.id,task.id])? == 1, "Message is no longer queued");
+                    self.record_outgoing(&task.id, message)?;
+                }
+                LedgerChange::Confirm { id, turn } => self.confirm_submission(id, turn)?,
+                LedgerChange::Fail { id, unknown, error } => {
+                    self.fail_outgoing(&task.id, id, *unknown, error)?;
+                }
+            }
+        }
+        if commit.release_completion {
+            self.release_completion_messages(&task.id)?;
+        }
+        // After the ledger, so that the first row of a new run is its recorded user message.
+        for run in commit.runs {
+            self.save_run(run)?;
+        }
         self.save_task(task)?;
-        self.record_outgoing(&task.id, message)?;
         tx.commit()?;
+        Ok(())
+    }
+    /// Returns the newest run of a task, open or ended.
+    pub fn latest_run(&self, task_id: &str) -> Result<Option<Run>> {
+        let json: Option<String> = self
+            .db
+            .query_row(
+                "SELECT json FROM runs WHERE task_id=?1 ORDER BY ordinal DESC LIMIT 1",
+                [task_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(json.map(|json| serde_json::from_str(&json)).transpose()?)
+    }
+    /// Returns the runs of a task, oldest first.
+    pub fn runs(&self, task_id: &str) -> Result<Vec<Run>> {
+        let mut statement = self
+            .db
+            .prepare("SELECT json FROM runs WHERE task_id=?1 ORDER BY ordinal")?;
+        let rows = statement.query_map([task_id], |row| row.get::<_, String>(0))?;
+        rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    }
+    /// Stores a run. A new run gets the `seq` of its first transcript row here: the row of the
+    /// submission that started it, or the next row that the store will write.
+    pub fn save_run(&self, run: &Run) -> Result<()> {
+        let mut run = run.clone();
+        if run.first_seq == 0 {
+            let submitted: Option<i64> = match run.submissions.first() {
+                Some(submission) => self
+                    .db
+                    .query_row(
+                        "SELECT seq FROM messages WHERE task_id=?1 AND id=?2",
+                        params![run.task_id, format!("submission-{submission}")],
+                        |row| row.get(0),
+                    )
+                    .optional()?,
+                None => None,
+            };
+            let first = match submitted {
+                Some(seq) => seq,
+                None => self.db.query_row(
+                    "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='messages'),0)+1",
+                    [],
+                    |row| row.get(0),
+                )?,
+            };
+            run.first_seq = u64::try_from(first)?;
+        }
+        self.db.execute(
+            "INSERT INTO runs VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET json=excluded.json",
+            params![
+                run.id,
+                run.task_id,
+                run.ordinal,
+                serde_json::to_string(&run)?
+            ],
+        )?;
         Ok(())
     }
     fn record_outgoing(&self, task_id: &str, message: &OutgoingMessage) -> Result<()> {
         self.message(&Message {
             seq: 0,
+            transfer: None,
             id: format!("submission-{}", message.id),
             task_id: task_id.into(),
             kind: MessageKind::User,
@@ -818,15 +1024,23 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+    /// Returns the data directory that holds the database and the snapshot files.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
     /// Stores captured content once, addressed by its SHA-256 identity.
     pub fn save_snapshot(&self, snapshot: &mut DiffSnapshot) -> Result<()> {
+        Self::write_snapshot(&self.root, snapshot)
+    }
+    /// Stores captured content in a data directory without the database connection.
+    ///
+    /// A snapshot is an immutable file named by its content, so a caller can write it before
+    /// taking the lock that guards the store.
+    pub fn write_snapshot(root: &Path, snapshot: &mut DiffSnapshot) -> Result<()> {
         snapshot.id.clear();
         let bytes = serde_json::to_vec(snapshot)?;
         snapshot.id = format!("{:x}", Sha256::digest(&bytes));
-        let path = self
-            .root
-            .join("snapshots")
-            .join(format!("{}.json", snapshot.id));
+        let path = root.join("snapshots").join(format!("{}.json", snapshot.id));
         if !path.exists() {
             let mut f = fs::OpenOptions::new()
                 .write(true)

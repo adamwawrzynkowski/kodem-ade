@@ -342,3 +342,217 @@ The ideas from other tools are from general knowledge of the Codex app, Claude C
 Checked with a locked `cargo check` of the workspace, `cargo fmt --all -- --check` and Clippy, which reports the six warnings that the code had before this change and no new one. Two temporary tests, removed afterward, checked which paragraphs of bold text become titles and which reply ends a turn.
 
 Not checked: the appearance of any of this, because app visual testing is prohibited. The sizes of the gaps, the place of the copy icon under the pointer and the look of a hanging plate are untested judgments. The chat background still draws its dots behind the text in the lower part of the conversation; it was not changed. No commit or push was made.
+
+## Orchestration, phase 0: streamed text is written at a bounded rate
+
+Recorded on 13 October 2026. This is the first phase of the plan that adopts the lifecycle model of T3 Code's Orchestrator V2 (pure decision, one transactional commit, runs, durable requests, a change cursor). The user chose to keep the task and message rows as the stored truth, without an event log.
+
+Before this change each streamed delta stored the whole row of its item under the host lock, with `synchronous=FULL`. A long answer or a long command output therefore cost one growing write for each delta.
+
+`provider::Streamed` holds the open items of one session and the set of items whose text changed. Changed rows are written together at most once in 120 ms (`STREAM_WRITE_INTERVAL`). Three rules keep the stored rows correct:
+
+| Rule | Codex | Claude Code |
+| --- | --- | --- |
+| The first delta of an idle session is written at once. | `Streamed::changed` in `ingest` | `Streamed::changed` in `Transcript::stream` |
+| Every event that is not a delta sees current rows. | `ingest` writes pending rows first (`appends_text`) | `Owner::event` calls `Transcript::write_pending` for every event that is not a `stream_event` |
+| Text that no later event follows still appears. | The loop of `run` writes rows that are due after each poll | The loop of `run` calls `Transcript::write_due` |
+
+The Codex session loop and its event callback share the open items through `Rc<RefCell<..>>`. Both run on the owner thread and never at the same time.
+
+Checked with a locked `cargo build` of the workspace and `cargo fmt --all -- --check`. Clippy with `-D warnings` reports the six findings that the code had before this change (four collapsible `if`, two needless borrows) and no new one. Two temporary tests, removed afterward, ran the real `ingest` of each driver against a store in a temporary directory:
+
+| Driver | Input | Result |
+| --- | --- | --- |
+| Codex | 500 `item/commandExecution/outputDelta` events in 803 ms | 7 row writes in place of 500; the final row holds all text after the loop write; a pending row is written before the next event that is not a delta |
+| Claude Code | 300 `text_delta` events in 395 ms | 4 row writes in place of 300; `write_pending` stores all text and the row stays open; `content_block_stop` stores one complete row |
+
+Not checked: a live turn of either provider, and the conversation while text streams, because app control is prohibited. The desktop reads rows every 600 ms, so a delay of at most 160 ms (the interval and one poll of 40 ms) is below what it shows. A session owner that fails between two writes loses at most that much streamed text of open items; reconciliation restores items from the provider history as before. No commit or push was made.
+
+## Orchestration, phase 1: lifecycle decisions for the Codex main turn
+
+Recorded on 13 October 2026. `kodem-host/src/orchestrator.rs` now decides the lifecycle of a task's main turn. [Provider integration](providers.md#lifecycle-decisions) describes the parts.
+
+| Before | Now |
+| --- | --- |
+| `provider::claim_next` read the queue, failed expired steering messages, checked options and the checkout, and claimed a message in separate writes. | `Command::Claim`: `decide` returns `SteerExpired`, then `SteerClaimed`, `TurnClaimed` or `QueuePaused`. One `Store::commit` stores them. |
+| `codex::dispatch_next` confirmed or failed a delivery and changed the task itself. | `Signal::Delivered` and `Signal::DeliveryFailed`. |
+| `codex::ingest` set the task to `Running` for `turn/started`. | `Signal::TurnStarted`, decided under the lock that `ingest` already holds. |
+| `codex_subagents::complete_main` and `finish_if_ready` held the outcome and released it. | `Signal::TurnEnded` and `Signal::ChildrenChanged`; both functions are removed. |
+| `provider::complete_turn` released the final answer, deleted its staging rows and saved the task in separate writes, and wrote the snapshot file under the host lock. | `orchestrator::observe` captures the checkout and writes the snapshot file without the lock (`Store::write_snapshot`). `Command::Finalize` stores the rest in one transaction. |
+
+`Store::claim_outgoing` is removed; `Store::commit` holds its statements. The check of the turn identity for `turn/completed` stays in the Codex driver, before the check for a compaction, so the order of those two checks did not change. Claude Code calls the same `claim_next` and `complete_turn` as before.
+
+Checked with a locked `cargo build` of the workspace and `cargo fmt --all -- --check`. Clippy with `-D warnings` reports the six earlier findings and no new one. Three temporary tests, removed afterward:
+
+| Check | Cases and result |
+| --- | --- |
+| `decide` and `apply`, no store | A task at rest claims its oldest unbound message: `Starting`, `updated` and `last_started` set to the time of the claim, `branch_merged` and `error` cleared. `Delivered` after `turn/started` changes nothing; `Delivered` first sets `Running` and the turn and leaves `updated`. `turn/completed` before `Delivered`: the outcome is released, `Finalize` sets `Completed`, and the late `Delivered` leaves `Completed`. A turn that ends while a subagent works is held with the task `Running`; `ChildrenChanged` releases it only after the subagent stopped, and releases nothing without a held outcome. A steering message of an earlier turn expires while the one of the running turn is claimed and an unbound message waits. A turn that is still starting accepts nothing. A busy checkout pauses the queue as `Interrupted` and sends nothing. Unsupported options refuse the claim after the expired message was recorded. Nothing is claimed or expired while a delivery is uncertain or the task is `DeliveryUnknown`, `Failed` or `Interrupted`. A refused steering message leaves the turn; a refused start gives `Failed`; an uncertain delivery gives `DeliveryUnknown`. All passed. |
+| `Store::commit` and the whole loop on a store in a temporary directory | A claim of a message above the 2 MiB transcript limit fails and leaves the task row and both ledger rows unchanged. Then claim, `TurnStarted`, `Delivered`, `TurnEnded`: the ledger row is `pending` and then acknowledged with the turn, the staged final answer moves into the transcript after the user message, the staging transcript is empty, and activities are cleared. A coding task outside a repository still completes through `complete_turn`; its review holds the capture error. Passed. |
+| The real `codex::ingest` | `turn/started` gives `Running`. A `turn/completed` of another turn is ignored. The main turn ends while a subagent works: the outcome is held and the final answer stays staged. The subagent's `turn/completed` completes the task and publishes the answer. Passed. |
+
+Not checked: a live Codex or Claude Code turn, a host-requested compaction, and the alerts, because app control and authenticated turns are prohibited here. The Claude Code driver was not changed in this phase, so its use of the two shared functions is covered only by the store check above. No commit or push was made.
+
+## Orchestration, phase 2: the window watches its conversation (protocol 30)
+
+Recorded on 13 October 2026. Before this change the desktop asked every 600 ms for the whole workspace and for the newest 100 messages of the open task, and merged them by `seq`. A change to a row older than those 100 never reached an open window.
+
+`Request::Watch { task_id, after }` waits on the host until the task differs from what the cursor `after` describes. The answer is a `SubscriptionStart`, the shape that [architecture](../design/architecture.md) names:
+
+| Answer | When | Transcript rows in it |
+| --- | --- | --- |
+| `Snapshot` | No cursor, or a cursor of another host process | The newest page |
+| `Replay` | The cursor is known | Only the rows written after it, in `seq` order; none when only other state changed or the wait of 10 s ended |
+| `ReplayGap` | The cursor is older than the 1024 writes the store retains, or more than 100 rows or 4 MiB changed | The newest page |
+
+A `Cursor` holds the identity of the host process (`Store::revision`), the revision of its newest transcript write, and a digest of the rest of the view: the task, the outbox, activities and requests.
+
+| Part | Where | Rule |
+| --- | --- | --- |
+| Transcript changes | `Store::message` records each write; `Store::changed_messages` reads them | A row that is written again while it streams keeps one entry. The list lives in memory, so it adds no table and no schema version. |
+| Other changes | `watch` in `kodem-host/src/main.rs` | A waiting request looks at the task every 50 ms and compares the digest. No code that changes a task, an activity or a request has to notify anything, so a change cannot be missed by a forgotten notification. The host lock is held only for each look. |
+| Order of views | `TaskView.epoch` and `TaskView.serial` | The host numbers the views it produces. The watcher and the explicit requests use separate connections, so `merge_transcript` in the desktop lets the view with the larger number win, and an older answer only adds rows that the window does not hold. |
+| Desktop | `Watcher` in `kodem-desktop/src/bridge.rs` | One thread and connection per followed task, apart from the ordered worker, so Send and Stop never wait for it. It asks again at most every 200 ms. A request in flight cannot be cancelled: when the window turns to another task, the old thread ends when its request returns, after at most 10 s, and its answer is dropped. |
+| Start and fallback | `Command::Poll(.., viewed)` | The poll still sends `Hello` every 600 ms, which also drives settlement and usage refresh. It requests the task itself only while the window does not hold its first page. From then on the watcher follows the task. Changed rows that arrive while the window has no page are dropped. |
+
+This plan first named a condition variable and a notification from each place that changes a task. The digest replaced it, because about 80 places change a task directly and a place without the notification would leave the window stale for the whole wait.
+
+Checked with a locked `cargo build` of the workspace and `cargo fmt --all -- --check`. Clippy with `-D warnings` reports the six earlier findings and no new one. Three temporary tests, removed afterward:
+
+| Check | Cases and result |
+| --- | --- |
+| `watch` on a store in a temporary directory, 150 stored rows | No cursor: the newest 100 rows at once. A row older than that page changes after 150 ms: the answer holds exactly that row and arrives 150 to 400 ms after the request. An activity that exists only in host memory, and a change of the task row, each wake the watcher with no rows. 300 writes of one row and one new row: two rows, in order. 120 changed rows: `ReplayGap` with the newest page. 1100 writes of another task: `ReplayGap`. A cursor of another host: `Snapshot`. A write of another task does not wake the watcher; it answers no change after 10 s. A waiting watcher ends with an error when the host shuts down. An unknown task is an error. All passed. |
+| `Watcher` against a real `kodem-host` process on a scratch data directory, without `Hello`, so no account or provider was read | First answer without a cursor. No answer while nothing changes. A draft edit arrives in under 400 ms with no rows. The row that `RunCheck` writes arrives as the only row of its answer. Following the same task again starts no new watcher. After the window turns away, a change is not delivered. After it turns back, the first answer is whole again. A stopped watcher stays quiet, and a host that shut down is not reported as an error. Passed. The scratch host and its directory were removed. |
+| `merge_transcript`, no host | Changed rows join the page and bring the newer state. An answer with a smaller number does not put a shorter row or the older state back, and still adds a row the window lacks. An outdated older page extends the history and keeps the state. A view of a restarted host is not outdated. Passed. |
+
+The first run of the bridge check found only an error of the check itself. The check of `watch` showed that an upsert that updates a row still advances SQLite's `AUTOINCREMENT` counter, so `seq` values of new rows have gaps. Nothing depends on `seq` being dense.
+
+Not checked: the window itself. Whether the conversation follows a running task smoothly, whether scrolling and the follow-latest behaviour are unchanged at five updates a second in place of 1.6, and the change from one task to another, need a run by the user, because app control is prohibited. An older host is replaced through the existing protocol check: a desktop of protocol 30 shuts down an idle host of protocol 29 and starts its own. No commit or push was made.
+
+## Orchestration, phase 3: runs (protocol 31)
+
+Recorded on 13 October 2026. A task had no record of its turns: only `Task.active_turn`, and the desktop read turn boundaries from the order of messages. `Run` in `kodem-core/src/model.rs` is now one counted turn of a task, from the claim of its first message to its published outcome.
+
+| Rule | Where |
+| --- | --- |
+| A claimed message starts a run (`RunOrigin::User`). A message that steers the running turn joins that run. | `orchestrator::apply_run` for `TurnClaimed` and `SteerClaimed` |
+| A provider turn that nobody claimed starts a run of its own (`RunOrigin::Continuation`). | `apply_run` for `TurnStarted` without an open run |
+| The provider turn of a compaction that the host asked for is not a run. | `Facts.compacting` |
+| A run ends with the published outcome, or as `Failed` when its start was refused. An uncertain delivery leaves it open as `DeliveryUnknown`, also through `Store::recover`, because reconciliation can still prove the outcome. | `apply_run` for `Finalized` and `DeliveryFailed` |
+| An open run that a new claim finds ends without an outcome of its own. | `begin_run` |
+
+Runs are rows of a new table, `runs(id, task_id, ordinal, json)`, created with `CREATE TABLE IF NOT EXISTS`. The schema version did not change, so an older binary still opens the database and ignores the table. `Store::commit` stores the runs of a step with the task and the ledger. `TaskView.runs` carries them to the desktop, and they are part of the digest that wakes a watcher.
+
+This phase differs from the plan in two points, both stated to the user before the work. A message has no stored `run_id`: `Run.first_seq` is the `seq` of the first transcript row of the run, and the rows of the task's own transcript from that row up to the first row of the next run belong to it. The store sets it when it first saves the run: the row of the submission that started it, which can be older than the claim when the message was accepted at rest, or the next row that the store will write. The desktop's grouping of work is unchanged: it shows the stretch between two messages of the user, which is a rule of presentation, and a steering message would otherwise change how the replies around it look. Nothing reads `TaskView.runs` in the desktop yet; checkpoints and transfers will.
+
+Checked with a locked `cargo build` of the workspace and `cargo fmt --all -- --check`. Clippy with `-D warnings` reports the six earlier findings and no new one. One temporary test, removed afterward, drove the real orchestrator against a store in a temporary directory: a message accepted at rest gives a run whose first row is that message; `turn/started` and the acknowledgement record the provider turn; a steering message joins the run, which then holds two submissions; the outcome ends it as `Completed`. Of two queued messages the second is recorded only at its claim, and the three runs have rising ordinals and first rows equal to their submission rows. A turn that nobody claimed gives a `Continuation` run whose first row is the next row written. A compaction gives no run. A refused start ends its run as `Failed`. A run with an unconfirmed delivery stays open through `Store::recover` and ends with the outcome that arrives later. An open run ends as `Interrupted` when the next claim starts a run. The task view carries the runs and deleting the task removes them. All passed. The first two runs of the check failed on steps that the check itself had left out.
+
+Not checked: a live turn of either provider. Claude Code's own continuation after a background agent does not start a run yet, because that driver reports no `TurnStarted` signal before phase 4. No commit or push was made.
+
+## Orchestration, phase 4: Claude Code reports lifecycle signals
+
+Recorded on 13 October 2026. The Claude Code driver changed the task itself at four places. Each is now a signal to the orchestrator, described in [provider integration](providers.md#lifecycle-decisions).
+
+| Place in `providers/claude.rs` | Before | Now |
+| --- | --- | --- |
+| `send`, a message that starts a turn | Set `Running` and a local turn identity | `Signal::TurnStarted` |
+| `send`, a message that cannot be built | `fail_outgoing`, then `complete_turn` as `Failed`, which also captured the checkout | `Signal::DeliveryFailed` without uncertainty. No capture, because no turn ran. |
+| `receipt`, the echo of a message identity | `confirm_submission` | `Signal::Delivered` |
+| `follow_up`, the CLI continues by itself | Set `Running`, a local turn identity, cleared the error | `Signal::TurnStarted`, which starts a `Continuation` run when no run is open |
+| `settle`, the outcome while an agent works | Wrote `pending_completion` and `Running` | `Signal::TurnEnded`; the orchestrator holds the outcome |
+| `settle`, the outcome when nothing works | `complete_turn` | `Signal::TurnEnded`; the orchestrator releases, captures and finalizes |
+
+Two rules of the orchestrator changed with this, for both providers. `TurnStarted` clears `Task.error`, because an error belongs to the turn before it; the Claude Code driver did that for a continuation and the Codex driver did not. A held outcome withdraws only the requests of the main provider conversation, and a request that names no conversation is kept, so a Claude Code agent's request stays answerable while its outcome is held.
+
+`provider::complete_turn` stays for Claude Code's reconciliation, which publishes an outcome it read from the CLI's stored session. The states of subagents are still written by both drivers; the plan named `ChildStarted` and `ChildEnded` signals for them, and they were left out because the rule they protect, that only the main turn completes a task, is already decided in one place.
+
+Checked with a locked `cargo build` of the workspace and `cargo fmt --all -- --check`. Clippy with `-D warnings` reports the six earlier findings and no new one. One temporary test, removed afterward, sent the signals in the order the driver sends them, against a store in a temporary directory: a continuation after a failed turn runs, clears the error and is a `Continuation` run; a written message starts the turn and the echo only records the receipt; a steering message joins the run; a result while an agent works is held with the task `Running`, the agent's request stays, and the outcome that the user's stop changed is the one published; a message that cannot be built fails its start, leaves the message recoverable and not uncertain, and ends its run as `Failed`. All passed.
+
+Not checked: the driver itself. Which signal it sends at which moment is verified by reading only, because a turn needs the CLI and an authenticated model call. A run by the user of one Claude Code turn, one with a steering message and one with a background agent covers it. No commit or push was made.
+
+## Orchestration, phase 5: requests are read through one interface
+
+Recorded on 13 October 2026. The desktop and the host's request handler read a pending request by the provider's wire fields: `request.method.ends_with("requestApproval")` and `request.params["availableDecisions"]`, `["decisionLabels"]`, `["reason"]`, `["command"]`, `["tool"]`, `["plan"]`, `["planFilePath"]`, `["questions"]` and `["threadId"]`, at 18 places in `ui/questions.rs`, `ui/subagents.rs` and `kodem-host/src/main.rs`.
+
+`InputRequest` in `kodem-core/src/model.rs` now has one method for each: `is_approval`, `conversation`, `offered_decisions`, `decisions`, `decision_label`, `reason`, `command`, `tool`, `plan`, `plan_path`, `questions` and `details`. Those 18 places call them, and no file outside the two drivers reads `method` or `params`. `decisions` holds the fallback of accept, decline and cancel that two places in the desktop each wrote out. Every method returns what the expression it replaces returned, so nothing that a user sees changed. The wire format did not change, so the protocol number stays 31.
+
+This is less than the plan named for this phase, on purpose:
+
+| Planned | Done | Reason |
+| --- | --- | --- |
+| A new typed request stored in `Task.requests`, with `Host.requests` removed | No | Neither provider can answer a request after its process is gone: Codex needs the live JSON-RPC identity, Claude Code the pending control request. A stored request could only be shown as expired. After a host restart the task already says that the host stopped before completion was confirmed. The change would have rewritten how both drivers ask and how the user approves a command, which cannot be checked here without live turns. |
+| `ResponseCapability` and `Store::recover` marking requests | No | It follows from the row above. |
+| `rollback`, `fork` and `delegation` flags on `RuntimeInfo` | Not yet | Each flag is added in the phase that reads it. |
+| The desktop stops reading provider wire fields | Yes | As described above. A question is still a JSON object with `id`, `question` and `options`. |
+
+Checked with a locked `cargo build` of the workspace and `cargo fmt --all -- --check`. Clippy with `-D warnings` reports the six earlier findings and no new one. A search finds no `params[` and no `.method` in `kodem-desktop` or in `kodem-host/src/main.rs`. No temporary test was written, because each method is the expression it replaces.
+
+Not checked: the approval and question panels on screen. No commit or push was made.
+
+## Orchestration, phase 6: checkpoints and undo (protocol 32)
+
+Recorded on 13 October 2026. A coding task now keeps the files of its checkout as each turn left them, and the composer command `/undo` restores them to before the last turn.
+
+| Part | Where | Rule |
+| --- | --- | --- |
+| Checkpoint | `kodem-core/src/git/checkpoint.rs` | `capture` builds a tree of every file that Git does not ignore, tracked or not, in a copy of the index, and commits it under `refs/kodem/checkpoints/<task>/<name>`. The user's index, branch and commits do not change. The copy keeps Git's record of unchanged files, so only changed files are read. |
+| When | `orchestrator::observe` and `save_baseline` | After each turn of a `Coding` task, under the ordinal of its run (`Run.checkpoint`), without the host lock. Before the first recorded turn, the state before it is saved as `0`. A failed checkpoint does not fail the turn; it only means that the turn after it cannot be undone. |
+| Restore | `checkpoint::restore` | First saves the present state as `restore-<time>`, so the restore can be undone by hand. Then removes the files that did not exist in the checkpoint and makes all others equal to it. A commit made after the checkpoint stays on the branch, and its changes show as undone in the working tree. |
+| Undo | `Request::UndoTurn`, `provider::undo_turn` | Restores the checkpoint of the last turn before it that is not undone, or `0`. Marks the run as undone (`Run.undone`); its rows stay in the transcript and the desktop dims them. Refused while a turn or a compaction runs, while a delivery is uncertain, while messages are queued, and while another task writes to the checkout. |
+| Conversation | `Task.handoff`, `provider::handoff_context` | The provider conversation still holds the undone turn. The task therefore leaves it: the session owner is closed, `provider_thread` is cleared, and the next message starts a new conversation. That message carries the messages of the user and the replies of the turns that are not undone, newest kept up to 200 KiB, inside `<earlier-conversation>`, with the reason. The transcript keeps the message as the user wrote it and shows a "Context handoff" divider. |
+| Removal | `discard_scratch` | Deleting the task deletes its checkpoint references. |
+
+The plan named a rollback of the provider's own conversation (Codex `thread/rollback`, Claude Code resume at a message) before the files. Neither could be proven here without authenticated turns, and a provider that rolls back wrongly would leave the conversation and the files apart. A new conversation with the remaining messages as context works the same way for both providers and is the mechanism that a change of provider needs in phase 7. Its cost is that the agent loses its tool history and reasoning from the earlier turns.
+
+Not part of a checkpoint: files that Git ignores, and other repositories that the checkout links to. A large file that Git does not ignore is stored again each time it changes.
+
+Checked with a locked `cargo build` of the workspace and `cargo fmt --all -- --check`. Clippy with `-D warnings` reports the six earlier findings and no new one. Two temporary tests on real repositories in a temporary directory, removed afterward:
+
+| Check | Cases and result |
+| --- | --- |
+| `checkpoint` | A repository without a commit can be saved. A checkpoint holds a modified, a staged, and an untracked file and no ignored file, and its parent is the current commit. Taking it leaves `HEAD`, the staged diff, the status and the branch list as they were, and no temporary index. After a turn that rewrites, deletes, adds an untracked file and commits another, restoring the first checkpoint gives exactly its tree: content back, deleted file back, both later files gone, the ignored file untouched, `HEAD` unchanged. The saved earlier state equals the second checkpoint, and restoring it brings the later state back. A name with a path, a missing checkpoint and a directory that is no repository are errors. Discarding one task's checkpoints leaves another's. Passed. |
+| The whole flow through the orchestrator | Nothing can be undone before a turn ran. Two turns leave checkpoints `0`, `1` and `2`. Undo restores the files of turn 1, clears the provider conversation, marks run 2 as undone and writes a notice of at most 96 characters. The next message is sent with the first turn's request and answer as context, without the undone turn and without a copy of itself; the transcript holds the message as written and the handoff divider. Only the rows of the undone turn written before the undo count as undone. A later message is sent as written. Three more undos go back to the last turn that still counts and then to the state before the first, where the working tree is clean; a fourth is refused. With every turn undone the next message has no context. A queued message and a running turn refuse the undo. Passed. |
+
+Not checked: the close of a live provider session before the undo, a new provider conversation receiving the context in a real turn, the `/undo` entry in the composer menu, and the dimmed rows, because app control and authenticated turns are prohibited here. No commit or push was made.
+
+## Orchestration, phase 7: change of provider, fork, and transfer rows (protocol 33)
+
+Recorded on 13 October 2026. The user asked that the conversation shows when one agent hands its context to another, as a divider such as "Context handoff, Claude Opus 5.5 to GPT-6.1-Sol" with the logos of both.
+
+| Part | Where | Rule |
+| --- | --- | --- |
+| Transfer row | `Message.transfer` (`Transfer`, `AgentRef`, `TransferKind`) | A `Notice` row that names the kind of transfer and both agents by provider and model. `text` holds the same statement in words (`provider::transfer_text`), so a client that does not draw the row still shows a divider. The host writes the row in the commit that claims the first message after the transfer, so a transfer never happens without its row. |
+| The row on screen | `Shell::transfer_row` in `ui/conversation.rs` | The existing divider, with a label for the kind, then logo and model of the source in the accent color, an arrow, and logo and model of the receiver. The model is named as the provider's catalog names it. |
+| Change of provider | `TaskEdit::Provider` in `kodem-host/src/main.rs` | Allowed for a started task between turns, with no message queued and no uncertain delivery. The session owner ends first (`provider::close_session`). `provider_thread` is cleared and `Task.handoff` is `Switched` from the agent that ran the turns. A second change before any message still hands over from that agent. The same provider with another account is refused here, because the account of a started task has rules of its own. |
+| Context | `provider::handoff_context` | As for undo in phase 6, with a reason for each kind. The message that starts the turn is never inside its own context. |
+| Fork | `Request::ForkTask`, composer command `/fork` | A new coding task in a worktree of its own. The worktree starts at the commit that the last checkpoint of the source was taken on and then receives the files of that checkpoint (`checkpoint::apply`), so work that was not committed stays uncommitted in the fork. `Task.handoff` is `Forked` and `Task.lineage` names the source and its turn. The first message of the fork carries the conversation of the source up to that turn. |
+| Desktop | `ui/model_picker.rs` | The provider list is no longer locked for a started task. |
+
+Less than the plan named, on purpose. A change back to an earlier provider does not resume that provider's old conversation with only the turns in between; every change starts a new conversation with the whole remaining conversation. A fork does not use a provider's own fork operation. Both would need provider behaviour that cannot be proven here, and the general path is correct for both providers; its cost is more context tokens on the first message. A fork starts from the last turn only, as undo does.
+
+Checked with a locked `cargo build` of the workspace and `cargo fmt --all -- --check`. Clippy with `-D warnings` reports the six earlier findings and no new one. One temporary test, removed afterward, ran the real request handler against a store and a Git repository in a temporary directory: a queued message refuses the change of provider; without it the task has the new provider, no provider conversation and a waiting handoff from Codex; two more changes keep that source; the next message is sent with both earlier turns as context and the reason that names Codex; the transcript holds a row with the transfer and the text "Context handoff · Codex → Claude Code"; the runs record their providers; a later message is sent as written. A fork has its own worktree on the same commit, the modified file as an uncommitted change and the untracked file as untracked, a branch `kodem/…`, and the lineage of turn 4. A later turn of the source changes neither the files nor the context of the fork, whose first message carries the source's conversation up to turn 4 and writes a "Forked context" row with the source task. The fork saves its own checkpoints. A task that works refuses both a fork and a change of provider. All passed. During this phase one of my edits removed `resources` and `complete_turn` from `provider.rs`; the compiler reported it, both were restored, and the function list was compared with the committed file.
+
+Not checked: the transfer row on screen, the provider list for a started task, `/fork` in the composer menu, a real turn of the new provider that receives the context, and the close of a live session before the change, because app control and authenticated turns are prohibited here. No commit or push was made.
+
+## Orchestration, phase 8: subagents on another provider (protocol 34)
+
+Recorded on 13 October 2026. The user asked a Claude Code task to "spawn subagent using gpt 6.1 sol" and the agent answered that its own Agent tool only accepts Claude models. That was correct before this phase. [Provider integration](providers.md#subagents-on-another-provider) describes what exists now.
+
+| Part | Where |
+| --- | --- |
+| The tool server | `kodem-host/src/mcp.rs`; `main` runs it for the argument `mcp` before anything else |
+| The operations | `kodem-host/src/delegation.rs`: `agents`, `delegate`, `status`, `cancel`, `stop_children` |
+| Requests | `Request::Agents`, `Delegate`, `DelegateStatus`, `DelegateCancel`; `Response::Agents`, `Delegated` |
+| Injection | `Session::open` in `providers/claude.rs`, `open` in `providers/codex.rs`, `Codex::start_with` in `kodem-core` |
+| One writer for each checkout | `Task::shares_checkout` in `provider::submit`, in the claim facts of the orchestrator and in `undo_turn` |
+
+Less than the plan named, on purpose. The parent's agent reads a result by calling a tool while its own turn runs; a result that arrives after that turn ended does not start a new turn of the parent. A delegated task cannot delegate, so Stop reaches one level. The plan's per-session token is left out: the host socket already accepts only the same user, and the server process is started by a provider that this user runs.
+
+Checked with a locked `cargo build` of the workspace and `cargo fmt --all -- --check`. Clippy with `-D warnings` reports the six earlier findings and no new one. Three temporary tests, removed afterward:
+
+| Check | Cases and result |
+| --- | --- |
+| Delegation on a store and a Git repository in a temporary directory, with two catalogs given to the host | The models of both providers are offered. "gpt 6.1 sol" and "GPT-6.1-Sol" find `gpt-6.1-sol` on Codex, "haiku" finds Claude Code, "luna" finds the one model that contains it, a provider alone gives its default, nothing gives the parent's provider, an unknown model is an error that lists the models, and a model of the other provider than the one named is an error. A reading task has the parent's checkout, read-only access, the first line of the task as its title, the lineage, and a "Delegated task · Opus 5.5 → GPT-6.1-Sol" row in both conversations. It is claimed while its parent works in the same checkout; a task that can write is still paused there; the parent is claimed while the reading task works. While it works the answer says so. After its turn the answer holds its reply, and the parent's conversation holds one "Subagent result · GPT-6.1-Sol → Opus 5.5" row also after a second read. Another task cannot read it, and it cannot delegate. A writing task has a worktree and branch of its own that hold the parent's uncommitted file, the parent's access, and no share in the parent's checkout, which is unchanged. Passed. |
+| The tool server as a process, against a real `kodem-host` on a scratch data directory | `initialize` answers with the client's protocol version, the server name and instructions. `tools/list` names the four tools. A status of an unknown task, a delegation without a task text, an unknown provider and an unknown tool are tool results marked as errors with their reason. An unknown method is error -32601. `ping` answers. The server ends when its input closes. Passed. |
+| The installed CLIs, Claude Code 2.1.296 and Codex 0.162.1, started with the configuration that Kodem passes | Claude Code reports the server `kodem` as connected with 4 tools through `mcp_status`. Codex lists `delegate_task`, `list_agents`, `task_cancel` and `task_status` through `mcpServerStatus/list`. No model request was made; both CLIs ran under the default account in a scratch directory. Passed. |
+
+Not checked, because each needs an authenticated turn: that an agent calls `delegate_task` when asked for a subagent on another model, a delegated turn from start to result, whether Codex asks for approval before it calls a tool of this server, a reading Claude Code task being held to the blocked tools, and Stop reaching a working delegated task. The transfer rows and the delegated tasks in the task list are not checked on screen. No commit or push was made.

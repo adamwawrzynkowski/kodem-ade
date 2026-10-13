@@ -173,6 +173,7 @@ pub(super) fn run_check(host: Shared, task_id: String, command: String) -> Resul
             );
             host.lock().unwrap().store.message(&Message {
                 seq: 0,
+                transfer: None,
                 id: new_id(),
                 task_id: task_id.clone(),
                 kind: MessageKind::Check,
@@ -191,6 +192,7 @@ pub(super) fn run_check(host: Shared, task_id: String, command: String) -> Resul
         if let Err(e) = result {
             let _ = h.store.message(&Message {
                 seq: 0,
+                transfer: None,
                 id: new_id(),
                 task_id,
                 kind: MessageKind::Error,

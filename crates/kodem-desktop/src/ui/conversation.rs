@@ -160,6 +160,93 @@ impl Shell {
         index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let content = self.message_body(conversation, index, cx);
+        if self.message_undone(conversation, index) {
+            // A turn that the user undid stays readable, but it no longer counts.
+            return div()
+                .w_full()
+                .opacity(0.45)
+                .child(content)
+                .into_any_element();
+        }
+        content
+    }
+
+    // Names one agent of a transfer: the logo of its provider and its model.
+    fn transfer_agent(&self, agent: &core::AgentRef, color: Hsla) -> Div {
+        let name = self.model_name(&AgentPreferences {
+            provider: agent.provider,
+            model: agent.model.clone(),
+            ..AgentPreferences::default()
+        });
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(5.))
+            .text_size(px(12.))
+            .text_color(color)
+            .child(icon(agent.provider.icon()).size(px(12.)))
+            .child(name)
+    }
+
+    // A transfer of the conversation from one agent to another reads as a divider that names
+    // both: where the context came from, and who continues with it.
+    fn transfer_row(&self, transfer: &core::Transfer) -> AnyElement {
+        let t = self.theme;
+        div()
+            .w_full()
+            .px_5()
+            .py(px(8.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .child(
+                div()
+                    .flex_1()
+                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.45))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(icon("refresh").size(px(12.)).text_color(t.subtle))
+                    .child(caps(transfer.kind.label(), t))
+                    .child(self.transfer_agent(&transfer.from, t.accent))
+                    .child(icon("arrow-right").size(px(12.)).text_color(t.subtle))
+                    .child(self.transfer_agent(&transfer.to, t.text)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.45))),
+            )
+            .into_any_element()
+    }
+
+    // Reports a row of a turn that the user undid. Rows written after the undo are not part
+    // of that turn, also before the next turn begins.
+    fn message_undone(&self, conversation: &Conversation, index: usize) -> bool {
+        if *conversation != Conversation::Main {
+            return false;
+        }
+        self.view.as_ref().is_some_and(|view| {
+            view.messages.get(index).is_some_and(|message| {
+                core::run_at(&view.runs, message.seq)
+                    .and_then(|run| run.undone)
+                    .is_some_and(|undone| message.created < undone)
+            })
+        })
+    }
+
+    fn message_body(
+        &mut self,
+        conversation: &Conversation,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some((message, closes_turn)) =
             self.conversation_messages(conversation)
                 .and_then(|messages| {
@@ -181,6 +268,9 @@ impl Shell {
         let user = message.kind == MessageKind::User;
         if message.kind == MessageKind::Tool {
             return self.tool_calls(conversation, index, cx);
+        }
+        if let Some(transfer) = &message.transfer {
+            return self.transfer_row(transfer);
         }
         // A one-line provider notice reads as a divider in the conversation, not as a message.
         if message.kind == MessageKind::Notice

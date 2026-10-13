@@ -1,18 +1,76 @@
 //! Provider routing and durable, per-task conversation ownership.
-use crate::{Shared, accounts};
+use crate::{
+    Shared, accounts,
+    orchestrator::{self, Command, Input, Signal},
+};
 #[path = "providers/claude.rs"]
 mod claude;
 #[path = "providers/codex.rs"]
 mod codex;
 use anyhow::{Context, Result, ensure};
-use kodem_core::*;
+use kodem_core::{
+    git,
+    storage::{Commit, Store},
+    *,
+};
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
+
+/// Shortest time between two writes of one task's streamed transcript rows.
+const STREAM_WRITE_INTERVAL: Duration = Duration::from_millis(120);
+
+/// Open transcript items that still receive streamed text, by a key their driver chooses.
+///
+/// A write stores the whole row under the host lock, so one write for each delta costs more as
+/// an item grows. Changed rows are written together instead, at most once per interval. A
+/// driver also writes them before any event that is not a delta, so such an event sees current
+/// rows, and from its session loop, so text that nothing follows still appears.
+pub(crate) struct Streamed {
+    pub(crate) rows: HashMap<String, Message>,
+    unwritten: HashSet<String>,
+    written: Instant,
+}
+impl Streamed {
+    /// Starts with no open item. The first changed row is written at once.
+    pub(crate) fn new() -> Self {
+        let now = Instant::now();
+        Self {
+            rows: HashMap::new(),
+            unwritten: HashSet::new(),
+            written: now.checked_sub(STREAM_WRITE_INTERVAL).unwrap_or(now),
+        }
+    }
+    /// Records that the text of an item changed and returns whether changed rows are due.
+    pub(crate) fn changed(&mut self, key: &str) -> bool {
+        if !self.unwritten.contains(key) {
+            self.unwritten.insert(key.to_owned());
+        }
+        self.due()
+    }
+    /// Returns whether a changed row waited for the whole write interval.
+    pub(crate) fn due(&self) -> bool {
+        self.pending() && self.written.elapsed() >= STREAM_WRITE_INTERVAL
+    }
+    /// Returns whether the text of any item changed since the last write.
+    pub(crate) fn pending(&self) -> bool {
+        !self.unwritten.is_empty()
+    }
+    /// Writes every changed row that is still open.
+    pub(crate) fn write(&mut self, store: &Store) -> Result<()> {
+        for key in self.unwritten.drain() {
+            if let Some(message) = self.rows.get(&key) {
+                store.message(message)?;
+            }
+        }
+        self.written = Instant::now();
+        Ok(())
+    }
+}
 
 pub(super) enum Control {
     Close,
@@ -144,11 +202,13 @@ pub(super) fn submit(
             h.store.outgoing(&task_id)?.len() < 64,
             "Outbox is full; send or remove existing messages first"
         );
+        // A delegated task that cannot write reads the checkout of its parent while the
+        // parent works, so it is no second writer.
         ensure!(
-            !h.store
-                .tasks()?
-                .iter()
-                .any(|t| t.id != task.id && t.cwd == task.cwd && t.state.active()),
+            task.shares_checkout()
+                || !h.store.tasks()?.iter().any(|t| {
+                    t.id != task.id && t.cwd == task.cwd && t.state.active() && !t.shares_checkout()
+                }),
             "Another task is writing to this checkout. Use a separate task worktree."
         );
         // A compaction has no turn to join, so input sent meanwhile starts the next turn.
@@ -336,6 +396,7 @@ pub(crate) fn end_compaction(host: &Shared, task_id: &str, failure: Option<Strin
     if let Some(failure) = failure {
         h.store.message(&Message {
             seq: 0,
+            transfer: None,
             id: format!("compact:{}", new_id()),
             task_id: task_id.into(),
             kind: MessageKind::Notice,
@@ -458,60 +519,7 @@ fn ensure_owner(host: Shared, task_id: String) {
 
 /// Claims the next eligible message while excluding concurrent checkout writers.
 pub(crate) fn claim_next(host: &Shared, task_id: &str) -> Result<Option<OutgoingMessage>> {
-    let mut h = host.lock().unwrap();
-    let mut task = h.store.task(task_id)?;
-    if h.store.has_uncertain_submission(task_id)? || task.state == RunState::DeliveryUnknown {
-        return Ok(None);
-    }
-    let outgoing = h.store.outgoing(task_id)?;
-    for message in outgoing
-        .iter()
-        .filter(|m| m.state == DeliveryState::Queued && m.expected_turn.is_some())
-    {
-        if message.expected_turn != task.active_turn {
-            h.store.fail_outgoing(task_id, &message.id, false, "The selected turn finished before this steering message could be delivered. Restore it to send again.")?;
-        }
-    }
-    let message = if task.state.active() {
-        outgoing.into_iter().find(|m| {
-            m.state == DeliveryState::Queued
-                && m.expected_turn.is_some()
-                && m.expected_turn == task.active_turn
-        })
-    } else if matches!(task.state, RunState::Idle | RunState::Completed) {
-        outgoing
-            .into_iter()
-            .find(|m| m.state == DeliveryState::Queued && m.expected_turn.is_none())
-    } else {
-        None
-    };
-    let Some(message) = message else {
-        return Ok(None);
-    };
-    validate_preferences(&h, &preferences(&task))?;
-    validate_attachments(&h, &task, &message.attachments)?;
-    if message.expected_turn.is_none() {
-        if h.store
-            .tasks()?
-            .iter()
-            .any(|other| other.id != task.id && other.cwd == task.cwd && other.state.active())
-        {
-            task.state = RunState::Interrupted;
-            task.error = Some("Queue paused because another task is using this checkout. Resume after it finishes.".into());
-            h.save_task_with_notification(&task)?;
-            return Ok(None);
-        }
-        h.activities.remove(task_id);
-        task.state = RunState::Starting;
-        task.branch_merged = false;
-        task.active_turn = None;
-        task.pending_completion = None;
-        task.error = None;
-        task.updated = now();
-        task.last_started = Some(task.updated);
-    }
-    h.store.claim_outgoing(&task, &message)?;
-    Ok(Some(message))
+    orchestrator::dispatch(host, task_id, Input::Command(Command::Claim))
 }
 
 /// Rules of a review session. Claude Code also runs it without its file-editing tools and with
@@ -834,6 +842,16 @@ pub(super) fn composer_catalog(
     project_id: Option<String>,
 ) -> Result<ComposerCatalog> {
     let account = scoped_account(host, provider, account, &task_id)?;
+    let (undoable, forkable) = match &task_id {
+        Some(task_id) => {
+            let h = host.lock().unwrap();
+            (
+                undoable_run(&h, task_id)?.is_some(),
+                forkable_run(&h, task_id)?.is_some(),
+            )
+        }
+        None => (false, false),
+    };
     let mut catalog = match account.provider {
         Provider::Codex => codex::composer_catalog(host, &account, task_id, project_id)?,
         Provider::Claude => claude::composer_catalog(host, &account, task_id, project_id)?,
@@ -841,7 +859,325 @@ pub(super) fn composer_catalog(
     if !catalog.commands.contains(&ComposerCommand::Provider) {
         catalog.commands.insert(0, ComposerCommand::Provider);
     }
+    // Only a turn whose files were saved before it began can be undone.
+    if undoable {
+        catalog.commands.push(ComposerCommand::Undo);
+    }
+    if forkable {
+        catalog.commands.push(ComposerCommand::Fork);
+    }
     Ok(catalog)
+}
+
+/// Most earlier conversation that a handoff gives to a provider conversation, in bytes.
+const HANDOFF_LIMIT: usize = 200 * 1024;
+
+// The last turn of a coding task that is not undone, with the turn whose checkpoint holds the
+// files from before it: the last turn before it that is not undone either, or zero for the
+// state before the first recorded turn. `None` when no such checkpoint was saved.
+fn undoable_run(host: &crate::Host, task_id: &str) -> Result<Option<(Run, u32)>> {
+    let task = host.store.task(task_id)?;
+    if task.kind != TaskKind::Coding {
+        return Ok(None);
+    }
+    let runs = host.store.runs(task_id)?;
+    let Some(index) = runs.iter().rposition(|run| run.undone.is_none()) else {
+        return Ok(None);
+    };
+    let before = runs[..index].iter().rfind(|run| run.undone.is_none());
+    if before.is_some_and(|run| run.checkpoint.is_none()) {
+        return Ok(None);
+    }
+    Ok(Some((
+        runs[index].clone(),
+        before.map_or(0, |run| run.ordinal),
+    )))
+}
+
+/// Returns the last turn of a coding task that is not undone, when its files were saved: the
+/// state that a fork of the task starts from.
+pub(crate) fn forkable_run(host: &crate::Host, task_id: &str) -> Result<Option<Run>> {
+    let task = host.store.task(task_id)?;
+    if task.kind != TaskKind::Coding {
+        return Ok(None);
+    }
+    Ok(host
+        .store
+        .runs(task_id)?
+        .into_iter()
+        .rfind(|run| run.undone.is_none())
+        .filter(|run| run.checkpoint.is_some()))
+}
+
+/// Restores the files of a coding task to the checkpoint from before its last turn.
+///
+/// The turn stays in the transcript, marked as undone. The provider conversation still holds
+/// it, so the task leaves that conversation: the next message starts a new one and carries the
+/// conversation that remains as context. The state that the restore replaced is saved as a
+/// checkpoint of its own.
+pub(super) fn undo_turn(host: &Shared, task_id: &str) -> Result<()> {
+    let (task, run, before) = {
+        let h = host.lock().unwrap();
+        ensure!(!h.shutdown, "Host is restarting. Retry after reconnecting.");
+        let task = h.store.task(task_id)?;
+        ensure!(
+            task.kind == TaskKind::Coding,
+            "Only a coding task saves its files after each turn"
+        );
+        ensure!(
+            !task.state.active() && !h.compactions.contains_key(task_id),
+            "Undo after this turn finishes"
+        );
+        ensure!(
+            task.state != RunState::DeliveryUnknown
+                && !h.store.has_uncertain_submission(task_id)?,
+            "Reconcile uncertain delivery before undoing a turn"
+        );
+        ensure!(
+            !h.store
+                .outgoing(task_id)?
+                .iter()
+                .any(|message| message.state == DeliveryState::Queued),
+            "Cancel queued messages before undoing a turn"
+        );
+        ensure!(
+            !h.store.tasks()?.iter().any(|other| other.id != task.id
+                && other.cwd == task.cwd
+                && other.state.active()
+                && !other.shares_checkout()),
+            "Another task is writing to this checkout. Undo after it finishes."
+        );
+        let (run, before) = undoable_run(&h, task_id)?
+            .context("There is no turn to undo: no files were saved before the last turn")?;
+        (task, run, before)
+    };
+    close_session(host, task_id)?;
+    let backup = git::checkpoint::restore(&task.cwd, task_id, &before.to_string())
+        .context("The files could not be restored to the checkpoint before this turn")?;
+    let h = host.lock().unwrap();
+    let mut task = h.store.task(task_id)?;
+    let mut run = run;
+    run.undone = Some(now());
+    task.provider_thread = None;
+    task.context_usage = None;
+    task.handoff = Some(Handoff::Restored { turn: before });
+    let name = backup.rsplit('/').next().unwrap_or_default();
+    let notice = Message {
+        seq: 0,
+        transfer: None,
+        id: format!("undo:{}", run.id),
+        task_id: task_id.into(),
+        kind: MessageKind::Notice,
+        text: format!(
+            "Turn {} undone · files restored · earlier state kept as {name}",
+            run.ordinal
+        ),
+        attachments: Vec::new(),
+        feedback: Vec::new(),
+        file_edits: Vec::new(),
+        tool: None,
+        complete: true,
+        created: now(),
+    };
+    h.store.commit(&Commit {
+        task: &task,
+        ledger: &[],
+        runs: &[run],
+        messages: &[notice],
+        release_completion: false,
+    })
+}
+
+/// Ends the provider session of a task that does no work, and waits until it is gone.
+///
+/// The session owner holds the provider conversation. It must end before the task leaves that
+/// conversation, or the next message would still reach it. Input that was accepted meanwhile
+/// gets a new owner.
+pub(crate) fn close_session(host: &Shared, task_id: &str) -> Result<()> {
+    {
+        let h = host.lock().unwrap();
+        let task = h.store.task(task_id)?;
+        ensure!(
+            !task.state.active() && !h.compactions.contains_key(task_id),
+            "Wait until this turn finishes"
+        );
+        let Some(session) = h.sessions.get(task_id) else {
+            return Ok(());
+        };
+        let _ = session.send(Control::Close);
+    }
+    let until = Instant::now() + Duration::from_secs(10);
+    while host.lock().unwrap().sessions.contains_key(task_id) {
+        ensure!(
+            Instant::now() < until,
+            "The provider session did not stop. Try again."
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let queued = host
+        .lock()
+        .unwrap()
+        .store
+        .outgoing(task_id)?
+        .iter()
+        .any(|message| message.state == DeliveryState::Queued);
+    if queued {
+        ensure_owner(host.clone(), task_id.into());
+    }
+    Ok(())
+}
+
+/// Returns the agent that runs a task now: its provider and the model that its turns use.
+pub(crate) fn agent_of(host: &crate::Host, task: &Task) -> AgentRef {
+    AgentRef {
+        provider: task.provider,
+        model: effective_model(host, task),
+        task_id: None,
+    }
+}
+
+/// Returns the name to show for an agent: its model as the provider lists it, or the provider.
+pub(crate) fn agent_name(host: &crate::Host, agent: &AgentRef) -> String {
+    let Some(id) = &agent.model else {
+        return agent.provider.label().to_owned();
+    };
+    host.runtimes
+        .get(&agent.provider)
+        .and_then(|runtime| runtime.models.iter().find(|model| &model.id == id))
+        .map_or_else(|| id.clone(), |model| model.name.clone())
+}
+
+/// Builds what a provider conversation that has not seen a task needs to continue it: the
+/// reason, and the messages of the user and the replies of the turns that are not undone.
+///
+/// The newest messages are kept when the conversation exceeds the limit. Tool calls, their
+/// output and reasoning are left out: the files hold their result. A fork reads the
+/// conversation of the task it came from, up to the turn it was forked at.
+pub(crate) fn handoff_context(
+    host: &crate::Host,
+    task: &Task,
+    message: &OutgoingMessage,
+) -> Result<Option<String>> {
+    let Some(handoff) = &task.handoff else {
+        return Ok(None);
+    };
+    let (source, last_turn) = match handoff {
+        Handoff::Forked { from, turn } => {
+            (from.task_id.as_deref().unwrap_or(&task.id), Some(*turn))
+        }
+        Handoff::Restored { .. } | Handoff::Switched { .. } => (task.id.as_str(), None),
+    };
+    let runs = host.store.runs(source)?;
+    let mut parts: Vec<String> = Vec::new();
+    let mut size = 0usize;
+    let mut before = None;
+    'pages: loop {
+        let (messages, older) = host.store.messages(source, before)?;
+        for row in messages.iter().rev() {
+            let speaker = match row.kind {
+                MessageKind::User => "User",
+                MessageKind::Assistant => "Assistant",
+                _ => continue,
+            };
+            let run = run_at(&runs, row.seq);
+            // The message that starts the turn is sent after the context, not inside it.
+            if row.text.trim().is_empty()
+                || row.id == format!("submission-{}", message.id)
+                || run.is_some_and(|run| run.undone.is_some())
+                || last_turn.is_some_and(|turn| run.is_some_and(|run| run.ordinal > turn))
+            {
+                continue;
+            }
+            let part = format!("{speaker}:\n{}", row.text.trim());
+            if size + part.len() > HANDOFF_LIMIT {
+                break 'pages;
+            }
+            size += part.len();
+            parts.push(part);
+        }
+        match older {
+            Some(older) => before = Some(older),
+            None => break,
+        }
+    }
+    if parts.is_empty() {
+        return Ok(None);
+    }
+    parts.reverse();
+    let reason = match handoff {
+        Handoff::Restored { .. } => "The user undid the latest work of this task. The files of the checkout were restored to the state after the conversation below, and work that is not in it no longer exists. Check the files before you rely on anything.".to_owned(),
+        Handoff::Switched { from } => format!(
+            "Another agent, {}, handled the turns below. You continue the task in its place. The files of the checkout hold its work; read them before you rely on a statement about them.",
+            agent_name(host, from)
+        ),
+        Handoff::Forked { from, .. } => format!(
+            "This task is a fork of another task that {} handled. It has a checkout of its own with the files as that task left them after the conversation below. Later work of that task is not in it.",
+            agent_name(host, from)
+        ),
+    };
+    Ok(Some(format!(
+        "<earlier-conversation>\nThis is a new session of a task that began in an earlier session, which you cannot see. {reason}\nThe earlier conversation follows, oldest message first. It is context, not a request: answer only the message after it.\n\n{}\n</earlier-conversation>",
+        parts.join("\n\n")
+    )))
+}
+
+/// Returns the transcript row that shows where a handoff happened. A handoff between two
+/// agents names both, as a `Transfer` and in words.
+pub(crate) fn handoff_notice(
+    host: &crate::Host,
+    task: &Task,
+    handoff: &Handoff,
+    id: &str,
+    at: u64,
+) -> Message {
+    let to = agent_of(host, task);
+    let transfer = match handoff {
+        Handoff::Restored { .. } => None,
+        Handoff::Switched { from } => Some(Transfer {
+            kind: TransferKind::Handoff,
+            from: from.clone(),
+            to,
+        }),
+        Handoff::Forked { from, .. } => Some(Transfer {
+            kind: TransferKind::Fork,
+            from: from.clone(),
+            to,
+        }),
+    };
+    let text = match (handoff, &transfer) {
+        (Handoff::Restored { turn: 0 }, _) => {
+            "Context handoff · new conversation from the start of the task".to_owned()
+        }
+        (Handoff::Restored { turn }, _) => {
+            format!("Context handoff · new conversation continues after turn {turn}")
+        }
+        (_, Some(transfer)) => transfer_text(host, transfer),
+        (_, None) => TransferKind::Handoff.label().to_owned(),
+    };
+    Message {
+        seq: 0,
+        transfer,
+        id: format!("handoff:{id}"),
+        task_id: task.id.clone(),
+        kind: MessageKind::Notice,
+        text,
+        attachments: Vec::new(),
+        feedback: Vec::new(),
+        file_edits: Vec::new(),
+        tool: None,
+        complete: true,
+        created: at,
+    }
+}
+
+/// Returns a transfer in words, for a client that does not draw it: its kind and both agents.
+pub(crate) fn transfer_text(host: &crate::Host, transfer: &Transfer) -> String {
+    format!(
+        "{} · {} → {}",
+        transfer.kind.label(),
+        agent_name(host, &transfer.from),
+        agent_name(host, &transfer.to)
+    )
 }
 
 /// Reads configuration and skill provenance from the selected provider.
@@ -866,58 +1202,7 @@ pub(crate) fn complete_turn(
     state: RunState,
     error: Option<String>,
 ) -> Result<()> {
-    let task = host.lock().unwrap().store.task(task_id)?;
-    // A chat has no checkout to capture.
-    let capture = (task.state.active() && task.kind.has_project()).then(|| {
-        kodem_core::git::capture(
-            &task,
-            if task.baseline.is_some() {
-                Comparison::Baseline
-            } else {
-                Comparison::WorkingTree
-            },
-        )
-    });
-    // Only a coding task follows the branch of its checkout. A review keeps the name of the
-    // branch it examines, and its worktree is detached.
-    let branch = (task.state.active() && task.kind == TaskKind::Coding)
-        .then(|| kodem_core::git::branch(&task.cwd));
-    let mut h = host.lock().unwrap();
-    let mut task = h.store.task(task_id)?;
-    if let Some(capture) = capture {
-        task.review = Some(match capture {
-            Ok(mut snapshot) => {
-                let summary = snapshot.summary();
-                let stored = h.store.save_snapshot(&mut snapshot);
-                TaskReview {
-                    snapshot_id: stored.as_ref().ok().map(|_| snapshot.id.clone()),
-                    added: summary.added,
-                    removed: summary.removed,
-                    omitted_files: summary.omitted_files,
-                    captured: snapshot.captured,
-                    error: stored.err().map(|error| error.to_string()),
-                }
-            }
-            Err(error) => TaskReview {
-                snapshot_id: None,
-                added: 0,
-                removed: 0,
-                omitted_files: 0,
-                captured: now(),
-                error: Some(error.to_string()),
-            },
-        });
-    }
-    if let Some(branch) = branch {
-        task.branch = branch;
-    }
-    h.store.release_completion_messages(task_id)?;
-    task.pending_completion = None;
-    task.active_turn = None;
-    task.state = state;
-    task.error = error;
-    task.updated = now();
-    h.requests.remove(task_id);
-    h.activities.remove(task_id);
-    h.save_task_with_notification(&task)
+    let command = orchestrator::observe(host, task_id, TurnOutcome { state, error })?;
+    orchestrator::dispatch(host, task_id, Input::Command(command))?;
+    Ok(())
 }

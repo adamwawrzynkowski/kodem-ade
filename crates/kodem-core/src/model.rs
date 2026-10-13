@@ -590,8 +590,24 @@ pub struct Task {
     /// Async questions remain answerable after the producing turn or host exits.
     #[serde(default)]
     pub questions: Vec<InputRequest>,
+    /// Set while the next run has to start with the earlier conversation as context.
+    #[serde(default)]
+    pub handoff: Option<Handoff>,
+    /// The task that this one was forked from.
+    #[serde(default)]
+    pub lineage: Option<Lineage>,
 }
 impl Task {
+    /// Reports a delegated task that may write only to a worktree of its own or not at all.
+    ///
+    /// Such a task reads the checkout of its parent while the parent works, so it neither
+    /// blocks another task of that checkout nor is blocked by one.
+    pub fn shares_checkout(&self) -> bool {
+        self.lineage
+            .as_ref()
+            .is_some_and(|lineage| lineage.delegated)
+            && !self.owns_worktree
+    }
     /// Returns the identity of the account that runs this task.
     pub fn account_id(&self) -> &str {
         self.account.as_deref().unwrap_or(DEFAULT_ACCOUNT)
@@ -647,6 +663,162 @@ impl Subagent {
     }
 }
 
+/// Why a run exists.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RunOrigin {
+    /// A message of the user started it.
+    #[default]
+    User,
+    /// The provider continued by itself, for example after a background agent reported.
+    Continuation,
+    /// Another task handed it over.
+    Delegated,
+}
+
+/// One counted turn of a task, from the claim of its first message to its published outcome.
+///
+/// A run is the unit that the provider turn, the checkout capture and the outcome belong to. A
+/// message that steers a running turn joins its run. A compaction that the host asked for is a
+/// provider turn but not a run. A run is open while `ended` is absent.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Run {
+    pub id: String,
+    pub task_id: String,
+    /// Position among the runs of the task, starting at 1.
+    pub ordinal: u32,
+    #[serde(default)]
+    pub origin: RunOrigin,
+    /// The submission that started the run, then those that steered it, in order.
+    #[serde(default)]
+    pub submissions: Vec<String>,
+    pub state: RunState,
+    pub provider: Provider,
+    /// Provider conversation that ran it, once the provider named one.
+    #[serde(default)]
+    pub provider_thread: Option<String>,
+    /// Provider turn that ran it, once the provider acknowledged or reported one.
+    #[serde(default)]
+    pub turn: Option<String>,
+    /// `seq` of the first transcript row of the run. Rows of the task's own transcript from
+    /// this one up to the first row of the next run belong to it. Zero until the store saved it.
+    #[serde(default)]
+    pub first_seq: u64,
+    pub started: u64,
+    #[serde(default)]
+    pub ended: Option<u64>,
+    /// Name of the checkpoint that holds the files of the checkout as the run left them.
+    #[serde(default)]
+    pub checkpoint: Option<String>,
+    /// When the user undid the run. Its rows stay in the transcript but are no longer part of
+    /// the conversation that the provider continues.
+    #[serde(default)]
+    pub undone: Option<u64>,
+}
+
+/// Returns the run that a row of a task's own transcript belongs to, by the row's `seq`.
+///
+/// `runs` are in order. A row that is older than the first recorded run belongs to none.
+pub fn run_at(runs: &[Run], seq: u64) -> Option<&Run> {
+    runs.iter()
+        .rev()
+        .find(|run| run.first_seq != 0 && run.first_seq <= seq)
+}
+
+/// The agent on one side of a transfer: a provider, its model, and the task when it is another.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentRef {
+    pub provider: Provider,
+    /// Identity of the model in the provider's catalog; absent before the catalog was read.
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+}
+
+/// What kind of transfer a transcript row marks.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TransferKind {
+    /// The task continues with another provider.
+    Handoff,
+    /// A new task starts from the conversation of another task.
+    Fork,
+    /// An agent gave a piece of work to another task.
+    Delegated,
+    /// A delegated task returned its result.
+    Result,
+}
+impl TransferKind {
+    /// Returns the words that name the transfer in the conversation.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Handoff => "Context handoff",
+            Self::Fork => "Forked context",
+            Self::Delegated => "Delegated task",
+            Self::Result => "Subagent result",
+        }
+    }
+}
+
+/// A transfer of conversation context from one agent to another.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Transfer {
+    pub kind: TransferKind,
+    pub from: AgentRef,
+    pub to: AgentRef,
+}
+
+/// Why the next run of a task starts in a provider conversation that has not seen the task.
+///
+/// The host then gives that conversation the earlier messages as context, with the reason.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum Handoff {
+    /// The files were restored to the checkpoint after this turn; zero is before the first.
+    Restored { turn: u32 },
+    /// Another provider ran the earlier turns of this task.
+    Switched { from: AgentRef },
+    /// The task is a fork: its conversation is that of the task in `from`, up to this turn.
+    Forked { from: AgentRef, turn: u32 },
+}
+
+/// Where a task came from when another task made it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Lineage {
+    pub parent: String,
+    /// Last turn of the parent that the task continues from.
+    pub turn: u32,
+    /// An agent of the parent gave this task a piece of work, as opposed to a fork by the user.
+    #[serde(default)]
+    pub delegated: bool,
+}
+
+/// A model that an agent can give work to, as the provider's catalog lists it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentOption {
+    pub provider: Provider,
+    pub model: String,
+    pub name: String,
+    /// The model that the provider's tasks use when none is chosen.
+    pub default: bool,
+}
+
+/// The state of a delegated task, as its parent's agent reads it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Delegation {
+    pub task_id: String,
+    /// Display name of the agent that does the work.
+    pub agent: String,
+    pub state: RunState,
+    /// The task stopped working and no message waits: `result` is final.
+    pub done: bool,
+    /// The task waits for an approval or an answer of the user.
+    pub needs_input: bool,
+    /// The replies of the task's last turn.
+    pub result: Option<String>,
+    pub error: Option<String>,
+    /// Branch and directory of the task's own worktree, when it may write.
+    pub worktree: Option<(String, PathBuf)>,
+}
+
 /// Provider outcome awaiting completion of the task's whole agent tree.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TurnOutcome {
@@ -687,6 +859,10 @@ pub struct Message {
     /// Structured form of a tool message. When present, `text` holds only the tool's output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<ToolCall>,
+    /// Set on the row that marks a transfer of the conversation from one agent to another.
+    /// `text` then holds the same statement in words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transfer: Option<Transfer>,
     pub text: String,
     pub complete: bool,
     pub created: u64,
@@ -756,6 +932,64 @@ pub struct InputRequest {
     pub params: serde_json::Value,
 }
 impl InputRequest {
+    /// Reports a request to approve an action or a plan, as opposed to questions to answer.
+    pub fn is_approval(&self) -> bool {
+        self.method.ends_with("requestApproval")
+    }
+    /// Returns the provider conversation that asked, which is a subagent's when it is not the
+    /// main one. A request that names none belongs to the main conversation.
+    pub fn conversation(&self) -> Option<&str> {
+        self.params["threadId"].as_str()
+    }
+    /// Returns the decisions that the provider listed for an approval, in its order.
+    pub fn offered_decisions(&self) -> Option<Vec<String>> {
+        self.params["availableDecisions"]
+            .as_array()
+            .map(|decisions| {
+                decisions
+                    .iter()
+                    .filter_map(|decision| decision.as_str().map(str::to_owned))
+                    .collect()
+            })
+    }
+    /// Returns the decisions to show for an approval: those the provider listed, or the three
+    /// that every provider accepts.
+    pub fn decisions(&self) -> Vec<String> {
+        self.offered_decisions()
+            .unwrap_or_else(|| vec!["accept".into(), "decline".into(), "cancel".into()])
+    }
+    /// Returns the provider's own wording of a decision, when it gave one.
+    pub fn decision_label(&self, decision: &str) -> Option<&str> {
+        self.params["decisionLabels"][decision].as_str()
+    }
+    /// Returns why the provider asks.
+    pub fn reason(&self) -> Option<&str> {
+        self.params["reason"].as_str()
+    }
+    /// Returns the command that an approval is about.
+    pub fn command(&self) -> Option<&str> {
+        self.params["command"].as_str()
+    }
+    /// Returns the name of the tool that an approval is about.
+    pub fn tool(&self) -> Option<&str> {
+        self.params["tool"].as_str()
+    }
+    /// Returns the text of a plan that is up for review. It can be empty.
+    pub fn plan(&self) -> Option<&str> {
+        self.params["plan"].as_str()
+    }
+    /// Returns the file that the provider wrote a reviewed plan to.
+    pub fn plan_path(&self) -> Option<&str> {
+        self.params["planFilePath"].as_str()
+    }
+    /// Returns the questions to answer. Each holds an `id`, a `question` and optional `options`.
+    pub fn questions(&self) -> Option<&Vec<serde_json::Value>> {
+        self.params["questions"].as_array()
+    }
+    /// Returns everything the provider sent with the request, as text for inspection.
+    pub fn details(&self) -> String {
+        serde_json::to_string_pretty(&self.params).unwrap_or_default()
+    }
     /// Identifies questions answered as user messages rather than JSON-RPC responses.
     pub fn is_async(&self) -> bool {
         self.method == "item/agentMessage"
@@ -845,6 +1079,48 @@ pub struct TaskView {
     pub messages: Vec<Message>,
     pub before: Option<u64>,
     pub requests: Vec<InputRequest>,
+    /// The runs of the task, oldest first.
+    #[serde(default)]
+    pub runs: Vec<Run>,
+    /// Identity of the host process that produced this view.
+    #[serde(default)]
+    pub epoch: String,
+    /// Order in which that host produced its views. A view with a smaller number is older, so
+    /// replies that arrive on separate connections can be put in order.
+    #[serde(default)]
+    pub serial: u64,
+}
+
+/// What a watcher of one task last received from one host process.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Cursor {
+    /// Identity of the host process; a cursor means nothing to another one.
+    pub epoch: String,
+    /// Last transcript revision of that host which the watcher received.
+    pub rev: u64,
+    /// Digest of the task state other than its transcript rows.
+    pub state: u64,
+}
+
+/// How the answer to a watch request relates to the cursor of the request.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum SubscriptionStart {
+    /// The request had no cursor of this host: `state` holds the newest transcript page.
+    Snapshot { state: TaskView, through: Cursor },
+    /// `state` holds only the transcript rows that changed after the cursor of the request.
+    Replay { state: TaskView, through: Cursor },
+    /// More changed than the host retains or one answer carries: `current` holds the newest
+    /// transcript page in place of the changed rows.
+    ReplayGap { current: TaskView, through: Cursor },
+}
+impl SubscriptionStart {
+    /// Returns the view and the cursor to send with the next watch request.
+    pub fn into_parts(self) -> (TaskView, Cursor) {
+        match self {
+            Self::Snapshot { state, through } | Self::Replay { state, through } => (state, through),
+            Self::ReplayGap { current, through } => (current, through),
+        }
+    }
 }
 impl TaskView {
     /// Returns accepted input already in chat while its idle provider session starts.
@@ -1469,6 +1745,10 @@ pub enum ComposerCommand {
     Mcp,
     Status,
     Compact,
+    /// Restores the files to the checkpoint from before the last turn.
+    Undo,
+    /// Starts a new task in its own worktree from the files and conversation of this one.
+    Fork,
 }
 
 /// An enabled skill returned by the provider for the current working directory.
@@ -1767,9 +2047,59 @@ pub enum Request {
         command: String,
     },
     Shutdown,
+    /// Restores the files of a coding task to the checkpoint from before its last turn that is
+    /// not undone yet, and starts the provider conversation again without that turn.
+    UndoTurn {
+        task_id: String,
+    },
+    /// Lists the models that an agent of the given task can give work to.
+    Agents {
+        parent: String,
+    },
+    /// Starts a task for an agent of `parent` on any provider and model, and sends it `prompt`.
+    ///
+    /// A task that may not write reads the checkout of its parent. One that may write gets a
+    /// worktree of its own with the files as the parent has them now.
+    Delegate {
+        parent: String,
+        prompt: String,
+        provider: Option<Provider>,
+        /// A model by identity or name; spaces and punctuation do not matter.
+        model: Option<String>,
+        write: bool,
+        /// How long to wait for the result before answering with the task still working.
+        wait_ms: u64,
+    },
+    /// Reads a delegated task, waiting up to `wait_ms` for it to finish.
+    DelegateStatus {
+        parent: String,
+        task_id: String,
+        wait_ms: u64,
+    },
+    /// Stops the running turn of a delegated task.
+    DelegateCancel {
+        parent: String,
+        task_id: String,
+    },
+    /// Starts a new coding task in a worktree of its own, with the files that the last turn of
+    /// the given task left and with its conversation as context for the first message.
+    ForkTask {
+        task_id: String,
+    },
+    /// Waits until the task differs from what `after` describes, then answers with the change.
+    ///
+    /// Without a cursor the answer is immediate. With one, an unchanged task is answered after
+    /// a bounded wait, so the request never outlives the read timeout of its connection.
+    Watch {
+        task_id: String,
+        after: Option<Cursor>,
+    },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
+    Watched(SubscriptionStart),
+    Agents(Vec<AgentOption>),
+    Delegated(Delegation),
     Usage {
         provider: Provider,
         account: String,

@@ -399,6 +399,9 @@ impl Shell {
                                 s.selected.clone(),
                                 s.show_terminal && s.has_checkout(),
                                 s.agent_popup.as_ref().map(|p| p.thread_id.clone()),
+                                s.view
+                                    .as_ref()
+                                    .is_some_and(|view| s.selected.as_ref() == Some(&view.task.id)),
                             ));
                         }
                         if s.host_connected && s.has_checkout() && s.changes_refresh.due() {
@@ -582,6 +585,7 @@ impl Shell {
         }
         let response_task = match &reply.request {
             core::Request::Task { task_id, .. }
+            | core::Request::Watch { task_id, .. }
             | core::Request::ReadFile { task_id, .. }
             | core::Request::Files { task_id }
             | core::Request::Terminal { task_id }
@@ -589,6 +593,20 @@ impl Shell {
             _ => None,
         };
         if response_task.is_some_and(|id| self.selected.as_ref() != Some(id)) {
+            return;
+        }
+        // After its first answer the watcher sends only the rows that changed. They are not a
+        // conversation by themselves, so they are dropped until the window holds the first
+        // page of the task, which the poll requests while it is missing.
+        if let core::Request::Watch {
+            task_id,
+            after: Some(_),
+        } = &reply.request
+            && self
+                .view
+                .as_ref()
+                .is_none_or(|view| &view.task.id != task_id)
+        {
             return;
         }
 
@@ -1147,6 +1165,10 @@ impl Shell {
                 }
             }
             Response::Terminal(terminal) => self.terminal = Some(terminal),
+            // The bridge turns each answer of its watcher into a task view.
+            Response::Watched(_) => {}
+            // Answers to the tools that a provider agent calls. The desktop never asks for them.
+            Response::Agents(_) | Response::Delegated(_) => {}
             Response::Ok => match reply.request {
                 core::Request::CompactTask { .. } => {
                     let tone = self.theme.info;
@@ -1844,21 +1866,43 @@ fn tool_rows_end(messages: &[Message], start: usize) -> usize {
     row
 }
 
-// Polls refresh the tail; explicit page requests extend the retained prefix.
+// The watcher and polls refresh the tail; explicit page requests extend the retained prefix.
 fn merge_transcript(current: &TaskView, incoming: &mut TaskView, older: bool) {
     if !older && !current.messages.is_empty() {
         incoming.before = current.before;
     }
-    let mut messages: std::collections::BTreeMap<_, _> = current
-        .messages
-        .iter()
-        .cloned()
+    // The watcher and the explicit requests use separate connections, so an answer can arrive
+    // after one that the host produced later. Such an answer adds the rows that the window
+    // does not hold, but it must not put older rows or an older task state back.
+    let outdated = incoming.task.id == current.task.id
+        && incoming.epoch == current.epoch
+        && incoming.serial < current.serial;
+    let (base, news) = if outdated {
+        (
+            std::mem::take(&mut incoming.messages),
+            current.messages.clone(),
+        )
+    } else {
+        (
+            current.messages.clone(),
+            std::mem::take(&mut incoming.messages),
+        )
+    };
+    let mut messages: std::collections::BTreeMap<_, _> = base
+        .into_iter()
         .map(|message| (message.seq, message))
         .collect();
-    for message in incoming.messages.drain(..) {
+    for message in news {
         messages.insert(message.seq, message);
     }
     incoming.messages = messages.into_values().collect();
+    if outdated {
+        incoming.task = current.task.clone();
+        incoming.activities = current.activities.clone();
+        incoming.outgoing = current.outgoing.clone();
+        incoming.requests = current.requests.clone();
+        incoming.serial = current.serial;
+    }
 }
 struct Hint {
     text: String,

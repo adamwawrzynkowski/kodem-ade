@@ -87,7 +87,7 @@ impl Shell {
             .text_color(t.text)
             .text_size(px(12.));
         for request in requests {
-            panel = panel.child(if request.method.ends_with("requestApproval") {
+            panel = panel.child(if request.is_approval() {
                 self.approval_card(&request, cx)
             } else {
                 self.question_card(&request, cx)
@@ -108,9 +108,9 @@ impl Shell {
         let request_key = request.id.to_string();
         let sending = self.answering.contains(&request_key);
         // A plan review without plan text points at the file the provider wrote it to.
-        let plan = request.params["plan"].as_str().map(|plan| {
+        let plan = request.plan().map(|plan| {
             if plan.trim().is_empty() {
-                request.params["planFilePath"].as_str().map_or_else(
+                request.plan_path().map_or_else(
                     || "The provider did not include the plan text.".to_owned(),
                     |path| format!("The plan is in `{path}`."),
                 )
@@ -118,15 +118,7 @@ impl Shell {
                 plan.to_owned()
             }
         });
-        let decisions: Vec<String> = request.params["availableDecisions"]
-            .as_array()
-            .map(|decisions| {
-                decisions
-                    .iter()
-                    .filter_map(|decision| decision.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_else(|| vec!["accept".into(), "decline".into(), "cancel".into()]);
+        let decisions: Vec<String> = request.decisions();
         // The request is one block: a tinted header, what is asked, then the decisions.
         let mut card = kit::block(t)
             .flex_shrink_0()
@@ -144,14 +136,11 @@ impl Shell {
                 .pr(px(10.))
                 .bg(t.warning.opacity(0.07))
                 .border_color(t.warning.opacity(0.22))
-                .when_some(request.params["tool"].as_str(), |header, tool| {
+                .when_some(request.tool(), |header, tool| {
                     header.child(kit::chip(tool.to_owned(), t.muted))
                 }),
             );
-        if let Some(reason) = request.params["reason"]
-            .as_str()
-            .filter(|reason| !reason.is_empty())
-        {
+        if let Some(reason) = request.reason().filter(|reason| !reason.is_empty()) {
             card = card
                 .child(div().px(px(12.)).py(px(8.)).child(reason.to_owned()))
                 .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)));
@@ -184,8 +173,8 @@ impl Shell {
                     .font_family(crate::theme::MONO)
                     .text_size(px(11.5))
                     .child(
-                        request.params["command"]
-                            .as_str()
+                        request
+                            .command()
                             .unwrap_or("File changes; inspect the matching item in the transcript.")
                             .to_owned(),
                     ),
@@ -226,8 +215,8 @@ impl Shell {
             .items_center()
             .gap(px(6.));
         for decision in decisions {
-            let label = request.params["decisionLabels"][&decision]
-                .as_str()
+            let label = request
+                .decision_label(&decision)
                 .unwrap_or(decision_label(&decision))
                 .to_owned();
             let id = SharedString::from(format!("decision:{request_key}:{decision}"));
@@ -272,7 +261,7 @@ impl Shell {
     // One request's questions, each with its options and a free-text answer.
     fn question_card(&mut self, request: &InputRequest, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let Some(questions) = request.params["questions"].as_array().cloned() else {
+        let Some(questions) = request.questions().cloned() else {
             return div().into_any_element();
         };
         let request_key = request.id.to_string();
@@ -511,10 +500,7 @@ impl Shell {
         else {
             return;
         };
-        let Some(questions) = request.params["questions"]
-            .as_array()
-            .filter(|q| !q.is_empty())
-        else {
+        let Some(questions) = request.questions().filter(|q| !q.is_empty()) else {
             return;
         };
         let mut answers = serde_json::Map::new();

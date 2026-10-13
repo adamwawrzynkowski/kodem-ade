@@ -66,6 +66,18 @@ impl Choice {
                     "bot",
                     "Provider",
                 ),
+                ComposerCommand::Undo => (
+                    "undo",
+                    "Restore the files to before the last turn",
+                    "undo-2",
+                    "Provider",
+                ),
+                ComposerCommand::Fork => (
+                    "fork",
+                    "Continue from here in a new task with its own worktree",
+                    "git-pull-request",
+                    "Provider",
+                ),
             },
             Self::Skill(skill) => (&skill.name, &skill.description, "code", "Skill"),
             Self::Path(path) => (
@@ -448,6 +460,16 @@ impl Shell {
                     });
                 }
                 ComposerCommand::Compact => self.compact_task(cx),
+                ComposerCommand::Undo => {
+                    if let Some(task_id) = self.selected.clone() {
+                        self.send(core::Request::UndoTurn { task_id });
+                    }
+                }
+                ComposerCommand::Fork => {
+                    if let Some(task_id) = self.selected.clone() {
+                        self.send(core::Request::ForkTask { task_id });
+                    }
+                }
                 ComposerCommand::Status => {
                     self.open_settings(settings::PROVIDERS);
                 }

@@ -1,7 +1,10 @@
 //! On-demand local host. Window closure never drops provider or PTY ownership.
 mod accounts;
 mod attachments;
+mod delegation;
+mod mcp;
 mod notifications;
+mod orchestrator;
 mod project_icons;
 mod provider;
 mod settlement;
@@ -33,6 +36,8 @@ struct Host {
     compacted: HashMap<String, u64>,
     terminals: HashMap<String, terminal::Terminal>,
     checks: std::collections::HashSet<String>,
+    /// Number of task views produced so far, which puts them in order for a client.
+    views: std::cell::Cell<u64>,
     shutdown: bool,
     usage_refresh: Option<Instant>,
     usage_refreshing: bool,
@@ -46,6 +51,18 @@ unsafe extern "C" {
     fn dispatch_main() -> !;
 }
 fn main() {
+    // A provider starts this executable as the server of Kodem's tools for one task.
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.first().is_some_and(|argument| argument == "mcp") {
+        let code = match mcp::serve(&arguments) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("Kodem tools: {error:#}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
     // Notification Center calls its delegate on the main dispatch queue. The main thread
     // serves that queue, so the host can answer how to present an alert while Kodem is active.
     #[cfg(target_os = "macos")]
@@ -122,6 +139,7 @@ fn run() -> Result<()> {
         compacted: HashMap::new(),
         terminals: HashMap::new(),
         checks: Default::default(),
+        views: Default::default(),
         shutdown: false,
         usage_refresh: None,
         usage_refreshing: false,
@@ -181,19 +199,91 @@ fn fs2_lock(file: &fs::File) -> Result<()> {
     ensure!(result == 0, "Host already running");
     Ok(())
 }
-fn task_view(h: &Host, id: &str, before: Option<u64>) -> Result<TaskView> {
-    let (messages, before) = h.store.messages(id, before)?;
+/// Longest time a watch request waits for a change before it answers with none.
+const WATCH_WAIT: Duration = Duration::from_secs(10);
+/// How often a waiting watch request looks at its task again.
+const WATCH_INTERVAL: Duration = Duration::from_millis(50);
+
+// The state of a task without transcript rows. Each call counts as one produced view.
+fn task_state(h: &Host, id: &str) -> Result<TaskView> {
     let task = h.store.task(id)?;
     let mut requests = h.requests.get(id).cloned().unwrap_or_default();
     requests.extend(task.questions.iter().cloned());
+    h.views.set(h.views.get() + 1);
     Ok(TaskView {
         activities: h.activities.get(id).cloned().unwrap_or_default(),
         task,
         outgoing: h.store.outgoing(id)?,
-        messages,
-        before,
+        messages: Vec::new(),
+        before: None,
         requests,
+        runs: h.store.runs(id)?,
+        epoch: h.store.revision().0.to_owned(),
+        serial: h.views.get(),
     })
+}
+fn task_view(h: &Host, id: &str, before: Option<u64>) -> Result<TaskView> {
+    let mut view = task_state(h, id)?;
+    (view.messages, view.before) = h.store.messages(id, before)?;
+    Ok(view)
+}
+// Digest of everything in a view that is not a transcript row or the order of the view.
+fn state_digest(view: &TaskView) -> Result<u64> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_vec(&(
+        &view.task,
+        &view.activities,
+        &view.outgoing,
+        &view.requests,
+        &view.runs,
+    ))?
+    .hash(&mut hasher);
+    Ok(hasher.finish())
+}
+/// Answers a watcher once the task differs from what its cursor describes.
+///
+/// Transcript rows are compared by the revisions of the store. The rest of the view (the task,
+/// the outbox, activities, requests and runs) is compared by a digest, so a change that only lives in
+/// host memory is seen without a notification from the code that made it. The host lock is
+/// held only while the task is looked at.
+fn watch(host: &Shared, task_id: &str, after: Option<Cursor>) -> Result<Response> {
+    let until = Instant::now() + WATCH_WAIT;
+    loop {
+        {
+            let h = host.lock().unwrap();
+            ensure!(!h.shutdown, "Host is restarting. Retry after reconnecting.");
+            let mut view = task_state(&h, task_id)?;
+            let (epoch, rev) = h.store.revision();
+            let through = Cursor {
+                epoch: epoch.to_owned(),
+                rev,
+                state: state_digest(&view)?,
+            };
+            let Some(after) = after.as_ref().filter(|after| after.epoch == through.epoch) else {
+                (view.messages, view.before) = h.store.messages(task_id, None)?;
+                return Ok(Response::Watched(SubscriptionStart::Snapshot {
+                    state: view,
+                    through,
+                }));
+            };
+            let Some(rows) = h.store.changed_messages(task_id, after.rev)? else {
+                (view.messages, view.before) = h.store.messages(task_id, None)?;
+                return Ok(Response::Watched(SubscriptionStart::ReplayGap {
+                    current: view,
+                    through,
+                }));
+            };
+            if !rows.is_empty() || after.state != through.state || Instant::now() >= until {
+                view.messages = rows;
+                return Ok(Response::Watched(SubscriptionStart::Replay {
+                    state: view,
+                    through,
+                }));
+            }
+        }
+        std::thread::sleep(WATCH_INTERVAL);
+    }
 }
 fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Response> {
     ensure!(
@@ -514,12 +604,101 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             }
             Ok(Response::Created(task))
         }
+        Request::Watch { task_id, after } => watch(host, &task_id, after),
+        Request::Agents { parent } => Ok(Response::Agents(delegation::agents(host, &parent)?)),
+        Request::Delegate {
+            parent,
+            prompt,
+            provider,
+            model,
+            write,
+            wait_ms,
+        } => Ok(Response::Delegated(delegation::delegate(
+            host,
+            root,
+            &parent,
+            &prompt,
+            (provider, model.as_deref()),
+            write,
+            wait_ms,
+        )?)),
+        Request::DelegateStatus {
+            parent,
+            task_id,
+            wait_ms,
+        } => Ok(Response::Delegated(delegation::status(
+            host, &parent, &task_id, wait_ms,
+        )?)),
+        Request::DelegateCancel { parent, task_id } => Ok(Response::Delegated(delegation::cancel(
+            host, &parent, &task_id,
+        )?)),
+        Request::ForkTask { task_id } => {
+            let (source, run, from) = {
+                let h = host.lock().unwrap();
+                let source = h.store.task(&task_id)?;
+                ensure!(
+                    !source.state.active() && !h.compactions.contains_key(&task_id),
+                    "Fork after this turn finishes"
+                );
+                let run = provider::forkable_run(&h, &task_id)?.context(
+                    "This task has no saved turn to fork from. Only a coding task saves its files after each turn.",
+                )?;
+                let mut from = provider::agent_of(&h, &source);
+                from.task_id = Some(source.id.clone());
+                (source, run, from)
+            };
+            let project = project(host, &source.project_id)?;
+            let checkpoint = run.checkpoint.clone().unwrap_or_default();
+            let id = new_id();
+            // The worktree starts at the commit that the checkpoint was taken on and then
+            // receives the files of the checkpoint, so changes that were not committed stay
+            // uncommitted in the fork.
+            let start = format!(
+                "{}^",
+                git::checkpoint::reference_of(&source.id, &checkpoint)?
+            );
+            let cwd = git::worktree(&project.path, &root.join("worktrees"), &id, Some(&start))?;
+            git::checkpoint::apply(&cwd, &source.id, &checkpoint)?;
+            let mut task = new_task(
+                id,
+                TaskKind::Coding,
+                source.project_id.clone(),
+                cwd,
+                &provider::preferences(&source),
+            );
+            task.owns_worktree = true;
+            task.baseline = git::head(&task.cwd);
+            task.repository_baselines = git::repository_baselines(&task.cwd)?;
+            task.branch = git::branch(&task.cwd);
+            task.title = format!("Fork of {}", source.title);
+            task.title_pending = false;
+            task.handoff = Some(Handoff::Forked {
+                from,
+                turn: run.ordinal,
+            });
+            task.lineage = Some(Lineage {
+                parent: source.id.clone(),
+                turn: run.ordinal,
+                delegated: false,
+            });
+            host.lock().unwrap().store.save_task(&task)?;
+            Ok(Response::Created(task))
+        }
+        Request::UndoTurn { task_id } => {
+            provider::undo_turn(host, &task_id)?;
+            Ok(Response::Ok)
+        }
         Request::Task { task_id, before } => Ok(Response::Task(task_view(
             &host.lock().unwrap(),
             &task_id,
             before,
         )?)),
         Request::EditTask { task_id, edit } => {
+            // Another provider cannot continue the provider conversation of the task, so the
+            // session that holds it ends first. A task that works refuses the edit below.
+            if matches!(edit, TaskEdit::Provider(_)) {
+                let _ = provider::close_session(host, &task_id);
+            }
             let h = host.lock().unwrap();
             let mut t = h.store.task(&task_id)?;
             let preferences_changed = matches!(
@@ -541,14 +720,36 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             match edit {
                 TaskEdit::Provider(preferences) => {
                     ensure!(
-                        t.provider_thread.is_none()
-                            && !h.sessions.contains_key(&task_id)
+                        !h.sessions.contains_key(&task_id)
                             && !t.state.active()
+                            && !h.compactions.contains_key(&task_id)
                             && t.state != RunState::DeliveryUnknown
+                            && !h.store.has_uncertain_submission(&task_id)?
                             && h.store.outgoing(&task_id)?.is_empty(),
-                        "Start a new conversation to change providers after this task has started"
+                        "Change the provider after this turn finishes and with no message queued"
                     );
                     provider::validate_saved_selection(&h, &preferences)?;
+                    if t.provider_thread.is_some() {
+                        // The account of a started conversation has rules of its own.
+                        ensure!(
+                            preferences.provider != t.provider
+                                || preferences.account.as_deref().unwrap_or(DEFAULT_ACCOUNT)
+                                    == t.account_id(),
+                            "Use the account choice to change the account of a started task"
+                        );
+                        // The task leaves the conversation of its provider. The next message
+                        // starts one with the new provider and carries the earlier turns.
+                        if preferences.provider != t.provider {
+                            let mut from = provider::agent_of(&h, &t);
+                            // Two changes without a message between them hand over once, from
+                            // the agent that ran the turns.
+                            if let Some(Handoff::Switched { from: earlier }) = &t.handoff {
+                                from = earlier.clone();
+                            }
+                            t.handoff = Some(Handoff::Switched { from });
+                            t.provider_thread = None;
+                        }
+                    }
                     t.provider = preferences.provider;
                     t.account = preferences.account.clone();
                     t.provider_access = preferences.provider_access.clone();
@@ -776,6 +977,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 "No live provider session. Recovered tasks are not automatically replayed.",
             )?;
             tx.send(provider::Control::Interrupt)?;
+            delegation::stop_children(&h, &task_id)?;
             Ok(Response::Ok)
         }
         Request::CompactTask { task_id } => {
@@ -1014,7 +1216,9 @@ fn review_directory(root: &std::path::Path) -> std::path::PathBuf {
 // derives from the task's identity is removed; a failure leaves the directory behind.
 fn discard_scratch(root: &std::path::Path, task: &Task, project: Option<&Project>) {
     match task.kind {
-        TaskKind::Coding => {}
+        TaskKind::Coding => {
+            let _ = git::checkpoint::discard(&task.cwd, &task.id);
+        }
         TaskKind::Chat => {
             if task.cwd == chat_directory(root, &task.id) {
                 let _ = fs::remove_dir_all(&task.cwd);
@@ -1075,6 +1279,8 @@ fn new_task(
         attachments: Vec::new(),
         error: None,
         questions: Vec::new(),
+        handoff: None,
+        lineage: None,
     }
 }
 
@@ -1090,8 +1296,8 @@ fn answer_text(request: &InputRequest, response: &Value) -> String {
         }
         escaped
     }
-    request.params["questions"]
-        .as_array()
+    request
+        .questions()
         .unwrap()
         .iter()
         .map(|question| {
@@ -1125,7 +1331,7 @@ fn answer_text(request: &InputRequest, response: &Value) -> String {
 }
 
 fn validate_answer(request: &InputRequest, response: &Value) -> Result<()> {
-    if request.method.ends_with("requestApproval") {
+    if request.is_approval() {
         let decision = response["decision"]
             .as_str()
             .context("Choose an approval decision")?;
@@ -1133,16 +1339,14 @@ fn validate_answer(request: &InputRequest, response: &Value) -> Result<()> {
             ["accept", "acceptForSession", "decline", "cancel"].contains(&decision),
             "Unsupported approval decision"
         );
-        if let Some(available) = request.params["availableDecisions"].as_array() {
+        if let Some(available) = request.offered_decisions() {
             ensure!(
-                available.iter().any(|v| v.as_str() == Some(decision)),
+                available.iter().any(|offered| offered == decision),
                 "Decision was not offered by this request"
             )
         }
     } else {
-        let questions = request.params["questions"]
-            .as_array()
-            .context("Malformed question")?;
+        let questions = request.questions().context("Malformed question")?;
         for question in questions {
             let id = question["id"]
                 .as_str()

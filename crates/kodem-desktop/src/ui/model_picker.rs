@@ -342,10 +342,6 @@ impl Shell {
             );
         }
         if self.panel == Panel::Models {
-            let bound = self
-                .view
-                .as_ref()
-                .is_some_and(|view| view.task.provider_thread.is_some());
             let mut rail = div()
                 .w(px(132.))
                 .flex_shrink_0()
@@ -363,26 +359,12 @@ impl Shell {
             for (index, provider) in Provider::ALL.into_iter().enumerate() {
                 let chosen = preferences.provider == provider;
                 rail = rail.child(
-                    self.option_row(
-                        ("model-provider", index),
-                        chosen,
-                        disabled || (bound && !chosen),
-                    )
-                    .child(icon(provider.icon()).size(px(13.)))
-                    .child(provider.label())
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        s.choose_provider(provider, cx);
-                    })),
-                );
-            }
-            if bound {
-                rail = rail.child(
-                    div()
-                        .px(px(8.))
-                        .pt(px(8.))
-                        .text_size(px(11.))
-                        .text_color(t.subtle)
-                        .child("A started task keeps its provider."),
+                    self.option_row(("model-provider", index), chosen, disabled)
+                        .child(icon(provider.icon()).size(px(13.)))
+                        .child(provider.label())
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            s.choose_provider(provider, cx);
+                        })),
                 );
             }
             if let Some(error) = runtime.error {
@@ -1164,7 +1146,6 @@ impl Shell {
             if view.task.state.active()
                 || view.task.state == RunState::DeliveryUnknown
                 || !view.outgoing.is_empty()
-                || (view.task.provider_thread.is_some() && view.task.provider != provider)
             {
                 return;
             }

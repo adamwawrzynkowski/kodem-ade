@@ -14,6 +14,7 @@ use std::{
     process::{Command, Stdio},
 };
 const MAX_FILE: u64 = 2 * 1024 * 1024;
+pub mod checkpoint;
 mod repositories;
 mod review;
 pub use repositories::{repositories, repository_baselines};

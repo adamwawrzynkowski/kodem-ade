@@ -1,6 +1,7 @@
 //! Codex integration: app-server sessions, discovery and protocol events.
 use super::*;
 use kodem_core::providers::codex::Codex;
+use std::{cell::RefCell, rc::Rc};
 #[path = "codex_subagents.rs"]
 mod subagents;
 
@@ -39,7 +40,25 @@ fn open(
     account: &Account,
     event: &mut impl FnMut(Value),
 ) -> Result<(Codex, String, Option<u64>)> {
-    let mut codex = Codex::start(cwd, account, &mut *event)?;
+    // Kodem's own tools reach the session as an MCP server of this process only. A task that
+    // another task delegated starts no subagents of its own through Kodem.
+    let delegated = host
+        .lock()
+        .unwrap()
+        .store
+        .task(task_id)?
+        .lineage
+        .is_some_and(|lineage| lineage.delegated);
+    let mut config = Vec::new();
+    if !delegated {
+        let (command, arguments) = crate::mcp::command(task_id)?;
+        let server = format!("mcp_servers.{}", crate::mcp::SERVER);
+        config.push(format!("{server}.command={}", json!(command)));
+        config.push(format!("{server}.args={}", json!(arguments)));
+        // A tool call waits up to 45 seconds for a delegated task.
+        config.push(format!("{server}.tool_timeout_sec=120"));
+    }
+    let mut codex = Codex::start_with(cwd, account, &config, &mut *event)?;
     let known = host
         .lock()
         .unwrap()
@@ -122,12 +141,16 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
         // Only a coding task follows the branch of its checkout.
         (task.cwd, account, task.kind == TaskKind::Coding)
     };
-    let mut items: HashMap<String, Message> = HashMap::new();
+    // The session loop shares the open items with the event callback to write text that no
+    // later event follows. Both run on this thread and never at the same time.
+    let items = Rc::new(RefCell::new(Streamed::new()));
+    let event_items = items.clone();
     let event_host = host.clone();
     let event_task = task_id.to_owned();
     let persistence_error = Arc::new(Mutex::new(None));
     let callback_error = persistence_error.clone();
     let mut event = move |value: Value| {
+        let mut items = event_items.borrow_mut();
         if let Err(error) = ingest(&event_host, &event_task, value, &mut items) {
             *callback_error.lock().unwrap() =
                 Some(format!("Could not persist provider event: {error}"));
@@ -204,6 +227,7 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
                     if let Some(text) = answer {
                         h.store.message(&Message {
                             seq: 0,
+                            transfer: None,
                             id: format!(
                                 "{}:{}",
                                 task.active_turn.as_deref().unwrap_or("unknown"),
@@ -302,7 +326,18 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
         }
         dispatch_next(&host, task_id, &thread, &mut codex, &mut event)?;
         codex.poll(Duration::from_millis(40), &mut event)?;
+        if items.borrow().due() {
+            items.borrow_mut().write(&host.lock().unwrap().store)?;
+        }
     }
+}
+
+/// Returns whether a notification appends streamed text to an open transcript item.
+fn appends_text(method: &str) -> bool {
+    matches!(
+        method,
+        "item/agentMessage/delta" | "item/commandExecution/outputDelta"
+    )
 }
 
 fn dispatch_next(
@@ -351,31 +386,29 @@ fn dispatch_next(
                 reply["turn"]["id"].as_str()
             }
             .context("Codex omitted delivery acknowledgement")?;
-            let h = host.lock().unwrap();
-            h.store.confirm_submission(&message.id, turn)?;
-            let mut task = h.store.task(task_id)?;
-            // Notifications may have completed the turn while call waited for its response.
-            if message.expected_turn.is_none() && task.state == RunState::Starting {
-                task.state = RunState::Running;
-                task.active_turn = Some(turn.into());
-                h.save_task_with_notification(&task)?;
-            }
+            // Codex proves delivery with this reply, which can arrive after the turn's events.
+            orchestrator::dispatch(
+                host,
+                task_id,
+                Input::Signal(Signal::Delivered {
+                    submission: message.id.clone(),
+                    turn: turn.into(),
+                    steers: message.expected_turn.is_some(),
+                }),
+            )?;
         }
         Err(error) => {
             let rejected = error.is::<kodem_core::providers::codex::Rejected>();
-            let h = host.lock().unwrap();
-            h.store
-                .fail_outgoing(task_id, &message.id, !rejected, &format!("{error:#}"))?;
-            if !rejected || message.expected_turn.is_none() {
-                let mut task = h.store.task(task_id)?;
-                task.state = if rejected {
-                    RunState::Failed
-                } else {
-                    RunState::DeliveryUnknown
-                };
-                task.error = Some(format!("{error:#}"));
-                h.save_task_with_notification(&task)?;
-            }
+            orchestrator::dispatch(
+                host,
+                task_id,
+                Input::Signal(Signal::DeliveryFailed {
+                    submission: message.id.clone(),
+                    steers: message.expected_turn.is_some(),
+                    unknown: !rejected,
+                    error: format!("{error:#}"),
+                }),
+            )?;
             if !rejected {
                 return Err(error);
             }
@@ -383,14 +416,13 @@ fn dispatch_next(
     }
     Ok(())
 }
-fn ingest(
-    host: &Shared,
-    task_id: &str,
-    value: Value,
-    items: &mut HashMap<String, Message>,
-) -> Result<()> {
+fn ingest(host: &Shared, task_id: &str, value: Value, items: &mut Streamed) -> Result<()> {
     let method = value["method"].as_str().unwrap_or_default();
     let p = &value["params"];
+    // Every event but a delta must see the rows of streamed text as they are now.
+    if !appends_text(method) && items.pending() {
+        items.write(&host.lock().unwrap().store)?;
+    }
     if subagents::observe(host, task_id, method, p)? {
         return Ok(());
     }
@@ -446,15 +478,18 @@ fn ingest(
             };
             return end_compaction(host, task_id, failure);
         }
-        subagents::complete_main(
+        // The outcome is published only after every subagent of the task stopped working.
+        orchestrator::dispatch(
             host,
             task_id,
-            TurnOutcome {
-                state,
-                error: p["turn"]["error"]["message"].as_str().map(str::to_owned),
-            },
+            Input::Signal(Signal::TurnEnded {
+                outcome: TurnOutcome {
+                    state,
+                    error: p["turn"]["error"]["message"].as_str().map(str::to_owned),
+                },
+            }),
         )?;
-        items.retain(|_, message| {
+        items.rows.retain(|_, message| {
             message.task_id != task_id && message.task_id != format!("{task_id}/completion")
         });
         return Ok(());
@@ -497,9 +532,6 @@ fn ingest(
         h.store.save_task(&task)?;
         h.notify_task_state(&task);
         return Ok(());
-    }
-    if let Some(branch) = observed_branch {
-        task.branch = branch;
     }
     if child_thread.is_none() {
         update_activities(h.activities.entry(task_id.into()).or_default(), method, p);
@@ -550,10 +582,14 @@ fn ingest(
             );
         }
         "turn/started" => {
-            task.active_turn = p["turn"]["id"].as_str().map(str::to_owned);
-            task.state = RunState::Running;
-            task.updated = now();
-            h.save_task_with_notification(&task)?;
+            orchestrator::orchestrate(
+                &mut h,
+                task_id,
+                Input::Signal(Signal::TurnStarted {
+                    turn: p["turn"]["id"].as_str().map(str::to_owned),
+                    branch: observed_branch,
+                }),
+            )?;
         }
         "serverRequest/resolved" => {
             if let Some(requests) = h.requests.get_mut(task_id) {
@@ -567,15 +603,16 @@ fn ingest(
                 h.save_task_with_notification(&task)?;
             }
         }
-        "item/agentMessage/delta" | "item/commandExecution/outputDelta" => {
+        method if appends_text(method) => {
             let id = p["itemId"]
                 .as_str()
                 .context("Missing item identity")?
                 .to_owned();
             let key = format!("{}:{id}", p["turnId"].as_str().unwrap_or("unknown"));
             let cache_key = format!("{transcript_id}:{key}");
-            let item = items.entry(cache_key).or_insert(Message {
+            let item = items.rows.entry(cache_key.clone()).or_insert(Message {
                 seq: 0,
+                transfer: None,
                 id: key,
                 task_id: if child_thread.is_none() && method.contains("agentMessage") {
                     format!("{task_id}/completion")
@@ -597,7 +634,9 @@ fn ingest(
             });
             let delta = p["delta"].as_str().unwrap_or_default();
             append_bounded(&mut item.text, delta);
-            h.store.message(item)?;
+            if items.changed(&cache_key) {
+                items.write(&h.store)?;
+            }
         }
         "item/started" | "item/completed" => {
             let item = &p["item"];
@@ -709,6 +748,7 @@ fn ingest(
             };
             let mut message = Message {
                 seq: 0,
+                transfer: None,
                 id: key.clone(),
                 task_id: destination,
                 kind: message_kind,
@@ -750,9 +790,9 @@ fn ingest(
             }
             let cache_key = format!("{transcript_id}:{key}");
             if message.complete {
-                items.remove(&cache_key);
+                items.rows.remove(&cache_key);
             } else {
-                items.insert(cache_key, message);
+                items.rows.insert(cache_key, message);
             }
         }
         "error" if p["willRetry"].as_bool() != Some(true) => {
@@ -761,6 +801,7 @@ fn ingest(
                 .unwrap_or("Codex reported an error");
             h.store.message(&Message {
                 seq: 0,
+                transfer: None,
                 id: new_id(),
                 task_id: transcript_id.clone(),
                 kind: MessageKind::Error,
@@ -780,6 +821,7 @@ fn ingest(
 fn compaction_notice(transcript: &str, id: &str, text: String) -> Message {
     Message {
         seq: 0,
+        transfer: None,
         id: id.into(),
         task_id: transcript.into(),
         kind: MessageKind::Notice,
@@ -1317,7 +1359,7 @@ pub(crate) fn reconcile(host: &Shared, task_id: &str) -> Result<()> {
         ),
         "Provider outcome is not terminal"
     );
-    let mut normalized = HashMap::new();
+    let mut normalized = Streamed::new();
     for item in items {
         ingest(
             host,

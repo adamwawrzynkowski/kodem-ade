@@ -7,7 +7,11 @@
 mod transcript;
 #[path = "claude_transport.rs"]
 mod transport;
-use crate::{Shared, accounts, provider};
+use crate::{
+    Shared, accounts,
+    orchestrator::{self, Input, Signal},
+    provider,
+};
 use anyhow::{Context, Result, bail, ensure};
 use base64::Engine;
 use kodem_core::{providers::claude::message_uuid, *};
@@ -88,6 +92,8 @@ pub(super) fn initial_runtime() -> RuntimeInfo {
 
 /// Web tools a chat uses without asking; searching and reading pages is what a chat is for.
 const CHAT_TOOLS: [&str; 2] = ["WebSearch", "WebFetch"];
+/// Rule that allows every tool of Kodem's own MCP server.
+const KODEM_TOOLS: &str = "mcp__kodem";
 /// What a review session starts without: the tools that edit files, and the commands that
 /// publish or record changes. A denied rule also overrides a rule of the user that allows it.
 const REVIEW_BLOCKED_TOOLS: [&str; 13] = [
@@ -283,6 +289,29 @@ impl Session {
             }
         };
         let instructions = provider::instructions(task);
+        // A task that another task delegated starts no subagents of its own through Kodem.
+        let delegated = task
+            .lineage
+            .as_ref()
+            .is_some_and(|lineage| lineage.delegated);
+        let mcp = if delegated {
+            None
+        } else {
+            let (command, arguments) = crate::mcp::command(&task.id)?;
+            Some(
+                json!({"mcpServers":{crate::mcp::SERVER:{"command":command,"args":arguments}}})
+                    .to_string(),
+            )
+        };
+        let mut allowed: Vec<&str> = match task.kind {
+            TaskKind::Chat => CHAT_TOOLS.to_vec(),
+            TaskKind::Coding | TaskKind::Review => Vec::new(),
+        };
+        // Kodem's own tools start tasks that the user sees and can stop, so they need no
+        // approval each time.
+        if mcp.is_some() {
+            allowed.push(KODEM_TOOLS);
+        }
         let (transport, initialized) = Transport::start(&Launch {
             cwd: &task.cwd,
             account,
@@ -293,14 +322,16 @@ impl Session {
             light: false,
             compact: Some(compact),
             instructions: instructions.as_deref(),
-            allowed_tools: match task.kind {
-                TaskKind::Chat => &CHAT_TOOLS,
-                TaskKind::Coding | TaskKind::Review => &[],
-            },
+            allowed_tools: &allowed,
+            // A delegated task that reads its parent's checkout must not change it.
             disallowed_tools: match task.kind {
                 TaskKind::Review => &REVIEW_BLOCKED_TOOLS,
+                TaskKind::Coding | TaskKind::Chat if task.shares_checkout() => {
+                    &REVIEW_BLOCKED_TOOLS
+                }
                 TaskKind::Coding | TaskKind::Chat => &[],
             },
+            mcp: mcp.as_deref(),
         })?;
         Ok(Self {
             transport,
@@ -362,6 +393,8 @@ struct Prompt {
     submission: String,
     uuid: String,
     confirmed: bool,
+    /// The message joined a running turn instead of starting one.
+    steer: bool,
 }
 
 /// A finished turn whose completion waits for background agents or a follow-up by the CLI.
@@ -472,6 +505,7 @@ pub(super) fn run(
         }
         owner.settle()?;
         owner.dispatch()?;
+        owner.transcript.write_due(&host)?;
         if branch_refresh.elapsed() >= Duration::from_secs(5) {
             branch_refresh = Instant::now();
             // Only a coding task follows the branch of its checkout.
@@ -494,6 +528,10 @@ impl Owner<'_> {
     }
 
     fn event(&mut self, event: &Value) -> Result<()> {
+        // Every event but streamed text must see the rows of that text as they are now.
+        if event["type"] != "stream_event" {
+            self.transcript.write_pending(self.host)?;
+        }
         match event["type"].as_str() {
             Some("control_request") => {
                 if event["request"]["subtype"] == "can_use_tool" {
@@ -610,8 +648,18 @@ impl Owner<'_> {
             return Ok(());
         };
         prompt.confirmed = true;
-        let h = self.host.lock().unwrap();
-        h.store.confirm_submission(&prompt.submission, uuid)?;
+        let mut h = self.host.lock().unwrap();
+        // The turn already counts as started since the message was written to the CLI, so this
+        // proof only settles the delivery.
+        orchestrator::orchestrate(
+            &mut h,
+            self.task_id,
+            Input::Signal(Signal::Delivered {
+                submission: prompt.submission.clone(),
+                turn: uuid.to_owned(),
+                steers: prompt.steer,
+            }),
+        )?;
         if !self.session.stored {
             self.session.stored = true;
             let mut task = h.store.task(self.task_id)?;
@@ -624,14 +672,16 @@ impl Owner<'_> {
     fn follow_up(&mut self) -> Result<()> {
         self.running = true;
         self.follow_ups += 1;
-        let h = self.host.lock().unwrap();
-        let mut task = h.store.task(self.task_id)?;
         // This local identity links steering to the turn; it is never evidence for reconciliation.
-        task.active_turn = Some(format!("claude:follow-up:{}", self.follow_ups));
-        task.state = RunState::Running;
-        task.error = None;
-        task.updated = now();
-        h.save_task_with_notification(&task)
+        orchestrator::dispatch(
+            self.host,
+            self.task_id,
+            Input::Signal(Signal::TurnStarted {
+                turn: Some(format!("claude:follow-up:{}", self.follow_ups)),
+                branch: None,
+            }),
+        )?;
+        Ok(())
     }
 
     fn result(&mut self, event: &Value) -> Result<()> {
@@ -821,26 +871,31 @@ impl Owner<'_> {
             if held.stop_agents.is_some_and(|at| Instant::now() >= at) {
                 return self.transcript.stop_agents(self.host);
             }
+            // The outcome is held on the task while an agent still works.
             if task.active_turn.is_some() || task.pending_completion.is_none() {
-                let h = self.host.lock().unwrap();
-                let mut task = h.store.task(self.task_id)?;
-                task.active_turn = None;
-                task.pending_completion = Some(held.outcome.clone());
-                task.state = RunState::Running;
-                h.store.save_task(&task)?;
+                orchestrator::dispatch(
+                    self.host,
+                    self.task_id,
+                    Input::Signal(Signal::TurnEnded {
+                        outcome: held.outcome.clone(),
+                    }),
+                )?;
             }
             return Ok(());
         }
+        // The CLI may still continue by itself. Until this wait ends, the turn has not ended.
         if Instant::now() < held.ready {
             return Ok(());
         }
         let held = self.held.take().unwrap();
-        provider::complete_turn(
+        orchestrator::dispatch(
             self.host,
             self.task_id,
-            held.outcome.state,
-            held.outcome.error,
-        )
+            Input::Signal(Signal::TurnEnded {
+                outcome: held.outcome,
+            }),
+        )?;
+        Ok(())
     }
 
     fn dispatch(&mut self) -> Result<()> {
@@ -939,20 +994,17 @@ impl Owner<'_> {
         let content = match input(&message) {
             Ok(content) => content,
             Err(error) => {
-                self.host.lock().unwrap().store.fail_outgoing(
+                // Nothing was written to the CLI, so the message is refused, not uncertain.
+                orchestrator::dispatch(
+                    self.host,
                     self.task_id,
-                    &message.id,
-                    false,
-                    &error.to_string(),
+                    Input::Signal(Signal::DeliveryFailed {
+                        submission: message.id.clone(),
+                        steers: steer,
+                        unknown: false,
+                        error: error.to_string(),
+                    }),
                 )?;
-                if !steer {
-                    provider::complete_turn(
-                        self.host,
-                        self.task_id,
-                        RunState::Failed,
-                        Some(error.to_string()),
-                    )?;
-                }
                 return Ok(());
             }
         };
@@ -968,16 +1020,22 @@ impl Owner<'_> {
             submission: message.id.clone(),
             uuid,
             confirmed: false,
+            steer,
         });
         if !steer {
             self.running = true;
             self.interrupting = false;
-            let h = self.host.lock().unwrap();
-            let mut task = h.store.task(self.task_id)?;
-            // This local identity links steering to the turn; it is never evidence for reconciliation.
-            task.active_turn = Some(format!("claude:{}", message.id));
-            task.state = RunState::Running;
-            h.save_task_with_notification(&task)?;
+            // The CLI has no acknowledgement of a turn start: a written message starts the turn.
+            // This local identity links steering to the turn; it is never evidence for
+            // reconciliation.
+            orchestrator::dispatch(
+                self.host,
+                self.task_id,
+                Input::Signal(Signal::TurnStarted {
+                    turn: Some(format!("claude:{}", message.id)),
+                    branch: None,
+                }),
+            )?;
         }
         Ok(())
     }
@@ -1212,6 +1270,7 @@ impl Owner<'_> {
                 );
             h.store.message(&Message {
                 seq: 0,
+                transfer: None,
                 id: format!("claude:answer:{}", id.as_str().unwrap_or_default()),
                 task_id: transcript,
                 kind: MessageKind::User,
@@ -1543,6 +1602,7 @@ fn probe(cwd: &Path, account: &Account, light: bool) -> Result<(Transport, Value
         instructions: None,
         allowed_tools: &[],
         disallowed_tools: &[],
+        mcp: None,
     })
 }
 

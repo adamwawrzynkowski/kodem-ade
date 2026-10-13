@@ -44,6 +44,7 @@ fn spawn_message(h: &crate::Host, task: &Task, thread: &str, parent: &str) -> Re
         .map_or_else(|| task.id.clone(), |a| a.transcript_id(&task.id));
     h.store.message(&Message {
         seq: 0,
+        transfer: None,
         id: format!("spawn:{thread}"),
         task_id: transcript,
         kind: MessageKind::Subagent,
@@ -156,7 +157,7 @@ pub(super) fn observe(host: &Shared, task_id: &str, method: &str, p: &Value) -> 
     }
     h.store.save_task(&task)?;
     drop(h);
-    finish_if_ready(host, task_id)?;
+    orchestrator::dispatch(host, task_id, Input::Signal(Signal::ChildrenChanged))?;
     Ok(true)
 }
 
@@ -209,39 +210,8 @@ pub(super) fn transition(
     }
     h.store.save_task(&task)?;
     drop(h);
-    finish_if_ready(host, task_id)
-}
-
-/// Defers checkout capture, queue advancement and task alerts until descendants settle.
-pub(super) fn complete_main(host: &Shared, task_id: &str, outcome: TurnOutcome) -> Result<()> {
-    let mut h = host.lock().unwrap();
-    let mut task = h.store.task(task_id)?;
-    task.active_turn = None;
-    task.pending_completion = Some(outcome);
-    h.activities.remove(task_id);
-    if let Some(requests) = h.requests.get_mut(task_id) {
-        requests.retain(|r| r.params["threadId"].as_str() != task.provider_thread.as_deref());
-    }
-    if task.subagents.iter().any(|a| a.state.active()) {
-        task.state = RunState::Running;
-    }
-    h.store.save_task(&task)?;
-    drop(h);
-    finish_if_ready(host, task_id)
-}
-
-fn finish_if_ready(host: &Shared, task_id: &str) -> Result<()> {
-    let h = host.lock().unwrap();
-    let mut task = h.store.task(task_id)?;
-    if task.subagents.iter().any(|agent| agent.state.active()) {
-        return Ok(());
-    }
-    let Some(outcome) = task.pending_completion.take() else {
-        return Ok(());
-    };
-    h.store.save_task(&task)?;
-    drop(h);
-    complete_turn(host, task_id, outcome.state, outcome.error)
+    orchestrator::dispatch(host, task_id, Input::Signal(Signal::ChildrenChanged))?;
+    Ok(())
 }
 
 /// Per-session subscriptions and incremental backfill cursors for child threads.

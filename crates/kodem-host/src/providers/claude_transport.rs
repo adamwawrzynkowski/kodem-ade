@@ -68,6 +68,8 @@ pub(super) struct Launch<'a> {
     pub(super) allowed_tools: &'a [&'a str],
     /// Tools the session starts without.
     pub(super) disallowed_tools: &'a [&'a str],
+    /// MCP servers that Kodem adds to those of the user, as the CLI's JSON configuration.
+    pub(super) mcp: Option<&'a str>,
 }
 
 pub(super) struct Transport {
@@ -123,6 +125,11 @@ impl Transport {
             Conversation::Resume(id) => command.args(["--resume", id]),
             Conversation::Ephemeral => command.arg("--no-session-persistence"),
         };
+        // The option takes several values. Only options follow it, and input arrives on the
+        // stream, so the CLI reads nothing else as a configuration.
+        if let Some(mcp) = launch.mcp {
+            command.args(["--mcp-config", mcp]);
+        }
         if launch.light {
             command.arg("--strict-mcp-config");
         }

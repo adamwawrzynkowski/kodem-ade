@@ -1,6 +1,6 @@
 # Provider integration
 
-The host binds every conversation to a provider before starting its owner. Old task records and saved preferences default to Codex. A provider cannot change after session startup or while retained outgoing input exists. Starting another conversation preserves the original provider history.
+The host binds every conversation to a provider before starting its owner. Old task records and saved preferences default to Codex. A task can change its provider between turns, while no message is queued. The conversation of the earlier provider cannot move, so the task leaves it: the next message starts a conversation with the new provider and carries the earlier messages of the user and the replies as context. The transcript shows the change as a transfer row that names both agents. [Phase 7](progress.md) records the rules.
 
 The providers are Codex and Claude Code. The Devin integration was removed on 12 October 2026; the store moves its old tasks aside when it opens.
 
@@ -8,9 +8,40 @@ The providers are Codex and Claude Code. The Devin integration was removed on 12
 
 The desktop sends `ConnectRuntime { provider }` to inspect an integration and `SetAgentPreferences` to persist choices before a task exists. `CreateTask` stores the complete selection; subsequent model and permission edits apply to that task. Runtime catalogs and saved model choices are keyed by `Provider`; sign-in state and usage are keyed by provider account.
 
-`kodem-host/src/provider.rs` routes operations and owns submission acceptance, the task owner, queue claims, attachment validation and terminal-turn persistence. `providers/codex.rs` implements app-server operations. `providers/claude.rs`, `claude_transport.rs` and `claude_transcript.rs` implement Claude Code's stream-json control protocol. `kodem-core/src/providers/codex.rs` contains the low-level Codex CLI transport and its wire permission mappings.
+`kodem-host/src/provider.rs` routes operations and owns submission acceptance, the task owner and attachment validation. `kodem-host/src/orchestrator.rs` owns the lifecycle of a task's main turn: queue claims, delivery proof, the start and the end of a turn, the wait for subagents, and the publication of the outcome. `providers/codex.rs` implements app-server operations. `providers/claude.rs`, `claude_transport.rs` and `claude_transcript.rs` implement Claude Code's stream-json control protocol. `kodem-core/src/providers/codex.rs` contains the low-level Codex CLI transport and its wire permission mappings.
 
 The design compared a universal typed session-event interface with native provider drivers. The native drivers were selected because the protocols differ in when a turn is acknowledged: Codex answers `turn/start` before the turn completes, while Claude Code echoes the message identity in its event stream. A universal interface would require migrating the existing event decoder without removing those lifecycle differences. Shared queue claiming, uncertainty handling and review capture were retained from the other candidate to keep delivery rules consistent.
+
+That decision stands. The orchestrator is not a session-event interface: each driver keeps its own session loop, dispatch and protocol, and there is no driver trait. A driver only reports a lifecycle fact as an `orchestrator::Signal` at the moment its own protocol proves it. Codex reports `Delivered` when `turn/start` or `turn/steer` answers, which can be after `turn/started` and even after `turn/completed`. The decision therefore accepts these signals in any order: `Delivered` marks the turn as running only while the task is still `Starting`, and never changes a later state.
+
+## Subagents on another provider
+
+Each provider session of a task receives one more MCP server, `kodem`: Claude Code through `--mcp-config` and the allow rule `mcp__kodem`, Codex through `-c mcp_servers.kodem.*` for that process only. The server is the host executable itself, started as `kodem-host mcp --root <data dir> --task <task>` (`kodem-host/src/mcp.rs`). It keeps no state and turns each tool call into one request on the host's socket. Its tools are `list_agents`, `delegate_task`, `task_status` and `task_cancel`.
+
+`delegate_task` starts an ordinary task (`kodem-host/src/delegation.rs`) whose `Lineage` names the parent. A model is found by identity or name without regard to case, spaces and punctuation, and it decides the provider. A task that only reads uses the checkout of its parent while the parent works, with `AccessMode::ReadOnly` for Codex and the tools that a review blocks for Claude Code; `Task::shares_checkout` exempts it from the rule of one writer for each checkout. A task that may write gets a worktree and branch of its own that start with the parent's present files. The parent's agent reads the result with a tool call that waits at most 45 seconds, below the shortest default limit of a provider, and calls again for a longer task. Both conversations show a "Delegated task" transfer row, and the parent shows "Subagent result" when the result is first read. A delegated task gets no `kodem` server, so it cannot delegate further. Stop on the parent also stops its delegated tasks that work.
+
+## Lifecycle decisions
+
+The model follows T3 Code's Orchestrator V2 without its event log: the task and message rows stay the stored truth.
+
+| Part | Where | Rule |
+| --- | --- | --- |
+| Input | `Signal` (from a driver), `Command` (from the host) | A signal is an observation. `Command::Claim` asks for the next message; `Command::Finalize` publishes an outcome. |
+| Facts | `Facts`, read under the host lock | The queue, an unconfirmed delivery, a busy checkout, and options the provider does not support. Only a claim reads the queue. |
+| Decision | `decide(&Task, &Facts, &Input)` | No I/O. Returns events, effects, and a refusal that is reported after the events are stored. |
+| State change | `apply(&mut Task, &Event)` | The only code that changes a task for these events. |
+| Storage | `Store::commit` | One transaction for the task, the ledger changes and the released final answer. Before, a completed turn was several separate writes. |
+| Effects | `Effect::Send`, `Effect::Capture` | A message to send returns to the session loop that owns the transport. The checkout capture runs after the commit, without the host lock, and ends in `Command::Finalize`. |
+
+Each counted turn is a `Run`: `apply_run` creates it when a message is claimed, lets a steering message join it, and ends it with the published outcome. [Phase 3](progress.md) records its rules.
+
+Three rules of the model are now in one place. Only the main turn completes a task. The end of a turn is held (`OutcomeHeld`) until no subagent works (`OutcomeReleased`). The end of the provider turn and the publication of the outcome (`Finalized`, after the checkout capture) are two steps.
+
+The inputs of all tasks are decided one at a time, because `orchestrate` takes the locked host. The user is alerted when a step changes the state of the task, as `save_task_with_notification` did.
+
+Claude Code reports the same signals at its own moments. The CLI has no acknowledgement of a turn start, so a message written to it is `TurnStarted`, and the echo of the message identity is `Delivered`, which then only settles the delivery. A model request that nobody submitted is `TurnStarted` too: the CLI continues by itself. The driver keeps its wait for such a continuation (`Held.ready`): until that wait ends, it does not report `TurnEnded`. A message that cannot be built for the CLI is `DeliveryFailed` without uncertainty.
+
+Not on this path, and still written by the drivers: the states of subagents, the `Waiting` state of an input request, the outcome change on Stop while an outcome is held, compaction, context usage, drafts, titles and settlement.
 
 ## Task kinds and session rules
 
