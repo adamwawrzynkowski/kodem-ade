@@ -133,7 +133,9 @@ Open points that code cannot settle:
 
 ## Claude Code
 
-`providers/claude.rs` drives `claude -p` with stream-json input and output and `--permission-prompt-tool stdio`. `claude_transport.rs` owns the process and control requests; `claude_transcript.rs` maps events to transcript items. One process per task owner holds the conversation. A new task starts with a host-chosen `--session-id`; `provider_thread` is saved when the CLI first acknowledges input, and later processes use `--resume`. Model, effort and permission mode follow the task between turns through `set_model`, `apply_flag_settings` and `set_permission_mode`. Changing the account, clearing the effort, changing the automatic compaction rule, or entering or leaving `bypassPermissions` starts a new process with `--resume`.
+`providers/claude.rs` drives `claude -p` with stream-json input and output and `--permission-prompt-tool stdio`. `claude_transport.rs` owns the process and control requests; `claude_transcript.rs` maps events to transcript items. One process per task owner holds the conversation. A new task starts with a host-chosen `--session-id`; `provider_thread` is saved when the CLI first acknowledges input, and later processes use `--resume`. Model, effort and permission mode follow the task between turns through `set_model`, `apply_flag_settings` and `set_permission_mode`. Changing the account, clearing the effort, changing the automatic compaction rule, changing `Settings.claude_artifacts`, or entering or leaving `bypassPermissions` starts a new process with `--resume`.
+
+Print mode sets the entry point `sdk-cli`, and the CLI keeps Artifacts off for that entry point. `Settings.claude_artifacts` starts each process with `CLAUDE_CODE_ARTIFACT=1`, which turns them on. The setting is off by default. The probes that read the composer catalog start with the same variable, so the catalog of a new task lists the same commands as its session. Artifacts also need a first-party claude.ai sign-in whose plan and organization policy allow them; the CLI decides that, and Kodem does not check it.
 
 Every submission carries a UUID derived from its identity. The CLI echoes it in `command_lifecycle`, replayed user messages and the turn result, which confirms delivery. A message for a running turn is sent with `priority: "next"` and joins that turn. Reconciliation after a lost connection looks for the same UUID in the CLI's stored session transcript, restores the stored items and settles the turn. That transcript format is internal to the CLI, so anything unreadable leaves delivery unknown.
 
@@ -150,6 +152,10 @@ Without a model call: the control handshake and its catalog; `get_usage`, `apply
 With eight short Haiku turns in scratch directories: thinking deltas, image input, the echoed message UUID, steering with `priority: "next"`, interruption, compaction, the edit patch shape, session-scoped permission suggestions, `AskUserQuestion`, `ExitPlanMode` approval and refusal, a background subagent with its lifecycle events and a permission request of its own, and one complete turn through the host including an approval and a generated title. Scratch directories and their session transcripts were removed.
 
 Not covered: a turn under a second signed-in account, so the API accepting a session produced under another account is an assumption; the todo and task-list tools, which this CLI version did not offer, so their mapping follows the documented shapes only; `api_retry`, a reached usage limit, synchronous subagents and nested subagents; opening Terminal for sign-in; in-app Codex sign-in through `account/login/start`. `ToolStatus` has no interrupted value, so a tool cut off by Stop ends as failed.
+
+## Artifacts evidence
+
+Checked on 13 October 2026 against Claude Code 2.1.296, without a model call. The installed CLI's code reports `sdk_default_off` for the entry points `sdk-cli`, `sdk-ts` and `sdk-py` unless `CLAUDE_CODE_ARTIFACT` is true. The handshake of `claude -p` then lists three more commands: `/slides`, `artifact-capabilities` and `artifact-diagramming`, and `/design` changes from the access grant to "Make a new Design artifact from a brief". Not covered: a turn that publishes an Artifact, and an account whose plan or organization policy refuses them.
 
 ## Model and compaction evidence
 

@@ -25,6 +25,10 @@ const SLIDER_COLUMN: f32 = 220.;
 const CONTROL_COLUMN: f32 = 340.;
 /// Step of a compaction threshold slider, in percent.
 const THRESHOLD_STEP: f32 = 5.;
+/// Name of the switch that turns on Artifacts in Claude Code sessions.
+const ARTIFACTS_LABEL: &str = "Artifacts, /design and /slides";
+/// What the Artifacts switch does and what it needs.
+const ARTIFACTS_DETAIL: &str = "Claude Code keeps Artifacts off in sessions that an app starts. Turn this on so that /design and /slides publish to claude.ai. This needs a claude.ai sign-in on a Pro, Max, Team or Enterprise plan. Each task applies the change with its next message.";
 
 // One place where a compaction rule is stored: the shared rule, a provider or one of its models.
 #[derive(Clone)]
@@ -1180,6 +1184,9 @@ impl Shell {
             .child(defaults)
             .child(setting_group("Default access", None, t).child(access))
             .child(messages)
+            .when(provider == Provider::Claude, |d| {
+                d.child(self.claude_feature_settings(cx))
+            })
             .child(self.compaction_settings(provider, &runtime.models, cx))
             .child(
                 setting_group("Background tasks", None, t)
@@ -1198,6 +1205,29 @@ impl Shell {
                                 ),
                         ),
                     ),
+            )
+            .into_any_element()
+    }
+
+    // Builds the switches for the Claude Code features that the CLI keeps off in a session that
+    // an application starts.
+    fn claude_feature_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        setting_group("Claude Code features", None, self.theme)
+            .child(
+                self.setting_row(
+                    ARTIFACTS_LABEL,
+                    ARTIFACTS_DETAIL,
+                    controls::Switch::new("claude-artifacts", self.settings.claude_artifacts)
+                        .label(ARTIFACTS_LABEL)
+                        .on_click(cx.listener(|s, enabled: &bool, _, cx| {
+                            s.settings.claude_artifacts = *enabled;
+                            // The CLI lists other commands now, so the next completion reads them again.
+                            s.slash = Default::default();
+                            s.save_settings();
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                ),
             )
             .into_any_element()
     }

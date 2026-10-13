@@ -62,6 +62,8 @@ pub(super) struct Launch<'a> {
     pub(super) light: bool,
     /// When the CLI compacts by itself; absent leaves its own configuration in effect.
     pub(super) compact: Option<CompactRule>,
+    /// Turns on Artifacts, which the CLI keeps off in a session that an application embeds.
+    pub(super) artifacts: bool,
     /// Standing instructions added to the CLI's own system prompt.
     pub(super) instructions: Option<&'a str>,
     /// Tools the session may use without asking.
@@ -164,6 +166,11 @@ impl Transport {
                     .env_remove("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE");
             }
             None => {}
+        }
+        // Print mode starts without Artifacts unless this variable is set. The `/design` and
+        // `/slides` commands publish Artifacts, so the CLI lists them only when it is set.
+        if launch.artifacts {
+            command.env("CLAUDE_CODE_ARTIFACT", "1");
         }
         let mut child = command
             .stdin(Stdio::piped())

@@ -269,6 +269,8 @@ struct Session {
     bypass: bool,
     /// The CLI reads its automatic compaction rule from the environment it starts with.
     compact: CompactRule,
+    /// The CLI reads from its starting environment whether Artifacts are on.
+    artifacts: bool,
     /// Cost of this task's earlier processes; each process counts from zero.
     cost_base: f64,
 }
@@ -279,6 +281,7 @@ impl Session {
         account: &Account,
         model: Option<String>,
         compact: CompactRule,
+        artifacts: bool,
     ) -> Result<Self> {
         let access = access_of(task);
         let (conversation, id, stored) = match &task.provider_thread {
@@ -321,6 +324,7 @@ impl Session {
             conversation,
             light: false,
             compact: Some(compact),
+            artifacts,
             instructions: instructions.as_deref(),
             allowed_tools: &allowed,
             // A delegated task that reads its parent's checkout must not change it.
@@ -344,6 +348,7 @@ impl Session {
             bypass: access == "bypassPermissions",
             access,
             compact,
+            artifacts,
             cost_base: task
                 .context_usage
                 .as_ref()
@@ -354,11 +359,12 @@ impl Session {
     }
 
     // Some choices are fixed when the process starts and need a new one to change.
-    fn stale(&self, task: &Task, compact: CompactRule) -> bool {
+    fn stale(&self, task: &Task, compact: CompactRule, artifacts: bool) -> bool {
         task.account_id() != self.account.id
             || (access_of(task) == "bypassPermissions") != self.bypass
             || (task.effort.is_none() && self.effort.is_some())
             || compact != self.compact
+            || artifacts != self.artifacts
     }
 
     // Applies choices the CLI can change in place, before the next turn starts. `model` is the
@@ -449,15 +455,16 @@ pub(super) fn run(
     task_id: &str,
     controls: mpsc::Receiver<provider::Control>,
 ) -> Result<()> {
-    let (task, account, model, compact) = {
+    let (task, account, model, compact, artifacts) = {
         let h = host.lock().unwrap();
         let task = h.store.task(task_id)?;
         let account = accounts::for_task(&h, &task)?;
         let model = provider::effective_model(&h, &task);
         let compact = provider::compact_rule(&h, &task)?;
-        (task, account, model, compact)
+        let artifacts = h.store.settings()?.claude_artifacts;
+        (task, account, model, compact, artifacts)
     };
-    let session = Session::open(&task, &account, model, compact)?;
+    let session = Session::open(&task, &account, model, compact, artifacts)?;
     publish(&host, &account, &session.initialized);
     crate::titles::start(host.clone(), task_id)?;
     let mut owner = Owner {
@@ -938,19 +945,20 @@ impl Owner<'_> {
     // new process starts for choices fixed at launch. The old one stops first, so two processes
     // never write the same conversation.
     fn prepare(&mut self, task: &Task) -> Result<()> {
-        let (account, model, compact) = {
+        let (account, model, compact, artifacts) = {
             let h = self.host.lock().unwrap();
             (
                 accounts::for_task(&h, task)?,
                 provider::effective_model(&h, task),
                 provider::compact_rule(&h, task)?,
+                h.store.settings()?.claude_artifacts,
             )
         };
-        if self.session.stale(task, compact) {
+        if self.session.stale(task, compact, artifacts) {
             self.session.transport.stop();
             let mut resumable = task.clone();
             resumable.provider_thread = self.session.stored.then(|| self.session.id.clone());
-            self.session = Session::open(&resumable, &account, model.clone(), compact)?;
+            self.session = Session::open(&resumable, &account, model.clone(), compact, artifacts)?;
             publish(self.host, &account, &self.session.initialized);
         }
         self.session.configure(task, model)
@@ -1589,7 +1597,10 @@ fn merge_rate_limit(current: &mut Option<UsageLimits>, info: &Value) {
     *current = Some(usage);
 }
 
-fn probe(cwd: &Path, account: &Account, light: bool) -> Result<(Transport, Value)> {
+// The handshake lists the commands of the session, so a probe starts with the same Artifacts
+// setting as a task.
+fn probe(host: &Shared, cwd: &Path, account: &Account, light: bool) -> Result<(Transport, Value)> {
+    let artifacts = host.lock().unwrap().store.settings()?.claude_artifacts;
     Transport::start(&Launch {
         cwd,
         account,
@@ -1599,6 +1610,7 @@ fn probe(cwd: &Path, account: &Account, light: bool) -> Result<(Transport, Value
         conversation: Conversation::Ephemeral,
         light,
         compact: None,
+        artifacts,
         instructions: None,
         allowed_tools: &[],
         disallowed_tools: &[],
@@ -1635,7 +1647,7 @@ fn live(host: &Shared, account: &Account) -> Option<mpsc::Sender<provider::Contr
 /// Reads models, permission modes and the signed-in identity from a handshake, without a turn.
 pub(super) fn discover(host: Shared, account: &Account, cwd: Option<PathBuf>) -> Result<()> {
     let cwd = cwd.unwrap_or(std::env::current_dir()?);
-    let (mut transport, initialized) = probe(&cwd, account, true)?;
+    let (mut transport, initialized) = probe(&host, &cwd, account, true)?;
     let mut info = runtime(&initialized);
     // The CLI reports only the effort in effect, which is what a new task starts with.
     if let Ok(settings) = transport.call(json!({"subtype":"get_settings"}))
@@ -1665,7 +1677,7 @@ pub(super) fn discover(host: Shared, account: &Account, cwd: Option<PathBuf>) ->
 fn read_usage(host: &Shared, account: &Account) -> Result<UsageLimits> {
     let report = match live(host, account) {
         Some(session) => query(&session, "kodem/control", json!({"subtype":"get_usage"}))?,
-        None => probe(&std::env::current_dir()?, account, true)?
+        None => probe(host, &std::env::current_dir()?, account, true)?
             .0
             .call(json!({"subtype":"get_usage"}))?,
     };
@@ -1848,7 +1860,7 @@ pub(super) fn composer_catalog(
     let (cwd, owner) = location(host, task_id, project_id)?;
     let initialized = match owner {
         Some(owner) => query(&owner, "kodem/initialized", Value::Null)?,
-        None => probe(&cwd, account, true)?.1,
+        None => probe(host, &cwd, account, true)?.1,
     };
     let mut result = catalog(&initialized, started);
     result.skills = skills(&cwd, account);
@@ -1903,7 +1915,7 @@ pub(super) fn resources(
             query(&owner, "kodem/control", json!({"subtype":"mcp_status"})),
         ),
         None => {
-            let (mut transport, initialized) = probe(&cwd, account, false)?;
+            let (mut transport, initialized) = probe(host, &cwd, account, false)?;
             let servers = transport.call(json!({"subtype":"mcp_status"}));
             (initialized, servers)
         }

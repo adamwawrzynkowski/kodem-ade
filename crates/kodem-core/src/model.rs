@@ -1260,6 +1260,9 @@ pub struct Settings {
     /// Host-owned. Keyed by [`AutoCompact::model_key`].
     pub access_choices: std::collections::BTreeMap<String, AccessChoice>,
     pub auto_compact: AutoCompact,
+    /// Turns on Artifacts in Claude Code sessions, which the CLI keeps off outside its own
+    /// terminal. The `/design` and `/slides` commands need them.
+    pub claude_artifacts: bool,
     pub notifications: NotificationSettings,
     pub sidebar_width: f32,
     pub review_width: f32,
@@ -1312,6 +1315,7 @@ impl Default for Settings {
             model_choices: Default::default(),
             access_choices: Default::default(),
             auto_compact: AutoCompact::default(),
+            claude_artifacts: false,
             accounts: Vec::new(),
             default_worktree: false,
             show_review: true,
