@@ -130,7 +130,11 @@ fn primary_checkout(cwd: &Path) -> Option<PathBuf> {
 }
 
 /// Records each linked checkout's own starting commit without changing its working tree.
+/// A folder without Git links no checkouts.
 pub fn repository_baselines(cwd: &Path) -> Result<Vec<RepositoryBaseline>> {
+    if !is_repository(cwd) {
+        return Ok(Vec::new());
+    }
     Ok(repositories(cwd)?
         .into_iter()
         .skip(1)

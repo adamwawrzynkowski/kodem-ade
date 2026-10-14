@@ -132,11 +132,19 @@ pub(super) fn run_check(host: Shared, task_id: String, command: String) -> Resul
     };
     std::thread::spawn(move || {
         let result = (|| -> Result<()> {
-            let revision = git::head(&cwd).unwrap_or_else(|| "unborn HEAD".into());
-            let before = git::command(
-                &cwd,
-                &["status".as_ref(), "--porcelain=v1".as_ref(), "-z".as_ref()],
-            )?;
+            // A folder without Git has no commit or status to record.
+            let (revision, status) = if git::is_repository(&cwd) {
+                let before = git::command(
+                    &cwd,
+                    &["status".as_ref(), "--porcelain=v1".as_ref(), "-z".as_ref()],
+                )?;
+                (
+                    git::head(&cwd).unwrap_or_else(|| "unborn HEAD".into()),
+                    git::digest(&before),
+                )
+            } else {
+                ("no Git repository".into(), "none".into())
+            };
             let mut child = Command::new("/bin/zsh")
                 .args(["-lc", &command])
                 .current_dir(&cwd)
@@ -164,7 +172,7 @@ pub(super) fn run_check(host: Shared, task_id: String, command: String) -> Resul
             let text = format!(
                 "$ {command}\nDirectory: {}\nHEAD before: {revision}\nWorking status digest: {}\nEnvironment: {} / {}\nExit: {}\nOutput limited to 512 KiB per stream.\n\n{}\n{}",
                 cwd.display(),
-                git::digest(&before),
+                status,
                 std::env::consts::OS,
                 std::env::consts::ARCH,
                 code.code().map_or("signal".into(), |c| c.to_string()),

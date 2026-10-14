@@ -19,6 +19,7 @@ impl Shell {
         let title = match self.panel {
             Panel::CustomizeProject => "Customize project",
             Panel::RemoveProject => "Remove project?",
+            Panel::NoRepository => "No Git repository here",
             Panel::Settings => "Settings",
             Panel::Setup => "Welcome to Kodem",
             Panel::Resources => "Skills, instructions & MCP",
@@ -162,6 +163,70 @@ impl Shell {
                                     })
                                 })),
                             ),
+                        );
+                }
+            }
+            Panel::NoRepository => {
+                if let Some(path) = self.folder_without_git.clone() {
+                    content = content
+                        .child(
+                            div()
+                                .text_size(text_px(14.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(
+                                    path.file_name()
+                                        .unwrap_or(path.as_os_str())
+                                        .to_string_lossy()
+                                        .into_owned(),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .font_family(crate::theme::mono())
+                                .text_size(text_px(11.))
+                                .text_color(theme.subtle)
+                                .text_ellipsis()
+                                .child(path.to_string_lossy().into_owned()),
+                        )
+                        .child(
+                            div()
+                                .text_size(text_px(13.))
+                                .line_height(relative(1.45))
+                                .text_color(theme.muted)
+                                .child("This folder has no Git repository of its own. Initialize Git to get task worktrees, branches and tracked changes, or open it anyway and let tasks edit the folder directly."),
+                        )
+                        .when_some(self.error.clone(), |d, error| {
+                            d.child(settings::error_block("Error", error, theme))
+                        })
+                        .child(footer_rule(theme))
+                        .child(
+                            footer_actions()
+                                .child(
+                                    self.ghost("no-repository-cancel", "close", "Cancel")
+                                        .on_click(cx.listener(|s, _, _, cx| {
+                                            s.folder_without_git = None;
+                                            s.panel = Panel::None;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    self.ghost("no-repository-open", "folder-open", "Open anyway")
+                                        .on_click(cx.listener(|s, _, _, _| {
+                                            s.open_folder_without_git(
+                                                MissingRepository::OpenAnyway,
+                                            )
+                                        })),
+                                )
+                                .child(
+                                    self.primary(
+                                        "no-repository-initialize",
+                                        "branch",
+                                        "Initialize Git and open",
+                                    )
+                                    .on_click(cx.listener(|s, _, _, _| {
+                                        s.open_folder_without_git(MissingRepository::Initialize)
+                                    })),
+                                ),
                         );
                 }
             }
@@ -377,6 +442,7 @@ impl Shell {
         let presentation = match self.panel {
             Panel::CustomizeProject => Some(("palette", "Name, accent and icon")),
             Panel::RemoveProject => Some(("trash-2", "Files and local history stay on disk")),
+            Panel::NoRepository => Some(("folder", "Choose how this folder opens")),
             Panel::Setup => Some(("sparkles", "Check the providers and make the first choices")),
             Panel::Resources => Some(("code", "What the provider can use in this task")),
             Panel::Check => Some((

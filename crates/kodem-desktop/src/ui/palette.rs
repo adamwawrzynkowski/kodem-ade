@@ -369,8 +369,11 @@ impl Shell {
                 } else {
                     "chat"
                 };
-                // A chat has neither a project nor a branch, so it names its workspace.
-                let detail = if task.kind.has_project() {
+                // A chat has neither a project nor a branch, so it names its workspace. A folder
+                // without Git has no branch.
+                let detail = if task.kind.has_project() && task.branch.is_empty() {
+                    project.to_string()
+                } else if task.kind.has_project() {
                     format!("{project} / {}", task.branch)
                 } else {
                     task.kind.label().to_owned()

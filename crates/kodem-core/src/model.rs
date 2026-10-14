@@ -1787,6 +1787,10 @@ pub struct Workspace {
     pub notification_delivery: NotificationDelivery,
     pub protocol: u32,
     pub projects: Vec<Project>,
+    /// Identities of the projects whose folder has no Git repository of its own. The host checks
+    /// the folders each time it sends the workspace, so a repository made later is noticed.
+    #[serde(default)]
+    pub without_git: std::collections::BTreeSet<String>,
     pub tasks: Vec<Task>,
     pub settings: Settings,
     // Older hosts must deserialize so connect_or_start can negotiate an idle upgrade.
@@ -2028,6 +2032,16 @@ pub enum TaskEdit {
         effort: Option<String>,
     },
 }
+/// What opening a project does with a folder that is not the root of a Git repository.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MissingRepository {
+    /// Adds nothing and answers with `Response::NoRepository`, so the user can choose.
+    Ask,
+    /// Creates an empty repository in the folder, then adds it.
+    Initialize,
+    /// Adds the folder without Git. Its tasks have no worktrees, branches or tracked changes.
+    OpenAnyway,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Request {
     SubagentThread {
@@ -2094,8 +2108,11 @@ pub enum Request {
     Reconcile {
         task_id: String,
     },
+    /// Adds the folder as a project. `missing_repository` decides what happens when the folder
+    /// is not the root of a Git repository.
     OpenProject {
         path: PathBuf,
+        missing_repository: MissingRepository,
     },
     CustomizeProject {
         project_id: String,
@@ -2344,6 +2361,9 @@ pub enum Response {
     Task(TaskView),
     SubagentThread(SubagentView),
     Project(Project),
+    /// The canonical folder that `Request::OpenProject` did not add, because it has no Git
+    /// repository of its own.
+    NoRepository(PathBuf),
     Account(Account),
     Created(Task),
     ReviewTargets(ReviewTargets),

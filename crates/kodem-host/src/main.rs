@@ -379,10 +379,16 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                     !task.kind.has_project() || projects.iter().any(|p| p.id == task.project_id)
                 })
                 .collect();
+            let without_git = projects
+                .iter()
+                .filter(|p| !git::is_repository(&p.path))
+                .map(|p| p.id.clone())
+                .collect();
             Ok(Response::Workspace(Workspace {
                 notification_delivery: h.notifications.status(),
                 protocol: ipc::PROTOCOL,
                 projects,
+                without_git,
                 tasks,
                 settings: h.store.settings()?,
                 runtimes: h.runtimes.clone(),
@@ -458,8 +464,21 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             h.store.save_access_choice(preferences)?;
             Ok(Response::Ok)
         }
-        Request::OpenProject { path } => {
-            let path = git::repository(&path)?;
+        Request::OpenProject {
+            path,
+            missing_repository,
+        } => {
+            let mut path = path.canonicalize()?;
+            if !git::is_repository(&path) {
+                match missing_repository {
+                    MissingRepository::Ask => return Ok(Response::NoRepository(path)),
+                    MissingRepository::Initialize => git::initialize(&path)?,
+                    MissingRepository::OpenAnyway => {}
+                }
+            }
+            if git::is_repository(&path) {
+                path = git::repository(&path)?;
+            }
             Ok(Response::Project(
                 host.lock().unwrap().store.add_project(path)?,
             ))
@@ -565,6 +584,10 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         }
         Request::ReviewTargets { project_id } => {
             let p = project(host, &project_id)?;
+            ensure!(
+                git::is_repository(&p.path),
+                "This project has no Git repository, so it has no branches or pull requests to review"
+            );
             Ok(Response::ReviewTargets(git::review_targets(
                 &project_id,
                 &p.path,

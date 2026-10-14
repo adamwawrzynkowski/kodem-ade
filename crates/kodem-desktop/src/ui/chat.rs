@@ -815,20 +815,29 @@ impl Shell {
         // A new task says where it will work in a row above the draft.
         if empty && mode == TaskKind::Coding {
             let worktree = self.composer_worktree();
+            // A folder without Git has no worktrees, so its task always edits the folder.
+            let has_git = self
+                .composer_project()
+                .is_none_or(|project| self.project_has_git(&project.id));
             let status = div().px(px(8.)).pt(px(6.)).flex().items_center().child(
                 self.ghost(
                     "composer-worktree",
-                    "branch",
-                    if worktree {
+                    if has_git { "branch" } else { "folder" },
+                    if !has_git {
+                        "No Git repository"
+                    } else if worktree {
                         "New worktree"
                     } else {
                         "Current checkout"
                     },
                 )
+                .disabled(!has_git)
                 .when(worktree, |b| b.text_color(t.info))
                 .tooltip(move |_, cx| {
                     cx.new(|_| Hint {
-                        text: if worktree {
+                        text: if !has_git {
+                            "This task edits the project folder. The folder has no Git repository, so its changes are not tracked.".into()
+                        } else if worktree {
                             "This task works in its own Git worktree and branch.".into()
                         } else {
                             "This task edits the repository's current checkout.".into()

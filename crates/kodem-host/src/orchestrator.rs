@@ -684,8 +684,11 @@ pub(crate) fn observe(host: &Shared, task_id: &str, outcome: TurnOutcome) -> Res
                 .ok()
                 .map(|_| name)
         });
-    // A chat has no checkout to capture.
-    let review = (task.state.active() && task.kind.has_project()).then(|| {
+    // A chat has no checkout to capture, and a folder without Git has no changes to compare.
+    let review = (task.state.active()
+        && task.kind.has_project()
+        && kodem_core::git::is_repository(&task.cwd))
+    .then(|| {
         let capture = kodem_core::git::capture(
             &task,
             if task.baseline.is_some() {

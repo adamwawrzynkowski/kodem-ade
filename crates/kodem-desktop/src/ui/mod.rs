@@ -52,6 +52,7 @@ use gpui::{prelude::*, *};
 use kodem_core::{self as core, *};
 use std::{
     collections::{HashMap, HashSet},
+    path::PathBuf,
     sync::mpsc,
     time::Duration,
 };
@@ -97,6 +98,7 @@ enum Panel {
     None,
     CustomizeProject,
     RemoveProject,
+    NoRepository,
     ChatProjects,
     Settings,
     Setup,
@@ -183,6 +185,8 @@ pub struct Shell {
     // Project chosen for the next task, independent of the currently viewed thread.
     selected_project: Option<String>,
     editing_project: Option<Project>,
+    // Folder without Git that waits for the user to choose how it opens.
+    folder_without_git: Option<PathBuf>,
     // Narrows the built-in icons in the project editor by name.
     icon_filter: Entity<TextInput>,
     greeting_name: String,
@@ -482,6 +486,7 @@ impl Shell {
             settings_provider: Provider::default(),
             selected_project: None,
             editing_project: None,
+            folder_without_git: None,
             icon_filter,
             greeting_name: user_first_name(),
             show_review: true,
@@ -840,8 +845,14 @@ impl Shell {
                     self.open_empty_chat(cx);
                 }
                 self.selected_project = Some(project.id);
+                self.folder_without_git = None;
                 self.panel = Panel::None;
                 self.send(core::Request::Hello);
+            }
+            Response::NoRepository(path) => {
+                self.error = None;
+                self.folder_without_git = Some(path);
+                self.panel = Panel::NoRepository;
             }
             Response::Created(task) => {
                 self.new_worktree_override = None;
@@ -1476,18 +1487,55 @@ impl Shell {
                 && let Some(path) = paths.first()
             {
                 let path = path.clone();
-                let _ = this.update(cx, |s, _| s.send(core::Request::OpenProject { path }));
+                let _ = this.update(cx, |s, _| {
+                    s.send(core::Request::OpenProject {
+                        path,
+                        missing_repository: MissingRepository::Ask,
+                    })
+                });
             }
         })
         .detach();
+    }
+    /// Opens the folder that has no Git repository, as the user chose in its dialog.
+    fn open_folder_without_git(&mut self, choice: MissingRepository) {
+        if let Some(path) = self.folder_without_git.clone() {
+            self.send(core::Request::OpenProject {
+                path,
+                missing_repository: choice,
+            });
+        }
+    }
+    /// Tells whether a project's folder has a Git repository of its own.
+    fn project_has_git(&self, project_id: &str) -> bool {
+        self.workspace
+            .as_ref()
+            .is_none_or(|workspace| !workspace.without_git.contains(project_id))
+    }
+    /// Reports that the open task works in a Git checkout, so its changes can be compared.
+    fn tracks_changes(&self) -> bool {
+        self.has_checkout()
+            && self
+                .workspace
+                .as_ref()
+                .and_then(|w| {
+                    w.tasks
+                        .iter()
+                        .find(|t| self.selected.as_ref() == Some(&t.id))
+                })
+                .is_none_or(|task| self.project_has_git(&task.project_id))
     }
     fn new_task(&mut self, _: &NewTask, window: &mut Window, cx: &mut Context<Self>) {
         self.open_empty_chat(cx);
         window.focus(&self.input.read(cx).focus_handle(cx), cx);
     }
+    /// Tells whether the next task gets its own worktree. A folder without Git has none.
     fn composer_worktree(&self) -> bool {
-        self.new_worktree_override
-            .unwrap_or(self.settings.default_worktree)
+        self.composer_project()
+            .is_none_or(|project| self.project_has_git(&project.id))
+            && self
+                .new_worktree_override
+                .unwrap_or(self.settings.default_worktree)
     }
     fn open_empty_chat(&mut self, cx: &mut Context<Self>) {
         if self.creating_task {

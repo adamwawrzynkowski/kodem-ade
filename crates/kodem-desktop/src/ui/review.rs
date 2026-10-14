@@ -119,6 +119,23 @@ impl Shell {
                         .child(caps("Changes", t).mr(px(6.))),
                 )
             });
+        // A folder without Git has nothing to compare its files with.
+        if !self.tracks_changes() {
+            return motion::reveal(
+                "review-enter",
+                panel.child(div().flex_1().child(kit::empty_state(
+                    "No Git repository",
+                    "This folder has no Git repository, so its changes are not tracked.",
+                    dither::DitherField::Glow {
+                        x: 0.5,
+                        y: 0.55,
+                        radius: 0.7,
+                        strength: 0.85,
+                    },
+                    t,
+                ))),
+            );
+        }
         if self.new_diff.is_some() {
             panel = panel.child(
                 div()

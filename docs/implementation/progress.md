@@ -585,3 +585,20 @@ Checked with a locked `cargo build` of the workspace and `cargo fmt --all -- --c
 | Chat background | All themes, five states and six window sizes over 160 moments each, with the blur computed as the shader does: behind messages the tint stays below 6% on dark themes and 4% on light ones, text loses at most 15% of its contrast and stays at 6.7:1 or more, muted text at 4.8:1 or more. Each light is short enough for the shader's four samples |
 
 Not checked, because app control and screenshots are prohibited here: every screen at a scale other than 100%, the look of each theme and typeface, and the motion of the background.
+
+## Projects without Git (protocol 36)
+
+Recorded on 14 October 2026. Before this change, Open Repository resolved the chosen folder with `git rev-parse --show-toplevel`. A folder without a repository inside the checkout of another one therefore opened the repository above it.
+
+| Part | Where |
+| --- | --- |
+| Git stays in its folder | `kodem-core/src/git.rs`: `git_process` sets `GIT_CEILING_DIRECTORIES` to the parent of the folder it runs in, so no Git command, checkpoint or restore reaches a repository above a project |
+| Detection and setup | `git::is_repository` (the folder has its own `.git`) and `git::initialize` (`git init`, no commit) |
+| Opening | `Request::OpenProject` carries `MissingRepository`: `Ask` answers `Response::NoRepository` and adds nothing, `Initialize` runs `git init` first, `OpenAnyway` adds the folder as it is |
+| The dialog | `ui/panels.rs`: `Panel::NoRepository`, "No Git repository here", with Cancel, Open anyway, and Initialize Git and open |
+| The workspace | `Workspace.without_git` names the projects whose folder has no `.git`. The host checks this each time it sends the workspace, so a repository made later is noticed |
+| Tasks in such a folder | No worktree (`git::worktree` and the composer refuse it), an empty branch (`git::branch`), no linked checkouts, no checkpoints, no review capture after a turn (`orchestrator::observe`), no review targets. The changes panel says "No Git repository" and does not poll. A project check records "no Git repository". The file list walks the folder, without hidden entries, up to 20,000 files |
+
+Checked with a locked `cargo build` of the workspace and `cargo fmt --all -- --check`. Clippy with `-D warnings` reports the six earlier findings and no new one. One temporary test, removed afterward, used a repository with one commit and a folder without Git inside it, in a scratch directory. In the folder: `is_repository` is false, `repository` fails, there is no head, the branch is empty, there are no linked checkouts, a checkpoint fails and writes no reference into the repository above, a worktree is refused with the new message, and the file list holds the two visible files only. The repository above still resolves, has its branch and head, takes a checkpoint, lists its files, and makes a task worktree that has its branch, head, files and checkpoint. Through the real request handler: `Ask` answers with the canonical folder and adds no project; `OpenAnyway` adds it, and a second open returns the same project; a repository opens without a question; review targets and a capture fail with the new messages; `Initialize` makes the same project a repository of its own with a branch and no commit, and a capture then works. Passed.
+
+Not checked, because app control is prohibited here: the dialog, the composer control and the changes panel on screen. A provider's own tools still run Git as the provider does, so an agent's `git status` in such a folder can still see a repository above it.

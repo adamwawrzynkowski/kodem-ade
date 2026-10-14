@@ -133,18 +133,21 @@ impl Shell {
             );
         if let Some(view) = self.view.as_ref().filter(|_| self.mode.has_project()) {
             let review = view.task.kind == TaskKind::Review;
+            // A folder without Git has no branch to name.
             project_path = project_path
-                .child(figure("/", t.subtle))
-                .child(icon("branch").size(px(12.)).text_color(t.subtle))
-                .child(
-                    div()
-                        .min_w_0()
-                        .font_family(crate::theme::mono())
-                        .text_size(text_px(11.))
-                        .text_color(t.muted)
-                        .text_ellipsis()
-                        .child(view.task.branch.clone()),
-                )
+                .when(!view.task.branch.is_empty(), |d| {
+                    d.child(figure("/", t.subtle))
+                        .child(icon("branch").size(px(12.)).text_color(t.subtle))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .font_family(crate::theme::mono())
+                                .text_size(text_px(11.))
+                                .text_color(t.muted)
+                                .text_ellipsis()
+                                .child(view.task.branch.clone()),
+                        )
+                })
                 .when(view.task.owns_worktree && !review, |d| {
                     d.child(kit::chip("WORKTREE", t.info))
                 })

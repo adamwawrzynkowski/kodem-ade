@@ -655,8 +655,10 @@ impl Shell {
             None => provider.label().to_owned(),
         };
         // The second line names where the task works. A chat has no branch, so it names its
-        // model instead.
-        let place = if task.kind.has_project() {
+        // model instead. A folder without Git has no branch either.
+        let place = if task.kind.has_project() && task.branch.is_empty() {
+            "No Git".to_owned()
+        } else if task.kind.has_project() {
             task.branch.clone()
         } else {
             self.model_name(&AgentPreferences {

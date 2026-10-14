@@ -14,6 +14,7 @@ use std::{
     process::{Command, Stdio},
 };
 const MAX_FILE: u64 = 2 * 1024 * 1024;
+const MAX_FOLDER_FILES: usize = 20_000;
 pub mod checkpoint;
 mod repositories;
 mod review;
@@ -51,6 +52,11 @@ fn search_path() -> Result<OsString> {
 
 fn git_process(cwd: &Path) -> Result<Command> {
     let mut command = Command::new("git");
+    // Kodem runs Git at the root of a checkout. A project folder without a repository of its own
+    // must not use the repository of a folder above it.
+    if let Some(parent) = cwd.canonicalize().ok().as_deref().and_then(Path::parent) {
+        command.env("GIT_CEILING_DIRECTORIES", parent);
+    }
     command
         .current_dir(cwd)
         .env("PATH", search_path()?)
@@ -74,6 +80,18 @@ pub fn command(cwd: &Path, args: &[&OsStr]) -> Result<Vec<u8>> {
 fn query(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
     command(cwd, &args.iter().map(OsStr::new).collect::<Vec<_>>())
 }
+/// Tells whether a folder is the root of a Git checkout.
+///
+/// Git never looks above the folder that it runs in, so a folder without its own `.git` has no
+/// repository, even inside the checkout of another one.
+pub fn is_repository(path: &Path) -> bool {
+    path.join(".git").exists()
+}
+/// Creates an empty repository in a folder, without a commit.
+pub fn initialize(path: &Path) -> Result<()> {
+    query(path, &["init", "--quiet"])?;
+    Ok(())
+}
 /// Resolves and validates a local repository root without changing branches.
 pub fn repository(path: &Path) -> Result<PathBuf> {
     let canonical = path.canonicalize()?;
@@ -92,8 +110,12 @@ pub fn head(cwd: &Path) -> Option<String> {
         .ok()
         .map(|v| String::from_utf8_lossy(&v).trim().to_owned())
 }
-/// Returns branch metadata without checking out the branch.
+/// Returns branch metadata without checking out the branch. A folder without Git has no branch,
+/// so its name is empty.
 pub fn branch(cwd: &Path) -> String {
+    if !is_repository(cwd) {
+        return String::new();
+    }
     query(cwd, &["symbolic-ref", "--short", "HEAD"])
         .ok()
         .map(|v| String::from_utf8_lossy(&v).trim().to_owned())
@@ -175,6 +197,10 @@ pub fn branch_merged(project: &Path, task: &Task) -> bool {
 ///
 /// The branch starts at `start` when it names a commit, otherwise at the project's current commit.
 pub fn worktree(project: &Path, root: &Path, id: &str, start: Option<&str>) -> Result<PathBuf> {
+    ensure!(
+        is_repository(project),
+        "Initialize Git in this project before making a task worktree, or choose the current folder"
+    );
     ensure!(
         head(project).is_some(),
         "Create an initial commit before making a task worktree, or choose the current checkout"
@@ -423,6 +449,10 @@ fn parse_patch(bytes: &[u8]) -> (Vec<DiffLine>, Option<String>) {
 }
 /// Captures each related checkout independently, retrying boundedly when its files change.
 pub fn capture(task: &Task, comparison: Comparison) -> Result<DiffSnapshot> {
+    ensure!(
+        is_repository(&task.cwd),
+        "This folder has no Git repository, so its changes are not tracked"
+    );
     let roots = repositories(&task.cwd)?;
     let mut snapshot = capture_repository(task, comparison.clone())?;
     for root in roots.iter().skip(1) {
@@ -838,7 +868,13 @@ pub fn stage(task: &Task, snapshot: &DiffSnapshot, file: usize) -> Result<()> {
     result
 }
 /// Lists tracked and untracked files as original path bytes.
+///
+/// A folder without Git has no ignore rules that leave out generated files, so its list skips
+/// hidden entries and stops at a limit.
 pub fn files(cwd: &Path) -> Result<Vec<Vec<u8>>> {
+    if !is_repository(cwd) {
+        return folder_files(cwd);
+    }
     Ok(query(
         cwd,
         &[
@@ -853,6 +889,38 @@ pub fn files(cwd: &Path) -> Result<Vec<Vec<u8>>> {
     .filter(|p| !p.is_empty())
     .map(|p| p.to_vec())
     .collect())
+}
+// Walks the folder breadth first, so the limit keeps the files nearest to its root. Symbolic
+// links are listed as files and never followed.
+fn folder_files(cwd: &Path) -> Result<Vec<Vec<u8>>> {
+    let mut files = Vec::new();
+    let mut folders = std::collections::VecDeque::from([PathBuf::new()]);
+    while let Some(relative) = folders.pop_front() {
+        let entries = match fs::read_dir(cwd.join(&relative)) {
+            Ok(entries) => entries,
+            Err(error) if relative.as_os_str().is_empty() => return Err(error.into()),
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.as_bytes().starts_with(b".") {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = relative.join(name);
+            if kind.is_dir() {
+                folders.push_back(path);
+            } else {
+                files.push(path.into_os_string().into_vec());
+                if files.len() >= MAX_FOLDER_FILES {
+                    return Ok(files);
+                }
+            }
+        }
+    }
+    Ok(files)
 }
 /// Reads a bounded regular file inside the task checkout without following outside symlinks.
 pub fn read_file(cwd: &Path, path: &[u8]) -> Result<String> {
