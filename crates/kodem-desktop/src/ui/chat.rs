@@ -1090,7 +1090,7 @@ impl Shell {
             "arrow-up"
         };
         let submit = if stop_only {
-            self.tinted("composer-submit", submit_glyph, "", t.removed)
+            self.glass("composer-submit", submit_glyph, "", t.removed)
         } else {
             self.primary("composer-submit", submit_glyph, "")
                 .disabled(blocked)

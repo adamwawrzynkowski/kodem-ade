@@ -32,6 +32,87 @@ pub(super) fn glint(color: Hsla, from: Edge) -> Div {
     .layer()
 }
 
+/// Static dots of light that thin out from the top edge of a glass control, so its sheen reads
+/// as dither on top of the smooth body.
+pub(super) fn sheen(color: Hsla) -> Div {
+    Dither::new(DitherField::Fade {
+        from: Edge::Top,
+        start: 0.6,
+        end: -0.35,
+    })
+    .color(color)
+    .grid(2., 1.)
+    .toned()
+    .corner_radius(crate::theme::RADIUS_CONTROL)
+    .layer()
+}
+
+/// Where the light falls on a glass control.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Pose {
+    Rest,
+    Hover,
+    Pressed,
+}
+
+/// Returns the body of a glass control in a tone. It is lit from above, a little more under the
+/// pointer, and lit from below while pressed, so the press reads as the key sinking.
+pub(super) fn glass_fill(tone: Hsla, pose: Pose) -> Background {
+    let (top, bottom) = match pose {
+        Pose::Rest => (lighten(tone, 0.08), lighten(tone, -0.06)),
+        Pose::Hover => (lighten(tone, 0.12), lighten(tone, -0.03)),
+        Pose::Pressed => (lighten(tone, -0.07), lighten(tone, 0.02)),
+    };
+    linear_gradient(
+        180.,
+        linear_color_stop(top, 0.),
+        linear_color_stop(bottom, 1.),
+    )
+}
+
+/// Returns the darker edge that frames a glass control like a bezel.
+pub(super) fn glass_bezel(tone: Hsla) -> Hsla {
+    lighten(tone, -0.14)
+}
+
+/// Returns the light and shadow of a glass control: a bright rim inside its top edge, light that
+/// gathers inside its bottom edge as in a lens, a tight contact shadow, and a soft glow of its
+/// tone below it. A pressed control loses the rim, takes a dark inner edge and its glow tightens.
+pub(super) fn glass_depth(tone: Hsla, theme: Theme, pose: Pose) -> Vec<BoxShadow> {
+    let shadow = |inset: bool, color: Hsla, y: f32, blur: f32, spread: f32| BoxShadow {
+        inset,
+        color,
+        offset: point(px(0.), px(y)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+    };
+    let glow = if theme.light { 0.3 } else { 0.4 };
+    let contact = gpui::black().opacity(if theme.light { 0.18 } else { 0.42 });
+    match pose {
+        Pose::Rest | Pose::Hover => {
+            let lift = if pose == Pose::Hover { 1.35 } else { 1. };
+            vec![
+                shadow(true, gpui::white().opacity(0.42), 1., 0., 0.),
+                shadow(true, gpui::white().opacity(0.22), -1.5, 2., 0.),
+                shadow(false, contact, 1., 1.5, 0.),
+                shadow(false, tone.opacity(glow * lift), 3., 8. * lift, -2.),
+            ]
+        }
+        Pose::Pressed => vec![
+            shadow(true, gpui::black().opacity(0.26), 1.5, 2., 0.),
+            shadow(true, gpui::white().opacity(0.14), -1., 1.5, 0.),
+            shadow(false, contact, 0.5, 1., 0.),
+            shadow(false, tone.opacity(glow * 0.6), 1., 4., -2.),
+        ],
+    }
+}
+
+// Moves a color's lightness by `amount` and keeps its hue, saturation and alpha.
+fn lighten(mut color: Hsla, amount: f32) -> Hsla {
+    color.lightness = (color.lightness + amount).clamp(0., 1.);
+    color
+}
+
 /// A section header: an uppercase mono label, an optional count, and a dotted rule that fills
 /// the remaining width.
 pub(super) fn section_header(label: impl AsRef<str>, count: Option<usize>, theme: Theme) -> Div {

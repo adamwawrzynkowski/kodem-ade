@@ -1873,12 +1873,23 @@ impl Shell {
                 .into()
             })
     }
-    /// Returns the main action of a surface: a solid accent fill with a dithered shade.
+    /// Returns the main action of a surface: a raised glass key in the accent.
     fn primary(
         &self,
         id: impl Into<ElementId>,
         glyph: &'static str,
         label: impl Into<SharedString>,
+    ) -> Button {
+        self.glass(id, glyph, label, self.theme.accent)
+    }
+    /// Returns a raised glass key in a tone. A smooth body, rim light and glow give it depth,
+    /// and dithered sheen and shade keep the dot texture.
+    fn glass(
+        &self,
+        id: impl Into<ElementId>,
+        glyph: &'static str,
+        label: impl Into<SharedString>,
+        tone: Hsla,
     ) -> Button {
         let theme = self.theme;
         // An empty label must not become a child: it would take a gap and push the icon of an
@@ -1886,17 +1897,25 @@ impl Shell {
         let label = label.into();
         self.control(id)
             .overflow_hidden()
+            .child(kit::sheen(gpui::white().opacity(0.34)))
             .child(kit::shade(gpui::black().opacity(0.2), dither::Edge::Bottom))
             .child(kit::glint(gpui::white().opacity(0.3), dither::Edge::Top))
             .child(icon(glyph).size(px(13.)))
             .when(!label.is_empty(), |b| b.child(label))
-            .bg(theme.accent)
-            .border_color(theme.accent)
+            .bg(kit::glass_fill(tone, kit::Pose::Rest))
+            .border_color(kit::glass_bezel(tone))
+            .shadow(kit::glass_depth(tone, theme, kit::Pose::Rest))
             .text_color(theme.on_accent)
             .font_weight(FontWeight::SEMIBOLD)
-            .hover(move |s| s.bg(theme.accent.opacity(0.9)))
-            .active(move |s| s.bg(theme.accent.opacity(0.8)))
-            .on_press(move |position, cx| fx::ripple(position, theme.accent, cx))
+            .hover(move |s| {
+                s.bg(kit::glass_fill(tone, kit::Pose::Hover))
+                    .shadow(kit::glass_depth(tone, theme, kit::Pose::Hover))
+            })
+            .active(move |s| {
+                s.bg(kit::glass_fill(tone, kit::Pose::Pressed))
+                    .shadow(kit::glass_depth(tone, theme, kit::Pose::Pressed))
+            })
+            .on_press(move |position, cx| fx::ripple(position, tone, cx))
     }
     /// Returns a button tinted with a tone that carries its own meaning, such as a destructive
     /// or approving action.
