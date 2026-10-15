@@ -279,7 +279,7 @@ impl Shell {
             ),
             _ => (
                 "git-pull-request",
-                "Reviews list pull requests with it, and updates from the private release repository use its sign-in.",
+                "Reviews list pull requests with it.",
             ),
         };
         let detail = match (&version, installing) {

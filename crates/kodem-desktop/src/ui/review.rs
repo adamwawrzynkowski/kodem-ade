@@ -223,7 +223,7 @@ impl Shell {
                     ),
                 );
             }
-            let files = self.changes_tree(&snapshot, cx);
+            let files = self.changes_tree(snapshot, cx);
             if !self.reviewing_file
                 || (!center && self.settings.diff_placement == DiffPlacement::Conversation)
             {
@@ -443,7 +443,7 @@ impl Shell {
                 if replace {
                     let view = cx.new(|cx| {
                         diff_view::DiffView::new(
-                            &snapshot,
+                            snapshot,
                             self.file,
                             self.split,
                             self.settings.wrap_diff,

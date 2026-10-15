@@ -67,9 +67,10 @@ jobs:
       KODEM_SIGN_PFX_PASSWORD: ${{ secrets.KODEM_SIGN_PFX_PASSWORD }}
       KODEM_WINDOWS_ARCH: x86_64 aarch64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.commit }}
+          persist-credentials: false
       - name: Import the signing certificate
         env:
           CERTIFICATE: ${{ secrets.KODEM_SIGN_PFX_BASE64 }}
@@ -79,10 +80,10 @@ jobs:
               printf '%s' "$CERTIFICATE" | base64 -d > "$certificate"
               echo "KODEM_SIGN_PFX=$certificate" >> "$GITHUB_ENV"
           fi
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build, sign and package
         run: scripts/build-windows.sh "$KODEM_CHANNEL"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows
           path: target/${{ inputs.channel }}/Kodem-windows-*
@@ -100,9 +101,10 @@ jobs:
     env:
       KODEM_GPG_KEY: ${{ vars.KODEM_GPG_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.commit }}
+          persist-credentials: false
       - name: Install build libraries
         run: |
           sudo apt-get update
@@ -121,10 +123,10 @@ jobs:
                   printf 'pinentry-mode loopback\npassphrase-file %s\n' ~/.gnupg/kodem-passphrase >> ~/.gnupg/gpg.conf
               fi
           fi
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build and package
         run: scripts/build-linux.sh "$KODEM_CHANNEL"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux
           path: target/${{ inputs.channel }}/Kodem-linux-*

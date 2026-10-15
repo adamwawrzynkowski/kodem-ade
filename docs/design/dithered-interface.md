@@ -20,7 +20,7 @@ Sixth revision recorded on 13 October 2026. The user reported that the conversat
 - Animated dithers flicker when the pattern moves. Keep the pattern fixed to the screen and animate only what is lit. Bayer patterns read as precise; noise reads as organic. ([Playdate developer forum](https://devforum.play.date/t/an-exploration-of-dithering-and-flashing/10272), [Return of the Obra Dinn notes](https://blog.playstation.com/archive/2019/10/17/lucas-pope-on-return-of-the-obra-dinns-art-style))
 - Teenage Engineering interfaces use monospace uppercase labels, tabular figures, one signal color and motion that reports state. Nothing OS uses its dot-matrix type for character, not body text, and its accent as an interrupt. ([Teenage Engineering analysis](https://blakecrosley.com/guides/design/teenage-engineering), [Nothing OS](https://nothing.community/d/61774-nothing-os-evolution))
 - Critiques of AI-generated interfaces name uniform rounded cards, decorative gradients, soft shadows at one opacity, glass, and status decoration that carries no information. ([Superdesign](https://www.superdesign.dev/blog/why-ai-design-looks-generic), [Noqta](https://noqta.tn/en/blog/ai-design-slop-overused-ui-patterns-fix-2026))
-- Liquid (`/Users/adamwaw/Projects/Personal/liquid`, `src/theme.rs` and `src/ui/{dither,fx,motion,liquid_button,components}.rs`) is the source of the current language.
+- Liquid (a separate local project: `src/theme.rs` and `src/ui/{dither,fx,motion,liquid_button,components}.rs`) is the source of the current language.
 
 ## Rules
 

@@ -1,0 +1,8 @@
+# Keeps the pinned commits of the workflows' actions current. Cargo dependencies are updated by
+# hand, because each change needs a license review (licensing/README.md).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

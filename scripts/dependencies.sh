@@ -59,6 +59,18 @@ kodem_runtimes_dir() {
     fi
 }
 
+# Makes release executables name source files relative to the checkout and the home folder, so
+# published binaries carry no paths of the build computer. The checkout's mapping comes last,
+# because rustc applies the last matching one.
+kodem_release_rustflags() {
+    local home=$HOME root=$KODEM_ROOT
+    if [[ "$KODEM_PLATFORM" == windows ]]; then
+        home=$(cygpath -w "$HOME")
+        root=$(cygpath -w "$KODEM_ROOT")
+    fi
+    export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$home=~"$'\x1f'"--remap-path-prefix=$root=kodem"
+}
+
 # Prints the SHA-256 digest of a file.
 kodem_sha256() {
     if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d ' ' -f 1

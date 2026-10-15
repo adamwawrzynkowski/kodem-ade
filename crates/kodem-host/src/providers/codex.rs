@@ -296,17 +296,17 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
                     })
                     .chain(task.active_turn.clone().map(|turn| (thread.clone(), turn)));
                 for (thread_id, turn_id) in targets {
-                    if interrupted.insert((thread_id.clone(), turn_id.clone())) {
-                        if let Err(error) = codex.call(
+                    if interrupted.insert((thread_id.clone(), turn_id.clone()))
+                        && let Err(error) = codex.call(
                             "turn/interrupt",
                             json!({"threadId":thread_id,"turnId":turn_id}),
                             &mut event,
-                        ) {
-                            let h = host.lock().unwrap();
-                            let mut task = h.store.task(task_id)?;
-                            task.error = Some(format!("Could not stop agent turn: {error}"));
-                            h.store.save_task(&task)?;
-                        }
+                        )
+                    {
+                        let h = host.lock().unwrap();
+                        let mut task = h.store.task(task_id)?;
+                        task.error = Some(format!("Could not stop agent turn: {error}"));
+                        h.store.save_task(&task)?;
                     }
                 }
             }
@@ -519,14 +519,13 @@ fn ingest(host: &Shared, task_id: &str, value: Value, items: &mut Streamed) -> R
                 method: method.into(),
                 params: p.clone(),
             });
-        if let Some(thread) = &child_thread {
-            if let Some(agent) = task
+        if let Some(thread) = &child_thread
+            && let Some(agent) = task
                 .subagents
                 .iter_mut()
                 .find(|agent| &agent.thread_id == thread)
-            {
-                agent.state = RunState::Waiting;
-            }
+        {
+            agent.state = RunState::Waiting;
         }
         task.state = RunState::Waiting;
         h.store.save_task(&task)?;

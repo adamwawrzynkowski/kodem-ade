@@ -39,7 +39,9 @@ kodem_release_prepare() {
         return 0
     fi
     command -v gh >/dev/null || { echo 'Install GitHub CLI and run gh auth login before publishing.' >&2; return 1; }
-    gh auth status >/dev/null 2>&1 || { echo 'Run gh auth login with repository write access.' >&2; return 1; }
+    gh auth status >/dev/null 2>&1 || { echo 'Run gh auth login with the repository owner account.' >&2; return 1; }
+    # The Release tags ruleset reserves release tags for administrators. Check before building.
+    [[ "$(gh api "repos/$release_repository" --jq .permissions.admin 2>/dev/null)" == true ]] || { echo "GitHub CLI is signed in as $(gh api user --jq .login 2>/dev/null || echo 'an unknown account'), which cannot create release tags. Run gh auth switch to the repository owner account." >&2; return 1; }
     [[ -z "$(git status --porcelain --untracked-files=normal)" ]] || { echo 'Release builds require a clean committed checkout. No changes are committed or pushed by this script.' >&2; return 1; }
     release_commit=$(git rev-parse HEAD)
     [[ "$(gh api "repos/$release_repository/commits/$release_commit" --jq .sha)" == "$release_commit" ]] || { echo 'The build commit must already exist on GitHub.' >&2; return 1; }

@@ -681,15 +681,14 @@ impl Shell {
                     task_id, thread_id, ..
                 } = &reply.request
                 {
-                    if self.selected.as_ref() == Some(task_id) {
-                        if let Some(popup) = self
+                    if self.selected.as_ref() == Some(task_id)
+                        && let Some(popup) = self
                             .agent_popup
                             .as_mut()
                             .filter(|p| &p.thread_id == thread_id)
-                        {
-                            popup.error = Some(e);
-                            cx.notify();
-                        }
+                    {
+                        popup.error = Some(e);
+                        cx.notify();
                     }
                     return;
                 }
@@ -1574,13 +1573,13 @@ impl Shell {
             return;
         }
         self.new_worktree_override = None;
-        if let Some(view) = &self.view {
-            if self.submitted_draft.is_none() {
-                self.send(core::Request::EditTask {
-                    task_id: view.task.id.clone(),
-                    edit: TaskEdit::Draft(self.input.read(cx).text()),
-                });
-            }
+        if let Some(view) = &self.view
+            && self.submitted_draft.is_none()
+        {
+            self.send(core::Request::EditTask {
+                task_id: view.task.id.clone(),
+                edit: TaskEdit::Draft(self.input.read(cx).text()),
+            });
         }
         if self.selected.is_some() {
             self.clear_selected_task(cx);

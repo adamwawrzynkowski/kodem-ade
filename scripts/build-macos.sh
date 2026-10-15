@@ -41,6 +41,7 @@ cargo fmt --all -- --check
 build_target=aarch64-apple-darwin
 python3 scripts/licenses.py prepare --target "$build_target"
 if [[ "$configuration" == release ]]; then
+    kodem_release_rustflags
     cargo build --workspace --release --locked --target "$build_target" --target-dir "$KODEM_ROOT/target"
 else
     cargo build --workspace --locked --target "$build_target" --target-dir "$KODEM_ROOT/target"
@@ -102,7 +103,6 @@ Build: $build_id
 Configuration: $channel
 Version: $release_version
 Target: $build_target
-Source: $KODEM_ROOT
 INFO
 # UserNotifications checks the sender's code identity against the requested bundle.
 # An automatically generated helper identifier cannot post for the parent app.

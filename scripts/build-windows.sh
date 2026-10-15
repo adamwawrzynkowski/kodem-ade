@@ -122,6 +122,7 @@ for arch in $architectures; do
     echo "Building $build_target"
     "$python" scripts/licenses.py prepare --target "$build_target"
     if [[ "$configuration" == release ]]; then
+        kodem_release_rustflags
         cargo build --workspace --release --locked --target "$build_target" --target-dir "$KODEM_ROOT/target"
     else
         cargo build --workspace --locked --target "$build_target" --target-dir "$KODEM_ROOT/target"
@@ -159,7 +160,6 @@ Version: $release_version
 Date: $build_date
 Target: $build_target
 Requires: ${requirements[$arch]}
-Source: $KODEM_ROOT
 INFO
     "$python" -c 'import json, sys; json.load(open(sys.argv[1]))' "$(cygpath -w "$package/release.json")"
     signed=1

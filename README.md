@@ -48,7 +48,7 @@ After an update, the first launch of the new version shows **What's new** once: 
 
 When an update is available, **Update ↓** appears beside Settings. Click it to download and view progress. Once the archive's size, SHA-256 digest, bundle identity, channel, version and code signature have been checked, the control becomes a reload icon. On Windows, an app signed with a trusted certificate accepts only updates from the same certificate; Linux packages rely on the GitHub digest. Click to save state, stop the idle host, install and reopen. Active tasks and checks block restart; terminal sessions close when the update is applied. Failed downloads can be retried. Installation failures restore the previous bundle and retain a log.
 
-The release repository is private. Users need GitHub CLI installed and signed in with read access to `adamwawrzynkowski/kodem-ade`; credentials are never bundled. Public releases work without a token if the repository becomes public. The Codex runtime remains a separate prerequisite installed by the build commands. See [release implementation](docs/implementation/releases.md) for the channel and installation contract.
+The repository and its releases are public, so updates need no GitHub account. When GitHub CLI is signed in, the updater uses its token for a higher API rate limit; credentials are never bundled. Only the repository owner can publish: release tags are reserved for the owner's account (see [Security](SECURITY.md)). The Codex runtime remains a separate prerequisite installed by the build commands. See [release implementation](docs/implementation/releases.md) for the channel and installation contract.
 
 ## Start a task
 

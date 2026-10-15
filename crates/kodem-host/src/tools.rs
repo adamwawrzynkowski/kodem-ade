@@ -200,7 +200,7 @@ fn steps(tool: Tool) -> Result<Vec<String>> {
     })
 }
 
-/// Signs GitHub CLI in unless it already has an account. Reviews and private updates need it.
+/// Signs GitHub CLI in unless it already has an account. Reviews of pull requests need it.
 #[cfg(unix)]
 const GITHUB_SIGN_IN: &str = "{ gh auth status >/dev/null 2>&1 || gh auth login; }";
 
@@ -323,7 +323,7 @@ fn steps(tool: Tool) -> Result<Vec<String>> {
             "Assert-Winget".into(),
             winget("GitHub.cli"),
             "Update-Path".into(),
-            // Reviews and private updates need a signed-in GitHub CLI. Windows PowerShell stops at
+            // Reviews of pull requests need a signed-in GitHub CLI. Windows PowerShell stops at
             // redirected error output of a program while errors stop the script.
             "$ErrorActionPreference = 'Continue'; & gh auth status *> $null; $signedIn = $LASTEXITCODE -eq 0; $ErrorActionPreference = 'Stop'".into(),
             "if (-not $signedIn) { Invoke-Step gh @('auth', 'login') }".into(),

@@ -67,7 +67,7 @@ To reproduce later, create a disposable crate with the manifest above and the na
 - Verified installed Codex version `0.153.4` and app-server help without starting the server.
 - Checked Pi's repository redirect and the distinction between built-in features and extension-supplied MCP/subagent/permission support.
 - Checked current MCP specification routing. At this research date `/specification/latest` redirected to `2026-07-28`. Older provider versions may negotiate older versions. [Current specification](https://modelcontextprotocol.io/specification/2026-07-28)
-- Read the computer-history skill at `/Users/adamwaw/.codex/plugins/cache/openai-bundled/computer-history/1.0.1000926/skills/computer-history/SKILL.md`. Its required `computer_history_status` tool was unavailable. No activity-history claims were made from unverified capture data.
+- Read the computer-history skill at from Codex's bundled plugins (version 1.0.1000926). Its required `computer_history_status` tool was unavailable. No activity-history claims were made from unverified capture data.
 - Historical memory informed the distinction between cached and available extensions and the need to keep branch activation explicit. Live source checks establish the technical findings in this package.
 
 ## Design scope correction
