@@ -4,8 +4,10 @@
 #
 # - main: only administrators (the owner) can push or merge; pull requests need the code owner's
 #   approval, resolved threads and the Checks workflow; no force pushes or deletion.
-# - Release tags (v*, nightly/v*): only administrators can create, move or delete them, so nobody
-#   else can publish a release that installed apps would download.
+# - Release tags (v*, nightly/v*): only the owner and collaborators with write access can create,
+#   move or delete them, so nobody else can publish a release that installed apps would download.
+#   A repository of a personal account cannot make a collaborator an administrator, so the write
+#   role releases too: add as collaborators only accounts that may publish releases.
 # - Actions: read-only token by default, GitHub's own actions and the pinned cache action only,
 #   actions pinned to full commit SHAs, approval for every outside contributor's workflow run.
 # - Security: secret scanning with push protection, Dependabot alerts, private vulnerability
@@ -13,7 +15,8 @@
 set -euo pipefail
 repository=${1:-adamwawrzynkowski/kodem-ade}
 api="repos/$repository"
-# GitHub's numbers for the repository administrator role and the GitHub Actions app.
+# GitHub's numbers for the repository write and administrator roles and the GitHub Actions app.
+write_role=4
 admin_role=5
 actions_app=15368
 
@@ -83,7 +86,8 @@ apply_ruleset "Release tags" "$(cat <<JSON
   "enforcement": "active",
   "conditions": { "ref_name": { "include": ["refs/tags/v*", "refs/tags/nightly/v*"], "exclude": [] } },
   "bypass_actors": [
-    { "actor_id": $admin_role, "actor_type": "RepositoryRole", "bypass_mode": "always" }
+    { "actor_id": $admin_role, "actor_type": "RepositoryRole", "bypass_mode": "always" },
+    { "actor_id": $write_role, "actor_type": "RepositoryRole", "bypass_mode": "always" }
   ],
   "rules": [
     { "type": "creation" },

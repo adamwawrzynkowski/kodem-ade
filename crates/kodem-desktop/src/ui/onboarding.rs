@@ -277,10 +277,7 @@ impl Shell {
                 "archive",
                 "Repositories that keep large files in Git LFS need it.",
             ),
-            _ => (
-                "git-pull-request",
-                "Reviews list pull requests with it.",
-            ),
+            _ => ("git-pull-request", "Reviews list pull requests with it."),
         };
         let detail = match (&version, installing) {
             (Some(version), _) => version.clone(),

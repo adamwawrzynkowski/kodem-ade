@@ -653,3 +653,17 @@ Recorded on 15 October 2026. `kodem_release_changes` in `scripts/github-release.
 
 Checked with Clippy `-D warnings` on macOS (six earlier findings, no new one), a locked `cargo build`, `cargo fmt --all -- --check`, `bash -n`, and a YAML parse of the workflow. Temporary tests, removed afterward: in scratch data directories, a new installation showed nothing at two launches, an update from a version before the record showed once, an update without notes showed nothing, and an update from a recorded version showed once and recorded the new version; notes passed at build time were embedded trimmed, without blank lines, with their previous version. With a stubbed `gh`, the previous release was 0.1.10 for 0.1.11, 0.1.9 for 0.1.10, nightly 0.2.0 for nightly 0.2.1, and none for the first release of a channel; the compare filter dropped merges, kept only subjects and listed the newest first. Not checked: the dialog on screen and a real release.
 
+## Public repository review and protection
+
+Recorded on 15 October 2026. The repository was already public. Review of everything reachable from the pushed `main` and tags, plus the working tree:
+
+| Area | Result |
+| --- | --- |
+| Credentials | gitleaks 8.30.1 found none in 151 commits or in the working tree. Greps for key, token and private-key formats found none |
+| Personal data | 67 commits carry the author's work email. Two design documents named local home paths; they now describe the projects without paths, and the old text stays in history. Committed `.DS_Store` files (removed on 10 September) hold Finder view settings only. Emails elsewhere are upstream authors in license notices |
+| Published releases | `BuildInfo.txt` of earlier releases names the build folder, and the binaries embed home-folder source paths. Builds now omit the folder and map those paths to `~` and `kodem` (`kodem_release_rustflags`); a release probe binary held no `/Users/` path |
+
+Repository changes: `.github/CODEOWNERS`, `SECURITY.md` (private vulnerability reporting), `.github/workflows/check.yml` (format, license snapshot, and Clippy with warnings denied on macOS, Windows and Linux), `.github/dependabot.yml` for the actions, and actions pinned to full commit SHAs. The six earlier Clippy findings were fixed with Clippy's own suggestions, so the checks pass with `-D warnings`. `scripts/configure-github.sh` applies the GitHub settings and was run: the **Main** ruleset lets only the administrator role push or merge, requires a code owner's approval, approval of the last push, resolved threads and the four checks, and forbids force pushes and deletion; the deploy-key bypass was removed. The **Release tags** ruleset reserves `v*` and `nightly/v*` for the owner and collaborators; a personal account's repository cannot make a collaborator an administrator, so the write role bypasses it. Secret scanning with push protection, Dependabot alerts and private vulnerability reporting are on. Actions allow GitHub's own actions and `Swatinem/rust-cache` only, require SHA pins, default to a read-only token, and need approval for every outside contributor's run. The release commands check before building that GitHub CLI's account can create release tags.
+
+Checked by reading every setting back through the API, as the owner and as the collaborator account (Main: never bypasses; Release tags: always), `cargo clippy -D warnings` on macOS with no finding, `cargo fmt --all -- --check`, the license snapshot, `bash -n`, and YAML parses of the workflows.
+

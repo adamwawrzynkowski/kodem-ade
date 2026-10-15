@@ -2,7 +2,7 @@
 
 The three build commands embed a channel and version, package both executables, and publish complete GitHub releases. The desktop checks its installed channel, downloads on request, verifies the bundle, and installs after saving state and stopping the idle host.
 
-The release commands require GitHub CLI signed in as an administrator of `adamwawrzynkowski/kodem-ade`, because the **Release tags** ruleset lets only administrators create, move or delete `v*` and `nightly/v*` tags. The repository is public, so the updater reads releases without authentication; it uses a GitHub CLI token when one is available. Tokens are read at request time and never embedded in a build.
+The release commands require GitHub CLI signed in as the owner of `adamwawrzynkowski/kodem-ade` or a collaborator, because the **Release tags** ruleset lets only them create, move or delete `v*` and `nightly/v*` tags. A personal account's repository cannot make a collaborator an administrator, so every collaborator can publish releases. The repository is public, so the updater reads releases without authentication; it uses a GitHub CLI token when one is available. Tokens are read at request time and never embedded in a build.
 
 Debug builds do not check for updates. Nightly checks only prereleases tagged `nightly/vX.X.X`; Production checks stable releases tagged `vX.X.X`. Versions compare numerically. Release commands select the workspace version or increment the latest channel's patch version, whichever is newer. `KODEM_VERSION=X.X.X` selects an explicit newer version. Releases contain `Kodem-macos-aarch64.zip`; GitHub's asset digest is required before an update is offered.
 
