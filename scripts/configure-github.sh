@@ -2,12 +2,14 @@
 # Applies the repository's GitHub protection settings. Safe to run again: it updates the existing
 # rulesets by name. Needs GitHub CLI signed in as a repository administrator.
 #
-# - main: only administrators (the owner) can push or merge; pull requests need the code owner's
-#   approval, resolved threads and the Checks workflow; no force pushes or deletion.
+# - main: only the owner and collaborators with write access can push or merge; pull requests from
+#   anyone else need the code owner's approval, resolved threads and the Checks workflow; no force
+#   pushes or deletion.
 # - Release tags (v*, nightly/v*): only the owner and collaborators with write access can create,
 #   move or delete them, so nobody else can publish a release that installed apps would download.
 #   A repository of a personal account cannot make a collaborator an administrator, so the write
-#   role releases too: add as collaborators only accounts that may publish releases.
+#   role bypasses both rulesets: add as collaborators only accounts that may push to main and
+#   publish releases.
 # - Actions: read-only token by default, GitHub's own actions and the pinned cache action only,
 #   actions pinned to full commit SHAs, approval for every outside contributor's workflow run.
 # - Security: secret scanning with push protection, Dependabot alerts, private vulnerability
@@ -43,7 +45,8 @@ apply_ruleset Main "$(cat <<JSON
   "enforcement": "active",
   "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
   "bypass_actors": [
-    { "actor_id": $admin_role, "actor_type": "RepositoryRole", "bypass_mode": "always" }
+    { "actor_id": $admin_role, "actor_type": "RepositoryRole", "bypass_mode": "always" },
+    { "actor_id": $write_role, "actor_type": "RepositoryRole", "bypass_mode": "always" }
   ],
   "rules": [
     { "type": "deletion" },
@@ -58,6 +61,7 @@ apply_ruleset Main "$(cat <<JSON
         "require_code_owner_review": true,
         "require_last_push_approval": true,
         "required_review_thread_resolution": true,
+        "require_extra_approval_for_unattributed_changes": true,
         "allowed_merge_methods": ["squash", "rebase"]
       }
     },
