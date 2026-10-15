@@ -84,7 +84,10 @@ kodem_dependencies() {
         windows) kodem_dependencies_windows ;;
     esac
     kodem_rust
-    kodem_codex
+    # A packaging build in GitHub Actions never runs the app, so it needs no Codex runtime.
+    if [[ -z "${KODEM_RELEASE_VERSION:-}" ]]; then
+        kodem_codex
+    fi
     # Cargo installs every pinned Rust dependency, including bundled SQLite.
     cargo fetch --locked
 }
@@ -247,7 +250,7 @@ kodem_codex() {
         if [[ ! -f "$package_dir/codex-package.json" ]]; then
             package_dir="$archive_dir/package/codex-package-$codex_target"
         fi
-        if ! kodem_runtime_valid "$package_dir"; then
+        if ! kodem_runtime_version "$package_dir" explain >/dev/null; then
             echo "The downloaded Codex package is incomplete or incompatible." >&2
             rm -rf "$archive_dir"; return 1
         fi
@@ -275,32 +278,36 @@ kodem_copy_tree() {
     else cp -R -p "$1/." "$2"; fi
 }
 
-# Verifies the package layout, tool runner and bundled shell/search dependencies.
-kodem_runtime_valid() {
-    kodem_runtime_version "$1" >/dev/null
+# Names a failed package check when asked to explain. Always fails.
+kodem_runtime_reject() {
+    if [[ -n "$1" ]]; then echo "Codex package check failed: $2" >&2; fi
+    return 1
 }
 
 # Returns the version only after validating the complete package. The required files match
-# kodem_core::providers::codex::PACKAGE_FILES.
+# kodem_core::providers::codex::PACKAGE_FILES. With "explain" as the second argument, it names
+# the check that failed.
 kodem_runtime_version() {
-    local root=$1
+    local root=$1 explain=${2:-}
     local package_version cli_version
-    [[ -f "$root/codex-package.json" ]] || return 1
+    [[ -f "$root/codex-package.json" ]] || { kodem_runtime_reject "$explain" "codex-package.json is missing"; return 1; }
     package_version=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$root/codex-package.json" | head -1)
-    [[ -n "$package_version" ]] || return 1
-    kodem_version_at_least "$package_version" "$KODEM_CODEX_MIN_VERSION" || return 1
-    [[ -x "$root/bin/codex$KODEM_EXE" && -x "$root/bin/codex-code-mode-host$KODEM_EXE" && -x "$root/codex-path/rg$KODEM_EXE" ]] || return 1
+    [[ -n "$package_version" ]] || { kodem_runtime_reject "$explain" "codex-package.json has no version"; return 1; }
+    kodem_version_at_least "$package_version" "$KODEM_CODEX_MIN_VERSION" || { kodem_runtime_reject "$explain" "version $package_version is older than $KODEM_CODEX_MIN_VERSION"; return 1; }
+    [[ -x "$root/bin/codex$KODEM_EXE" && -x "$root/bin/codex-code-mode-host$KODEM_EXE" && -x "$root/codex-path/rg$KODEM_EXE" ]] || { kodem_runtime_reject "$explain" "bin/codex, bin/codex-code-mode-host or codex-path/rg is missing"; return 1; }
     case "$KODEM_PLATFORM" in
-        windows) [[ -f "$root/codex-resources/codex-command-runner.exe" ]] || return 1 ;;
-        linux) [[ -x "$root/codex-resources/zsh/bin/zsh" && -x "$root/codex-resources/bwrap" ]] || return 1 ;;
-        macos) [[ -x "$root/codex-resources/zsh/bin/zsh" ]] || return 1 ;;
+        windows) [[ -f "$root/codex-resources/codex-command-runner.exe" ]] || { kodem_runtime_reject "$explain" "codex-resources/codex-command-runner.exe is missing"; return 1; } ;;
+        linux) [[ -x "$root/codex-resources/zsh/bin/zsh" && -x "$root/codex-resources/bwrap" ]] || { kodem_runtime_reject "$explain" "codex-resources/zsh or codex-resources/bwrap is missing"; return 1; } ;;
+        macos) [[ -x "$root/codex-resources/zsh/bin/zsh" ]] || { kodem_runtime_reject "$explain" "codex-resources/zsh is missing"; return 1; } ;;
     esac
-    cli_version=$("$root/bin/codex$KODEM_EXE" --version 2>/dev/null | tr -d '\r') || return 1
-    [[ "$cli_version" == "codex-cli $package_version" ]] || return 1
-    "$root/bin/codex-code-mode-host$KODEM_EXE" --help >/dev/null 2>&1 || return 1
-    "$root/codex-path/rg$KODEM_EXE" --version >/dev/null 2>&1 || return 1
-    if [[ "$KODEM_PLATFORM" != windows ]]; then
-        "$root/codex-resources/zsh/bin/zsh" -f -c 'exit 0' >/dev/null 2>&1 || return 1
+    cli_version=$("$root/bin/codex$KODEM_EXE" --version 2>/dev/null | tr -d '\r') || { kodem_runtime_reject "$explain" "codex --version did not run"; return 1; }
+    [[ "$cli_version" == "codex-cli $package_version" ]] || { kodem_runtime_reject "$explain" "codex reports '$cli_version', not $package_version"; return 1; }
+    "$root/bin/codex-code-mode-host$KODEM_EXE" --help >/dev/null 2>&1 || { kodem_runtime_reject "$explain" "codex-code-mode-host did not run"; return 1; }
+    "$root/codex-path/rg$KODEM_EXE" --version >/dev/null 2>&1 || { kodem_runtime_reject "$explain" "the bundled rg did not run"; return 1; }
+    # Linux packages bundle a zsh linked against glibc 2.38, which older distributions lack.
+    # Codex runs without it there, and Kodem's own check never starts it either.
+    if [[ "$KODEM_PLATFORM" == macos ]]; then
+        "$root/codex-resources/zsh/bin/zsh" -f -c 'exit 0' >/dev/null 2>&1 || { kodem_runtime_reject "$explain" "the bundled zsh did not run"; return 1; }
     fi
     echo "$package_version"
 }

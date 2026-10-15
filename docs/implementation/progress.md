@@ -667,3 +667,7 @@ Repository changes: `.github/CODEOWNERS`, `SECURITY.md` (private vulnerability r
 
 Checked by reading every setting back through the API, as the owner and as the collaborator account (both rulesets: always bypasses), `cargo clippy -D warnings` on macOS with no finding, `cargo fmt --all -- --check`, the license snapshot, `bash -n`, and YAML parses of the workflows.
 
+## Linux release job: Codex package check
+
+Recorded on 15 October 2026. The first coordinated release (nightly 0.1.37) failed in the Linux job with "The downloaded Codex package is incomplete or incompatible." The Codex 0.153.4 Linux package's binaries are static, but its bundled `zsh` needs glibc 2.38 and `libtinfo.so.6`; `ubuntu-22.04` has glibc 2.35, so the build's `zsh -f -c 'exit 0'` check failed. Kodem itself never starts that `zsh`, so the build now runs it on macOS only and checks only that it exists on Linux. Packaging builds in GitHub Actions (`KODEM_RELEASE_VERSION` set) no longer install a Codex runtime at all, because they never run the app. A failed package check now names the check. Checked with `bash -n`, the installed macOS package still validating, and the Linux package's `zsh` dependencies read with `llvm-objdump`. The fixed workflow run itself is not yet checked.
+
