@@ -1005,17 +1005,25 @@ impl Shell {
         let has_content = self.has_composer_content(cx);
         let steer = steering && self.settings.send_mode == SendMode::Steer;
         if steering {
+            // A square icon chip: its arrow is the one the submit key shows in the same mode, and
+            // the tooltip names the mode.
             rules = rules.child(
                 self.chip_button("active-send-mode")
+                    .w(px(24.))
+                    .px_0()
                     .text_color(t.accent)
+                    .accessibility_label(if steer {
+                        "Send mode: steer. Click to queue instead"
+                    } else {
+                        "Send mode: queue. Click to steer instead"
+                    })
                     .child(icon(if steer { "arrow-right" } else { "arrow-down" }).size(px(13.)))
-                    .child(if steer { "Steer" } else { "Queue" })
                     .tooltip(move |_, cx| {
                         cx.new(|_| Hint {
                             text: if steer {
-                                "Enter adds your message to the running turn. ⌘Enter queues it instead.".into()
+                                "Steer · Enter adds your message to the running turn. ⌘Enter queues it instead. Click to switch.".into()
                             } else {
-                                "Enter queues your message for the next turn. ⌘Enter steers the running turn instead.".into()
+                                "Queue · Enter queues your message for the next turn. ⌘Enter steers the running turn instead. Click to switch.".into()
                             },
                             theme: t,
                         })
