@@ -118,6 +118,7 @@ enum Panel {
     Usage,
     Palette,
     Mode,
+    WhatsNew,
 }
 struct ThreadMenu {
     task_id: String,
@@ -234,6 +235,9 @@ pub struct Shell {
     tools: Vec<ToolVersion>,
     /// Tools whose installer runs in a terminal window and that were not found since.
     tool_installers: Vec<Tool>,
+    /// The release notes wait for the first workspace, because this version runs for the first
+    /// time after an update.
+    whats_new_due: bool,
     window_width: f32,
     window_placement: WindowBounds,
     window_save_task: Option<gpui::Task<()>>,
@@ -534,6 +538,7 @@ impl Shell {
             title_press: false,
             tools: Vec::new(),
             tool_installers: Vec::new(),
+            whats_new_due: crate::release_notes::take_unseen(),
             window_width: f32::from(window.viewport_size().width),
             window_placement: window.window_bounds(),
             window_save_task: None,
@@ -833,6 +838,9 @@ impl Shell {
                         })
                     {
                         self.connect_runtime();
+                    }
+                    if std::mem::take(&mut self.whats_new_due) && self.panel == Panel::None {
+                        self.panel = Panel::WhatsNew;
                     }
                     cx.notify();
                     return;

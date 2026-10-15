@@ -24,6 +24,7 @@ enum Action {
     Resources,
     Settings(usize),
     Setup,
+    WhatsNew,
     Theme(ThemeId),
     Interrupt,
     Compact,
@@ -454,6 +455,16 @@ impl Shell {
             "Settings",
             Action::Setup,
         );
+        if !crate::release_notes::changes().is_empty() {
+            add(
+                "sparkles",
+                "What's new",
+                "The changes in this version",
+                "",
+                "Settings",
+                Action::WhatsNew,
+            );
+        }
         let query = &self.palette.query;
         if query.is_empty() {
             return items;
@@ -519,6 +530,7 @@ impl Shell {
             Action::Resources => self.open_resources(),
             Action::Settings(section) => self.open_settings(section),
             Action::Setup => self.open_setup(),
+            Action::WhatsNew => self.panel = Panel::WhatsNew,
             Action::Theme(theme) => self.set_theme(theme, cx),
             Action::Interrupt => {
                 if let Some(task_id) = &task_id {

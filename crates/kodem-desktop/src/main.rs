@@ -7,6 +7,7 @@ mod clipboard;
 mod components;
 mod icons;
 mod markdown;
+mod release_notes;
 mod sound;
 mod syntax;
 mod theme;

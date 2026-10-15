@@ -27,7 +27,7 @@ source "$KODEM_ROOT/scripts/dependencies.sh"
 kodem_dependencies
 source "$KODEM_ROOT/scripts/github-release.sh"
 kodem_release_prepare "$channel"
-export KODEM_RELEASE_CHANNEL="$channel" KODEM_APP_VERSION="$release_version"
+export KODEM_RELEASE_CHANNEL="$channel" KODEM_APP_VERSION="$release_version" KODEM_RELEASE_PREVIOUS="$release_previous" KODEM_RELEASE_NOTES="$release_notes"
 echo "Compiling $channel $release_version from $KODEM_ROOT"
 cargo fmt --all -- --check
 # Pin both the output root and target. Shell/global Cargo overrides must never
@@ -123,7 +123,11 @@ if [[ "$channel" != debug ]]; then
     else
         echo "Not signed: set KODEM_GPG_KEY to publish a detached OpenPGP signature."
     fi
-    kodem_release_publish "$channel" "$archive" "${signatures[@]}"
+    if kodem_release_publishes "$channel"; then
+        kodem_release_publish "$channel" "$archive" "${signatures[@]}"
+    else
+        echo "PACKAGED: $archive (the build that started this one publishes it)"
+    fi
 fi
 echo "Built and verified: $output"
 echo "The application was not launched."

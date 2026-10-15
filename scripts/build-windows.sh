@@ -56,7 +56,7 @@ export KODEM_BUILD_TARGETS
 kodem_dependencies
 source "$KODEM_ROOT/scripts/github-release.sh"
 kodem_release_prepare "$channel"
-export KODEM_RELEASE_CHANNEL="$channel" KODEM_APP_VERSION="$release_version"
+export KODEM_RELEASE_CHANNEL="$channel" KODEM_APP_VERSION="$release_version" KODEM_RELEASE_PREVIOUS="$release_previous" KODEM_RELEASE_NOTES="$release_notes"
 echo "Compiling $channel $release_version for $architectures from $KODEM_ROOT"
 cargo fmt --all -- --check
 python=$(kodem_python)
@@ -199,9 +199,13 @@ INFO
             [[ "$entry" == "$app_name/"* ]] || { echo "Unexpected archive entry: $entry" >&2; exit 1; }
         done < <("$windows_tar" -t -f "$(cygpath -w "$archive")" | tr -d '\r')
         (cd "$(dirname "$archive")" && echo "$(kodem_sha256 "$(basename "$archive")")  $(basename "$archive")" > "$(basename "$archive").sha256")
-        kodem_release_publish "$channel" "$archive" "$archive.sha256"
-        # The next processor adds its archive to the release that this one published.
-        release_existing=$release_tag
+        if kodem_release_publishes "$channel"; then
+            kodem_release_publish "$channel" "$archive" "$archive.sha256"
+            # The next processor adds its archive to the release that this one published.
+            release_existing=$release_tag
+        else
+            echo "PACKAGED: $archive (the build that started this one publishes it)"
+        fi
     fi
 done
 echo "Build ID: $build_id"

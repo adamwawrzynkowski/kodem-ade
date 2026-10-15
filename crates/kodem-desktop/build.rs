@@ -1,6 +1,11 @@
 //! Embeds release metadata and rebuilds when a build command changes channels.
 fn main() {
-    for key in ["KODEM_RELEASE_CHANNEL", "KODEM_APP_VERSION"] {
+    for key in [
+        "KODEM_RELEASE_CHANNEL",
+        "KODEM_APP_VERSION",
+        "KODEM_RELEASE_NOTES",
+        "KODEM_RELEASE_PREVIOUS",
+    ] {
         println!("cargo:rerun-if-env-changed={key}");
     }
     let channel = std::env::var("KODEM_RELEASE_CHANNEL").unwrap_or_else(|_| "debug".into());
@@ -19,6 +24,14 @@ fn main() {
     );
     println!("cargo:rustc-env=KODEM_RELEASE_CHANNEL={channel}");
     println!("cargo:rustc-env=KODEM_APP_VERSION={version}");
+    // The release commands pass the commit subjects since the previous release of the channel,
+    // one per line. A multi-line value cannot travel as a compiler environment variable.
+    let notes = std::env::var("KODEM_RELEASE_NOTES").unwrap_or_default();
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    std::fs::write(out.join("release-notes.txt"), notes).expect("Write the release notes");
+    let previous = std::env::var("KODEM_RELEASE_PREVIOUS").unwrap_or_default();
+    assert!(previous.bytes().all(|b| b.is_ascii_digit() || b == b'.'));
+    println!("cargo:rustc-env=KODEM_RELEASE_PREVIOUS={previous}");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         windows_resources(&channel, &parts);
     }

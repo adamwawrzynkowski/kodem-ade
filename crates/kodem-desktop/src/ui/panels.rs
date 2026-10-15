@@ -22,6 +22,7 @@ impl Shell {
             Panel::NoRepository => "No Git repository here",
             Panel::Settings => "Settings",
             Panel::Setup => "Welcome to Kodem",
+            Panel::WhatsNew => "What's new",
             Panel::Resources => "Skills, instructions & MCP",
             Panel::Files => "Files",
             Panel::Check => "Run a project check",
@@ -232,6 +233,49 @@ impl Shell {
             }
             Panel::Settings => {
                 content = content.p_0().gap_0().child(self.settings_panel(cx));
+            }
+            Panel::WhatsNew => {
+                let version = format!(
+                    "{} {}",
+                    crate::updater::Channel::current().app_name(),
+                    crate::updater::VERSION
+                );
+                let summary = if crate::release_notes::PREVIOUS.is_empty() {
+                    version
+                } else {
+                    format!(
+                        "{version} · changes since {}",
+                        crate::release_notes::PREVIOUS
+                    )
+                };
+                let changes = crate::release_notes::changes().into_iter().map(|change| {
+                    div()
+                        .flex()
+                        .items_start()
+                        .gap(px(9.))
+                        .child(div().pt(px(6.)).child(kit::marker(theme.accent)))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(text_px(13.))
+                                .line_height(relative(1.45))
+                                .child(change),
+                        )
+                });
+                content =
+                    content
+                        .child(settings::note(summary, theme))
+                        .child(div().flex().flex_col().gap(px(7.)).children(changes))
+                        .child(footer_rule(theme))
+                        .child(footer_actions().child(
+                            self.primary("whats-new-done", "check", "Got it").on_click(
+                                cx.listener(|s, _, _, cx| {
+                                    s.panel = Panel::None;
+                                    cx.notify();
+                                }),
+                            ),
+                        ));
             }
             Panel::Setup => {
                 content = content
@@ -444,6 +488,7 @@ impl Shell {
             Panel::RemoveProject => Some(("trash-2", "Files and local history stay on disk")),
             Panel::NoRepository => Some(("folder", "Choose how this folder opens")),
             Panel::Setup => Some(("sparkles", "Check the providers and make the first choices")),
+            Panel::WhatsNew => Some(("sparkles", "The changes in this update, from its history")),
             Panel::Resources => Some(("code", "What the provider can use in this task")),
             Panel::Check => Some((
                 "square-terminal",

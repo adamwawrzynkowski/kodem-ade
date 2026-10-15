@@ -1,0 +1,132 @@
+# Builds the Windows (x64 and Arm64) and Linux packages of one release commit. The macOS release
+# commands start it, build macOS meanwhile, download these packages and publish all of them in
+# one GitHub release (scripts/github-release.sh). This workflow publishes nothing itself.
+#
+# Optional configuration in the repository's Actions settings:
+#   Secrets  KODEM_SIGN_PFX_BASE64, KODEM_SIGN_PFX_PASSWORD   Authenticode certificate (.pfx, base64)
+#            KODEM_GPG_PRIVATE_KEY, KODEM_GPG_PASSPHRASE      OpenPGP key for the Linux .asc signature
+#   Variables KODEM_GPG_KEY                                   that key's ID or fingerprint
+#             KODEM_ALLOW_UNSIGNED=1                          allows unsigned Windows executables
+name: Release packages
+run-name: Release ${{ inputs.channel }} ${{ inputs.version }} at ${{ inputs.commit }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        type: choice
+        options: [nightly, production]
+      version:
+        description: Version that the macOS release command chose (X.X.X)
+        required: true
+        type: string
+      commit:
+        description: Commit to build
+        required: true
+        type: string
+      platforms:
+        description: Platforms to build
+        required: true
+        default: windows linux
+        type: string
+      previous:
+        description: The channel's previous release, which the notes start after
+        required: false
+        type: string
+      notes:
+        description: Commit subjects since the previous release, for the app's What's new dialog
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.channel }}-${{ inputs.commit }}
+
+env:
+  KODEM_RELEASE_VERSION: ${{ inputs.version }}
+  KODEM_RELEASE_COMMIT: ${{ inputs.commit }}
+  KODEM_CHANNEL: ${{ inputs.channel }}
+  KODEM_RELEASE_PREVIOUS: ${{ inputs.previous }}
+  KODEM_RELEASE_NOTES: ${{ inputs.notes }}
+
+jobs:
+  windows:
+    if: contains(inputs.platforms, 'windows')
+    # Visual Studio on this image has the x64 and Arm64 C++ tools and the Windows SDK.
+    runs-on: windows-2022
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    env:
+      KODEM_ALLOW_UNSIGNED: ${{ vars.KODEM_ALLOW_UNSIGNED }}
+      KODEM_SIGN_PFX_PASSWORD: ${{ secrets.KODEM_SIGN_PFX_PASSWORD }}
+      KODEM_WINDOWS_ARCH: x86_64 aarch64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+      - name: Import the signing certificate
+        env:
+          CERTIFICATE: ${{ secrets.KODEM_SIGN_PFX_BASE64 }}
+        run: |
+          if [[ -n "$CERTIFICATE" ]]; then
+              certificate="$(cygpath -u "$RUNNER_TEMP")/kodem-signing.pfx"
+              printf '%s' "$CERTIFICATE" | base64 -d > "$certificate"
+              echo "KODEM_SIGN_PFX=$certificate" >> "$GITHUB_ENV"
+          fi
+      - uses: Swatinem/rust-cache@v2
+      - name: Build, sign and package
+        run: scripts/build-windows.sh "$KODEM_CHANNEL"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: target/${{ inputs.channel }}/Kodem-windows-*
+          if-no-files-found: error
+          retention-days: 3
+      - name: Remove the signing certificate
+        if: always()
+        run: rm -f "$(cygpath -u "$RUNNER_TEMP")/kodem-signing.pfx"
+
+  linux:
+    if: contains(inputs.platforms, 'linux')
+    # The package needs this glibc (2.35) or newer, which covers current distributions.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      KODEM_GPG_KEY: ${{ vars.KODEM_GPG_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit }}
+      - name: Install build libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev libxcb1-dev libwayland-dev
+      - name: Import the OpenPGP key
+        env:
+          PRIVATE_KEY: ${{ secrets.KODEM_GPG_PRIVATE_KEY }}
+          PASSPHRASE: ${{ secrets.KODEM_GPG_PASSPHRASE }}
+        run: |
+          if [[ -n "$PRIVATE_KEY" ]]; then
+              mkdir -p -m 700 ~/.gnupg
+              printf '%s' "$PRIVATE_KEY" | gpg --batch --import
+              if [[ -n "$PASSPHRASE" ]]; then
+                  printf '%s' "$PASSPHRASE" > ~/.gnupg/kodem-passphrase
+                  chmod 600 ~/.gnupg/kodem-passphrase
+                  printf 'pinentry-mode loopback\npassphrase-file %s\n' ~/.gnupg/kodem-passphrase >> ~/.gnupg/gpg.conf
+              fi
+          fi
+      - uses: Swatinem/rust-cache@v2
+      - name: Build and package
+        run: scripts/build-linux.sh "$KODEM_CHANNEL"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: target/${{ inputs.channel }}/Kodem-linux-*
+          if-no-files-found: error
+          retention-days: 3
