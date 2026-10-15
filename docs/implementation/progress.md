@@ -619,3 +619,19 @@ Recorded on 15 October 2026. Before this change the workspace compiled for macOS
 Checked with `cargo check` and `cargo clippy --all-targets -D warnings` for `aarch64-apple-darwin`, `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` (the Windows and Linux checks used a scratch zig C toolchain and a stand-in resource compiler, so their native libraries were not linked), a locked macOS `cargo build`, and `cargo fmt --all -- --check`. Clippy reports the six earlier findings on each target and no new one. Temporary probes, removed afterward: the shortcut label translation for 15 labels; the Bash dependency helpers against the installed Codex package; the release reuse logic against a stubbed `gh` (new version, reuse of the commit's release, refusal of a draft); the Linux installer and uninstaller in a scratch home; and the Linux update installer replacing a package folder. Passed.
 
 Not checked, because no Windows or Linux machine was available and app control is prohibited here: linking and running on Windows and Linux, the release shader compilation, Authenticode signing, the window buttons and resize edges, notifications, sounds, ConPTY terminals, sign-in windows, and an update cycle on either platform.
+
+## Installing tools from the setup dialog (protocol 37)
+
+Recorded on 15 October 2026. The setup dialog showed only an installation guide link for a missing Claude Code. It now lists Git, Git LFS and GitHub CLI below the providers and offers **Install** for every missing provider CLI or tool.
+
+| Part | Where |
+| --- | --- |
+| Protocol | `Tool` and `ToolVersion` in `model.rs`; `Request::InspectTools` answers `Response::Tools`, `Request::InstallTool` opens the installer. The bridge sends both off the conversation queue |
+| Detection | `kodem-host/src/tools.rs`: `git --version`, `git lfs version` and `gh --version` with `git::search_path`, which now also holds the Git, Git LFS and GitHub CLI folders under Program Files on Windows. On macOS, a `/usr/bin/git` without Command Line Tools counts as missing without being run, because running it opens Apple's installer |
+| Installers | A shell script (`.command` on macOS, `.sh` on Linux) or a PowerShell script on Windows, written to `installers/` in the data directory and opened by `accounts::open_terminal`, which sign-in also uses. Each step stops the script when it fails and the window reports the result |
+| Dialog | `ui/onboarding.rs`: a Tools group with INSTALLED, MISSING (Git), OPTIONAL and INSTALLING states, and **Install** or **Install again** buttons |
+
+Checked with `cargo clippy --all-targets -D warnings` for macOS, Windows and Linux (six earlier findings, no new one), a locked macOS `cargo build` and `cargo fmt --all -- --check`. Temporary tests, removed afterward: every macOS installer script passed `sh -n`; the Codex installer ran in a scratch home, downloaded the latest package and installed 0.162.1, which the build's package validation accepted; detection on this Mac reported Git, Git LFS and GitHub CLI with their versions; the Claude Code install scripts and the Windows and Linux Codex package URLs answered HTTP 200. The first script check found a `;` that broke the step chain in the Codex installer; it was fixed before the run.
+
+Not checked: the Windows PowerShell and Linux scripts did not run, the dialog was not viewed, and the Claude Code, Git, Git LFS and GitHub CLI installers were not run, because they change this system.
+
