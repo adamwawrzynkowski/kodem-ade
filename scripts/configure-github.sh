@@ -10,6 +10,8 @@
 #   A repository of a personal account cannot make a collaborator an administrator, so the write
 #   role bypasses both rulesets: add as collaborators only accounts that may push to main and
 #   publish releases.
+#   The Release packages workflow cannot create these tags: it stages a draft release, and an
+#   owner account publishes it, which creates the tag.
 # - Actions: read-only token by default, GitHub's own actions and the pinned cache action only,
 #   actions pinned to full commit SHAs, approval for every outside contributor's workflow run.
 # - Security: secret scanning with push protection, Dependabot alerts, private vulnerability

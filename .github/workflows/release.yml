@@ -1,6 +1,11 @@
-# Builds the Windows (x64 and Arm64) and Linux packages of one release commit. The macOS release
-# commands start it, build macOS meanwhile, download these packages and publish all of them in
-# one GitHub release (scripts/github-release.sh). This workflow publishes nothing itself.
+# Releases Kodem for every platform: chooses the version and change list, builds macOS,
+# Windows (x64 and Arm64) and Linux in parallel, and stages one draft release with all of them.
+# Nothing is staged unless every requested build succeeds.
+#
+# Start it with Run workflow here, or with Build Release Nightly / Production on your computer
+# (scripts/release.sh), which follows its progress and then publishes the draft. A ruleset
+# reserves release tags for the owner's accounts, so after Run workflow, publish the draft on
+# the Releases page; that creates the tag.
 #
 # Optional configuration in the repository's Actions settings:
 #   Secrets  KODEM_SIGN_PFX_BASE64, KODEM_SIGN_PFX_PASSWORD   Authenticode certificate (.pfx, base64)
@@ -8,7 +13,7 @@
 #   Variables KODEM_GPG_KEY                                   that key's ID or fingerprint
 #             KODEM_ALLOW_UNSIGNED=1                          allows unsigned Windows executables
 name: Release packages
-run-name: Release ${{ inputs.channel }} ${{ inputs.version }} at ${{ inputs.commit }}
+run-name: Release ${{ inputs.channel }}${{ inputs.request && format(' · {0}', inputs.request) || '' }}
 
 on:
   workflow_dispatch:
@@ -18,43 +23,87 @@ on:
         required: true
         type: choice
         options: [nightly, production]
-      version:
-        description: Version that the macOS release command chose (X.X.X)
-        required: true
-        type: string
       commit:
-        description: Commit to build
-        required: true
+        description: Commit to release (empty for the newest commit of the branch)
+        required: false
+        type: string
+      version:
+        description: Version (X.X.X; empty for the next patch version)
+        required: false
         type: string
       platforms:
         description: Platforms to build
         required: true
-        default: windows linux
+        default: macos windows linux
         type: string
-      previous:
-        description: The channel's previous release, which the notes start after
-        required: false
-        type: string
-      notes:
-        description: Commit subjects since the previous release, for the app's What's new dialog
+      request:
+        description: Set by scripts/release.sh to find this run
         required: false
         type: string
 
 permissions:
   contents: read
 
+# One release of a channel at a time, so two runs never choose the same version.
 concurrency:
-  group: release-${{ inputs.channel }}-${{ inputs.commit }}
+  group: release-${{ inputs.channel }}
+  cancel-in-progress: false
 
 env:
-  KODEM_RELEASE_VERSION: ${{ inputs.version }}
-  KODEM_RELEASE_COMMIT: ${{ inputs.commit }}
   KODEM_CHANNEL: ${{ inputs.channel }}
-  KODEM_RELEASE_PREVIOUS: ${{ inputs.previous }}
-  KODEM_RELEASE_NOTES: ${{ inputs.notes }}
+  KODEM_RELEASE_PLATFORMS: ${{ inputs.platforms }}
 
 jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      commit: ${{ steps.plan.outputs.commit }}
+      previous: ${{ steps.plan.outputs.previous }}
+      notes: ${{ steps.plan.outputs.notes }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.commit || github.sha }}
+          persist-credentials: false
+      - name: Choose the version and the change list
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KODEM_VERSION: ${{ inputs.version }}
+        run: scripts/release.sh plan "$KODEM_CHANNEL"
+
+  macos:
+    name: macOS
+    needs: plan
+    if: contains(inputs.platforms, 'macos')
+    runs-on: macos-14
+    timeout-minutes: 120
+    env:
+      KODEM_RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+      KODEM_RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
+      KODEM_RELEASE_PREVIOUS: ${{ needs.plan.outputs.previous }}
+      KODEM_RELEASE_NOTES: ${{ needs.plan.outputs.notes }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.plan.outputs.commit }}
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build and package
+        run: scripts/build-macos.sh "$KODEM_CHANNEL"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos
+          path: target/${{ inputs.channel }}/Kodem-macos-*
+          if-no-files-found: error
+          retention-days: 3
+
   windows:
+    name: Windows
+    needs: plan
     if: contains(inputs.platforms, 'windows')
     # Visual Studio on this image has the x64 and Arm64 C++ tools and the Windows SDK.
     runs-on: windows-2022
@@ -63,13 +112,17 @@ jobs:
       run:
         shell: bash
     env:
+      KODEM_RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+      KODEM_RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
+      KODEM_RELEASE_PREVIOUS: ${{ needs.plan.outputs.previous }}
+      KODEM_RELEASE_NOTES: ${{ needs.plan.outputs.notes }}
       KODEM_ALLOW_UNSIGNED: ${{ vars.KODEM_ALLOW_UNSIGNED }}
       KODEM_SIGN_PFX_PASSWORD: ${{ secrets.KODEM_SIGN_PFX_PASSWORD }}
       KODEM_WINDOWS_ARCH: x86_64 aarch64
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.commit }}
+          ref: ${{ needs.plan.outputs.commit }}
           persist-credentials: false
       - name: Import the signing certificate
         env:
@@ -94,16 +147,22 @@ jobs:
         run: rm -f "$(cygpath -u "$RUNNER_TEMP")/kodem-signing.pfx"
 
   linux:
+    name: Linux
+    needs: plan
     if: contains(inputs.platforms, 'linux')
     # The package needs this glibc (2.35) or newer, which covers current distributions.
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     env:
+      KODEM_RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+      KODEM_RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
+      KODEM_RELEASE_PREVIOUS: ${{ needs.plan.outputs.previous }}
+      KODEM_RELEASE_NOTES: ${{ needs.plan.outputs.notes }}
       KODEM_GPG_KEY: ${{ vars.KODEM_GPG_KEY }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.commit }}
+          ref: ${{ needs.plan.outputs.commit }}
           persist-credentials: false
       - name: Install build libraries
         run: |
@@ -132,3 +191,39 @@ jobs:
           path: target/${{ inputs.channel }}/Kodem-linux-*
           if-no-files-found: error
           retention-days: 3
+
+  publish:
+    name: Stage release
+    needs: [plan, macos, windows, linux]
+    # Skipped platforms are allowed; a failed or cancelled build stops publication.
+    if: >-
+      always() && needs.plan.result == 'success'
+      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    # The only job that can write. It creates the draft; a draft has no tag yet.
+    permissions:
+      contents: write
+    env:
+      KODEM_RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+      KODEM_RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
+      KODEM_RELEASE_STAGE_ONLY: 1
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.plan.outputs.commit }}
+          persist-credentials: false
+      # Outside the checkout, which must stay clean for publication.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/packages
+      - name: Verify and stage the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scripts/release.sh publish "$KODEM_CHANNEL" "$RUNNER_TEMP/packages" | tee "$RUNNER_TEMP/stage.log"
+          draft=$(sed -n 's/^STAGED: //p' "$RUNNER_TEMP/stage.log")
+          {
+            echo "### Draft release ready"
+            echo "[Open the draft]($draft) and choose **Publish release**, or run the Build Release command, which publishes it for you."
+          } >> "$GITHUB_STEP_SUMMARY"

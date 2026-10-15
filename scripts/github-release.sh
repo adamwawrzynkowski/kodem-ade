@@ -1,13 +1,23 @@
 #!/bin/bash
-# Shared release metadata and publication steps. Sourced by the macOS, Linux and Windows builds.
-# Builds of one commit on several platforms share one release; each adds its own archive.
+# Shared release metadata and publication steps.
 #
-# The macOS release commands publish every platform at once: they start the Release packages
-# workflow (.github/workflows/release.yml) for Windows and Linux, build macOS meanwhile, collect
-# the workflow's packages and publish one release with all of them. The workflow's builds run
-# with KODEM_RELEASE_VERSION set, which fixes the version and leaves publication to the caller.
+# Every platform releases together in GitHub Actions: the Release packages workflow
+# (.github/workflows/release.yml) chooses the version, builds macOS, Windows (x64 and Arm64)
+# and Linux, and publishes one release with all of them. Start it with Run workflow on GitHub,
+# or with scripts/release.sh (the Build Release commands), which follows its progress.
+#
+# The workflow's builds run with KODEM_RELEASE_VERSION set: the version is fixed and they only
+# package. Run directly with a release channel, a platform's build script publishes that
+# platform alone, or adds it to the release of the same commit.
 release_repository=adamwawrzynkowski/kodem-ade
 release_workflow=release.yml
+
+# Fails unless GitHub CLI's account may create release tags. The Release tags ruleset reserves
+# them for the owner, collaborators and the release workflow, whose job permissions decide.
+kodem_release_check_account() {
+    [[ "${GITHUB_ACTIONS:-}" != true ]] || return 0
+    [[ "$(gh api "repos/$release_repository" --jq .permissions.push 2>/dev/null)" == true ]] || { echo "GitHub CLI is signed in as $(gh api user --jq .login 2>/dev/null || echo 'an unknown account'), which cannot create release tags. Run gh auth switch to the owner or a collaborator account." >&2; return 1; }
+}
 
 # Resolves a monotonically increasing channel version before compiling, or the version of the
 # release that another platform already published for this commit.
@@ -39,10 +49,11 @@ kodem_release_prepare() {
         return 0
     fi
     command -v gh >/dev/null || { echo 'Install GitHub CLI and run gh auth login before publishing.' >&2; return 1; }
-    gh auth status >/dev/null 2>&1 || { echo 'Run gh auth login with the owner or a collaborator account.' >&2; return 1; }
-    # The Release tags ruleset reserves release tags for the owner and collaborators. Check before
-    # building, not at the upload.
-    [[ "$(gh api "repos/$release_repository" --jq .permissions.push 2>/dev/null)" == true ]] || { echo "GitHub CLI is signed in as $(gh api user --jq .login 2>/dev/null || echo 'an unknown account'), which cannot create release tags. Run gh auth switch to the owner or a collaborator account." >&2; return 1; }
+    # In the release workflow, GH_TOKEN carries the job's token, which has no user account.
+    if [[ "${GITHUB_ACTIONS:-}" != true ]]; then
+        gh auth status >/dev/null 2>&1 || { echo 'Run gh auth login with the owner or a collaborator account.' >&2; return 1; }
+    fi
+    kodem_release_check_account
     [[ -z "$(git status --porcelain --untracked-files=normal)" ]] || { echo 'Release builds require a clean committed checkout. No changes are committed or pushed by this script.' >&2; return 1; }
     release_commit=$(git rev-parse HEAD)
     [[ "$(gh api "repos/$release_repository/commits/$release_commit" --jq .sha)" == "$release_commit" ]] || { echo 'The build commit must already exist on GitHub.' >&2; return 1; }
@@ -107,37 +118,32 @@ kodem_release_changes() {
     echo "Changes since $previous_tag: $(printf '%s' "$release_notes" | grep -c . || true) commits"
 }
 
-# Tells whether this build publishes its packages itself.
+# Tells whether this build publishes its packages itself, as opposed to packaging them for the
+# release workflow.
 kodem_release_publishes() {
     [[ "$1" != debug && -z "${KODEM_RELEASE_VERSION:-}" ]]
 }
 
-# Starts the Release packages workflow for the platforms in KODEM_RELEASE_PLATFORMS (default:
-# "windows linux"; empty builds macOS only) and sets release_run to its run. An existing release
-# of this commit gets no workflow: the per-platform release commands add to it.
+# Starts the Release packages workflow for a commit and sets release_run to its run. The
+# platforms come from KODEM_RELEASE_PLATFORMS (default: all) and the version from KODEM_VERSION
+# when it is set.
 kodem_release_dispatch() {
-    local channel=$1 platforms title attempt
-    platforms=${KODEM_RELEASE_PLATFORMS-windows linux}
-    release_run=""
-    [[ -n "$platforms" ]] || { echo "Building macOS only, as KODEM_RELEASE_PLATFORMS is empty."; return 0; }
-    if [[ -n "${release_existing:-}" ]]; then
-        echo "$release_tag already exists, so this build adds macOS only. Run the Windows and Linux release commands to add theirs."
-        return 0
-    fi
-    # The workflow names its run after these inputs, which finds the run that this call starts.
-    title="Release $channel $release_version at $release_commit"
+    local channel=$1 commit=$2 platforms request attempt
+    platforms=${KODEM_RELEASE_PLATFORMS:-macos windows linux}
+    # The workflow names its run after this identifier, which finds the run that this call starts.
+    request="$(date -u +%Y%m%dT%H%M%SZ)-$$"
     gh workflow run "$release_workflow" --repo "$release_repository" \
         --ref "$(gh repo view "$release_repository" --json defaultBranchRef --jq .defaultBranchRef.name)" \
-        -f channel="$channel" -f version="$release_version" -f commit="$release_commit" -f platforms="$platforms" \
-        -f previous="$release_previous" -f notes="$release_notes" \
+        -f channel="$channel" -f commit="$commit" -f platforms="$platforms" \
+        -f version="${KODEM_VERSION:-}" -f request="$request" \
         || { echo "Could not start $release_workflow. It must be on the default branch on GitHub, and gh needs the workflow scope (gh auth refresh -s workflow)." >&2; return 1; }
+    release_run=""
     for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-        release_run=$(gh run list --repo "$release_repository" --workflow "$release_workflow" --event workflow_dispatch --limit 20 --json databaseId,displayTitle --jq "[.[] | select(.displayTitle == \"$title\")] | first | .databaseId // empty")
+        release_run=$(gh run list --repo "$release_repository" --workflow "$release_workflow" --event workflow_dispatch --limit 20 --json databaseId,displayTitle --jq "[.[] | select(.displayTitle | endswith(\"$request\"))] | first | .databaseId // empty")
         [[ -z "$release_run" ]] || break
         sleep 3
     done
-    [[ -n "$release_run" ]] || { echo "GitHub did not list the $release_workflow run that this build started." >&2; return 1; }
-    echo "Building $platforms in GitHub Actions: https://github.com/$release_repository/actions/runs/$release_run"
+    [[ -n "$release_run" ]] || { echo "GitHub did not list the $release_workflow run that this command started." >&2; return 1; }
 }
 
 # Shows the workflow run's progress until it ends: each job's state, its current step and how
@@ -146,7 +152,7 @@ kodem_release_dispatch() {
 kodem_release_wait() {
     local started now snapshot last="" reported=0 failures=0 state jobs
     started=$(date +%s)
-    echo "Waiting for the Windows and Linux builds: https://github.com/$release_repository/actions/runs/$release_run"
+    echo "Release workflow: https://github.com/$release_repository/actions/runs/$release_run"
     while true; do
         # The first line is the run's state; each further line describes one job.
         if ! snapshot=$(gh run view "$release_run" --repo "$release_repository" --json status,conclusion,jobs --jq '
@@ -181,27 +187,22 @@ kodem_release_wait() {
     done
 }
 
-# Waits for the workflow run, downloads its packages into a folder, checks their checksum files
-# and the expected archives, and lists them in release_assets.
-kodem_release_collect() {
-    local folder=$1 file expected platform
+# Checks the packages that the workflow's builds produced in a folder: every archive of the
+# platforms in the second argument exists, and each checksum file matches its archive. Lists
+# them in release_assets.
+kodem_release_verify_assets() {
+    local folder=$1 platforms=$2 file expected platform
     release_assets=()
-    [[ -n "${release_run:-}" ]] || return 0
-    if ! kodem_release_wait; then
-        echo "The Windows or Linux build failed. Nothing was published. See https://github.com/$release_repository/actions/runs/$release_run" >&2
-        return 1
-    fi
-    rm -rf "$folder"
-    mkdir -p "$folder"
-    gh run download "$release_run" --repo "$release_repository" --dir "$folder"
-    for platform in ${KODEM_RELEASE_PLATFORMS-windows linux}; do
+    for platform in $platforms; do
         case "$platform" in
+            macos) expected="Kodem-macos-aarch64.zip" ;;
             windows) expected="Kodem-windows-x86_64.zip Kodem-windows-aarch64.zip" ;;
             linux) expected="Kodem-linux-x86_64.tar.gz" ;;
-            *) echo "KODEM_RELEASE_PLATFORMS lists $platform. Use windows, linux or both." >&2; return 1 ;;
+            *) echo "Unknown platform $platform. Use macos, windows and linux." >&2; return 1 ;;
         esac
         for file in $expected; do
-            [[ -n "$(find "$folder" -type f -name "$file")" ]] || { echo "The workflow did not produce $file." >&2; return 1; }
+            [[ -n "$(find "$folder" -type f -name "$file")" ]] || { echo "The $platform build did not produce $file." >&2; return 1; }
+            [[ -n "$(find "$folder" -type f -name "$file.sha256")" ]] || { echo "$file has no checksum file." >&2; return 1; }
         done
     done
     while IFS= read -r file; do
@@ -252,8 +253,27 @@ kodem_release_publish() {
         fi
         return 1
     done
-    if [[ -z "${release_existing:-}" ]]; then
+    if [[ -n "${release_existing:-}" ]]; then
+        echo "PUBLISHED: https://github.com/$release_repository/releases/tag/$release_tag"
+    elif [[ "${KODEM_RELEASE_STAGE_ONLY:-0}" == 1 ]]; then
+        # The release workflow cannot create release tags; an owner account publishes the draft.
+        echo "STAGED: $(gh release view "$release_tag" --repo "$release_repository" --json url --jq .url)"
+    else
         gh release edit "$release_tag" --repo "$release_repository" --draft=false "${flags[@]}"
+        echo "PUBLISHED: https://github.com/$release_repository/releases/tag/$release_tag"
     fi
-    echo "PUBLISHED: https://github.com/$release_repository/releases/tag/$release_tag"
+}
+
+# Publishes the draft release that the release workflow staged for a commit, which creates its
+# tag under this account. Every file must carry the SHA-256 digest that the workflow verified.
+kodem_release_finish() {
+    local channel=$1 commit=$2 tag missing
+    local flags=(--latest)
+    [[ "$channel" != nightly ]] || flags=(--prerelease --latest=false)
+    tag=$(gh api "repos/$release_repository/releases?per_page=30" --jq "[.[] | select(.draft and .target_commitish == \"$commit\")] | first | .tag_name // empty")
+    [[ -n "$tag" ]] || { echo "The workflow staged no draft release for $commit." >&2; return 1; }
+    missing=$(gh release view "$tag" --repo "$release_repository" --json assets --jq '[.assets[] | select((.digest // "") | startswith("sha256:") | not) | .name] | join(", ")')
+    [[ -z "$missing" ]] || { echo "Draft $tag has files without a verified digest: $missing" >&2; return 1; }
+    gh release edit "$tag" --repo "$release_repository" --draft=false "${flags[@]}"
+    echo "PUBLISHED: https://github.com/$release_repository/releases/tag/$tag"
 }

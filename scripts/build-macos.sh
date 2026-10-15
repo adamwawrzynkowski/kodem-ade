@@ -20,19 +20,12 @@ echo "$$" > "$build_lock/pid"
 work_dir=$(mktemp -d -t kodem-build)
 cleanup() {
     rm -rf "$work_dir" "$build_lock"
-    # A failed macOS build stops the Windows and Linux builds that it started. A finished run
-    # ignores the request.
-    if [[ -n "${release_run:-}" ]]; then
-        gh run cancel "$release_run" --repo "$release_repository" >/dev/null 2>&1 || true
-    fi
 }
 trap cleanup EXIT
 source "$KODEM_ROOT/scripts/dependencies.sh"
 kodem_dependencies
 source "$KODEM_ROOT/scripts/github-release.sh"
 kodem_release_prepare "$channel"
-# Windows and Linux build in GitHub Actions while macOS builds here.
-if [[ "$channel" != debug ]]; then kodem_release_dispatch "$channel"; fi
 export KODEM_RELEASE_CHANNEL="$channel" KODEM_APP_VERSION="$release_version" KODEM_RELEASE_PREVIOUS="$release_previous" KODEM_RELEASE_NOTES="$release_notes"
 echo "Compiling $channel $release_version from $KODEM_ROOT"
 cargo fmt --all -- --check
@@ -127,10 +120,14 @@ echo "Build ID: $build_id"
 if [[ "$channel" != debug ]]; then
     archive="$KODEM_ROOT/target/$channel/Kodem-macos-aarch64.zip"
     rm -f "$archive"
+    rm -f "$archive.sha256"
     /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$output" "$archive"
-    # One release carries every platform, so nothing is published before all of them built.
-    kodem_release_collect "$KODEM_ROOT/target/$channel/other-platforms"
-    kodem_release_publish "$channel" "$archive" ${release_assets[@]+"${release_assets[@]}"}
+    (cd "$(dirname "$archive")" && echo "$(kodem_sha256 "$(basename "$archive")")  $(basename "$archive")" > "$(basename "$archive").sha256")
+    if kodem_release_publishes "$channel"; then
+        kodem_release_publish "$channel" "$archive" "$archive.sha256"
+    else
+        echo "PACKAGED: $archive (the release workflow publishes it)"
+    fi
 fi
 echo "Built and verified: $output"
 echo "The application was not launched."

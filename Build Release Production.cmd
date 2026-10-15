@@ -1,5 +1,5 @@
 @echo off
-rem Double-click to build and publish a Production GitHub release on Windows. Requires Git for Windows.
+rem Double-click to release Production for every platform through GitHub Actions. Requires Git for Windows.
 cd /d "%~dp0"
 if not exist target mkdir target
 set "KODEM_BASH=%ProgramFiles%\Git\bin\bash.exe"
@@ -10,7 +10,7 @@ if not exist "%KODEM_BASH%" (
 )
 rem Git Bash stays in this folder instead of opening the home folder.
 set CHERE_INVOKING=1
-"%KODEM_BASH%" -lc "scripts/build-windows.sh production 2>&1 | tee target/build-production.log; exit ${PIPESTATUS[0]}"
+"%KODEM_BASH%" -lc "scripts/release.sh production 2>&1 | tee target/build-production.log; exit ${PIPESTATUS[0]}"
 set result=%ERRORLEVEL%
 if not "%result%"=="0" echo. & echo Production command stopped. See target\build-production.log for the failed step.
 if not "%KODEM_NONINTERACTIVE%"=="1" pause

@@ -204,7 +204,7 @@ INFO
             # The next processor adds its archive to the release that this one published.
             release_existing=$release_tag
         else
-            echo "PACKAGED: $archive (the build that started this one publishes it)"
+            echo "PACKAGED: $archive (the release workflow publishes it)"
         fi
     fi
 done

@@ -126,7 +126,7 @@ if [[ "$channel" != debug ]]; then
     if kodem_release_publishes "$channel"; then
         kodem_release_publish "$channel" "$archive" "${signatures[@]}"
     else
-        echo "PACKAGED: $archive (the build that started this one publishes it)"
+        echo "PACKAGED: $archive (the release workflow publishes it)"
     fi
 fi
 echo "Built and verified: $output"
