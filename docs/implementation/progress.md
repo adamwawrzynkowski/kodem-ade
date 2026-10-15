@@ -635,3 +635,9 @@ Checked with `cargo clippy --all-targets -D warnings` for macOS, Windows and Lin
 
 Not checked: the Windows PowerShell and Linux scripts did not run, the dialog was not viewed, and the Claude Code, Git, Git LFS and GitHub CLI installers were not run, because they change this system.
 
+## Windows on Arm64
+
+Recorded on 15 October 2026. `scripts/build-windows.sh` builds `x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`: both for Nightly and Production, the build computer's own for Debug, or the list in `KODEM_WINDOWS_ARCH`. For each processor it builds, checks the PE machine type of both executables, signs, packages to `target/<channel>/windows-<processor>/` and publishes `Kodem-windows-<processor>.zip` into one release. `scripts/dependencies.sh` reads the processor from `PROCESSOR_ARCHITECTURE` and `PROCESSOR_ARCHITEW6432`, so an emulated x64 Git Bash on Arm still counts as Arm64. It requires the Visual Studio C++ tools of each processor, installs the matching rustup and Codex package, adds the Rust targets, and prefers the SDK's Arm64 tools on Arm. The updater and the Codex installer already name their downloads after the running processor. `scripts/licenses.py` accepts the Arm64 target.
+
+Checked with `cargo clippy --all-targets -D warnings` for `aarch64-pc-windows-msvc` with a scratch zig C toolchain (six earlier findings, no new one), `bash -n`, a probe of the processor detection with faked Windows variables (x64, Arm64, and an emulated x64 shell on Arm64), and generated Arm64 license notices: 373 packages, one fewer than x64 (`raw-cpuid`). Temporary probes and toolchains were removed. Not checked: a build, signing or run on Windows.
+

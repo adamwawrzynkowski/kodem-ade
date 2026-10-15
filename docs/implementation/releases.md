@@ -30,12 +30,12 @@ The existing `nightly/v0.1.0` draft was then published after its source commit a
 
 ## Windows and Linux packages
 
-Recorded on 15 October 2026. Each platform builds natively: `scripts/build-macos.sh` on macOS, `scripts/build-linux.sh` on Linux, and `scripts/build-windows.sh` from Git Bash on Windows (`Build *.cmd` at the repository root). GPUI compiles its Direct3D shaders with the Windows SDK's `fxc.exe` in release builds, so Windows releases cannot be cross-compiled from macOS.
+Recorded on 15 October 2026. Each platform builds natively: `scripts/build-macos.sh` on macOS, `scripts/build-linux.sh` on Linux, and `scripts/build-windows.sh` from Git Bash on Windows (`Build *.cmd` at the repository root). GPUI compiles its Direct3D shaders with the Windows SDK's `fxc.exe` in release builds, so Windows releases cannot be cross-compiled from macOS. One Windows build computer produces both processors: the build of the other processor is a cross-compilation with Visual Studio's C++ tools for it, and GPUI runs the SDK's `fxc.exe` for the build computer's processor. The second processor's archive joins the release that the first one published.
 
 | Platform | Release asset | Package folder | Identity and metadata |
 | --- | --- | --- | --- |
 | macOS | `Kodem-macos-aarch64.zip` | `Kodem.app`, `Kodem Nightly.app` | `Info.plist`, ad hoc code signature |
-| Windows | `Kodem-windows-x86_64.zip` and `.sha256` | `Kodem`, `Kodem Nightly`, `Kodem Debug` | `release.json`, Authenticode signature, embedded icon and version resource |
+| Windows | `Kodem-windows-x86_64.zip`, `Kodem-windows-aarch64.zip` and their `.sha256` files | `Kodem`, `Kodem Nightly`, `Kodem Debug` | `release.json`, Authenticode signature, embedded icon and version resource |
 | Linux | `Kodem-linux-x86_64.tar.gz`, `.sha256` and optional `.asc` | `kodem`, `kodem-nightly`, `kodem-debug` | `release.json`, optional detached OpenPGP signature |
 
 `release.json` carries `name`, `identifier`, `version`, `channel`, `repository` and `build`. The Windows and Linux updaters require the installed folder's `release.json` to name the running channel, accept only archives whose entries are regular files and folders under the channel's package folder, then compare identifier, version, channel and repository. On Windows, when the running `kodem.exe` has a valid Authenticode signature, both new executables must be validly signed by the same certificate thumbprint. The detached installer is `scripts/install-update-windows.ps1` or `scripts/install-update-linux.sh`. It waits for the desktop to exit, retries the folder rename while the stopped host releases its executable on Windows, swaps folders with rollback and starts the new app. Windows can leave the stage folder holding only `install.log`, which the installer process keeps open.

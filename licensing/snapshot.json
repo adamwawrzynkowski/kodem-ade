@@ -23,7 +23,7 @@
     "licensing/README.md": "3bed85358a49108ae18bfc6b1f5b1d4a40799632a3f4b8c72d5ee19d420122c2",
     "licensing/clarifications.json": "dec88b30659fabbe6ca866705ad71e7ff78e4afdb6b6dc139b3d7adb3b7824a0",
     "rust-toolchain.toml": "559f488c181e0e9e77cf17c29de663977f036ec7ff2e2060585714bf53c52d62",
-    "scripts/licenses.py": "4268ae6534897dca1e0da1680d8fe3bc39230051469eb3f60e50d5902bc96973"
+    "scripts/licenses.py": "8ca5f8b1d74dd38c911e4253f42345f0c4eedca25fe356eef4ca3246121f8f19"
   },
   "outputs": {
     "assets/licenses/Rust-THIRD-PARTY.txt": "9d65406f6d505c9191b848cc3ad49f1f8c9a8847e0dd0cd1443dd3137fde8515",

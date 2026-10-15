@@ -20,21 +20,32 @@ KODEM_PLATFORM=$(kodem_platform)
 KODEM_EXE=""
 [[ "$KODEM_PLATFORM" != windows ]] || KODEM_EXE=.exe
 
-# Returns the Rust target that this platform's build produces.
+# Prints the processor of a Windows computer: x86_64 or aarch64. Git Bash can run emulated on
+# Arm, so this reads what Windows reports instead of uname.
+kodem_windows_host_arch() {
+    case "${PROCESSOR_ARCHITEW6432:-${PROCESSOR_ARCHITECTURE:-}}" in
+        ARM64) echo aarch64 ;;
+        AMD64) echo x86_64 ;;
+        *) echo "Unsupported Windows processor: ${PROCESSOR_ARCHITECTURE:-unknown}" >&2; return 1 ;;
+    esac
+}
+
+# Returns the Rust target that this platform's build produces for the build computer's own
+# processor. Windows builds can add the other processor; see scripts/build-windows.sh.
 kodem_build_target() {
     case "$KODEM_PLATFORM" in
         macos) echo aarch64-apple-darwin ;;
         linux) echo x86_64-unknown-linux-gnu ;;
-        windows) echo x86_64-pc-windows-msvc ;;
+        windows) echo "$(kodem_windows_host_arch)-pc-windows-msvc" ;;
     esac
 }
 
-# Returns the Codex package target that matches this platform.
+# Returns the Codex package target that runs on the build computer.
 kodem_codex_target() {
     case "$KODEM_PLATFORM" in
         macos) echo aarch64-apple-darwin ;;
         linux) echo x86_64-unknown-linux-musl ;;
-        windows) echo x86_64-pc-windows-msvc ;;
+        windows) echo "$(kodem_windows_host_arch)-pc-windows-msvc" ;;
     esac
 }
 
@@ -116,20 +127,30 @@ kodem_dependencies_linux() {
     fi
 }
 
-# Checks the Visual Studio C++ tools and the Windows SDK. GPUI compiles its shaders with the
-# SDK's fxc.exe in release builds, and the SDK's rc.exe embeds the icon and manifest.
+# Checks the Visual Studio C++ tools for each processor in KODEM_WINDOWS_ARCHES (default: this
+# computer's) and the Windows SDK. GPUI compiles its shaders with the SDK's fxc.exe in release
+# builds, and the SDK's rc.exe embeds the icon and manifest.
 kodem_dependencies_windows() {
-    [[ "$(uname -m)" == x86_64 ]] || { echo "This release targets x86_64 Windows. Another architecture has not been validated." >&2; return 1; }
+    kodem_windows_host_arch >/dev/null
     command -v git >/dev/null || { echo "Install Git for Windows and run this command from Git Bash." >&2; return 1; }
     command -v curl >/dev/null || { echo "curl is unavailable. Use Windows 10 1803 or newer." >&2; return 1; }
     kodem_python >/dev/null || { echo "Install Python 3 from python.org; license notices need it." >&2; return 1; }
     local vswhere
     vswhere="$(kodem_program_files_x86)/Microsoft Visual Studio/Installer/vswhere.exe"
-    if [[ ! -f "$vswhere" ]] || [[ -z "$("$vswhere" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>/dev/null)" ]]; then
-        echo "Install Visual Studio 2022 Build Tools with the 'Desktop development with C++' workload and a Windows 11 SDK:" >&2
-        echo "  winget install Microsoft.VisualStudio.2022.BuildTools --override \"--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended\"" >&2
-        return 1
-    fi
+    local arch component
+    for arch in ${KODEM_WINDOWS_ARCHES:-$(kodem_windows_host_arch)}; do
+        case "$arch" in
+            x86_64) component=Microsoft.VisualStudio.Component.VC.Tools.x86.x64 ;;
+            aarch64) component=Microsoft.VisualStudio.Component.VC.Tools.ARM64 ;;
+            *) echo "Unsupported Windows processor: $arch. Use x86_64 or aarch64." >&2; return 1 ;;
+        esac
+        if [[ ! -f "$vswhere" ]] || [[ -z "$("$vswhere" -latest -products '*' -requires "$component" -property installationPath 2>/dev/null)" ]]; then
+            echo "Building for $arch Windows needs the Visual Studio 2022 C++ tools for that processor ($component) and a Windows 11 SDK:" >&2
+            echo "  winget install Microsoft.VisualStudio.2022.BuildTools --override \"--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --add $component --includeRecommended\"" >&2
+            echo "If Build Tools are installed already, add the component in the Visual Studio Installer." >&2
+            return 1
+        fi
+    done
     kodem_windows_sdk_tool fxc.exe >/dev/null || { echo "The Windows SDK is missing fxc.exe. Add a Windows 11 SDK in the Visual Studio Installer." >&2; return 1; }
 }
 
@@ -138,14 +159,19 @@ kodem_program_files_x86() {
     cygpath -u "$(printenv 'ProgramFiles(x86)' || echo 'C:\Program Files (x86)')"
 }
 
-# Prints the newest x64 Windows SDK tool with the given name.
+# Prints the newest Windows SDK tool with the given name, built for this computer's processor
+# when the SDK has one, and the x64 tool otherwise. Windows on Arm runs x64 tools emulated.
 kodem_windows_sdk_tool() {
-    local root
+    local root found folder
     root="$(kodem_program_files_x86)/Windows Kits/10/bin"
-    local found
-    found=$(find "$root" -maxdepth 3 -path "*/x64/$1" 2>/dev/null | sort -V | tail -1)
-    [[ -n "$found" ]] || return 1
-    echo "$found"
+    for folder in $([[ "$(kodem_windows_host_arch)" == aarch64 ]] && echo arm64) x64; do
+        found=$(find "$root" -maxdepth 3 -path "*/$folder/$1" 2>/dev/null | sort -V | tail -1)
+        if [[ -n "$found" ]]; then
+            echo "$found"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # Prints the command that runs Python 3. Windows installs it as python or py, and its
@@ -168,7 +194,7 @@ kodem_rust() {
         local installer
         installer=$(mktemp -d)
         if [[ "$KODEM_PLATFORM" == windows ]]; then
-            if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 https://win.rustup.rs/x86_64 -o "$installer/rustup-init.exe"; then rm -rf "$installer"; return 1; fi
+            if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 "https://win.rustup.rs/$(kodem_windows_host_arch)" -o "$installer/rustup-init.exe"; then rm -rf "$installer"; return 1; fi
             if ! "$installer/rustup-init.exe" -y --no-modify-path --profile minimal --default-toolchain none; then rm -rf "$installer"; return 1; fi
         else
             if ! curl --proto '=https' --tlsv1.2 --fail --location --retry 3 https://sh.rustup.rs -o "$installer/rustup.sh"; then rm -rf "$installer"; return 1; fi
@@ -181,7 +207,10 @@ kodem_rust() {
     fi
     if ! rustup run "$KODEM_RUST_VERSION" rustfmt --version >/dev/null 2>&1; then rustup component add rustfmt --toolchain "$KODEM_RUST_VERSION"; fi
     if ! rustup run "$KODEM_RUST_VERSION" cargo-clippy --version >/dev/null 2>&1; then rustup component add clippy --toolchain "$KODEM_RUST_VERSION"; fi
-    rustup target add "$(kodem_build_target)" --toolchain "$KODEM_RUST_VERSION" >/dev/null
+    local target
+    for target in ${KODEM_BUILD_TARGETS:-$(kodem_build_target)}; do
+        rustup target add "$target" --toolchain "$KODEM_RUST_VERSION" >/dev/null
+    done
     export RUSTUP_TOOLCHAIN="$KODEM_RUST_VERSION"
     echo "Using $(rustc --version)"
 }

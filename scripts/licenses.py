@@ -17,7 +17,7 @@ TOOL_VERSION = "0.9.2"
 TARGET = "aarch64-apple-darwin"
 # Windows and Linux notices are generated at build time under target/licensing/<target>/ with
 # the same policy. Only the macOS notices are tracked.
-TARGETS = [TARGET, "x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+TARGETS = [TARGET, "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
 NOTICE = "assets/licenses/Rust-THIRD-PARTY.txt"
 SOURCE = "assets/licenses/option-ext-0.2.0-source.tar.gz"
 STANDARD_LIBRARY = "assets/licenses/Rust-standard-library.html"
