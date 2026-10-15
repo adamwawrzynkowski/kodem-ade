@@ -14,4 +14,4 @@ Only the newest Production and Nightly releases receive fixes.
 
 ## Release integrity
 
-Releases are published only by the repository owner's accounts: a ruleset reserves the release tags for them. Each archive's SHA-256 digest is published with it, and the updater installs an archive only when its size and digest match GitHub's record. Windows executables carry an Authenticode signature; an app signed by a certificate accepts updates only from the same certificate.
+Releases are published only by the repository owner's accounts: a ruleset reserves the release tags for them. Each archive's SHA-256 digest is published with it, and the updater installs an archive only when its size and digest match GitHub's record. Windows executables are currently unsigned. Once releases carry an Authenticode signature, an app signed by a certificate accepts updates only from the same certificate.

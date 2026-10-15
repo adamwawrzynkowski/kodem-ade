@@ -677,3 +677,7 @@ Recorded on 15 October 2026. macOS joined Windows and Linux in the **Release pac
 
 Checked with `bash -n`, a YAML parse of the workflow, the configuration script re-applied and read back, and temporary probes under `/bin/bash` 3.2 with stubbed `gh`, `git` and `cargo`, removed afterward: Plan chose 0.1.37 after 0.1.36 with its change list; staging uploaded eight files to a draft and published nothing; finishing published a draft whose files all had digests as a prerelease and refused one with a file without a digest; dispatch found its run by the request identifier. Not checked: a real workflow run.
 
+The first all-platform run compiled every platform; the Windows job then stopped at the signing rule, because the repository has no signing certificate and does not allow unsigned releases. The Plan job now checks that before any build, and `build-windows.sh` checks it before compiling.
+
+Windows releases are now unsigned by default: publicly trusted code-signing certificates keep their keys in hardware or a provider's cloud since June 2023, so a `.pfx` secret cannot hold one, and the owner chose to ship unsigned until a signing service is set up. `build-windows.sh` signs when an identity is configured and otherwise warns; `KODEM_REQUIRE_SIGNING=1` restores the refusal, and the Plan job checks it before any build.
+

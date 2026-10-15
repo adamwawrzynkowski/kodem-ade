@@ -11,7 +11,8 @@
 #   Secrets  KODEM_SIGN_PFX_BASE64, KODEM_SIGN_PFX_PASSWORD   Authenticode certificate (.pfx, base64)
 #            KODEM_GPG_PRIVATE_KEY, KODEM_GPG_PASSPHRASE      OpenPGP key for the Linux .asc signature
 #   Variables KODEM_GPG_KEY                                   that key's ID or fingerprint
-#             KODEM_ALLOW_UNSIGNED=1                          allows unsigned Windows executables
+#             KODEM_REQUIRE_SIGNING=1                         refuses unsigned Windows executables
+# Without a signing certificate, Windows executables are unsigned.
 name: Release packages
 run-name: Release ${{ inputs.channel }}${{ inputs.request && format(' · {0}', inputs.request) || '' }}
 
@@ -68,6 +69,17 @@ jobs:
         with:
           ref: ${{ inputs.commit || github.sha }}
           persist-credentials: false
+      # When the repository requires signed Windows executables, stop before any build if no
+      # certificate is configured, instead of after an hour of builds.
+      - name: Check Windows signing
+        if: contains(inputs.platforms, 'windows') && vars.KODEM_REQUIRE_SIGNING == '1'
+        env:
+          HAS_CERTIFICATE: ${{ secrets.KODEM_SIGN_PFX_BASE64 != '' }}
+        run: |
+          if [[ "$HAS_CERTIFICATE" != true ]]; then
+              echo "::error::KODEM_REQUIRE_SIGNING is set, but the KODEM_SIGN_PFX_BASE64 secret is missing."
+              exit 1
+          fi
       - name: Choose the version and the change list
         id: plan
         env:
@@ -116,7 +128,7 @@ jobs:
       KODEM_RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
       KODEM_RELEASE_PREVIOUS: ${{ needs.plan.outputs.previous }}
       KODEM_RELEASE_NOTES: ${{ needs.plan.outputs.notes }}
-      KODEM_ALLOW_UNSIGNED: ${{ vars.KODEM_ALLOW_UNSIGNED }}
+      KODEM_REQUIRE_SIGNING: ${{ vars.KODEM_REQUIRE_SIGNING }}
       KODEM_SIGN_PFX_PASSWORD: ${{ secrets.KODEM_SIGN_PFX_PASSWORD }}
       KODEM_WINDOWS_ARCH: x86_64 aarch64
     steps:

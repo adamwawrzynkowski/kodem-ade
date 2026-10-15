@@ -12,8 +12,9 @@
 #   KODEM_SIGN_CERT_SHA1                 thumbprint of a certificate in the user's store or on a
 #                                        hardware token
 #   KODEM_SIGN_PFX                       a .pfx file, with KODEM_SIGN_PFX_PASSWORD
-# KODEM_SIGN_TIMESTAMP_URL overrides the RFC 3161 timestamp server. Nightly and Production
-# refuse to publish unsigned executables unless KODEM_ALLOW_UNSIGNED=1.
+# KODEM_SIGN_TIMESTAMP_URL overrides the RFC 3161 timestamp server. Without an identity, the
+# executables stay unsigned, and SmartScreen warns on other computers. KODEM_REQUIRE_SIGNING=1
+# refuses to build a release without one.
 set -euo pipefail
 KODEM_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$KODEM_ROOT"
@@ -27,6 +28,12 @@ case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) ;;
     *) echo "Run this build on Windows from Git Bash." >&2; exit 2 ;;
 esac
+# A required signature without an identity would fail only after compiling. Say so first.
+if [[ "$channel" != debug && "${KODEM_REQUIRE_SIGNING:-0}" == 1 \
+    && -z "${KODEM_SIGN_TRUSTED_SIGNING_METADATA:-}${KODEM_SIGN_CERT_SHA1:-}${KODEM_SIGN_PFX:-}" ]]; then
+    echo "KODEM_REQUIRE_SIGNING is set, but no signing identity is configured (see the top of scripts/build-windows.sh)." >&2
+    exit 1
+fi
 mkdir -p target
 build_lock="$KODEM_ROOT/target/.kodem-build-lock"
 if ! mkdir "$build_lock" 2>/dev/null; then
@@ -171,8 +178,8 @@ INFO
         echo "Signed and verified $arch $executable"
     done
     if [[ "$signed" == 0 ]]; then
-        if [[ "$channel" != debug && "${KODEM_ALLOW_UNSIGNED:-0}" != 1 ]]; then
-            echo "Release builds must be Authenticode-signed. Configure a signing identity (see the top of scripts/build-windows.sh) or set KODEM_ALLOW_UNSIGNED=1." >&2
+        if [[ "$channel" != debug && "${KODEM_REQUIRE_SIGNING:-0}" == 1 ]]; then
+            echo "KODEM_REQUIRE_SIGNING is set, but no signing identity is configured." >&2
             exit 1
         fi
         echo "Not signed: Windows SmartScreen will warn when this package runs on another computer."

@@ -42,7 +42,7 @@ Recorded on 15 October 2026. Each platform builds natively: `scripts/build-macos
 
 A release build of a commit that already has a published release in its channel adds its archive to that release instead of allocating a new version. A draft release for the commit stops the build. An upload whose GitHub digest differs from the local archive is deleted from an existing release, or leaves a new release as a draft.
 
-Release builds on Windows refuse unsigned executables unless `KODEM_ALLOW_UNSIGNED=1`. Linux signing is optional unless `KODEM_REQUIRE_SIGNING=1`. License notices for Windows and Linux are generated at build time under `target/licensing/<target>/` with the macOS policy; the Linux graph needed reviewed clarifications for `harfrust`, `wayland-protocols-plasma`, `xim-ctext` and `xim-parser`. The Windows graph has no MPL dependency, so its package carries no `option-ext` source archive.
+Windows executables are signed when a signing identity is configured and unsigned otherwise; `KODEM_REQUIRE_SIGNING=1` refuses unsigned release builds. Linux signing is optional unless `KODEM_REQUIRE_SIGNING=1`. License notices for Windows and Linux are generated at build time under `target/licensing/<target>/` with the macOS policy; the Linux graph needed reviewed clarifications for `harfrust`, `wayland-protocols-plasma`, `xim-ctext` and `xim-parser`. The Windows graph has no MPL dependency, so its package carries no `option-ext` source archive.
 
 ## One release for every platform
 
