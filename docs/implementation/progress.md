@@ -681,3 +681,5 @@ The first all-platform run compiled every platform; the Windows job then stopped
 
 Windows releases are now unsigned by default: publicly trusted code-signing certificates keep their keys in hardware or a provider's cloud since June 2023, so a `.pfx` secret cannot hold one, and the owner chose to ship unsigned until a signing service is set up. `build-windows.sh` signs when an identity is configured and otherwise warns; `KODEM_REQUIRE_SIGNING=1` restores the refusal, and the Plan job checks it before any build.
 
+The next run failed in the macOS job with "Refusing to replace an unrelated bundle". The build cache had restored `target/`, including the previous run's `target/nightly/Kodem Nightly.app`, from which the cache's pruning had removed `Info.plist`; the build script's guard then could not identify the bundle. Each build job now removes `target/<channel>`, which holds only Kodem's packages, after the cache restores and again after uploading, so packages never enter the cache. Checked with a YAML parse and the resulting step order.
+

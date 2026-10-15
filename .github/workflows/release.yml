@@ -104,6 +104,10 @@ jobs:
           ref: ${{ needs.plan.outputs.commit }}
           persist-credentials: false
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # The build cache restores target/, but packages of earlier runs must not come back: the
+      # cache prunes files inside them, and the build refuses to replace a bundle it cannot read.
+      - name: Remove packages restored by the cache
+        run: rm -rf "target/$KODEM_CHANNEL"
       - name: Build and package
         run: scripts/build-macos.sh "$KODEM_CHANNEL"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -112,6 +116,9 @@ jobs:
           path: target/${{ inputs.channel }}/Kodem-macos-*
           if-no-files-found: error
           retention-days: 3
+      - name: Keep packages out of the cache
+        if: always()
+        run: rm -rf "target/$KODEM_CHANNEL"
 
   windows:
     name: Windows
@@ -146,6 +153,10 @@ jobs:
               echo "KODEM_SIGN_PFX=$certificate" >> "$GITHUB_ENV"
           fi
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # The build cache restores target/, but packages of earlier runs must not come back: the
+      # cache prunes files inside them, and the build refuses to replace a bundle it cannot read.
+      - name: Remove packages restored by the cache
+        run: rm -rf "target/$KODEM_CHANNEL"
       - name: Build, sign and package
         run: scripts/build-windows.sh "$KODEM_CHANNEL"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -154,6 +165,9 @@ jobs:
           path: target/${{ inputs.channel }}/Kodem-windows-*
           if-no-files-found: error
           retention-days: 3
+      - name: Keep packages out of the cache
+        if: always()
+        run: rm -rf "target/$KODEM_CHANNEL"
       - name: Remove the signing certificate
         if: always()
         run: rm -f "$(cygpath -u "$RUNNER_TEMP")/kodem-signing.pfx"
@@ -195,6 +209,10 @@ jobs:
               fi
           fi
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # The build cache restores target/, but packages of earlier runs must not come back: the
+      # cache prunes files inside them, and the build refuses to replace a bundle it cannot read.
+      - name: Remove packages restored by the cache
+        run: rm -rf "target/$KODEM_CHANNEL"
       - name: Build and package
         run: scripts/build-linux.sh "$KODEM_CHANNEL"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -203,6 +221,9 @@ jobs:
           path: target/${{ inputs.channel }}/Kodem-linux-*
           if-no-files-found: error
           retention-days: 3
+      - name: Keep packages out of the cache
+        if: always()
+        run: rm -rf "target/$KODEM_CHANNEL"
 
   publish:
     name: Stage release
