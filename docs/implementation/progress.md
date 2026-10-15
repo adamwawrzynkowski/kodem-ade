@@ -708,3 +708,11 @@ Recorded on 16 October 2026. At the user's request the composer's Queue/Steer ch
 Recorded on 16 October 2026. The user asked for a little more depth on status badges (FAILED, RUNNING and others), the workspace tabs on the left and the other badges. `kit::tint_fill` draws a tint that is half again as strong at the top as its mean and six tenths of it at the bottom. `kit::tint_light` adds a lighter line of the tone one point under the top edge, a deeper one above the bottom edge (both below a hairline border, so the border does not hide them) and a tight shadow of the deep tone. Both take only the tone, so `kit::chip` keeps its signature for its many callers. They apply to `kit::chip`, `kit::icon_tile`, the open workspace's tile in `ui/workspaces.rs` and `settings::chosen_layer`, which draws the chosen settings section, the chosen segment of a segmented control, the chosen footer action and the chosen account. `kit::keycap` gets a light line under its top edge and a heavier bottom edge in the theme's edge color. Selected rows of lists and menus are unchanged.
 
 Checked with `cargo build`, `cargo clippy -D warnings` (no findings) and `cargo fmt --check` on macOS. The look is not checked on a display under the no-visual-testing agreement.
+
+## Stop always takes the place of send
+
+Recorded on 16 October 2026. While a turn ran with a draft, the composer showed a separate small stop button next to a queue or steer submit key. The user asked for stop to take the place of send. The submit key is now the red glass stop key for the whole turn, and the separate stop button is gone. A draft is still queued or steered with Enter (⌘Enter for the other mode), as the send mode chip and the key hints say. Checked with `cargo build`, `cargo clippy -D warnings` and `cargo fmt --check` on macOS.
+
+## Queue and steer icons
+
+Recorded on 16 October 2026. The user found the arrows of the send mode chip uninformative. Queue now shows Lucide `list-end`, a list with an arrow that turns into its end, and steer shows Lucide `ship-wheel`, at 14 points. Both come from `lucide-static` 1.55.0 with the geometry unchanged, written in the one-line form of the other control icons and listed in `assets/THIRD_PARTY.md`. Checked with `cargo build`, `cargo clippy -D warnings` and `cargo fmt --check` on macOS.

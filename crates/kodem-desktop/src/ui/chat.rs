@@ -1005,8 +1005,8 @@ impl Shell {
         let has_content = self.has_composer_content(cx);
         let steer = steering && self.settings.send_mode == SendMode::Steer;
         if steering {
-            // A square icon chip: its arrow is the one the submit key shows in the same mode, and
-            // the tooltip names the mode.
+            // A square icon chip: a list that takes the message at its end for queue, a wheel
+            // for steer. The tooltip names the mode.
             rules = rules.child(
                 self.chip_button("active-send-mode")
                     .w(px(24.))
@@ -1017,7 +1017,7 @@ impl Shell {
                     } else {
                         "Send mode: queue. Click to steer instead"
                     })
-                    .child(icon(if steer { "arrow-right" } else { "arrow-down" }).size(px(13.)))
+                    .child(icon(if steer { "ship-wheel" } else { "list-end" }).size(px(14.)))
                     .tooltip(move |_, cx| {
                         cx.new(|_| Hint {
                             text: if steer {
@@ -1056,29 +1056,11 @@ impl Shell {
             || (empty && !ready)
             || self.submitted_draft.is_some()
             || (needs_content && !has_content);
-        // While a turn runs, an empty draft offers to stop it and a draft offers to send it.
-        let stop_only = active && !has_content;
-        if active && has_content {
-            actions = actions.child(
-                self.icon_button("composer-stop", "stop", "Stop current turn")
-                    .text_color(t.removed)
-                    .on_click(cx.listener(|s, _, _, _| {
-                        if let Some(task_id) = &s.selected {
-                            s.send(core::Request::Interrupt {
-                                task_id: task_id.clone(),
-                            });
-                        }
-                    })),
-            );
-        }
-        let submit_label = if stop_only {
+        // While a turn runs the submit key stops it. Enter still queues or steers a draft, as the
+        // send mode chip says.
+        let stopping = active;
+        let submit_label = if stopping {
             "Stop current turn"
-        } else if active {
-            if steer {
-                "Steer the running turn · Enter"
-            } else {
-                "Queue for the next turn · Enter"
-            }
         } else if empty {
             match mode {
                 TaskKind::Coding => "Create task and send message · Enter",
@@ -1088,16 +1070,8 @@ impl Shell {
         } else {
             "Send message · Enter"
         };
-        let submit_glyph = if stop_only {
-            "stop"
-        } else if active && !steer {
-            "arrow-down"
-        } else if active {
-            "arrow-right"
-        } else {
-            "arrow-up"
-        };
-        let submit = if stop_only {
+        let submit_glyph = if stopping { "stop" } else { "arrow-up" };
+        let submit = if stopping {
             self.glass("composer-submit", submit_glyph, "", t.removed)
         } else {
             self.primary("composer-submit", submit_glyph, "")
@@ -1117,7 +1091,7 @@ impl Shell {
                     .into()
                 })
                 .on_click(cx.listener(move |s, _, w, cx| {
-                    if stop_only {
+                    if stopping {
                         if let Some(task_id) = &s.selected {
                             s.send(core::Request::Interrupt {
                                 task_id: task_id.clone(),
