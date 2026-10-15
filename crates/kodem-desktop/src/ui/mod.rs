@@ -16,6 +16,7 @@ mod diff_view;
 mod dither;
 mod effort_slider;
 mod fx;
+mod git;
 mod history;
 mod image_preview;
 mod kit;
@@ -90,7 +91,9 @@ actions!(
         GoToTask9,
         ShowCoding,
         ShowChat,
-        ShowReview
+        ShowReview,
+        ShowGit,
+        CloneRepository
     ]
 );
 #[derive(Clone, PartialEq)]
@@ -147,6 +150,14 @@ pub struct Shell {
     workspace: Option<Workspace>,
     /// The open workspace. An open task is always of this kind.
     mode: TaskKind,
+    /// The Git workspace, created when it opens the first time.
+    git: Option<Entity<git::GitWorkspace>>,
+    /// The Git workspace covers the workspace of `mode`.
+    git_open: bool,
+    /// Repository folders that the Git workspace asked the host to list as projects.
+    git_registrations: HashSet<PathBuf>,
+    /// The pages of the Git section of preferences.
+    git_settings: Option<Entity<git::settings_view::GitSettingsView>>,
     /// The task that was open in each workspace when the window left it.
     mode_tasks: HashMap<TaskKind, String>,
     /// The start-screen draft of each workspace that is not open.
@@ -467,6 +478,10 @@ impl Shell {
             focus,
             workspace: None,
             mode: TaskKind::default(),
+            git: None,
+            git_open: false,
+            git_registrations: HashSet::new(),
+            git_settings: Some(cx.new(|cx| git::settings_view::GitSettingsView::new(window, cx))),
             mode_tasks: HashMap::new(),
             mode_drafts: HashMap::new(),
             launch_draft: None,
@@ -810,6 +825,7 @@ impl Shell {
                     self.show_terminal = self.settings.show_terminal;
                     self.split = self.settings.split_diff;
                     self.mode = self.settings.mode;
+                    self.git_open = self.settings.git_workspace;
                     if self.mode == TaskKind::Review {
                         self.comparison = Comparison::Baseline;
                     }
@@ -821,6 +837,7 @@ impl Shell {
                         .clone()
                         .filter(|id| workspace.tasks.iter().any(|t| &t.id == id));
                     self.workspace = Some(workspace);
+                    self.sync_git_projects(cx);
                     if let Some(id) = selected {
                         self.select_task(id, cx)
                     }
@@ -853,8 +870,18 @@ impl Shell {
                 }
                 self.celebrate_transitions(&workspace, cx);
                 self.workspace = Some(workspace);
+                self.sync_git_projects(cx);
             }
             Response::Account(account) => self.account_added(&account, cx),
+            Response::Project(project)
+                if self
+                    .git_registrations
+                    .remove(&workspaces::plain_path(&project.path)) =>
+            {
+                // The Git workspace listed one of its repositories as a project; the window
+                // stays where it is.
+                self.send(core::Request::Hello);
+            }
             Response::Project(project) => {
                 // A chat has no project, so a repository opens in Agentic Coding.
                 if self.mode == TaskKind::Chat {
@@ -1506,7 +1533,13 @@ impl Shell {
         settings.split_diff = self.split;
         settings
     }
-    fn open_project(&mut self, _: &OpenProject, _: &mut Window, cx: &mut Context<Self>) {
+    fn open_project(&mut self, _: &OpenProject, window: &mut Window, cx: &mut Context<Self>) {
+        // The Git workspace opens repositories in its own rail; each one becomes a project too.
+        if self.git_open {
+            let git = self.git_workspace(window, cx);
+            git.update(cx, |git, cx| git.open_repository_dialog(window, cx));
+            return;
+        }
         let chosen = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -1557,6 +1590,7 @@ impl Shell {
                 .is_none_or(|task| self.project_has_git(&task.project_id))
     }
     fn new_task(&mut self, _: &NewTask, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_git(cx);
         self.open_empty_chat(cx);
         window.focus(&self.input.read(cx).focus_handle(cx), cx);
     }
@@ -2060,6 +2094,7 @@ impl Render for Hint {
 /// macOS and Control elsewhere.
 pub fn init(cx: &mut App) {
     crate::components::text_input::init(cx);
+    git::init(cx);
     cx.bind_keys([
         KeyBinding::new("secondary-o", OpenProject, None),
         KeyBinding::new("secondary-n", NewTask, None),
@@ -2090,6 +2125,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-alt-1", ShowCoding, None),
         KeyBinding::new("secondary-alt-2", ShowChat, None),
         KeyBinding::new("secondary-alt-3", ShowReview, None),
+        KeyBinding::new("secondary-alt-4", ShowGit, None),
+        KeyBinding::new("secondary-shift-o", CloneRepository, None),
         KeyBinding::new("escape", Cancel, None),
         KeyBinding::new("secondary-q", Quit, None),
     ]);
@@ -2108,6 +2145,7 @@ pub fn init(cx: &mut App) {
             name: "File".into(),
             items: vec![
                 MenuItem::action("Open Repository", OpenProject),
+                MenuItem::action("Clone Repository", CloneRepository),
                 MenuItem::action("New Task", NewTask),
             ],
         },
@@ -2120,6 +2158,7 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Agentic Coding", ShowCoding),
                 MenuItem::action("Chat", ShowChat),
                 MenuItem::action("Review", ShowReview),
+                MenuItem::action("Git (Beta)", ShowGit),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
                 MenuItem::action("Toggle Changes", ToggleReview),

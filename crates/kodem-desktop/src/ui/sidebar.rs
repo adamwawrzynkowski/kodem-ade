@@ -341,6 +341,7 @@ impl Shell {
     }
     /// Opens the task `offset` rows away from the open one in the feed, wrapping at the ends.
     pub(super) fn select_adjacent_task(&mut self, offset: isize, cx: &mut Context<Self>) {
+        self.close_git(cx);
         let tasks = self.feed_tasks(cx);
         if tasks.is_empty() {
             return;
@@ -360,6 +361,7 @@ impl Shell {
     /// Opens the next task after the open one that waits for the user or reported a failure.
     /// The tasks of the open workspace come first, in feed order; then those of the others.
     pub(super) fn select_next_attention(&mut self, cx: &mut Context<Self>) {
+        self.close_git(cx);
         let Some(workspace) = &self.workspace else {
             return;
         };

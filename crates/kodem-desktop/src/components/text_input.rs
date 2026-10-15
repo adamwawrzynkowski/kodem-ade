@@ -111,6 +111,10 @@ pub struct TextInput {
     redo: Vec<EditState>,
     readonly: bool,
     composer: bool,
+    /// One line of text: Return submits, and pasted line breaks become spaces.
+    single_line: bool,
+    /// Draws each character as an asterisk and keeps the text off the clipboard.
+    masked: bool,
     completion_open: bool,
     delegated_selection: bool,
     wrap: bool,
@@ -142,6 +146,8 @@ impl TextInput {
             redo: Vec::new(),
             readonly: false,
             composer: false,
+            single_line: false,
+            masked: false,
             completion_open: false,
             delegated_selection: false,
             wrap: true,
@@ -157,6 +163,17 @@ impl TextInput {
         let mut input = Self::new(placeholder, cx);
         input.composer = true;
         input
+    }
+    /// Makes the input hold one line: Return submits it, and pasted line breaks become spaces.
+    pub fn set_single_line(&mut self, single_line: bool) {
+        self.single_line = single_line;
+    }
+    /// Hides the text behind asterisks and keeps it off the clipboard, for secrets.
+    pub fn set_masked(&mut self, masked: bool, cx: &mut Context<Self>) {
+        if self.masked != masked {
+            self.masked = masked;
+            cx.notify();
+        }
     }
     /// Replaces the hint that shows while the input is empty.
     pub fn set_placeholder(&mut self, placeholder: &str, cx: &mut Context<Self>) {
@@ -519,7 +536,7 @@ impl TextInput {
         }
     }
     fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
-        if self.composer && self.marked_range.is_none() {
+        if (self.composer || self.single_line) && self.marked_range.is_none() {
             if self.completion_open {
                 cx.emit(CompletionInput::Accept);
             } else {
@@ -528,7 +545,7 @@ impl TextInput {
         }
     }
     fn submit_alternate(&mut self, _: &SubmitAlternate, _: &mut Window, cx: &mut Context<Self>) {
-        if self.composer && self.marked_range.is_none() {
+        if (self.composer || self.single_line) && self.marked_range.is_none() {
             if self.completion_open {
                 cx.emit(CompletionInput::Accept);
             } else {
@@ -537,6 +554,9 @@ impl TextInput {
         }
     }
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
+        if self.single_line {
+            return;
+        }
         self.replace_text_in_range(None, "\n", window, cx);
     }
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
@@ -722,6 +742,9 @@ impl TextInput {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if self.masked {
+            return;
+        }
         if self.delegated_selection {
             cx.emit(SelectionInput::Copy);
             return;
@@ -733,6 +756,9 @@ impl TextInput {
         }
     }
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.masked {
+            return;
+        }
         if self.delegated_selection {
             cx.emit(SelectionInput::Copy);
             return;
@@ -901,6 +927,13 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
+        let flattened;
+        let new_text = if self.single_line && new_text.contains(['\r', '\n']) {
+            flattened = new_text.replace("\r\n", " ").replace(['\r', '\n'], " ");
+            flattened.as_str()
+        } else {
+            new_text
+        };
         self.remember_edit();
         self.selection_reversed = false;
         self.content =
@@ -1262,6 +1295,8 @@ impl Render for TextInput {
             .flex()
             .key_context(if self.composer {
                 "TextInput Composer"
+            } else if self.single_line {
+                "TextInput SingleLine"
             } else {
                 "TextInput"
             })
@@ -1358,6 +1393,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-enter", SubmitAlternate, Some("Composer")),
         KeyBinding::new("tab", AcceptCompletion, Some("Composer")),
         KeyBinding::new("escape", DismissCompletion, Some("Composer")),
+        KeyBinding::new("enter", Submit, Some("SingleLine")),
+        KeyBinding::new("secondary-enter", SubmitAlternate, Some("SingleLine")),
         KeyBinding::new("up", Up, Some("TextInput")),
         KeyBinding::new("down", Down, Some("TextInput")),
     ]);
@@ -1432,6 +1469,9 @@ fn shape(
 ) -> Vec<(usize, super::inline_bubbles::TextLine)> {
     let text = if input.content.is_empty() {
         input.placeholder.clone()
+    } else if input.masked {
+        // One asterisk per byte keeps every offset of the hidden text valid in the drawn one.
+        "*".repeat(input.content.len()).into()
     } else {
         input.content.clone()
     };

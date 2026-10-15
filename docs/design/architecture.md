@@ -40,10 +40,14 @@ crates/
   kodem-desktop/
     main.rs        GPUI-CE application
     ui/            shell, sidebar, chat, composer, review, terminal, settings
+    ui/git/        Git workspace: repositories, history, changes, branches, pull requests
     components/    single GPUI Kit compatibility boundary and design tokens
+  kodem-git/       Git workspace engine: Git commands, GitHub, AI service, settings
 ```
 
 Extract further crates only for a useful dependency or build boundary. The host has no GPUI dependency. The desktop never imports provider wire types or SQL rows.
+
+`kodem-git` is the one extracted crate. It holds the Git workspace's engine, which came from the standalone Liquid Git client: Git commands and their parsed models, commit graph layout, cloning with progress, GitHub requests through `curl` and the GitHub CLI, the AI service for commit messages and reviews (Ollama over HTTP or the Codex CLI), and the workspace's saved settings. It has no GPUI dependency, so it builds once and stays out of the desktop's unoptimized debug build. The Git workspace in `kodem-desktop/src/ui/git/` runs its calls on GPUI background threads in the desktop process rather than through the host: they act on the user's own checkouts at the user's request, belong to no task run, and Liquid ran them the same way. Git, curl and the CLIs it starts get Kodem's tool search path and no console window on Windows.
 
 ```mermaid
 flowchart LR

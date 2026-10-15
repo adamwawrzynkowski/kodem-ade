@@ -11,7 +11,10 @@ path = "src/main.rs"
 
 [dependencies]
 kodem-core = { path = "../kodem-core" }
+kodem-git = { path = "../kodem-git" }
 anyhow.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+futures = "0.3"
 serde.workspace = true
 sha2.workspace = true
 semver = "1"

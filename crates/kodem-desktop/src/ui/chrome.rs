@@ -1,6 +1,6 @@
 use super::*;
 impl Shell {
-    fn titlebar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    fn titlebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let project = self.composer_project();
         let name = project.map(|p| p.name.clone()).unwrap_or_else(|| {
@@ -223,6 +223,33 @@ impl Shell {
                         }),
                 )
             });
+        if let Some(git) = self.git.clone().filter(|_| self.git_open) {
+            let title = git.update(cx, |git, cx| git.render_title_bar(window, cx));
+            header = header.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .min_w_0()
+                    .flex_1()
+                    .px(px(14.))
+                    .when(self.reveals.sidebar <= 0., |d| {
+                        d.pl(gpui::px(WINDOW_CONTROLS)).child(
+                            self.icon_button("expand-sidebar", "panel-left", "Show sidebar · ⌘B")
+                                .on_click(cx.listener(|s, _, _, cx| {
+                                    s.settings.collapsed = false;
+                                    s.save_settings();
+                                    cx.notify();
+                                })),
+                        )
+                    })
+                    .child(title),
+            );
+            return header
+                .when(app_window_buttons(window), |header| {
+                    header.child(self.window_buttons(window, cx))
+                })
+                .into_any_element();
+        }
         header = header
             .child(project_path)
             .child(readout)
@@ -446,6 +473,7 @@ impl Shell {
 
     fn go_to_task(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(id) = self.feed_tasks(cx).get(index) {
+            self.close_git(cx);
             self.select_task(id.clone(), cx);
         }
     }
@@ -525,7 +553,12 @@ impl Render for Shell {
                 }
             }))
             .on_action(cx.listener(|s, _: &ShowSettings, _, cx| {
-                s.panel = Panel::Settings;
+                // The Git workspace's preferences are its own section.
+                if s.git_open {
+                    s.open_settings(settings::GIT);
+                } else {
+                    s.panel = Panel::Settings;
+                }
                 cx.notify();
             }))
             .on_action(cx.listener(|s, _: &CommandPalette, w, cx| {
@@ -555,6 +588,12 @@ impl Render for Shell {
             .on_action(cx.listener(|s, _: &ShowCoding, _, cx| s.set_mode(TaskKind::Coding, cx)))
             .on_action(cx.listener(|s, _: &ShowChat, _, cx| s.set_mode(TaskKind::Chat, cx)))
             .on_action(cx.listener(|s, _: &ShowReview, _, cx| s.set_mode(TaskKind::Review, cx)))
+            .on_action(cx.listener(|s, _: &ShowGit, _, cx| s.open_git(cx)))
+            .on_action(cx.listener(|s, _: &CloneRepository, window, cx| {
+                s.open_git(cx);
+                let git = s.git_workspace(window, cx);
+                git.update(cx, |git, cx| git.clone_repository_dialog(window, cx));
+            }))
             .on_action(cx.listener(|s, _: &GoToTask1, _, cx| s.go_to_task(0, cx)))
             .on_action(cx.listener(|s, _: &GoToTask2, _, cx| s.go_to_task(1, cx)))
             .on_action(cx.listener(|s, _: &GoToTask3, _, cx| s.go_to_task(2, cx)))
@@ -565,6 +604,13 @@ impl Render for Shell {
             .on_action(cx.listener(|s, _: &GoToTask8, _, cx| s.go_to_task(7, cx)))
             .on_action(cx.listener(|s, _: &GoToTask9, _, cx| s.go_to_task(8, cx)))
             .on_action(cx.listener(|s, _: &Search, w, cx| {
+                // In the Git workspace, search looks through the open repository's commits.
+                if s.git_open
+                    && let Some(git) = s.git.clone()
+                {
+                    git.update(cx, |git, cx| git.open_commit_search(cx));
+                    return;
+                }
                 s.settings.collapsed = false;
                 s.search_visible = true;
                 w.focus(&s.search.read(cx).focus_handle(cx), cx);
@@ -599,9 +645,18 @@ impl Render for Shell {
                     cx.notify();
                 }),
             );
+        // The Git workspace exists once it is open, so that its parts can draw this frame.
+        let git = if self.git_open {
+            Some(self.git_workspace(window, cx))
+        } else {
+            None
+        };
         root = root.child(self.titlebar(window, cx));
-        let rail = self.workspace_rail(cx);
-        let sidebar = self.sidebar(cx);
+        let rail = self.workspace_rail(window, cx);
+        let sidebar = match &git {
+            Some(git) => self.git_sidebar(git, cx),
+            None => self.sidebar(cx),
+        };
         let sidebar_open = self.reveals.sidebar;
         // While the sidebar slides it is clipped to its current width, held at its trailing
         // edge so that it moves in from the side.
@@ -618,24 +673,39 @@ impl Render for Shell {
         } else {
             sidebar
         };
-        let narrow_review = self.show_review
+        let narrow_review = git.is_none()
+            && self.show_review
             && self.has_checkout()
             && self.window_width <= 1100.
             && !(self.reviewing_file
                 && self.settings.diff_placement == DiffPlacement::Conversation);
         // The content of a workspace that just opened clears out of a dissolve.
-        let chat = motion::switched(
-            ("workspace-enter", self.mode as usize),
-            div()
-                .relative()
-                .flex()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .child(self.chat(window, cx)),
-            t.canvas,
-            5.,
-        );
+        let chat = match &git {
+            Some(git) => motion::switched(
+                "workspace-enter-git",
+                div()
+                    .relative()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(git.clone()),
+                t.canvas,
+                5.,
+            ),
+            None => motion::switched(
+                ("workspace-enter", self.mode as usize),
+                div()
+                    .relative()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(self.chat(window, cx)),
+                t.canvas,
+                5.,
+            ),
+        };
         let mut body = div()
             .flex()
             .flex_1()
@@ -669,7 +739,11 @@ impl Render for Shell {
             body = body
                 .child(div().w(px(1.)).flex_shrink_0().h_full().bg(t.border))
                 .child(self.review(cx, false));
-        } else if review_open > 0. && self.has_checkout() && self.window_width > 1100. {
+        } else if git.is_none()
+            && review_open > 0.
+            && self.has_checkout()
+            && self.window_width > 1100.
+        {
             // The review pane is as wide as `review` makes it; the divider sits before it.
             let width = self.settings.review_width.min(self.window_width * 0.55);
             let review = self.review(cx, false);
@@ -951,7 +1025,54 @@ impl Render for Stage {
                 ),
             )
             .child(AnyView::from(self.shell.clone()).cached(StyleRefinement::default().size_full()))
+            // Dialogs and toasts of the Git workspace, which Preferences can open as well.
+            .child(super::git::kit::overlays(window, cx))
             .child(self.fx.clone())
             .children(resize_borders(window))
+    }
+}
+
+impl Shell {
+    // The sidebar of the Git workspace: the open repository's branches, remotes, tags, stashes
+    // and worktrees, at the width of the task sidebar.
+    fn git_sidebar(
+        &mut self,
+        git: &Entity<git::GitWorkspace>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let t = self.theme;
+        if self.reveals.sidebar <= 0. {
+            return div().into_any_element();
+        }
+        let content = match git.read(cx).sidebar() {
+            // Cached: the sidebar renders again only when it is notified.
+            Some(view) => view
+                .cached(StyleRefinement::default().size_full())
+                .into_any_element(),
+            None => div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(10.))
+                .p(px(16.))
+                .child(kit::empty_hint("No repository is open", t))
+                .child(
+                    self.button("git-sidebar-open", "folder-open", "Open Repository")
+                        .on_click(cx.listener(|s, _, w, cx| s.open_project(&OpenProject, w, cx))),
+                )
+                .into_any_element(),
+        };
+        div()
+            .id("git-sidebar")
+            .relative()
+            .w(px(self.settings.sidebar_width))
+            .flex_shrink_0()
+            .h_full()
+            .bg(t.sidebar)
+            .overflow_hidden()
+            .child(content)
+            .into_any_element()
     }
 }

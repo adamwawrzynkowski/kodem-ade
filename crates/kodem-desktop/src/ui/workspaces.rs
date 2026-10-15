@@ -1,6 +1,7 @@
 //! The workspace rail: a narrow column of icons that swaps the window between Agentic Coding,
-//! Chat and Review. Each workspace lists its own tasks, and keeps the task that was open in it
-//! and the unsent draft of its start screen.
+//! Chat, Review and Git. Each task workspace lists its own tasks, and keeps the task that was
+//! open in it and the unsent draft of its start screen. The Git workspace covers the task
+//! workspace that was open and keeps its own repositories.
 use super::*;
 use crate::thread_list::Section;
 
@@ -25,7 +26,7 @@ fn mode_keys(mode: TaskKind) -> &'static str {
 
 impl Shell {
     /// Builds the workspace rail. It also holds the quick actions while the sidebar is closed.
-    pub(super) fn workspace_rail(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn workspace_rail(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let mut rail = div()
             .id("workspace-rail")
@@ -42,6 +43,27 @@ impl Shell {
             .gap(px(4.));
         for mode in TaskKind::ALL {
             rail = rail.child(self.mode_button(mode, cx));
+        }
+        rail = rail.child(self.git_button(cx));
+        if self.git_open
+            && let Some(git) = self.git.clone()
+        {
+            // The Git workspace's repositories and actions take the rest of the rail.
+            return rail
+                .child(
+                    div()
+                        .w(px(22.))
+                        .py(px(4.))
+                        .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .child(git.update(cx, |git, cx| git.render_rail(window, cx))),
+                )
+                .into_any_element();
         }
         if self.reveals.sidebar > 0. {
             return rail.into_any_element();
@@ -84,7 +106,7 @@ impl Shell {
     // open, an edge on the rail's leading side, and a marker for tasks that want attention.
     fn mode_button(&self, mode: TaskKind, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let chosen = self.mode == mode;
+        let chosen = self.mode == mode && !self.git_open;
         let attention = self.mode_attention(mode);
         let hint = match &attention {
             Some((_, note)) => format!("{} · {note} · {}", mode.label(), mode_keys(mode)),
@@ -207,7 +229,13 @@ impl Shell {
     /// Opens another workspace. The task that was open in it comes back; without one, its start
     /// screen shows.
     pub(super) fn set_mode(&mut self, mode: TaskKind, cx: &mut Context<Self>) {
-        if self.mode == mode || self.creating_task {
+        if self.creating_task {
+            return;
+        }
+        if self.git_open {
+            self.close_git(cx);
+        }
+        if self.mode == mode {
             return;
         }
         self.enter_mode(mode, cx);
@@ -287,4 +315,202 @@ impl Shell {
         self.input
             .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
     }
+}
+
+impl Shell {
+    // The Git workspace's tile in the rail: the branch glyph with a Beta badge on its corner.
+    fn git_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let chosen = self.git_open;
+        let tile = self
+            .control("workspace-git")
+            .relative()
+            .overflow_hidden()
+            .size(px(34.))
+            .px_0()
+            .justify_center()
+            .border_color(gpui::transparent_black())
+            .bg(gpui::transparent_black())
+            .text_color(t.muted)
+            .accessibility_label("Git, beta")
+            .when(chosen, |tile| {
+                tile.bg(kit::tint_fill(t.accent, 0.12))
+                    .shadow(kit::tint_light(t.accent))
+                    .border_color(t.accent.opacity(0.4))
+                    .text_color(t.accent)
+                    .child(kit::shade(t.accent.opacity(0.6), dither::Edge::Bottom))
+            })
+            .when(!chosen, |tile| {
+                tile.child(kit::glint(t.dot, dither::Edge::Bottom))
+                    .hover(move |tile| tile.bg(t.selected).text_color(t.text))
+            })
+            .active(move |tile| tile.bg(t.control_active))
+            .on_press(move |position, cx| fx::ripple(position, t.accent, cx))
+            .child(icon("git-pull-request").size(px(17.)))
+            .tooltip(move |_, cx| {
+                cx.new(|_| Hint {
+                    text: "Git · Beta · ⌥⌘4".into(),
+                    theme: t,
+                })
+                .into()
+            })
+            .on_click(cx.listener(|s, _, _, cx| s.open_git(cx)));
+        div()
+            .relative()
+            .w_full()
+            .h(px(34.))
+            .flex()
+            .justify_center()
+            .when(chosen, |cell| cell.child(kit::selection_edge(t.accent)))
+            .child(if chosen {
+                motion::dissolve(
+                    "workspace-git-chosen",
+                    tile,
+                    t.sidebar,
+                    crate::theme::RADIUS_CONTROL,
+                    0.,
+                    2.,
+                    260,
+                )
+            } else {
+                tile.into_any_element()
+            })
+            .child(git_beta_badge(t).absolute().bottom(px(-1.)).right(px(3.)))
+            .into_any_element()
+    }
+
+    /// Returns the Git workspace, created the first time it is needed.
+    pub(super) fn git_workspace(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<git::GitWorkspace> {
+        if let Some(git) = &self.git {
+            return git.clone();
+        }
+        let git = cx.new(|cx| git::GitWorkspace::new(window, cx));
+        // The title bar, rail and sidebar draw parts of the Git workspace inside this view.
+        self._subscriptions
+            .push(cx.observe(&git, |_, _, cx| cx.notify()));
+        self._subscriptions
+            .push(cx.subscribe(&git, |s, _, event: &git::GitEvent, cx| {
+                s.git_event(event, cx)
+            }));
+        self.git = Some(git.clone());
+        self.sync_git_projects(cx);
+        // The repositories that the workspace restored opened before this view listened.
+        for path in git.read(cx).repository_paths(cx) {
+            self.git_event(&git::GitEvent::RepositoryOpened(path), cx);
+        }
+        git
+    }
+
+    /// Opens the Git workspace over the task workspace.
+    pub(super) fn open_git(&mut self, cx: &mut Context<Self>) {
+        if self.git_open || self.creating_task {
+            return;
+        }
+        self.git_open = true;
+        self.settings.git_workspace = true;
+        self.panel = Panel::None;
+        self.search_visible = false;
+        self.save_settings();
+        cx.notify();
+    }
+
+    /// Returns to the task workspace that the Git workspace covered.
+    pub(super) fn close_git(&mut self, cx: &mut Context<Self>) {
+        if !self.git_open {
+            return;
+        }
+        self.git_open = false;
+        self.settings.git_workspace = false;
+        if let Some(git) = &self.git {
+            git.update(cx, |git, cx| git.dismiss_popovers(cx));
+        }
+        self.save_settings();
+        cx.notify();
+    }
+
+    /// Gives the Git workspace Kodem's projects, which name and draw its repositories.
+    pub(super) fn sync_git_projects(&mut self, cx: &mut Context<Self>) {
+        let Some(git) = &self.git else {
+            return;
+        };
+        let projects = self
+            .workspace
+            .as_ref()
+            .map(|workspace| {
+                workspace
+                    .projects
+                    .iter()
+                    .filter(|project| !project.removed)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        git.update(cx, |git, cx| git.set_projects(projects, cx));
+    }
+
+    // Carries out what the Git workspace asks of the window.
+    fn git_event(&mut self, event: &git::GitEvent, cx: &mut Context<Self>) {
+        match event {
+            git::GitEvent::RepositoryOpened(path) => {
+                let known = self.workspace.as_ref().is_some_and(|workspace| {
+                    workspace
+                        .projects
+                        .iter()
+                        .any(|project| !project.removed && &project.path == path)
+                });
+                if !known {
+                    self.git_registrations.insert(plain_path(path));
+                    self.send(core::Request::OpenProject {
+                        path: path.clone(),
+                        missing_repository: MissingRepository::Ask,
+                    });
+                }
+            }
+            git::GitEvent::CustomizeRepository(path) => {
+                let project = self.workspace.as_ref().and_then(|workspace| {
+                    workspace
+                        .projects
+                        .iter()
+                        .find(|project| !project.removed && &project.path == path)
+                        .cloned()
+                });
+                if let Some(project) = project {
+                    let name = project.name.clone();
+                    self.aux.update(cx, |input, cx| input.set_text(name, cx));
+                    self.icon_filter
+                        .update(cx, |input, cx| input.set_text(String::new(), cx));
+                    self.editing_project = Some(project);
+                    self.error = None;
+                    self.panel = Panel::CustomizeProject;
+                    cx.notify();
+                }
+            }
+        }
+    }
+}
+
+/// Returns the Beta badge of the Git workspace: a tiny accent label in the mono face.
+pub(super) fn git_beta_badge(theme: Theme) -> Div {
+    div()
+        .px(px(2.))
+        .rounded(px(2.))
+        .bg(theme.accent)
+        .text_color(theme.on_accent)
+        .font_family(crate::theme::mono())
+        .text_size(text_px(6.5))
+        .line_height(text_px(8.))
+        .font_weight(FontWeight::BOLD)
+        .letter_spacing(text_px(0.3))
+        .child("BETA")
+}
+
+/// Returns a folder in the form that the host records for a project, for comparisons.
+pub(super) fn plain_path(path: &std::path::Path) -> PathBuf {
+    path.canonicalize()
+        .map(kodem_core::platform::plain_path)
+        .unwrap_or_else(|_| path.to_path_buf())
 }

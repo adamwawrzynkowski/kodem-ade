@@ -164,7 +164,7 @@ pub fn now() -> u64 {
 pub fn new_id() -> String {
     Uuid::new_v4().to_string()
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Project {
     pub id: String,
     pub path: PathBuf,
@@ -640,7 +640,7 @@ impl TaskKind {
         match self {
             Self::Coding => "code",
             Self::Chat => "chat",
-            Self::Review => "git-pull-request",
+            Self::Review => "scan-eye",
         }
     }
     /// Returns what one task of this kind is called in the interface.
@@ -1503,6 +1503,8 @@ pub struct Settings {
     pub selected_task: Option<String>,
     /// The workspace that was open last.
     pub mode: TaskKind,
+    /// The Git workspace was open last. It covers the workspace of `mode` while it is open.
+    pub git_workspace: bool,
     /// When each task was last open in the window, in wall-clock milliseconds. A finished task
     /// whose result is newer than this is still unread.
     pub viewed: std::collections::BTreeMap<String, u64>,
@@ -1537,6 +1539,7 @@ impl Default for Settings {
             collapsed_projects: Default::default(),
             selected_task: None,
             mode: TaskKind::default(),
+            git_workspace: false,
             viewed: Default::default(),
             diff_placement: DiffPlacement::default(),
             send_mode: SendMode::default(),

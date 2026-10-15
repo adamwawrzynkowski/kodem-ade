@@ -3000,11 +3000,14 @@ name = "kodem-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "embed-resource",
+ "futures",
  "gpui-ce",
  "gpui_ce_platform",
  "image",
  "kodem-core",
+ "kodem-git",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -3016,6 +3019,18 @@ dependencies = [
  "syntect",
  "tempfile",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "kodem-git"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "image",
+ "kodem-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

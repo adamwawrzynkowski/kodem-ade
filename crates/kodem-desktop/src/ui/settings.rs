@@ -1,3 +1,4 @@
+use super::git::settings_view::GitSettingsPage;
 use super::*;
 
 /// Index of the provider section.
@@ -6,21 +7,24 @@ pub(super) const PROVIDERS: usize = 2;
 pub(super) const PROJECTS: usize = 5;
 /// Index of the accounts section.
 pub(super) const ACCOUNTS: usize = 6;
+/// Index of the Git section.
+pub(super) const GIT: usize = 7;
 /// Preference sections in navigation order: stable index, icon and label.
-pub(super) const SECTIONS: [(usize, &str, &str); 7] = [
+pub(super) const SECTIONS: [(usize, &str, &str); 8] = [
     (0, "sun", "Appearance"),
     (1, "folder", "Workspace"),
     (PROVIDERS, "settings-2", "Providers"),
     (ACCOUNTS, "users", "Accounts"),
     (PROJECTS, "layers", "Projects"),
+    (GIT, "git-pull-request", "Git"),
     (3, "bell", "Notifications"),
     (4, "keyboard", "Shortcuts"),
 ];
 
 /// Space between the groups of one preferences section.
-const GROUP_GAP: f32 = 18.;
+pub(super) const GROUP_GAP: f32 = 18.;
 /// Width of the control column that holds a slider and its readout.
-const SLIDER_COLUMN: f32 = 220.;
+pub(super) const SLIDER_COLUMN: f32 = 220.;
 /// Widest control column of a settings row. A wider segmented control wraps.
 const CONTROL_COLUMN: f32 = 340.;
 /// Step of a compaction threshold slider, in percent.
@@ -143,6 +147,46 @@ const NOTIFICATION_CONTROL: &str =
 const NOTIFICATION_CONTROL: &str = "Windows controls notification banners and Do Not Disturb in Settings > System > Notifications. Kodem plays its own sound.";
 #[cfg(not(any(target_os = "macos", windows)))]
 const NOTIFICATION_CONTROL: &str = "Your desktop's notification service controls banners and Do Not Disturb. Kodem plays its own sound through PipeWire, PulseAudio or ALSA.";
+
+/// Returns one setting: its label over its description, beside its control and above a dotted
+/// rule.
+pub(super) fn setting_row(
+    label: &str,
+    detail: &str,
+    control: AnyElement,
+    theme: Theme,
+) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .py(px(11.))
+                .flex()
+                .items_center()
+                .gap(px(16.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().text_size(text_px(13.)).child(label.to_owned()))
+                        .child(note(detail.to_owned(), theme)),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .max_w(px(CONTROL_COLUMN))
+                        .flex()
+                        .justify_end()
+                        .child(control),
+                ),
+        )
+        .child(dither::DottedRule::horizontal(theme.subtle.opacity(0.4)))
+        .into_any_element()
+}
 
 /// Returns a short explanation in prose below a group header or between rows.
 pub(super) fn note(text: impl Into<SharedString>, theme: Theme) -> Div {
@@ -316,6 +360,7 @@ impl Shell {
         let section = match self.settings_section {
             PROJECTS => self.project_settings(cx),
             ACCOUNTS => self.account_settings(cx),
+            GIT => self.git_settings(cx),
             0 => self.appearance_settings(cx),
             1 => self.workspace_settings(cx),
             PROVIDERS => self.provider_settings(cx),
@@ -961,11 +1006,15 @@ impl Shell {
             ("Command palette", "⌘ K"),
             ("New task", "⌘ N"),
             ("Open repository", "⌘ O"),
-            ("Search tasks", "⌘ F"),
+            ("Clone repository into Git", "⇧ ⌘ O"),
+            ("Search tasks, or commits in Git", "⌘ F"),
             ("Next or previous task", "⌃ Tab / ⌃ ⇧ Tab / ⇧ ⌘ ] / ⇧ ⌘ ["),
             ("Go to a task in the feed", "⌘ 1 – ⌘ 9"),
             ("Next task that needs you", "⌥ ⌘ A"),
-            ("Agentic Coding, Chat or Review", "⌥ ⌘ 1 / ⌥ ⌘ 2 / ⌥ ⌘ 3"),
+            (
+                "Agentic Coding, Chat, Review or Git",
+                "⌥ ⌘ 1 / ⌥ ⌘ 2 / ⌥ ⌘ 3 / ⌥ ⌘ 4",
+            ),
             ("Send message", "Return"),
             ("Send the other way during a turn", "⌘ Return"),
             ("New line in prompt", "⇧ Return"),
@@ -1172,36 +1221,37 @@ impl Shell {
     /// Returns one setting: its label over its description, beside its control and above a
     /// dotted rule.
     pub(super) fn setting_row(&self, label: &str, detail: &str, control: AnyElement) -> AnyElement {
-        let t = self.theme;
+        setting_row(label, detail, control, self.theme)
+    }
+
+    // Builds the Git section: a tab row of its pages over the open page.
+    fn git_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(view) = self.git_settings.clone() else {
+            return div().into_any_element();
+        };
+        let page = view.read(cx).page();
+        let pages = self.segmented(
+            "git-settings-page",
+            GitSettingsPage::ALL.map(|page| (page, page.label())),
+            &page,
+            |s, page, cx| {
+                if let Some(view) = &s.git_settings {
+                    view.update(cx, |view, cx| view.set_page(page, cx));
+                }
+                cx.notify();
+            },
+            cx,
+        );
         div()
             .flex()
             .flex_col()
-            .child(
-                div()
-                    .py(px(11.))
-                    .flex()
-                    .items_center()
-                    .gap(px(16.))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(div().text_size(text_px(13.)).child(label.to_owned()))
-                            .child(note(detail.to_owned(), t)),
-                    )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .max_w(px(CONTROL_COLUMN))
-                            .flex()
-                            .justify_end()
-                            .child(control),
-                    ),
-            )
-            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
+            .gap(px(GROUP_GAP))
+            .child(self.section_title(
+                "Git",
+                "Choose how the Git workspace syncs with remotes, shows diffs and history, and uses AI.",
+            ))
+            .child(pages)
+            .child(view)
             .into_any_element()
     }
 

@@ -238,6 +238,29 @@ pub(super) fn fly_between(
     fly_to(from, target, label, tone, delay, cx);
 }
 
+/// Throws a chip from the `source` anchor to a point, with no impact.
+/// Used for things that leave the app, such as a push.
+pub(super) fn fly_away(
+    source: &str,
+    to: Point<Pixels>,
+    label: impl Into<SharedString>,
+    tone: Hsla,
+    cx: &mut App,
+) {
+    let Some(from) = anchor_bounds(source, cx).map(|bounds| bounds.center()) else {
+        return;
+    };
+    let flight = Flight {
+        from,
+        to,
+        target: None,
+        label: label.into(),
+        tone,
+        style: FlightStyle::Throw,
+    };
+    launch_flight(flight, Duration::ZERO, cx);
+}
+
 /// A flash, an expanding frame, a dithered shockwave, and sparks around
 /// the `target` anchor.
 pub(super) fn impact(target: &str, tone: Hsla, cx: &mut App) {

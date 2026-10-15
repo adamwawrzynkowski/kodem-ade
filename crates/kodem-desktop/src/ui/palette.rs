@@ -11,6 +11,8 @@ enum Action {
     OpenProject,
     OpenTask(String),
     Workspace(TaskKind),
+    Git,
+    CloneRepository,
     NextAttention,
     Models,
     Reasoning,
@@ -283,7 +285,7 @@ impl Shell {
             (TaskKind::Chat, "⌥⌘2"),
             (TaskKind::Review, "⌥⌘3"),
         ] {
-            if mode != self.mode {
+            if mode != self.mode || self.git_open {
                 add(
                     mode.icon(),
                     &format!("Open {}", mode.label()),
@@ -294,6 +296,24 @@ impl Shell {
                 );
             }
         }
+        if !self.git_open {
+            add(
+                "git-pull-request",
+                "Open Git (Beta)",
+                "",
+                "⌥⌘4",
+                "Workspaces",
+                Action::Git,
+            );
+        }
+        add(
+            "arrow-down-to-line",
+            "Clone repository",
+            "",
+            "⇧⌘O",
+            "Git",
+            Action::CloneRepository,
+        );
         let preferences = self.composer_preferences();
         let model = self.model_name(&preferences);
         add(
@@ -496,8 +516,17 @@ impl Shell {
         match action {
             Action::NewTask => self.new_task(&NewTask, window, cx),
             Action::OpenProject => self.open_project(&OpenProject, window, cx),
-            Action::OpenTask(id) => self.select_task(id, cx),
+            Action::OpenTask(id) => {
+                self.close_git(cx);
+                self.select_task(id, cx)
+            }
             Action::Workspace(mode) => self.set_mode(mode, cx),
+            Action::Git => self.open_git(cx),
+            Action::CloneRepository => {
+                self.open_git(cx);
+                let git = self.git_workspace(window, cx);
+                git.update(cx, |git, cx| git.clone_repository_dialog(window, cx));
+            }
             Action::NextAttention => self.select_next_attention(cx),
             Action::Models => self.open_agent_menu(Panel::Models, window, cx),
             Action::Reasoning => self.open_agent_menu(Panel::Reasoning, window, cx),

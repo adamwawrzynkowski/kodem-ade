@@ -829,6 +829,8 @@ pub(super) struct Sample {
     pub aspect: f32,
     /// Seconds on the stepped animation clock.
     pub time: f32,
+    /// Pointer position in `u, v` space while the pointer is over the grid.
+    pub pointer: Option<(f32, f32)>,
 }
 
 /// A function that gives the dot density at each cell.
@@ -853,6 +855,12 @@ pub(super) enum DitherField {
     },
     /// A packet of light that travels from left to right and repeats.
     Sweep { width: f32, speed: f32, floor: f32 },
+    /// A dithered area chart. Values are normalized to `0..1`.
+    Area { values: Rc<[f32]> },
+    /// Flickering flames that rise from the bottom edge.
+    Ember { scale: f32, speed: f32 },
+    /// A glow that follows the pointer while it is over the grid.
+    Pointer { radius: f32, strength: f32 },
     /// Covers the surface while progress goes from 0 to 1, then reveals it from the top.
     Dissolve(f32),
     /// Multiplies two fields.
@@ -921,6 +929,41 @@ impl DitherField {
                 let distance = (sample.u - center) / width.max(0.001);
                 floor + (1. - floor) * (-distance * distance).exp()
             }
+            DitherField::Area { values } => {
+                if values.is_empty() {
+                    return 0.;
+                }
+                let position = sample.u * (values.len().saturating_sub(1)) as f32;
+                let left = position.floor() as usize;
+                let right = (left + 1).min(values.len() - 1);
+                let value = lerp(values[left], values[right], position - left as f32);
+                let top = 1. - value.clamp(0., 1.);
+                if sample.v < top {
+                    return 0.;
+                }
+                let cell = 1. / sample.rows.max(1) as f32;
+                if sample.v - top < cell {
+                    return 1.;
+                }
+                let depth = (sample.v - top) / (1. - top).max(0.001);
+                0.16 + depth * 0.62
+            }
+            DitherField::Ember { scale, speed } => {
+                let x = sample.column as f32 * scale;
+                let y = sample.row as f32 * scale + sample.time * speed;
+                let flame = fractal_noise(x, y, 3);
+                let rise = sample.v.powf(1.6);
+                (flame * rise * 1.55 - 0.08).clamp(0., 1.)
+            }
+            DitherField::Pointer { radius, strength } => {
+                let Some((x, y)) = sample.pointer else {
+                    return 0.;
+                };
+                let dx = (sample.u - x) * sample.aspect;
+                let dy = sample.v - y;
+                let distance = (dx * dx + dy * dy).sqrt() / radius.max(0.001);
+                strength * (1. - distance).max(0.)
+            }
             DitherField::Dissolve(progress) => {
                 ((1. - progress) * 1.6 - sample.v * 0.6).clamp(0., 1.)
             }
@@ -948,7 +991,10 @@ impl DitherField {
     // Reports a field whose dots move with the animation clock.
     fn timed(&self) -> bool {
         match self {
-            DitherField::Flow { .. } | DitherField::Wave { .. } | DitherField::Sweep { .. } => true,
+            DitherField::Flow { .. }
+            | DitherField::Wave { .. }
+            | DitherField::Sweep { .. }
+            | DitherField::Ember { .. } => true,
             DitherField::Product(left, right) => left.timed() || right.timed(),
             _ => false,
         }
@@ -957,7 +1003,8 @@ impl DitherField {
     // Reports a field that looks the same on every frame, so its dots can be cached.
     fn cacheable(&self) -> bool {
         match self {
-            DitherField::Dissolve(_) => false,
+            // The pointer moves without the clock, so its glow is drawn on every frame.
+            DitherField::Dissolve(_) | DitherField::Pointer { .. } => false,
             DitherField::Product(left, right) => left.cacheable() && right.cacheable(),
             _ => true,
         }
@@ -990,6 +1037,9 @@ impl DitherField {
                 speed,
                 floor,
             } => values(11, &[*width, *speed, *floor]),
+            DitherField::Area { values: points } => values(12, points),
+            DitherField::Ember { scale, speed } => values(15, &[*scale, *speed]),
+            DitherField::Pointer { radius, strength } => values(16, &[*radius, *strength]),
             DitherField::Dissolve(progress) => values(13, &[*progress]),
             DitherField::Product(left, right) => {
                 values(14, &[]);
@@ -1082,6 +1132,12 @@ fn paint_grid(bounds: Bounds<Pixels>, spec: &PaintSpec, window: &mut Window, cx:
         dot: spec.dot,
     };
     let aspect = grid_width / grid_height;
+    let pointer = hovered.then(|| {
+        (
+            (f32::from(mouse.x) - grid.left) / grid_width,
+            (f32::from(mouse.y) - grid.top) / grid_height,
+        )
+    });
     let source = |column: i32, row: i32| -> Option<Hsla> {
         let intensity = spec.field.intensity(&Sample {
             u: (column as f32 + 0.5) / columns as f32,
@@ -1091,6 +1147,7 @@ fn paint_grid(bounds: Bounds<Pixels>, spec: &PaintSpec, window: &mut Window, cx:
             rows,
             aspect,
             time: spec.time,
+            pointer,
         });
         if intensity <= threshold(column as i64, row as i64) {
             return None;
