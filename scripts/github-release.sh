@@ -140,14 +140,54 @@ kodem_release_dispatch() {
     echo "Building $platforms in GitHub Actions: https://github.com/$release_repository/actions/runs/$release_run"
 }
 
+# Shows the workflow run's progress until it ends: each job's state, its current step and how
+# many steps finished, whenever that changes, and the elapsed time every five minutes otherwise.
+# Succeeds when the run succeeded.
+kodem_release_wait() {
+    local started now snapshot last="" reported=0 failures=0 state jobs
+    started=$(date +%s)
+    echo "Waiting for the Windows and Linux builds: https://github.com/$release_repository/actions/runs/$release_run"
+    while true; do
+        # The first line is the run's state; each further line describes one job.
+        if ! snapshot=$(gh run view "$release_run" --repo "$release_repository" --json status,conclusion,jobs --jq '
+            "\(.status) \(.conclusion // "")",
+            (.jobs[] | "  \(.name): " + (
+                if .status == "completed" then .conclusion
+                else ({"in_progress": "running", "queued": "queued", "waiting": "waiting for a runner"}[.status] // .status)
+                    + (([.steps[] | select(.status == "in_progress")][0].name // "") as $step
+                    | if $step == "" then "" else " · " + $step end)
+                end)
+                + " (\([.steps[] | select(.status == "completed")] | length)/\(.steps | length) steps)")' 2>/dev/null); then
+            failures=$((failures + 1))
+            [[ "$failures" -lt 20 ]] || { echo "GitHub stopped answering about the workflow run." >&2; return 1; }
+            sleep 30
+            continue
+        fi
+        failures=0
+        now=$(date +%s)
+        if [[ "$snapshot" != "$last" || $((now - reported)) -ge 300 ]]; then
+            jobs=$(printf '%s\n' "$snapshot" | sed 1d)
+            [[ -n "$jobs" ]] || jobs="  waiting for GitHub to start the jobs"
+            printf '[%s, %dm %02ds]\n%s\n' "$(date +%H:%M)" $(((now - started) / 60)) $(((now - started) % 60)) "$jobs"
+            last=$snapshot
+            reported=$now
+        fi
+        state=$(printf '%s\n' "$snapshot" | head -1)
+        if [[ "$state" == completed* ]]; then
+            [[ "$state" == "completed success" ]]
+            return
+        fi
+        sleep 20
+    done
+}
+
 # Waits for the workflow run, downloads its packages into a folder, checks their checksum files
 # and the expected archives, and lists them in release_assets.
 kodem_release_collect() {
     local folder=$1 file expected platform
     release_assets=()
     [[ -n "${release_run:-}" ]] || return 0
-    echo "Waiting for the Windows and Linux builds…"
-    if ! gh run watch "$release_run" --repo "$release_repository" --exit-status --interval 30 >/dev/null; then
+    if ! kodem_release_wait; then
         echo "The Windows or Linux build failed. Nothing was published. See https://github.com/$release_repository/actions/runs/$release_run" >&2
         return 1
     fi
