@@ -1880,41 +1880,43 @@ impl Shell {
         glyph: &'static str,
         label: impl Into<SharedString>,
     ) -> Button {
-        self.glass(id, glyph, label, self.theme.accent)
+        self.glass(
+            id,
+            glyph,
+            label,
+            self.theme.accent,
+            crate::theme::RADIUS_CONTROL,
+        )
     }
-    /// Returns a raised glass key in a tone. A smooth body, rim light and glow give it depth,
-    /// and dithered sheen and shade keep the dot texture.
+    /// Returns a raised glass key in a tone with corners of `radius`: a bezel ring and a lens
+    /// ring around a dithered face, an engraved icon and a soft glow of the tone below it.
     fn glass(
         &self,
         id: impl Into<ElementId>,
         glyph: &'static str,
         label: impl Into<SharedString>,
         tone: Hsla,
+        radius: f32,
     ) -> Button {
         let theme = self.theme;
         // An empty label must not become a child: it would take a gap and push the icon of an
         // icon-only button off center.
         let label = label.into();
         self.control(id)
+            .group(kit::GLASS)
             .overflow_hidden()
-            .child(kit::sheen(gpui::white().opacity(0.34)))
-            .child(kit::shade(gpui::black().opacity(0.2), dither::Edge::Bottom))
-            .child(kit::glint(gpui::white().opacity(0.3), dither::Edge::Top))
-            .child(icon(glyph).size(px(13.)))
+            .px(px(12.))
+            .rounded(px(radius))
+            .child(kit::glass_body(tone, radius))
+            .child(kit::engraved(glyph, tone, 13.))
             .when(!label.is_empty(), |b| b.child(label))
-            .bg(kit::glass_fill(tone, kit::Pose::Rest))
-            .border_color(kit::glass_bezel(tone))
-            .shadow(kit::glass_depth(tone, theme, kit::Pose::Rest))
+            .bg(gpui::transparent_black())
+            .border_color(gpui::transparent_black())
+            .shadow(kit::glass_glow(tone, theme, kit::Pose::Rest))
             .text_color(theme.on_accent)
             .font_weight(FontWeight::SEMIBOLD)
-            .hover(move |s| {
-                s.bg(kit::glass_fill(tone, kit::Pose::Hover))
-                    .shadow(kit::glass_depth(tone, theme, kit::Pose::Hover))
-            })
-            .active(move |s| {
-                s.bg(kit::glass_fill(tone, kit::Pose::Pressed))
-                    .shadow(kit::glass_depth(tone, theme, kit::Pose::Pressed))
-            })
+            .hover(move |s| s.shadow(kit::glass_glow(tone, theme, kit::Pose::Hover)))
+            .active(move |s| s.shadow(kit::glass_glow(tone, theme, kit::Pose::Pressed)))
             .on_press(move |position, cx| fx::ripple(position, tone, cx))
     }
     /// Returns a button tinted with a tone that carries its own meaning, such as a destructive

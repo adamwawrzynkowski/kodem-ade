@@ -32,20 +32,12 @@ pub(super) fn glint(color: Hsla, from: Edge) -> Div {
     .layer()
 }
 
-/// Static dots of light that thin out from the top edge of a glass control, so its sheen reads
-/// as dither on top of the smooth body.
-pub(super) fn sheen(color: Hsla) -> Div {
-    Dither::new(DitherField::Fade {
-        from: Edge::Top,
-        start: 0.6,
-        end: -0.35,
-    })
-    .color(color)
-    .grid(2., 1.)
-    .toned()
-    .corner_radius(crate::theme::RADIUS_CONTROL)
-    .layer()
-}
+/// The group that lights the layers of a glass control under the pointer and on a press. The
+/// control sets it on itself.
+pub(super) const GLASS: &str = "glass";
+
+/// Width of each of the two rings of a glass control.
+const GLASS_RING: f32 = 2.;
 
 /// Where the light falls on a glass control.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -55,61 +47,187 @@ pub(super) enum Pose {
     Pressed,
 }
 
-/// Returns the body of a glass control in a tone. It is lit from above, a little more under the
-/// pointer, and lit from below while pressed, so the press reads as the key sinking.
-pub(super) fn glass_fill(tone: Hsla, pose: Pose) -> Background {
-    let (top, bottom) = match pose {
-        Pose::Rest => (lighten(tone, 0.08), lighten(tone, -0.06)),
-        Pose::Hover => (lighten(tone, 0.12), lighten(tone, -0.03)),
-        Pose::Pressed => (lighten(tone, -0.07), lighten(tone, 0.02)),
-    };
-    linear_gradient(
-        180.,
-        linear_color_stop(top, 0.),
-        linear_color_stop(bottom, 1.),
+/// Returns the body of a glass control with corners of `radius`: two rings around a flat face.
+///
+/// The outer ring is a bezel, light at the top and the bottom and darkest across the middle. The
+/// inner ring catches a bright highlight at the top and the light that the glass bends back at
+/// the bottom. The face carries the dot texture: a sheen that thins out from the top, a shade
+/// along the bottom and more light under the pointer. Add it as the first child of the control,
+/// which must belong to [`GLASS`].
+pub(super) fn glass_body(tone: Hsla, radius: f32) -> Div {
+    let face_radius = (radius - GLASS_RING * 2.).max(0.);
+    let bezel = ring(
+        radius,
+        toward(tone, 0., 0.42),
+        toward(tone, 1., 0.3),
+        toward(tone, 1., 0.1),
+    );
+    let lens = ring(
+        radius - GLASS_RING,
+        toward(tone, 1., 0.22),
+        toward(tone, 1., 0.85),
+        toward(tone, 1., 0.5),
     )
+    .id("glass-lens")
+    .group_active(GLASS, |s| s.opacity(0.55));
+    let face = div()
+        .id("glass-face")
+        .absolute()
+        .size_full()
+        .rounded(px(face_radius))
+        .bg(tone)
+        .group_hover(GLASS, move |s| s.bg(toward(tone, 1., 0.1)))
+        .group_active(GLASS, move |s| s.bg(toward(tone, 0., 0.12)))
+        .child(face_dots(
+            Edge::Top,
+            0.6,
+            gpui::white().opacity(0.32),
+            face_radius,
+            false,
+        ))
+        .child(face_dots(
+            Edge::Bottom,
+            0.4,
+            gpui::black().opacity(0.18),
+            face_radius,
+            false,
+        ))
+        .child(face_dots(
+            Edge::Top,
+            0.75,
+            gpui::white().opacity(0.3),
+            face_radius,
+            true,
+        ));
+    // The body also covers the control's one-point edge, which only keyboard focus colors.
+    let edge = gpui::px(-1.);
+    div()
+        .absolute()
+        .top(edge)
+        .left(edge)
+        .right(edge)
+        .bottom(edge)
+        .child(bezel)
+        .child(inset(GLASS_RING).child(lens))
+        .child(inset(GLASS_RING * 2.).child(face))
 }
 
-/// Returns the darker edge that frames a glass control like a bezel.
-pub(super) fn glass_bezel(tone: Hsla) -> Hsla {
-    lighten(tone, -0.14)
-}
-
-/// Returns the light and shadow of a glass control: a bright rim inside its top edge, light that
-/// gathers inside its bottom edge as in a lens, a tight contact shadow, and a soft glow of its
-/// tone below it. A pressed control loses the rim, takes a dark inner edge and its glow tightens.
-pub(super) fn glass_depth(tone: Hsla, theme: Theme, pose: Pose) -> Vec<BoxShadow> {
-    let shadow = |inset: bool, color: Hsla, y: f32, blur: f32, spread: f32| BoxShadow {
-        inset,
+/// Returns the drop shadows of a glass control: a tight contact shadow and a soft glow of its
+/// tone below it. The glow grows under the pointer and tightens on a press.
+pub(super) fn glass_glow(tone: Hsla, theme: Theme, pose: Pose) -> Vec<BoxShadow> {
+    let shadow = |color: Hsla, y: f32, blur: f32, spread: f32| BoxShadow {
+        inset: false,
         color,
         offset: point(px(0.), px(y)),
         blur_radius: px(blur),
         spread_radius: px(spread),
     };
-    let glow = if theme.light { 0.3 } else { 0.4 };
-    let contact = gpui::black().opacity(if theme.light { 0.18 } else { 0.42 });
+    let glow = tone.opacity(if theme.light { 0.32 } else { 0.42 });
+    let contact = gpui::black().opacity(if theme.light { 0.2 } else { 0.45 });
     match pose {
-        Pose::Rest | Pose::Hover => {
-            let lift = if pose == Pose::Hover { 1.35 } else { 1. };
-            vec![
-                shadow(true, gpui::white().opacity(0.42), 1., 0., 0.),
-                shadow(true, gpui::white().opacity(0.22), -1.5, 2., 0.),
-                shadow(false, contact, 1., 1.5, 0.),
-                shadow(false, tone.opacity(glow * lift), 3., 8. * lift, -2.),
-            ]
-        }
+        Pose::Rest => vec![shadow(contact, 1., 1.5, 0.), shadow(glow, 4., 10., -1.)],
+        Pose::Hover => vec![
+            shadow(contact, 1., 1.5, 0.),
+            shadow(glow.opacity(1.3), 4., 13., 0.),
+        ],
         Pose::Pressed => vec![
-            shadow(true, gpui::black().opacity(0.26), 1.5, 2., 0.),
-            shadow(true, gpui::white().opacity(0.14), -1., 1.5, 0.),
-            shadow(false, contact, 0.5, 1., 0.),
-            shadow(false, tone.opacity(glow * 0.6), 1., 4., -2.),
+            shadow(contact, 0.5, 1., 0.),
+            shadow(glow.opacity(0.6), 1., 5., -2.),
         ],
     }
 }
 
-// Moves a color's lightness by `amount` and keeps its hue, saturation and alpha.
-fn lighten(mut color: Hsla, amount: f32) -> Hsla {
-    color.lightness = (color.lightness + amount).clamp(0., 1.);
+/// Returns an icon engraved into a glass face: a darker copy of the glyph one point above it
+/// reads as the edge of a cut.
+pub(super) fn engraved(glyph: &'static str, tone: Hsla, size: f32) -> Div {
+    div()
+        .relative()
+        .flex_shrink_0()
+        .size(px(size))
+        .child(
+            icon(glyph)
+                .size(px(size))
+                .absolute()
+                .top(gpui::px(-1.))
+                .left_0()
+                .text_color(toward(tone, 0., 0.55).opacity(0.75)),
+        )
+        .child(icon(glyph).size(px(size)).absolute().top_0().left_0())
+}
+
+// A rounded layer that fills its parent: `middle` across its center, blending into `top` at its
+// top edge and into `bottom` at its bottom edge. Each half fades to clear over the middle color,
+// so the halves meet without a seam.
+fn ring(radius: f32, middle: Hsla, top: Hsla, bottom: Hsla) -> Div {
+    let clear = middle.opacity(0.);
+    let radius = px(radius.max(0.));
+    div()
+        .absolute()
+        .size_full()
+        .rounded(radius)
+        .bg(middle)
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .h(relative(0.5))
+                .rounded_t(radius)
+                .bg(linear_gradient(
+                    180.,
+                    linear_color_stop(top, 0.),
+                    linear_color_stop(clear, 1.),
+                )),
+        )
+        .child(
+            div()
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .right_0()
+                .h(relative(0.5))
+                .rounded_b(radius)
+                .bg(linear_gradient(
+                    180.,
+                    linear_color_stop(clear, 0.),
+                    linear_color_stop(bottom, 1.),
+                )),
+        )
+}
+
+// An absolute layer inset from every edge of its parent by `points`.
+fn inset(points: f32) -> Div {
+    div()
+        .absolute()
+        .top(px(points))
+        .left(px(points))
+        .right(px(points))
+        .bottom(px(points))
+}
+
+// Static dots that fade from one edge of a glass face, or dots that light it under the pointer.
+fn face_dots(from: Edge, start: f32, color: Hsla, radius: f32, hover_only: bool) -> Div {
+    let dots = Dither::new(DitherField::Fade {
+        from,
+        start,
+        end: -0.3,
+    })
+    .color(color)
+    .grid(2., 1.)
+    .toned()
+    .corner_radius(radius);
+    if hover_only {
+        dots.hover_only().layer()
+    } else {
+        dots.layer()
+    }
+}
+
+// Moves a color's lightness the share `amount` of the way to `target` and keeps its hue,
+// saturation and alpha.
+fn toward(mut color: Hsla, target: f32, amount: f32) -> Hsla {
+    color.lightness += (target - color.lightness) * amount;
     color
 }
 
