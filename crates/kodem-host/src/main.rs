@@ -11,12 +11,11 @@ mod settlement;
 mod terminal;
 mod titles;
 use anyhow::{Context, Result, ensure};
-use kodem_core::{git, ipc, providers::codex, storage::Store, *};
+use kodem_core::{git, ipc, platform, providers::codex, storage::Store, *};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
-    os::unix::{fs::PermissionsExt, io::AsRawFd, net::UnixListener},
     sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
@@ -100,15 +99,18 @@ fn run() -> Result<()> {
         .read(true)
         .write(true)
         .open(root.join("host.lock"))?;
-    if fs2_lock(&lock).is_err() {
+    // Another host holds the lock and serves this data directory.
+    if lock.try_lock().is_err() {
         return Ok(());
     }
     let endpoint = ipc::socket(&root);
-    if endpoint.exists() {
-        fs::remove_file(&endpoint)?;
+    // A Windows socket file reads as a reparse point, so remove it without asking first.
+    match fs::remove_file(&endpoint) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+        _ => {}
     }
-    let listener = UnixListener::bind(&endpoint)?;
-    fs::set_permissions(&endpoint, fs::Permissions::from_mode(0o600))?;
+    let listener = ipc::UnixListener::bind(&endpoint)?;
+    platform::restrict(&endpoint, 0o600)?;
     listener.set_nonblocking(true)?;
     let store = Store::open(&root)?;
     store.recover()?;
@@ -154,12 +156,7 @@ fn run() -> Result<()> {
                 // Framed workers must wait for the complete request and response.
                 stream.set_nonblocking(false)?;
                 // Reject connections from any other local account even if filesystem permissions change.
-                let (mut uid, mut gid) = (0, 0);
-                ensure!(
-                    unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) } == 0
-                        && uid == unsafe { libc::geteuid() },
-                    "Unexpected IPC peer"
-                );
+                ensure!(same_user(&stream), "Unexpected IPC peer");
                 activity = Instant::now();
                 let host = host.clone();
                 let root = root.clone();
@@ -194,10 +191,40 @@ fn run() -> Result<()> {
     let _ = fs::remove_file(&endpoint);
     Ok(())
 }
-fn fs2_lock(file: &fs::File) -> Result<()> {
-    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    ensure!(result == 0, "Host already running");
-    Ok(())
+/// Tells whether the connected process runs as the same user as the host.
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
+fn same_user(stream: &ipc::UnixStream) -> bool {
+    use std::os::unix::io::AsRawFd;
+    let (mut uid, mut gid) = (0, 0);
+    let read = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
+    read == 0 && uid == unsafe { libc::geteuid() }
+}
+/// Tells whether the connected process runs as the same user as the host.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn same_user(stream: &ipc::UnixStream) -> bool {
+    use std::os::unix::io::AsRawFd;
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let read = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&raw mut credentials).cast(),
+            &mut length,
+        )
+    };
+    read == 0 && credentials.uid == unsafe { libc::geteuid() }
+}
+/// Windows reports no peer account for a Unix socket. The socket lives in the user's Local
+/// AppData folder, whose access list admits only that user.
+#[cfg(windows)]
+fn same_user(_stream: &ipc::UnixStream) -> bool {
+    true
 }
 /// Longest time a watch request waits for a change before it answers with none.
 const WATCH_WAIT: Duration = Duration::from_secs(10);
@@ -468,7 +495,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             path,
             missing_repository,
         } => {
-            let mut path = path.canonicalize()?;
+            let mut path = path.canonicalize().map(kodem_core::platform::plain_path)?;
             if !git::is_repository(&path) {
                 match missing_repository {
                     MissingRepository::Ask => return Ok(Response::NoRepository(path)),

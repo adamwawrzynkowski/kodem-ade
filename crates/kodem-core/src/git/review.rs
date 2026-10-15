@@ -20,7 +20,7 @@ pub struct PreparedReview {
 
 // Runs GitHub CLI in a checkout. It never prompts, and its absence reads as a setup hint.
 fn github(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let out = Command::new("gh")
+    let out = platform::hide_console(&mut Command::new("gh"))
         .current_dir(cwd)
         .env("PATH", search_path()?)
         .env("GH_PROMPT_DISABLED", "1")

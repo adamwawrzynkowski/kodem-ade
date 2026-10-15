@@ -1750,9 +1750,7 @@ pub(super) fn account_usage(
 fn config_home(account: &Account) -> Result<PathBuf> {
     match &account.home {
         Some(home) => Ok(home.clone()),
-        None => Ok(
-            PathBuf::from(std::env::var_os("HOME").context("HOME is unavailable")?).join(".claude"),
-        ),
+        None => Ok(kodem_core::platform::home_dir()?.join(".claude")),
     }
 }
 

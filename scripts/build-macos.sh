@@ -9,6 +9,7 @@ case "$channel" in
     nightly|production) configuration=release ;;
     *) echo "Usage: $0 debug|nightly|production" >&2; exit 2 ;;
 esac
+[[ "$(uname -s)" == Darwin ]] || { echo "Run this build on macOS. Use scripts/build-linux.sh or scripts/build-windows.sh elsewhere." >&2; exit 2; }
 mkdir -p target
 build_lock="$KODEM_ROOT/target/.kodem-build-lock"
 if ! mkdir "$build_lock" 2>/dev/null; then

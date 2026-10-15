@@ -23,20 +23,7 @@ pub(super) fn executable() -> PathBuf {
     if let Some(path) = std::env::var_os("KODEM_CLAUDE_PATH") {
         return PathBuf::from(path);
     }
-    let mut candidates = Vec::new();
-    if let Some(home) = std::env::var_os("HOME") {
-        candidates.push(PathBuf::from(home).join(".local/bin/claude"));
-    }
-    candidates.extend([
-        PathBuf::from("/opt/homebrew/bin/claude"),
-        PathBuf::from("/usr/local/bin/claude"),
-    ]);
-    if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(std::env::split_paths(&path).map(|directory| directory.join("claude")));
-    }
-    candidates
-        .into_iter()
-        .find(|path| path.is_file())
+    kodem_core::platform::find_program("claude", &kodem_core::platform::tool_directories())
         .unwrap_or_else(|| PathBuf::from("claude"))
 }
 

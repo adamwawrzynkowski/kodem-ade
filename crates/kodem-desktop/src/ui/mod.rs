@@ -226,6 +226,9 @@ pub struct Shell {
     file_text: Option<(String, String)>,
     dragging_sidebar: bool,
     dragging_review: bool,
+    /// A press on a title bar that the app draws itself, which moves the window once the
+    /// pointer moves. A press that ends in place stays a click.
+    title_press: bool,
     window_width: f32,
     window_placement: WindowBounds,
     window_save_task: Option<gpui::Task<()>>,
@@ -523,6 +526,7 @@ impl Shell {
             file_text: None,
             dragging_sidebar: false,
             dragging_review: false,
+            title_press: false,
             window_width: f32::from(window.viewport_size().width),
             window_placement: window.window_bounds(),
             window_save_task: None,
@@ -1685,7 +1689,9 @@ impl Shell {
         };
         let root = &view.task.cwd;
         let absolute = if let Some(rest) = path.strip_prefix("~/") {
-            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(rest))
+            kodem_core::platform::home_dir()
+                .ok()
+                .map(|home| home.join(rest))
         } else {
             Some(root.join(path))
         };
@@ -1702,10 +1708,10 @@ impl Shell {
             });
             self.send(core::Request::ReadFile {
                 task_id: view.task.id.clone(),
-                path: relative.to_string_lossy().into_owned().into_bytes(),
+                path: kodem_core::platform::os_bytes(relative.as_os_str()),
             });
         } else {
-            cx.open_url(&format!("file://{}", absolute.display()));
+            cx.open_with_system(&absolute);
         }
         cx.notify();
     }
@@ -1831,7 +1837,7 @@ impl Shell {
         self.ghost(id, name, "")
             .w(px(26.))
             .px_0()
-            .accessibility_label(label)
+            .accessibility_label(kit::shortcut(label))
             .tooltip(move |_, cx| {
                 cx.new(|_| Hint {
                     text: label.into(),
@@ -2006,45 +2012,46 @@ impl Render for Hint {
                     .border_1()
                     .border_color(self.theme.edge)
                     .rounded(px(5.))
-                    .child(self.text.clone()),
+                    .child(kit::shortcut(self.text.clone())),
             )
     }
 }
-/// Installs workspace keyboard commands and macOS menu actions.
+/// Installs workspace keyboard commands and the application menu. `secondary` is Command on
+/// macOS and Control elsewhere.
 pub fn init(cx: &mut App) {
     crate::components::text_input::init(cx);
     cx.bind_keys([
-        KeyBinding::new("cmd-o", OpenProject, None),
-        KeyBinding::new("cmd-n", NewTask, None),
-        KeyBinding::new("cmd-b", ToggleSidebar, None),
-        KeyBinding::new("cmd-d", ToggleReview, None),
-        KeyBinding::new("cmd-,", ShowSettings, None),
-        KeyBinding::new("cmd-f", Search, None),
-        KeyBinding::new("cmd-k", CommandPalette, None),
-        KeyBinding::new("cmd-shift-]", NextTask, None),
-        KeyBinding::new("cmd-shift-[", PreviousTask, None),
+        KeyBinding::new("secondary-o", OpenProject, None),
+        KeyBinding::new("secondary-n", NewTask, None),
+        KeyBinding::new("secondary-b", ToggleSidebar, None),
+        KeyBinding::new("secondary-d", ToggleReview, None),
+        KeyBinding::new("secondary-,", ShowSettings, None),
+        KeyBinding::new("secondary-f", Search, None),
+        KeyBinding::new("secondary-k", CommandPalette, None),
+        KeyBinding::new("secondary-shift-]", NextTask, None),
+        KeyBinding::new("secondary-shift-[", PreviousTask, None),
         KeyBinding::new("ctrl-tab", NextTask, None),
         KeyBinding::new("ctrl-shift-tab", PreviousTask, None),
-        KeyBinding::new("alt-cmd-a", NextAttention, None),
-        KeyBinding::new("cmd-shift-m", ChooseModel, None),
-        KeyBinding::new("cmd-shift-e", ChooseEffort, None),
-        KeyBinding::new("cmd-shift-a", ChooseAccess, None),
+        KeyBinding::new("secondary-alt-a", NextAttention, None),
+        KeyBinding::new("secondary-shift-m", ChooseModel, None),
+        KeyBinding::new("secondary-shift-e", ChooseEffort, None),
+        KeyBinding::new("secondary-shift-a", ChooseAccess, None),
         KeyBinding::new("shift-tab", CycleAccess, None),
         KeyBinding::new("ctrl-`", ToggleTerminal, None),
-        KeyBinding::new("cmd-1", GoToTask1, None),
-        KeyBinding::new("cmd-2", GoToTask2, None),
-        KeyBinding::new("cmd-3", GoToTask3, None),
-        KeyBinding::new("cmd-4", GoToTask4, None),
-        KeyBinding::new("cmd-5", GoToTask5, None),
-        KeyBinding::new("cmd-6", GoToTask6, None),
-        KeyBinding::new("cmd-7", GoToTask7, None),
-        KeyBinding::new("cmd-8", GoToTask8, None),
-        KeyBinding::new("cmd-9", GoToTask9, None),
-        KeyBinding::new("alt-cmd-1", ShowCoding, None),
-        KeyBinding::new("alt-cmd-2", ShowChat, None),
-        KeyBinding::new("alt-cmd-3", ShowReview, None),
+        KeyBinding::new("secondary-1", GoToTask1, None),
+        KeyBinding::new("secondary-2", GoToTask2, None),
+        KeyBinding::new("secondary-3", GoToTask3, None),
+        KeyBinding::new("secondary-4", GoToTask4, None),
+        KeyBinding::new("secondary-5", GoToTask5, None),
+        KeyBinding::new("secondary-6", GoToTask6, None),
+        KeyBinding::new("secondary-7", GoToTask7, None),
+        KeyBinding::new("secondary-8", GoToTask8, None),
+        KeyBinding::new("secondary-9", GoToTask9, None),
+        KeyBinding::new("secondary-alt-1", ShowCoding, None),
+        KeyBinding::new("secondary-alt-2", ShowChat, None),
+        KeyBinding::new("secondary-alt-3", ShowReview, None),
         KeyBinding::new("escape", Cancel, None),
-        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("secondary-q", Quit, None),
     ]);
     cx.set_menus(vec![
         Menu {
@@ -2089,13 +2096,40 @@ pub fn init(cx: &mut App) {
 
 // Resolve the local account's first name once, outside rendering.
 fn user_first_name() -> String {
+    full_user_name()
+        .or_else(|| std::env::var("USER").ok())
+        .or_else(|| std::env::var("USERNAME").ok())
+        .and_then(|name| name.split_whitespace().next().map(str::to_owned))
+        .unwrap_or_else(|| "there".into())
+}
+
+// The account's full name as macOS records it.
+#[cfg(target_os = "macos")]
+fn full_user_name() -> Option<String> {
     std::process::Command::new("/usr/bin/id")
         .arg("-F")
         .output()
         .ok()
         .filter(|output| output.status.success())
         .and_then(|output| String::from_utf8(output.stdout).ok())
-        .or_else(|| std::env::var("USER").ok())
-        .and_then(|name| name.split_whitespace().next().map(str::to_owned))
-        .unwrap_or_else(|| "there".into())
+}
+
+// The account's full name from the comment field of its passwd entry.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn full_user_name() -> Option<String> {
+    let user = std::env::var("USER").ok()?;
+    let output = std::process::Command::new("getent")
+        .args(["passwd", &user])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let entry = String::from_utf8(output.stdout).ok()?;
+    let name = entry.split(':').nth(4)?.split(',').next()?.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+// Windows gives the sign-in name only, without asking a directory service.
+#[cfg(windows)]
+fn full_user_name() -> Option<String> {
+    None
 }

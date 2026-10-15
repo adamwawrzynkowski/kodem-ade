@@ -5,7 +5,6 @@ use kodem_core::*;
 use std::{
     fs,
     io::{Read, Write},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::Path,
 };
 
@@ -33,21 +32,20 @@ pub(super) fn import(root: &Path, sources: Vec<AttachmentSource>) -> Result<Vec<
                 Some(
                     source
                         .canonicalize()
+                        .map(kodem_core::platform::plain_path)
                         .context("Skill source is unavailable")?,
                 )
             } else {
                 None
             };
-            let mut input = fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NONBLOCK)
-                .open(source)
+            let mut input = platform::open_nonblocking(source)
                 .with_context(|| format!("Cannot open {}", source.display()))?;
             let meta = input.metadata()?;
             if meta.is_dir() && skill.is_none() {
                 // A folder can exceed every attachment limit, so the agent reads it in place.
                 let path = source
                     .canonicalize()
+                    .map(kodem_core::platform::plain_path)
                     .with_context(|| format!("Cannot open {}", source.display()))?;
                 let name = path
                     .file_name()
@@ -97,18 +95,14 @@ pub(super) fn import(root: &Path, sources: Vec<AttachmentSource>) -> Result<Vec<
             let directory = root.join("attachments").join(&id);
             fs::create_dir_all(&directory)?;
             created.push(directory.clone());
-            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+            platform::restrict(&directory, 0o700)?;
             let name = source
                 .file_name()
                 .context("Attachment has no filename")?
                 .to_string_lossy()
                 .into_owned();
             let path = directory.join(&name);
-            let mut output = fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .mode(0o600)
-                .open(&path)?;
+            let mut output = platform::create_private(&path)?;
             output.write_all(&bytes)?;
             output.sync_all()?;
             imported.push(Attachment {

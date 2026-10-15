@@ -376,7 +376,7 @@ impl Transcript {
     pub(super) fn new(task_id: &str, cwd: &Path) -> Self {
         let mut roots = vec![cwd.to_owned()];
         // The CLI reports canonical paths, which differ from the stored checkout under symlinks.
-        if let Ok(canonical) = cwd.canonicalize()
+        if let Ok(canonical) = cwd.canonicalize().map(kodem_core::platform::plain_path)
             && canonical != cwd
         {
             roots.push(canonical);

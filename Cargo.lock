@@ -2990,7 +2990,9 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "uds_windows",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2998,6 +3000,7 @@ name = "kodem-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "embed-resource",
  "gpui-ce",
  "gpui_ce_platform",
  "image",
@@ -3025,6 +3028,7 @@ dependencies = [
  "image",
  "kodem-core",
  "libc",
+ "notify-rust",
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
  "objc2-user-notifications",

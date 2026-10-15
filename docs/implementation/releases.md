@@ -27,3 +27,19 @@ The release integration follows [GitHub release metadata](https://docs.github.co
 The first Nightly build uploaded its archive but failed with HTTP 404 when querying the unpublished release through the REST tag endpoint. Publication now resolves the draft with `gh release view --json apiUrl` and reads its asset digest from that release URL. A read-only probe of the actual publication function reproduced the old failure and passed with the corrected lookup; creation and publication were intercepted during that probe.
 
 The existing `nightly/v0.1.0` draft was then published after its source commit and archive checksum were verified. Its downloaded asset matched the local archive byte-for-byte. Workspace compilation, shell syntax and diff checks passed. Temporary probes and downloads were removed. This verifies release publication and download; app installation, reopening and visual interaction remain untested.
+
+## Windows and Linux packages
+
+Recorded on 15 October 2026. Each platform builds natively: `scripts/build-macos.sh` on macOS, `scripts/build-linux.sh` on Linux, and `scripts/build-windows.sh` from Git Bash on Windows (`Build *.cmd` at the repository root). GPUI compiles its Direct3D shaders with the Windows SDK's `fxc.exe` in release builds, so Windows releases cannot be cross-compiled from macOS.
+
+| Platform | Release asset | Package folder | Identity and metadata |
+| --- | --- | --- | --- |
+| macOS | `Kodem-macos-aarch64.zip` | `Kodem.app`, `Kodem Nightly.app` | `Info.plist`, ad hoc code signature |
+| Windows | `Kodem-windows-x86_64.zip` and `.sha256` | `Kodem`, `Kodem Nightly`, `Kodem Debug` | `release.json`, Authenticode signature, embedded icon and version resource |
+| Linux | `Kodem-linux-x86_64.tar.gz`, `.sha256` and optional `.asc` | `kodem`, `kodem-nightly`, `kodem-debug` | `release.json`, optional detached OpenPGP signature |
+
+`release.json` carries `name`, `identifier`, `version`, `channel`, `repository` and `build`. The Windows and Linux updaters require the installed folder's `release.json` to name the running channel, accept only archives whose entries are regular files and folders under the channel's package folder, then compare identifier, version, channel and repository. On Windows, when the running `kodem.exe` has a valid Authenticode signature, both new executables must be validly signed by the same certificate thumbprint. The detached installer is `scripts/install-update-windows.ps1` or `scripts/install-update-linux.sh`. It waits for the desktop to exit, retries the folder rename while the stopped host releases its executable on Windows, swaps folders with rollback and starts the new app. Windows can leave the stage folder holding only `install.log`, which the installer process keeps open.
+
+A release build of a commit that already has a published release in its channel adds its archive to that release instead of allocating a new version. A draft release for the commit stops the build. An upload whose GitHub digest differs from the local archive is deleted from an existing release, or leaves a new release as a draft.
+
+Release builds on Windows refuse unsigned executables unless `KODEM_ALLOW_UNSIGNED=1`. Linux signing is optional unless `KODEM_REQUIRE_SIGNING=1`. License notices for Windows and Linux are generated at build time under `target/licensing/<target>/` with the macOS policy; the Linux graph needed reviewed clarifications for `harfrust`, `wayland-protocols-plasma`, `xim-ctext` and `xim-parser`. The Windows graph has no MPL dependency, so its package carries no `option-ext` source archive.

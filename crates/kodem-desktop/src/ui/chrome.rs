@@ -1,6 +1,6 @@
 use super::*;
 impl Shell {
-    fn titlebar(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn titlebar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let project = self.composer_project();
         let name = project.map(|p| p.name.clone()).unwrap_or_else(|| {
@@ -34,6 +34,30 @@ impl Shell {
             .flex()
             .items_center()
             .window_control_area(WindowControlArea::Drag)
+            .when(client_decorations(window), |header| {
+                // A Linux compositor moves the window only when the app asks it to.
+                header
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|s, event: &MouseDownEvent, window, _| {
+                            if event.click_count == 2 {
+                                window.zoom_window();
+                            } else {
+                                s.title_press = true;
+                            }
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|s, _, window, _| {
+                        if s.title_press {
+                            s.title_press = false;
+                            window.start_window_move();
+                        }
+                    }))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|s, _, _, _| s.title_press = false),
+                    )
+            })
             .bg(t.sidebar)
             .border_b_1()
             .border_color(t.border)
@@ -275,8 +299,67 @@ impl Shell {
                                 cx.notify();
                             })),
                     ),
-            );
+            )
+            .when(app_window_buttons(window), |header| {
+                header.child(self.window_buttons(window, cx))
+            });
         header.into_any_element()
+    }
+
+    /// Returns the minimize, maximize and close buttons that Windows, and a Linux compositor
+    /// without server-side decorations, leave to the app. On Windows the system handles their
+    /// clicks through their window control areas, which also opens Snap Layouts.
+    fn window_buttons(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let button = |id: &'static str, glyph: &'static str, area: WindowControlArea| {
+            let hover = if area == WindowControlArea::Close {
+                t.removed
+            } else {
+                t.control_hover
+            };
+            div()
+                .id(id)
+                .w(gpui::px(46.))
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(t.muted)
+                .window_control_area(area)
+                .hover(move |s| {
+                    s.bg(hover).text_color(if area == WindowControlArea::Close {
+                        gpui::white()
+                    } else {
+                        t.text
+                    })
+                })
+                .child(icon(glyph).size(gpui::px(12.)))
+        };
+        div()
+            .h_full()
+            .flex()
+            .flex_shrink_0()
+            .child(
+                button("window-minimize", "minus", WindowControlArea::Min)
+                    .on_click(cx.listener(|_, _, window, _| window.minimize_window())),
+            )
+            .child(
+                button(
+                    "window-maximize",
+                    if window.is_maximized() {
+                        "copy"
+                    } else {
+                        "square"
+                    },
+                    WindowControlArea::Max,
+                )
+                .on_click(cx.listener(|_, _, window, _| window.zoom_window())),
+            )
+            .child(
+                button("window-close", "close", WindowControlArea::Close)
+                    .on_click(cx.listener(|_, _, window, _| window.remove_window())),
+            )
+            .into_any_element()
     }
 
     // Floating notices above the workspace: a persistent error card and a short confirmation.
@@ -516,7 +599,7 @@ impl Render for Shell {
                     cx.notify();
                 }),
             );
-        root = root.child(self.titlebar(cx));
+        root = root.child(self.titlebar(window, cx));
         let rail = self.workspace_rail(cx);
         let sidebar = self.sidebar(cx);
         let sidebar_open = self.reveals.sidebar;
@@ -652,7 +735,149 @@ impl Render for Shell {
 const RESIZE_REACH: f32 = 5.;
 
 /// Width at the leading end of the title bar that the window controls take, in window pixels.
+/// Only macOS puts its controls there; elsewhere this is the title bar's leading margin.
+#[cfg(target_os = "macos")]
 const WINDOW_CONTROLS: f32 = 80.;
+#[cfg(not(target_os = "macos"))]
+const WINDOW_CONTROLS: f32 = 12.;
+
+/// Tells whether the app draws the window frame because the platform does not: a Linux
+/// compositor without server-side decorations, such as GNOME on Wayland.
+fn client_decorations(window: &Window) -> bool {
+    cfg!(not(any(target_os = "macos", windows)))
+        && matches!(window.window_decorations(), Decorations::Client { .. })
+}
+
+/// Tells whether the title bar carries the app's own minimize, maximize and close buttons.
+fn app_window_buttons(window: &Window) -> bool {
+    cfg!(windows) || client_decorations(window)
+}
+
+/// Width of the band along a self-drawn window edge that resizes the window, in pixels.
+const RESIZE_BORDER: f32 = 5.;
+
+/// Thin bands along the edges and corners of a window whose frame the app draws. Pressing one
+/// asks the compositor to resize the window from that edge. Tiled and maximized edges have none.
+fn resize_borders(window: &Window) -> Option<AnyElement> {
+    let Decorations::Client { tiling } = window.window_decorations() else {
+        return None;
+    };
+    if cfg!(any(target_os = "macos", windows)) || window.is_maximized() {
+        return None;
+    }
+    let band = |id: &'static str, edge: ResizeEdge, cursor: CursorStyle| {
+        div()
+            .id(id)
+            .absolute()
+            .occlude()
+            .cursor(cursor)
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                window.start_window_resize(edge);
+            })
+    };
+    let reach = px(RESIZE_BORDER);
+    let corner = px(RESIZE_BORDER * 3.);
+    let mut borders = div().absolute().top_0().left_0().size_full();
+    if !tiling.top {
+        borders = borders.child(
+            band("resize-top", ResizeEdge::Top, CursorStyle::ResizeUpDown)
+                .top_0()
+                .left_0()
+                .right_0()
+                .h(reach),
+        );
+    }
+    if !tiling.bottom {
+        borders = borders.child(
+            band(
+                "resize-bottom",
+                ResizeEdge::Bottom,
+                CursorStyle::ResizeUpDown,
+            )
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .h(reach),
+        );
+    }
+    if !tiling.left {
+        borders = borders.child(
+            band(
+                "resize-left",
+                ResizeEdge::Left,
+                CursorStyle::ResizeLeftRight,
+            )
+            .top_0()
+            .bottom_0()
+            .left_0()
+            .w(reach),
+        );
+    }
+    if !tiling.right {
+        borders = borders.child(
+            band(
+                "resize-right",
+                ResizeEdge::Right,
+                CursorStyle::ResizeLeftRight,
+            )
+            .top_0()
+            .bottom_0()
+            .right_0()
+            .w(reach),
+        );
+    }
+    for (id, edge, cursor, open, top, left) in [
+        (
+            "resize-top-left",
+            ResizeEdge::TopLeft,
+            CursorStyle::ResizeUpLeftDownRight,
+            !tiling.top && !tiling.left,
+            true,
+            true,
+        ),
+        (
+            "resize-top-right",
+            ResizeEdge::TopRight,
+            CursorStyle::ResizeUpRightDownLeft,
+            !tiling.top && !tiling.right,
+            true,
+            false,
+        ),
+        (
+            "resize-bottom-left",
+            ResizeEdge::BottomLeft,
+            CursorStyle::ResizeUpRightDownLeft,
+            !tiling.bottom && !tiling.left,
+            false,
+            true,
+        ),
+        (
+            "resize-bottom-right",
+            ResizeEdge::BottomRight,
+            CursorStyle::ResizeUpLeftDownRight,
+            !tiling.bottom && !tiling.right,
+            false,
+            false,
+        ),
+    ] {
+        if open {
+            let mut handle = band(id, edge, cursor).size(corner);
+            handle = if top {
+                handle.top_0()
+            } else {
+                handle.bottom_0()
+            };
+            handle = if left {
+                handle.left_0()
+            } else {
+                handle.right_0()
+            };
+            borders = borders.child(handle);
+        }
+    }
+    Some(borders.into_any_element())
+}
 
 /// Height of the title bar, in window pixels.
 pub(super) const TITLE_BAR: f32 = 40.;
@@ -708,7 +933,7 @@ impl Stage {
 }
 
 impl Render for Stage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.try_global::<Theme>().copied().unwrap_or_default();
         div()
             .relative()
@@ -727,5 +952,6 @@ impl Render for Stage {
             )
             .child(AnyView::from(self.shell.clone()).cached(StyleRefinement::default().size_full()))
             .child(self.fx.clone())
+            .children(resize_borders(window))
     }
 }

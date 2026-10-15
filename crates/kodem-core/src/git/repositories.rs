@@ -5,7 +5,9 @@ use std::collections::BTreeSet;
 /// Finds nested repositories, submodules, symlinked checkouts and local Unity dependencies.
 /// Canonical roots deduplicate package links and stop cycles between repositories.
 pub fn repositories(cwd: &Path) -> Result<Vec<PathBuf>> {
-    let root = repository(cwd)?.canonicalize()?;
+    let root = repository(cwd)?
+        .canonicalize()
+        .map(crate::platform::plain_path)?;
     let mut roots = vec![root.clone()];
     let mut seen = BTreeSet::from([root]);
     let mut cursor = 0;
@@ -22,7 +24,7 @@ pub fn repositories(cwd: &Path) -> Result<Vec<PathBuf>> {
             if (entry.starts_with(b"160000 ") || entry.starts_with(b"120000 "))
                 && let Some(tab) = entry.iter().position(|b| *b == b'\t')
             {
-                let path = cwd.join(OsStr::from_bytes(&entry[tab + 1..]));
+                let path = cwd.join(platform::os_string(&entry[tab + 1..]));
                 if path.is_dir() {
                     candidates.insert(path);
                 }
@@ -32,7 +34,7 @@ pub fn repositories(cwd: &Path) -> Result<Vec<PathBuf>> {
         let paths = query(&cwd, &["ls-files", "-z", "--others", "--exclude-standard"])?;
         let mut directories = BTreeSet::new();
         for path in paths.split(|b| *b == 0).filter(|p| !p.is_empty()) {
-            let full = cwd.join(OsStr::from_bytes(path));
+            let full = cwd.join(platform::os_string(path));
             for ancestor in full.ancestors().take_while(|p| *p != cwd) {
                 if !directories.insert(ancestor.to_path_buf()) {
                     break;
@@ -62,7 +64,7 @@ pub fn repositories(cwd: &Path) -> Result<Vec<PathBuf>> {
         .split(|b| *b == 0)
         .filter(|p| !p.is_empty())
         {
-            let full = cwd.join(OsStr::from_bytes(path));
+            let full = cwd.join(platform::os_string(path));
             if full.join(".git").exists() {
                 candidates.insert(full);
             }
@@ -97,7 +99,7 @@ pub fn repositories(cwd: &Path) -> Result<Vec<PathBuf>> {
         let candidates: BTreeSet<_> = candidates
             .into_iter()
             .filter_map(|path| {
-                let canonical = path.canonicalize().ok()?;
+                let canonical = path.canonicalize().map(crate::platform::plain_path).ok()?;
                 canonical
                     .ancestors()
                     .find(|p| p.join(".git").exists())
@@ -108,7 +110,9 @@ pub fn repositories(cwd: &Path) -> Result<Vec<PathBuf>> {
             if seen.contains(&candidate) {
                 continue;
             }
-            let resolved = repository(&candidate)?.canonicalize()?;
+            let resolved = repository(&candidate)?
+                .canonicalize()
+                .map(crate::platform::plain_path)?;
             if seen.insert(resolved.clone()) {
                 roots.push(resolved);
             }
@@ -121,10 +125,11 @@ pub fn repositories(cwd: &Path) -> Result<Vec<PathBuf>> {
 fn primary_checkout(cwd: &Path) -> Option<PathBuf> {
     let bytes = query(cwd, &["rev-parse", "--git-common-dir"]).ok()?;
     let common = cwd
-        .join(OsStr::from_bytes(
+        .join(platform::os_string(
             bytes.strip_suffix(b"\n").unwrap_or(&bytes),
         ))
         .canonicalize()
+        .map(crate::platform::plain_path)
         .ok()?;
     (common.file_name()? == ".git").then(|| common.parent().unwrap().to_path_buf())
 }

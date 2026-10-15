@@ -1,5 +1,7 @@
-//! GitHub channel discovery and verified macOS updates, run outside the UI thread.
+//! GitHub channel discovery and verified updates, run outside the UI thread. macOS installs an
+//! app bundle; Windows and Linux replace the folder that holds the executables.
 use anyhow::{Context, Result, bail, ensure};
+use kodem_core::platform;
 use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -13,7 +15,21 @@ use std::{
 };
 
 const REPOSITORY: &str = "adamwawrzynkowski/kodem-ade";
-const ASSET_NAME: &str = "Kodem-macos-aarch64.zip";
+/// The archive format of this platform's release asset.
+#[cfg(any(target_os = "macos", windows))]
+const ARCHIVE: &str = "zip";
+#[cfg(not(any(target_os = "macos", windows)))]
+const ARCHIVE: &str = "tar.gz";
+
+/// Names the release asset for this platform and processor, such as `Kodem-windows-x86_64.zip`.
+fn asset_name() -> String {
+    let system = match std::env::consts::OS {
+        "macos" => "macos",
+        "windows" => "windows",
+        _ => "linux",
+    };
+    format!("Kodem-{system}-{}.{ARCHIVE}", std::env::consts::ARCH)
+}
 pub const VERSION: &str = env!("KODEM_APP_VERSION");
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -41,11 +57,32 @@ impl Channel {
             Self::Production => "production",
         }
     }
-    fn bundle_name(self) -> &'static str {
+    /// Returns the application name of the channel, as windows and installed files show it.
+    pub fn app_name(self) -> &'static str {
         match self {
+            Self::Debug => "Kodem Debug",
+            Self::Nightly => "Kodem Nightly",
+            Self::Production => "Kodem",
+        }
+    }
+    /// Returns the name of the top folder in the channel's release archive: the app bundle on
+    /// macOS, the install folder on Windows, and a lowercase folder on Linux.
+    fn package_name(self) -> &'static str {
+        match self {
+            #[cfg(target_os = "macos")]
             Self::Debug => "Kodem Debug.app",
+            #[cfg(target_os = "macos")]
             Self::Nightly => "Kodem Nightly.app",
+            #[cfg(target_os = "macos")]
             Self::Production => "Kodem.app",
+            #[cfg(windows)]
+            channel => channel.app_name(),
+            #[cfg(not(any(target_os = "macos", windows)))]
+            Self::Debug => "kodem-debug",
+            #[cfg(not(any(target_os = "macos", windows)))]
+            Self::Nightly => "kodem-nightly",
+            #[cfg(not(any(target_os = "macos", windows)))]
+            Self::Production => "kodem",
         }
     }
     fn bundle_id(self) -> &'static str {
@@ -162,7 +199,7 @@ fn select_release(release: GithubRelease, channel: Channel, current: &Version) -
     let asset = release
         .assets
         .into_iter()
-        .find(|a| a.name == ASSET_NAME && a.state == "uploaded")?;
+        .find(|a| a.name == asset_name() && a.state == "uploaded")?;
     let digest = asset.digest?.strip_prefix("sha256:")?.to_owned();
     if digest.len() != 64
         || !digest.bytes().all(|b| b.is_ascii_hexdigit())
@@ -188,7 +225,7 @@ fn github_token() -> Option<String> {
     }
     // Finder does not inherit a shell's Homebrew PATH.
     for gh in ["gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"] {
-        if let Ok(output) = Command::new(gh)
+        if let Ok(output) = platform::hide_console(&mut Command::new(gh))
             .args(["auth", "token", "--hostname", "github.com"])
             .stdin(Stdio::null())
             .stderr(Stdio::null())
@@ -211,7 +248,7 @@ fn valid_token(token: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 fn curl(endpoint: &str, token: Option<&str>, binary: bool) -> Result<std::process::Child> {
-    let mut child = Command::new("/usr/bin/curl")
+    let mut child = platform::hide_console(&mut Command::new(curl_program()))
         .args([
             "--disable",
             "--config",
@@ -259,6 +296,24 @@ fn curl(endpoint: &str, token: Option<&str>, binary: bool) -> Result<std::proces
     }
     Ok(child)
 }
+/// Returns the curl that the system ships: macOS and Windows 10 and later include one.
+fn curl_program() -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var_os("SystemRoot")
+            .map(|root| PathBuf::from(root).join("System32").join("curl.exe"))
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| PathBuf::from("curl.exe"))
+    }
+    #[cfg(not(windows))]
+    {
+        ["/usr/bin/curl", "/bin/curl"]
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|path| path.is_file())
+            .unwrap_or_else(|| PathBuf::from("curl"))
+    }
+}
 fn api(endpoint: &str, token: Option<&str>) -> Result<Vec<u8>> {
     let output = curl(endpoint, token, false)?.wait_with_output()?;
     ensure!(
@@ -275,21 +330,7 @@ pub fn download(release: &Release, progress: &mpsc::Sender<State>) -> Result<Pre
         channel != Channel::Debug,
         "Debug builds cannot install updates"
     );
-    let executable = std::env::current_exe()?.canonicalize()?;
-    let destination = executable
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .context("Run the installed macOS app to update")?
-        .to_path_buf();
-    ensure!(
-        destination.extension().is_some_and(|e| e == "app"),
-        "Run the installed macOS app to update"
-    );
-    ensure!(
-        plist(&destination, "CFBundleIdentifier")? == channel.bundle_id(),
-        "Installed app identity does not match this update channel"
-    );
+    let destination = installed_package(channel)?;
     let directory = tempfile::Builder::new()
         .prefix(".kodem-update-")
         .tempdir_in(
@@ -297,10 +338,9 @@ pub fn download(release: &Release, progress: &mpsc::Sender<State>) -> Result<Pre
                 .parent()
                 .context("Missing application directory")?,
         )
-        .context("Move Kodem to a writable Applications folder before updating")?;
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
-    let archive = directory.path().join("update.zip");
+        .context("Move Kodem to a writable folder before updating")?;
+    platform::restrict(directory.path(), 0o700)?;
+    let archive = directory.path().join(format!("update.{ARCHIVE}"));
     let mut file = File::create(&archive)?;
     let token = github_token();
     let mut child = curl(
@@ -355,10 +395,27 @@ pub fn download(release: &Release, progress: &mpsc::Sender<State>) -> Result<Pre
         let _ = child.wait();
     }
     result?;
+    drop(file);
+    let unpacked = directory.path().join("unpacked");
+    extract(&archive, &unpacked, channel)?;
+    let bundle = unpacked.join(channel.package_name());
+    verify_package(&bundle, channel, &release.version.to_string())?;
+    fs::remove_file(archive)?;
+    Ok(PreparedUpdate {
+        directory,
+        destination,
+        bundle,
+    })
+}
+
+/// Checks that the archive holds only regular files and folders of the channel's package,
+/// then extracts it.
+#[cfg(target_os = "macos")]
+fn extract(archive: &Path, unpacked: &Path, channel: Channel) -> Result<()> {
     // Our bundles contain regular files and directories only. Reject links and traversal before extraction.
     let listing = Command::new("/usr/bin/unzip")
         .args(["-Z", "-1"])
-        .arg(&archive)
+        .arg(archive)
         .output()?;
     ensure!(
         listing.status.success(),
@@ -370,14 +427,14 @@ pub fn download(release: &Release, progress: &mpsc::Sender<State>) -> Result<Pre
             "Unsafe update archive path"
         );
         ensure!(
-            name.starts_with(&format!("{}/", channel.bundle_name()))
+            name.starts_with(&format!("{}/", channel.package_name()))
                 || name.starts_with("__MACOSX/"),
             "Unexpected update archive contents"
         );
     }
     let listing = Command::new("/usr/bin/unzip")
         .args(["-Z", "-l"])
-        .arg(&archive)
+        .arg(archive)
         .output()?;
     ensure!(
         listing.status.success()
@@ -386,20 +443,117 @@ pub fn download(release: &Release, progress: &mpsc::Sender<State>) -> Result<Pre
                 .any(|line| line.starts_with('l')),
         "Update archive contains symbolic links"
     );
-    let unpacked = directory.path().join("unpacked");
     run(Command::new("/usr/bin/ditto")
         .args(["-x", "-k"])
-        .arg(&archive)
-        .arg(&unpacked))?;
-    let bundle = unpacked.join(channel.bundle_name());
-    verify_bundle(&bundle, channel, &release.version.to_string())?;
-    fs::remove_file(archive)?;
-    Ok(PreparedUpdate {
-        directory,
-        destination,
-        bundle,
-    })
+        .arg(archive)
+        .arg(unpacked))
 }
+
+/// Checks that the archive holds only regular files and folders of the channel's package,
+/// then extracts it with the system's `tar`, which reads ZIP archives on Windows.
+#[cfg(not(target_os = "macos"))]
+fn extract(archive: &Path, unpacked: &Path, channel: Channel) -> Result<()> {
+    let tar = tar_program()?;
+    let listing = platform::hide_console(&mut Command::new(&tar))
+        .arg("-tf")
+        .arg(archive)
+        .output()?;
+    ensure!(
+        listing.status.success(),
+        "Update is not a readable {ARCHIVE} archive"
+    );
+    let root = format!("{}/", channel.package_name());
+    for name in std::str::from_utf8(&listing.stdout)?.lines() {
+        ensure!(
+            !name.starts_with('/')
+                && !name.contains(['\\', ':'])
+                && !name.split('/').any(|part| part == ".."),
+            "Unsafe update archive path"
+        );
+        ensure!(
+            name.starts_with(&root),
+            "Unexpected update archive contents"
+        );
+    }
+    // A verbose listing marks symbolic and hard links like `ls -l` does.
+    let listing = platform::hide_console(&mut Command::new(&tar))
+        .arg("-tvf")
+        .arg(archive)
+        .output()?;
+    ensure!(
+        listing.status.success()
+            && !String::from_utf8_lossy(&listing.stdout)
+                .lines()
+                .any(|line| line.starts_with(['l', 'h'])),
+        "Update archive contains links"
+    );
+    fs::create_dir(unpacked)?;
+    run(platform::hide_console(&mut Command::new(&tar))
+        .arg("-xf")
+        .arg(archive)
+        .arg("-C")
+        .arg(unpacked))
+}
+
+/// Returns the system's own `tar`. On Windows that is bsdtar, which reads ZIP archives; a Git
+/// installation can put a GNU tar that does not earlier on PATH.
+#[cfg(not(target_os = "macos"))]
+fn tar_program() -> Result<PathBuf> {
+    #[cfg(windows)]
+    let candidates = vec![
+        PathBuf::from(std::env::var_os("SystemRoot").context("SystemRoot is unavailable")?)
+            .join("System32")
+            .join("tar.exe"),
+    ];
+    #[cfg(not(windows))]
+    let candidates = vec![PathBuf::from("/usr/bin/tar"), PathBuf::from("/bin/tar")];
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .context("The system tar program is missing")
+}
+
+/// Resolves the installed app bundle that this process runs from.
+#[cfg(target_os = "macos")]
+fn installed_package(channel: Channel) -> Result<PathBuf> {
+    let executable = std::env::current_exe()?
+        .canonicalize()
+        .map(kodem_core::platform::plain_path)?;
+    let destination = executable
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .context("Run the installed macOS app to update")?
+        .to_path_buf();
+    ensure!(
+        destination.extension().is_some_and(|e| e == "app"),
+        "Run the installed macOS app to update"
+    );
+    ensure!(
+        plist(&destination, "CFBundleIdentifier")? == channel.bundle_id(),
+        "Installed app identity does not match this update channel"
+    );
+    Ok(destination)
+}
+
+/// Resolves the installed package folder that this process runs from.
+#[cfg(not(target_os = "macos"))]
+fn installed_package(channel: Channel) -> Result<PathBuf> {
+    let executable = std::env::current_exe()?
+        .canonicalize()
+        .map(kodem_core::platform::plain_path)?;
+    let destination = executable
+        .parent()
+        .context("Run the installed Kodem package to update")?
+        .to_path_buf();
+    ensure!(
+        manifest(&destination).is_ok_and(|manifest| manifest.identifier == channel.bundle_id()),
+        "Run the installed Kodem package to update. Its release.json must match this channel."
+    );
+    Ok(destination)
+}
+
+#[cfg(target_os = "macos")]
 fn plist(bundle: &Path, key: &str) -> Result<String> {
     let output = Command::new("/usr/libexec/PlistBuddy")
         .args(["-c", &format!("Print {key}")])
@@ -408,7 +562,27 @@ fn plist(bundle: &Path, key: &str) -> Result<String> {
     ensure!(output.status.success(), "Update bundle is missing {key}");
     Ok(String::from_utf8(output.stdout)?.trim().into())
 }
-fn verify_bundle(bundle: &Path, channel: Channel, version: &str) -> Result<()> {
+
+/// Release metadata that the build commands write next to the Windows and Linux executables,
+/// in place of a macOS bundle's Info.plist.
+#[cfg(not(target_os = "macos"))]
+#[derive(Deserialize)]
+struct Manifest {
+    identifier: String,
+    version: String,
+    channel: String,
+    repository: String,
+}
+
+#[cfg(not(target_os = "macos"))]
+fn manifest(package: &Path) -> Result<Manifest> {
+    let bytes =
+        fs::read(package.join("release.json")).context("Update package is missing release.json")?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+#[cfg(target_os = "macos")]
+fn verify_package(bundle: &Path, channel: Channel, version: &str) -> Result<()> {
     for (key, expected) in [
         ("CFBundleIdentifier", channel.bundle_id()),
         ("CFBundleShortVersionString", version),
@@ -430,6 +604,66 @@ fn verify_bundle(bundle: &Path, channel: Channel, version: &str) -> Result<()> {
         .args(["--verify", "--deep", "--strict"])
         .arg(bundle))
 }
+
+#[cfg(not(target_os = "macos"))]
+fn verify_package(package: &Path, channel: Channel, version: &str) -> Result<()> {
+    let manifest = manifest(package)?;
+    for (key, value, expected) in [
+        ("identifier", &manifest.identifier, channel.bundle_id()),
+        ("version", &manifest.version, version),
+        ("channel", &manifest.channel, channel.name()),
+        ("repository", &manifest.repository, REPOSITORY),
+    ] {
+        ensure!(value == expected, "Update package has an unexpected {key}");
+    }
+    for executable in ["kodem", "kodem-host"] {
+        let path = package.join(platform::executable_name(executable));
+        ensure!(path.is_file(), "Update is missing {executable}");
+        #[cfg(windows)]
+        verify_signer(&path)?;
+    }
+    Ok(())
+}
+
+/// Requires an update to carry a valid Authenticode signature from the certificate that signed
+/// the running app. An unsigned or locally signed app accepts the download on its GitHub
+/// digest alone.
+#[cfg(windows)]
+fn verify_signer(executable: &Path) -> Result<()> {
+    let Some(expected) = signer(&std::env::current_exe()?)? else {
+        return Ok(());
+    };
+    ensure!(
+        signer(executable)?.as_deref() == Some(expected.as_str()),
+        "The update is not signed by the publisher of the installed app"
+    );
+    Ok(())
+}
+
+/// Returns the thumbprint of the certificate behind a valid Authenticode signature.
+#[cfg(windows)]
+fn signer(executable: &Path) -> Result<Option<String>> {
+    // The path travels in the environment, so it is never parsed as PowerShell code.
+    let output = platform::hide_console(&mut Command::new("powershell.exe"))
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$s = Get-AuthenticodeSignature -LiteralPath $env:KODEM_SIGNED_FILE; \
+             if ($s.Status -eq 'Valid') { $s.SignerCertificate.Thumbprint }",
+        ])
+        .env("KODEM_SIGNED_FILE", executable)
+        .stdin(Stdio::null())
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "Windows could not read the update's signature"
+    );
+    let thumbprint = String::from_utf8(output.stdout)?.trim().to_owned();
+    Ok((!thumbprint.is_empty()).then_some(thumbprint))
+}
+
 fn run(command: &mut Command) -> Result<()> {
     let output = command.output()?;
     ensure!(
@@ -442,26 +676,21 @@ fn run(command: &mut Command) -> Result<()> {
 
 /// Starts the detached installer and waits for its readiness before allowing desktop exit.
 pub fn install(prepared: PreparedUpdate) -> Result<()> {
-    ensure!(
-        plist(&prepared.destination, "CFBundleIdentifier")? == Channel::current().bundle_id()
-            && plist(&prepared.destination, "CFBundleShortVersionString")? == VERSION,
-        "The installed app changed after this download. Reopen it before updating."
-    );
-    let script = prepared.directory.path().join("install.sh");
-    fs::write(&script, include_str!("../../../scripts/install-update.sh"))?;
+    ensure_unchanged(&prepared.destination)?;
+    let script = prepared.directory.path().join(INSTALLER.0);
+    fs::write(&script, INSTALLER.1)?;
     let log = File::create(prepared.directory.path().join("install.log"))?;
-    use std::os::unix::process::CommandExt;
-    let mut helper = Command::new("/bin/bash")
-        .arg(&script)
-        .arg(std::process::id().to_string())
-        .arg(&prepared.destination)
-        .arg(&prepared.bundle)
-        .arg(prepared.directory.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log.try_clone()?))
-        .stderr(Stdio::from(log))
-        .process_group(0)
-        .spawn()?;
+    let mut helper = platform::detach(
+        installer_command(&script)
+            .arg(std::process::id().to_string())
+            .arg(&prepared.destination)
+            .arg(&prepared.bundle)
+            .arg(prepared.directory.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log.try_clone()?))
+            .stderr(Stdio::from(log)),
+    )
+    .spawn()?;
     let ready = prepared.directory.path().join("ready");
     let until = Instant::now() + Duration::from_secs(10);
     while Instant::now() < until {
@@ -478,4 +707,63 @@ pub fn install(prepared: PreparedUpdate) -> Result<()> {
     let _ = helper.kill();
     let _ = helper.wait();
     bail!("Update installer did not become ready. Retry the download.")
+}
+
+/// The installer script's file name and contents for this platform.
+#[cfg(target_os = "macos")]
+const INSTALLER: (&str, &str) = (
+    "install.sh",
+    include_str!("../../../scripts/install-update.sh"),
+);
+#[cfg(windows)]
+const INSTALLER: (&str, &str) = (
+    "install.ps1",
+    include_str!("../../../scripts/install-update-windows.ps1"),
+);
+#[cfg(not(any(target_os = "macos", windows)))]
+const INSTALLER: (&str, &str) = (
+    "install.sh",
+    include_str!("../../../scripts/install-update-linux.sh"),
+);
+
+/// Starts the installer script. Its arguments are passed directly, never interpolated as code.
+fn installer_command(script: &Path) -> Command {
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("powershell.exe");
+        command
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(script);
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = Command::new("/bin/bash");
+        command.arg(script);
+        command
+    }
+}
+
+/// Refuses to replace an installed app that changed after the download started.
+fn ensure_unchanged(destination: &Path) -> Result<()> {
+    let channel = Channel::current();
+    #[cfg(target_os = "macos")]
+    let unchanged = plist(destination, "CFBundleIdentifier")? == channel.bundle_id()
+        && plist(destination, "CFBundleShortVersionString")? == VERSION;
+    #[cfg(not(target_os = "macos"))]
+    let unchanged = manifest(destination).is_ok_and(|manifest| {
+        manifest.identifier == channel.bundle_id() && manifest.version == VERSION
+    });
+    ensure!(
+        unchanged,
+        "The installed app changed after this download. Reopen it before updating."
+    );
+    Ok(())
 }

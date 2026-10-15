@@ -1,5 +1,5 @@
 //! Codex app-server JSONL adapter, validated against the minimum supported version's schema.
-use crate::model::*;
+use crate::{model::*, platform};
 use anyhow::{Context, Result, bail, ensure};
 use semver::Version;
 use serde_json::{Value, json};
@@ -12,6 +12,36 @@ use std::{
     time::{Duration, Instant},
 };
 const CODEX_MIN_VERSION: &str = include_str!("../../../../codex-min-version");
+/// The build command that installs a supported Codex package on this platform.
+#[cfg(target_os = "macos")]
+const INSTALL_COMMAND: &str = "Build Debug.command";
+#[cfg(windows)]
+const INSTALL_COMMAND: &str = "Build Debug.cmd";
+#[cfg(not(any(target_os = "macos", windows)))]
+const INSTALL_COMMAND: &str = "scripts/build-linux.sh debug";
+/// Files besides the CLI that a complete Codex package carries on this platform.
+#[cfg(target_os = "macos")]
+const PACKAGE_FILES: &[&str] = &[
+    "bin/codex-code-mode-host",
+    "codex-path/rg",
+    "codex-resources/zsh/bin/zsh",
+    "codex-package.json",
+];
+#[cfg(windows)]
+const PACKAGE_FILES: &[&str] = &[
+    "bin/codex-code-mode-host.exe",
+    "codex-path/rg.exe",
+    "codex-resources/codex-command-runner.exe",
+    "codex-package.json",
+];
+#[cfg(not(any(target_os = "macos", windows)))]
+const PACKAGE_FILES: &[&str] = &[
+    "bin/codex-code-mode-host",
+    "codex-path/rg",
+    "codex-resources/zsh/bin/zsh",
+    "codex-resources/bwrap",
+    "codex-package.json",
+];
 pub struct Codex {
     child: Child,
     stdin: ChildStdin,
@@ -55,23 +85,20 @@ struct Runtime {
 }
 
 fn inspect_runtime(executable: &Path) -> Result<Runtime> {
-    let executable = executable.canonicalize()?;
+    let executable = executable.canonicalize().map(crate::platform::plain_path)?;
     let package = executable
         .parent()
         .and_then(Path::parent)
         .context("Invalid Codex package path")?;
-    for relative in [
-        "bin/codex-code-mode-host",
-        "codex-path/rg",
-        "codex-resources/zsh/bin/zsh",
-        "codex-package.json",
-    ] {
+    for relative in PACKAGE_FILES {
         ensure!(
             package.join(relative).is_file(),
-            "Codex package is incomplete: missing {relative}. Run Build Debug.command to repair it."
+            "Codex package is incomplete: missing {relative}. Run {INSTALL_COMMAND} to repair it."
         );
     }
-    let out = Command::new(&executable).arg("--version").output()?;
+    let out = platform::hide_console(&mut Command::new(&executable))
+        .arg("--version")
+        .output()?;
     ensure!(out.status.success(), "Codex version query failed");
     let output = String::from_utf8(out.stdout)?;
     let version = Version::parse(
@@ -83,7 +110,7 @@ fn inspect_runtime(executable: &Path) -> Result<Runtime> {
     let minimum = Version::parse(CODEX_MIN_VERSION.trim())?;
     ensure!(
         version.cmp_precedence(&minimum).is_ge(),
-        "Kodem requires Codex {minimum} or newer; found {version}. Run Build Debug.command to install a supported runtime."
+        "Kodem requires Codex {minimum} or newer; found {version}. Run {INSTALL_COMMAND} to install a supported runtime."
     );
     let metadata: Value =
         serde_json::from_slice(&std::fs::read(package.join("codex-package.json"))?)?;
@@ -101,37 +128,39 @@ fn installed_runtime() -> Result<Runtime> {
     if let Some(p) = std::env::var_os("KODEM_CODEX_PATH") {
         return inspect_runtime(Path::new(&p)).context("Invalid KODEM_CODEX_PATH runtime");
     }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME is unavailable")?;
-    let mut candidates = vec![
-        home.join(".local/bin/codex"),
-        PathBuf::from("/opt/homebrew/bin/codex"),
-        PathBuf::from("/usr/local/bin/codex"),
-    ];
-    if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(std::env::split_paths(&path).map(|p| p.join("codex")));
-    }
-    if let Ok(entries) = std::fs::read_dir(home.join(".local/share/kodem/runtimes")) {
-        candidates.extend(
-            entries
-                .flatten()
-                .map(|entry| entry.path().join("bin/codex")),
-        );
+    let mut candidates = platform::program_candidates("codex", &platform::tool_directories());
+    if let Ok(entries) = std::fs::read_dir(runtimes_dir()?) {
+        candidates.extend(entries.flatten().map(|entry| {
+            entry
+                .path()
+                .join("bin")
+                .join(platform::executable_name("codex"))
+        }));
     }
     let mut seen = HashSet::new();
     candidates
         .into_iter()
-        .filter_map(|p| p.canonicalize().ok())
+        .filter_map(|p| p.canonicalize().map(crate::platform::plain_path).ok())
         .filter(|p| seen.insert(p.clone()))
         .filter_map(|p| inspect_runtime(&p).ok())
         .max_by(|a, b| a.version.cmp_precedence(&b.version))
         .with_context(|| format!(
-            "No complete Codex {} or newer package found. Run Build Debug.command to install the required runtime.",
+            "No complete Codex {} or newer package found. Run {INSTALL_COMMAND} to install the required runtime.",
             CODEX_MIN_VERSION.trim()
         ))
 }
 
+/// Returns the folder where the build commands install Codex packages for Kodem.
+pub fn runtimes_dir() -> Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        Ok(platform::data_home()?.join("kodem").join("runtimes"))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(platform::home_dir()?.join(".local/share/kodem/runtimes"))
+    }
+}
 /// Finds the configured or newest supported CLI without relying on Finder's minimal PATH.
 pub fn executable() -> Result<PathBuf> {
     Ok(installed_runtime()?.executable)

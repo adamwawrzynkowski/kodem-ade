@@ -111,6 +111,55 @@ pub(super) fn chip(label: impl Into<SharedString>, tone: Hsla) -> Div {
         .child(label.into())
 }
 
+/// Names the keys of the shortcuts in a label the way this platform does. Labels are written
+/// with macOS symbols, so `⇧⌘M` reads `Ctrl+Shift+M` on Windows and Linux.
+pub(super) fn shortcut(label: impl Into<SharedString>) -> SharedString {
+    let label = label.into();
+    if cfg!(target_os = "macos") || !label.contains(['⌘', '⌥', '⇧', '⌃']) {
+        return label;
+    }
+    let mut text = String::with_capacity(label.len() + 16);
+    let mut chars = label.chars().peekable();
+    while let Some(&next) = chars.peek() {
+        if !matches!(next, '⌘' | '⌥' | '⇧' | '⌃') {
+            text.push(next);
+            chars.next();
+            continue;
+        }
+        // One chord: modifier symbols, spaced or not, then the key up to the next space.
+        let (mut control, mut alt, mut shift) = (false, false, false);
+        while let Some(&symbol) = chars.peek() {
+            match symbol {
+                '⌘' | '⌃' => control = true,
+                '⌥' => alt = true,
+                '⇧' => shift = true,
+                ' ' => {}
+                _ => break,
+            }
+            chars.next();
+        }
+        let mut key = String::new();
+        while let Some(&character) = chars.peek() {
+            if character == ' ' {
+                break;
+            }
+            key.push(character);
+            chars.next();
+        }
+        for (held, name) in [(control, "Ctrl+"), (alt, "Alt+"), (shift, "Shift+")] {
+            if held {
+                text.push_str(name);
+            }
+        }
+        text.push_str(match key.as_str() {
+            "⇥" => "Tab",
+            "Return" | "⏎" | "↩" => "Enter",
+            key => key,
+        });
+    }
+    text.into()
+}
+
 /// A keycap that names a keyboard shortcut next to the action it triggers.
 pub(super) fn keycap(keys: impl Into<SharedString>, theme: Theme) -> Div {
     div()
@@ -127,7 +176,7 @@ pub(super) fn keycap(keys: impl Into<SharedString>, theme: Theme) -> Div {
         .font_family(crate::theme::mono())
         .text_size(text_px(10.))
         .line_height(relative(1.))
-        .child(keys.into())
+        .child(shortcut(keys))
 }
 
 /// Number of blocks in a micro diffstat.

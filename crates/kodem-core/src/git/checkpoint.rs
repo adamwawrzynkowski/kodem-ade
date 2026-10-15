@@ -129,7 +129,7 @@ pub fn restore(cwd: &Path, task_id: &str, name: &str) -> Result<String> {
         .split(|byte| *byte == 0)
         .filter(|path| !path.is_empty())
     {
-        let _ = fs::remove_file(root.join(OsStr::from_bytes(path)));
+        let _ = fs::remove_file(root.join(platform::os_string(path)));
     }
     git(
         &root,

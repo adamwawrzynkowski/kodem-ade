@@ -4,7 +4,10 @@ pub mod ipc;
 pub mod model;
 #[cfg(target_os = "macos")]
 pub mod notification_presentation;
+pub mod platform;
 pub mod project_icons;
 pub mod providers;
+#[cfg(not(target_os = "macos"))]
+pub mod sound;
 pub mod storage;
 pub use model::*;

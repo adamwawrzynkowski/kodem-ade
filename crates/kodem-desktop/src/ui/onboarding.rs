@@ -245,7 +245,7 @@ impl Shell {
                     .child(self.appearance_setting(cx))
                     .child(self.task_location_setting(cx))
                     .child(self.task_notifications_setting(
-                        "Send macOS notifications when a task needs you, finishes, fails or stops. Select the events in Settings.",
+                        &format!("Send {} notifications when a task needs you, finishes, fails or stops. Select the events in Settings.", settings::NOTIFIER),
                         cx,
                     )),
             )

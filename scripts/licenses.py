@@ -15,6 +15,9 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 TOOL_VERSION = "0.9.2"
 TARGET = "aarch64-apple-darwin"
+# Windows and Linux notices are generated at build time under target/licensing/<target>/ with
+# the same policy. Only the macOS notices are tracked.
+TARGETS = [TARGET, "x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
 NOTICE = "assets/licenses/Rust-THIRD-PARTY.txt"
 SOURCE = "assets/licenses/option-ext-0.2.0-source.tar.gz"
 STANDARD_LIBRARY = "assets/licenses/Rust-standard-library.html"
@@ -37,35 +40,39 @@ def inputs():
     return {str(p.relative_to(ROOT)): digest(p) for p in sorted(paths)}
 
 
-def stale_files(artifact_root):
+def stale_files(artifact_root, target=TARGET):
     """List missing, stale or altered snapshot artifacts without network access."""
     snapshot = artifact_root / SNAPSHOT
     if not snapshot.is_file():
         return [SNAPSHOT]
-    saved = json.loads(snapshot.read_text())
+    saved = json.loads(snapshot.read_text(encoding="utf-8"))
+    if saved.get("target") != target:
+        return [SNAPSHOT]
     current = inputs()
     changed = sorted(k for k in set(current) | set(saved["inputs"]) if current.get(k) != saved["inputs"].get(k))
-    for name in OUTPUTS:
+    # A target without MPL dependencies has no source archive.
+    for name in saved["outputs"] if target != TARGET else OUTPUTS:
         path = artifact_root / name
         if not path.is_file() or digest(path) != saved["outputs"].get(name):
             changed.append(name)
     return changed
 
 
-def check(artifact_root=ROOT):
+def check(artifact_root=ROOT, target=TARGET):
     """Reject stale or altered notice artifacts without network access."""
-    changed = stale_files(artifact_root)
+    changed = stale_files(artifact_root, target)
     if changed:
         raise SystemExit("Licensing snapshot is stale: " + ", ".join(changed) + "\nReview dependency licenses, then run python3 scripts/licenses.py refresh.")
-    saved = json.loads((artifact_root / SNAPSHOT).read_text())
-    print("License notices verified for {} external packages ({})".format(saved["package_count"], TARGET))
+    saved = json.loads((artifact_root / SNAPSHOT).read_text(encoding="utf-8"))
+    print("License notices verified for {} external packages ({})".format(saved["package_count"], target))
 
 
 def cargo_about(install):
     """Resolve the pinned scanner, installing a build-local copy when requested."""
     override = os.environ.get("KODEM_CARGO_ABOUT")
     local_root = ROOT / "target/license-tools" / TOOL_VERSION
-    candidates = [override] if override else [str(local_root / "bin/cargo-about"), shutil.which("cargo-about")]
+    executable = "cargo-about.exe" if os.name == "nt" else "cargo-about"
+    candidates = [override] if override else [str(local_root / "bin" / executable), shutil.which("cargo-about")]
     for tool in candidates:
         if not tool or not Path(tool).is_file():
             continue
@@ -83,8 +90,20 @@ def cargo_about(install):
     return cargo_about(install=False)
 
 
-def prepare():
+def build_root(target):
+    """Return the folder of a target's build notices. macOS keeps the original location."""
+    return BUILD_ROOT if target == TARGET else BUILD_ROOT / target
+
+
+def prepare(target=TARGET):
     """Prepare current notices under target without changing tracked release inputs."""
+    if target != TARGET:
+        root = build_root(target)
+        if stale_files(root, target):
+            print("Generating " + target + " license notices using the existing license policy", flush=True)
+            refresh(root, install_tools=True, target=target)
+        check(root, target)
+        return
     if not stale_files(ROOT):
         for name in [*OUTPUTS, SNAPSHOT]:
             destination = BUILD_ROOT / name
@@ -113,14 +132,14 @@ def source_archive(package):
     return buffer.getvalue()
 
 
-def refresh(artifact_root=ROOT, install_tools=False):
+def refresh(artifact_root=ROOT, install_tools=False, target=TARGET):
     """Generate locked notices with cargo-about and version-specific reviewed clarifications."""
     tool = cargo_about(install_tools)
     with tempfile.TemporaryDirectory(prefix="kodem-licenses-") as temporary:
         output = Path(temporary) / "licenses.json"
-        subprocess.run([tool, "generate", "--workspace", "--locked", "--offline", "--fail", "--format", "json", "--target", TARGET, "--output-file", str(output)], cwd=ROOT, check=True)
-        result = json.loads(output.read_text())
-    overrides = json.loads((ROOT / "licensing/clarifications.json").read_text())
+        subprocess.run([tool, "generate", "--workspace", "--locked", "--offline", "--fail", "--format", "json", "--target", target, "--output-file", str(output)], cwd=ROOT, check=True)
+        result = json.loads(output.read_text(encoding="utf-8"))
+    overrides = json.loads((ROOT / "licensing/clarifications.json").read_text(encoding="utf-8"))
     packages = {p["package"]["id"]: p["package"] for p in result["crates"]}
     if any(p["source"] is None for p in packages.values()):
         raise SystemExit("Private workspace crates must be excluded from third-party notices")
@@ -145,10 +164,14 @@ def refresh(artifact_root=ROOT, install_tools=False):
                 if "Copyright (c) <year>" in text:
                     raise SystemExit("Unresolved copyright placeholder for " + key)
             groups.setdefault((license_entry["id"], text), {})[key] = package
-    lines = ["Rust dependency notices", "", "Target: " + TARGET, "Generated by cargo-about " + TOOL_VERSION + ". Build-only and development dependencies are excluded.",
-             "License alternatives shown below are selected by about.toml. Additional upstream notices are preserved afterward.",
-             "", "MPL source: the complete, unmodified option-ext 0.2.0 source is included alongside this file as option-ext-0.2.0-source.tar.gz.",
-             "That source remains under MPL-2.0. Kodem's proprietary terms do not restrict your rights to it.", ""]
+    mpl = [p for p in packages.values() if p["license"] == "MPL-2.0"]
+    if [(p["name"], p["version"]) for p in mpl] not in ([("option-ext", "0.2.0")], []):
+        raise SystemExit("Review MPL source packaging for the changed dependency set")
+    lines = ["Rust dependency notices", "", "Target: " + target, "Generated by cargo-about " + TOOL_VERSION + ". Build-only and development dependencies are excluded.",
+             "License alternatives shown below are selected by about.toml. Additional upstream notices are preserved afterward.", ""]
+    if mpl:
+        lines += ["MPL source: the complete, unmodified option-ext 0.2.0 source is included alongside this file as option-ext-0.2.0-source.tar.gz.",
+                  "That source remains under MPL-2.0. Kodem's proprietary terms do not restrict your rights to it.", ""]
     for (identifier, text), users in sorted(groups.items()):
         lines += ["=" * 72, identifier, ""]
         for key, package in sorted(users.items()):
@@ -163,29 +186,30 @@ def refresh(artifact_root=ROOT, install_tools=False):
         root = Path(package["manifest_path"]).parent
         for path in sorted(root.iterdir()):
             if path.is_file() and path.name.lower().startswith(("license", "licence", "copying", "copyright", "notice", "authors")):
-                text = path.read_text(errors="replace").strip()
+                text = path.read_text(encoding="utf-8", errors="replace").strip()
                 notices.setdefault(text, []).append(package["name"] + "@" + package["version"] + "/" + path.name)
     lines += ["=" * 72, "Additional original upstream notices", ""]
     for text, names in sorted(notices.items(), key=lambda item: sorted(item[1])):
         lines += ["; ".join(sorted(names)), "", text, ""]
-    mpl = [p for p in packages.values() if p["license"] == "MPL-2.0"]
-    if [(p["name"], p["version"]) for p in mpl] != [("option-ext", "0.2.0")]:
-        raise SystemExit("Review MPL source packaging for the changed dependency set")
     sysroot = Path(subprocess.check_output(["rustc", "--print", "sysroot"], cwd=ROOT, text=True).strip())
     library_notice = sysroot / "share/doc/rust/COPYRIGHT-library.html"
     if not library_notice.is_file() and install_tools:
         subprocess.run(["rustup", "component", "add", "rust-docs"], cwd=ROOT, check=True)
     standard_library = library_notice.read_bytes()
     notice_bytes = ("\n".join(lines).rstrip() + "\n").encode()
-    archive_bytes = source_archive(mpl[0])
     (artifact_root / NOTICE).parent.mkdir(parents=True, exist_ok=True)
     (artifact_root / STANDARD_LIBRARY).write_bytes(standard_library)
     (artifact_root / NOTICE).write_bytes(notice_bytes)
-    (artifact_root / SOURCE).write_bytes(archive_bytes)
-    snapshot = {"tool_version": TOOL_VERSION, "target": TARGET, "package_count": len(packages), "inputs": inputs(), "outputs": {p: digest(artifact_root / p) for p in OUTPUTS}}
+    written = [NOTICE, STANDARD_LIBRARY]
+    if mpl:
+        (artifact_root / SOURCE).write_bytes(source_archive(mpl[0]))
+        written.append(SOURCE)
+    elif (artifact_root / SOURCE).exists():
+        (artifact_root / SOURCE).unlink()
+    snapshot = {"tool_version": TOOL_VERSION, "target": target, "package_count": len(packages), "inputs": inputs(), "outputs": {p: digest(artifact_root / p) for p in written}}
     (artifact_root / SNAPSHOT).parent.mkdir(parents=True, exist_ok=True)
-    (artifact_root / SNAPSHOT).write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
-    check(artifact_root)
+    (artifact_root / SNAPSHOT).write_bytes((json.dumps(snapshot, indent=2, sort_keys=True) + "\n").encode())
+    check(artifact_root, target)
 
 
 def main():
@@ -194,10 +218,12 @@ def main():
     parser.add_argument("command", choices=["prepare", "refresh", "check"])
     parser.add_argument("--target", default=TARGET, help="The application build target")
     args = parser.parse_args()
-    if args.target != TARGET:
+    if args.target not in TARGETS:
         parser.error("No reviewed licensing policy for target " + args.target)
+    if args.command != "prepare" and args.target != TARGET:
+        parser.error("Only the macOS notices are tracked. Builds generate the others with prepare.")
     if args.command == "prepare":
-        prepare()
+        prepare(args.target)
     elif args.command == "refresh":
         refresh()
     else:

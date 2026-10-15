@@ -574,7 +574,14 @@ impl Shell {
             .on_key_down(move |event, w, cx| {
                 let Some(task_id) = &selected else { return };
                 let key = &event.keystroke;
-                let bytes = if key.modifiers.platform && key.key == "v" {
+                // Terminals paste with Command-V on macOS and Ctrl-Shift-V elsewhere, because
+                // Ctrl-V is a control character there.
+                let paste = if cfg!(target_os = "macos") {
+                    key.modifiers.platform
+                } else {
+                    key.modifiers.control && key.modifiers.shift
+                };
+                let bytes = if paste && key.key == "v" {
                     cx.read_from_clipboard()
                         .and_then(|c| c.text())
                         .map(|s| s.into_bytes())

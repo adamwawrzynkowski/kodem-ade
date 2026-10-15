@@ -1,12 +1,12 @@
 //! Host-owned PTYs and explicit, revision-bound project checks.
 use crate::Shared;
 use anyhow::{Context, Result, ensure};
-use kodem_core::{git, *};
+use kodem_core::{git, platform, *};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::{
     io::{Read, Write},
     path::Path,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{Arc, Mutex},
 };
 struct Screen {
@@ -29,9 +29,9 @@ impl Terminal {
             pixel_width: 0,
             pixel_height: 0,
         })?;
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+        let (shell, arguments) = platform::interactive_shell();
         let mut command = CommandBuilder::new(shell);
-        command.arg("-l");
+        command.args(arguments);
         command.cwd(cwd);
         command.env("TERM", "xterm-256color");
         let mut child = pair.slave.spawn_command(command)?;
@@ -145,8 +145,7 @@ pub(super) fn run_check(host: Shared, task_id: String, command: String) -> Resul
             } else {
                 ("no Git repository".into(), "none".into())
             };
-            let mut child = Command::new("/bin/zsh")
-                .args(["-lc", &command])
+            let mut child = platform::shell_command(&command)
                 .current_dir(&cwd)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())

@@ -1,4 +1,6 @@
-//! Native macOS desktop for Kodem's durable local host.
+//! Native desktop for Kodem's durable local host on macOS, Windows and Linux.
+// A release build opens no console window next to the app on Windows.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 mod bayer;
 mod bridge;
 mod clipboard;
@@ -72,16 +74,33 @@ fn main() {
                 eprintln!("Could not load bundled fonts: {error}");
             }
             ui::init(cx);
+            // Windows and Linux apps end with their last window; a macOS app stays open.
+            #[cfg(not(target_os = "macos"))]
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
             let bounds = window_state::load(cx);
             let opened = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(bounds),
                     titlebar: Some(TitlebarOptions {
-                        title: None,
+                        // The taskbar and window switchers of Windows and Linux show the title.
+                        title: (!cfg!(target_os = "macos"))
+                            .then(|| updater::Channel::current().app_name().into()),
                         appears_transparent: true,
                         traffic_light_position: Some(point(px(12.), px(12.))),
                     }),
+                    // Linux finds the window's desktop entry and icon by this identity.
+                    app_id: Some(kodem_core::platform::app_id().into()),
+                    // Linux keeps the compositor's frame where it draws one.
+                    window_decorations: Some(WindowDecorations::Server),
                     window_min_size: Some(size(px(850.), px(600.))),
+                    // X11 shows this icon; Wayland takes it from the desktop entry.
+                    #[cfg(not(any(target_os = "macos", windows)))]
+                    icon: window_icon(),
                     ..Default::default()
                 },
                 |window, cx| cx.new(|cx| ui::Stage::new(window, cx)),
@@ -92,4 +111,12 @@ fn main() {
             }
             cx.activate(true);
         });
+}
+
+/// Decodes the bundled app icon at the size that X11 window managers show.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn window_icon() -> Option<std::sync::Arc<image::RgbaImage>> {
+    let icon = image::load_from_memory(include_bytes!("../../../assets/app/AppIcon_1024x1024.png"))
+        .ok()?;
+    Some(std::sync::Arc::new(icon.thumbnail(256, 256).to_rgba8()))
 }

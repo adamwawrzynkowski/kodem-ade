@@ -1,5 +1,5 @@
 //! One host-owned SQLite connection with immutable snapshot blobs.
-use crate::model::*;
+use crate::{model::*, platform};
 use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
@@ -7,7 +7,6 @@ use std::{
     cell::RefCell,
     collections::VecDeque,
     fs,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
 
@@ -63,7 +62,7 @@ impl Store {
     /// Opens the local store, migrates its schema, and restricts access to the user.
     pub fn open(root: &Path) -> Result<Self> {
         fs::create_dir_all(root.join("snapshots"))?;
-        fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
+        platform::restrict(root, 0o700)?;
         let db = Connection::open(root.join("workspace.sqlite"))?;
         db.busy_timeout(std::time::Duration::from_secs(5))?;
         let version: u32 = db.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -79,7 +78,7 @@ impl Store {
                     .to_str()
                     .context("Database backup path is not UTF-8")?],
             )?;
-            fs::set_permissions(backup, fs::Permissions::from_mode(0o600))?;
+            platform::restrict(&backup, 0o600)?;
         }
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE; CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, path TEXT UNIQUE NOT NULL, json TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY, json TEXT NOT NULL); CREATE TABLE IF NOT EXISTS messages(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL,task_id TEXT NOT NULL,json TEXT NOT NULL, UNIQUE(task_id,id)); CREATE INDEX IF NOT EXISTS messages_task_seq ON messages(task_id,seq); CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY CHECK(id=1),json TEXT NOT NULL); CREATE TABLE IF NOT EXISTS submissions(id TEXT PRIMARY KEY,task_id TEXT NOT NULL,prompt TEXT NOT NULL,state TEXT NOT NULL,feedback TEXT NOT NULL); ")?;
         if version < 2 {
@@ -95,10 +94,7 @@ impl Store {
         db.execute_batch("CREATE TABLE IF NOT EXISTS agent_message_order(transcript TEXT NOT NULL, id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(transcript,id)); CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, ordinal INTEGER NOT NULL, json TEXT NOT NULL, UNIQUE(task_id,ordinal)); COMMIT;")?;
         retire_removed_providers(&db)?;
         repair_settings_collections(&db)?;
-        fs::set_permissions(
-            root.join("workspace.sqlite"),
-            fs::Permissions::from_mode(0o600),
-        )?;
+        platform::restrict(&root.join("workspace.sqlite"), 0o600)?;
         Ok(Self {
             db,
             root: root.to_owned(),

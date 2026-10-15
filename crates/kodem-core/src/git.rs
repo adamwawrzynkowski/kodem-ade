@@ -1,15 +1,11 @@
 //! Byte-preserving Git capture and guarded whole-file staging.
-use crate::model::*;
+use crate::{model::*, platform};
 use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest, Sha256};
 use std::{
     ffi::{OsStr, OsString},
     fs,
     io::{Read, Write},
-    os::unix::{
-        ffi::{OsStrExt, OsStringExt},
-        fs::OpenOptionsExt,
-    },
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -27,21 +23,13 @@ fn search_path() -> Result<OsString> {
     let mut paths: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect())
         .unwrap_or_default();
-    let mut fallbacks = Vec::new();
-    if let Some(home) = std::env::var_os("HOME") {
-        fallbacks.push(PathBuf::from(home).join(".local/bin"));
+    let mut fallbacks = platform::tool_directories();
+    #[cfg(unix)]
+    fallbacks.extend(["/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(PathBuf::from));
+    #[cfg(windows)]
+    if let Some(programs) = std::env::var_os("ProgramFiles") {
+        fallbacks.push(PathBuf::from(programs).join("Git").join("cmd"));
     }
-    fallbacks.extend(
-        [
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/usr/bin",
-            "/bin",
-            "/usr/sbin",
-            "/sbin",
-        ]
-        .map(PathBuf::from),
-    );
     for path in fallbacks {
         if !paths.contains(&path) {
             paths.push(path);
@@ -52,9 +40,16 @@ fn search_path() -> Result<OsString> {
 
 fn git_process(cwd: &Path) -> Result<Command> {
     let mut command = Command::new("git");
+    platform::hide_console(&mut command);
     // Kodem runs Git at the root of a checkout. A project folder without a repository of its own
     // must not use the repository of a folder above it.
-    if let Some(parent) = cwd.canonicalize().ok().as_deref().and_then(Path::parent) {
+    if let Some(parent) = cwd
+        .canonicalize()
+        .map(crate::platform::plain_path)
+        .ok()
+        .as_deref()
+        .and_then(Path::parent)
+    {
         command.env("GIT_CEILING_DIRECTORIES", parent);
     }
     command
@@ -94,14 +89,14 @@ pub fn initialize(path: &Path) -> Result<()> {
 }
 /// Resolves and validates a local repository root without changing branches.
 pub fn repository(path: &Path) -> Result<PathBuf> {
-    let canonical = path.canonicalize()?;
+    let canonical = path.canonicalize().map(crate::platform::plain_path)?;
     ensure!(
         query(&canonical, &["rev-parse", "--is-bare-repository"])? == b"false\n",
         "Choose a working-tree repository"
     );
     let root = query(&canonical, &["rev-parse", "--show-toplevel"])?;
-    Ok(PathBuf::from(OsString::from_vec(
-        root.strip_suffix(b"\n").unwrap_or(&root).to_vec(),
+    Ok(PathBuf::from(platform::os_string(
+        root.strip_suffix(b"\n").unwrap_or(&root),
     )))
 }
 /// Returns the current commit, including the unborn-repository case.
@@ -232,8 +227,8 @@ pub fn digest(bytes: &[u8]) -> String {
 }
 fn index_path(cwd: &Path) -> Result<PathBuf> {
     let bytes = query(cwd, &["rev-parse", "--git-path", "index"])?;
-    let path = PathBuf::from(OsString::from_vec(
-        bytes.strip_suffix(b"\n").unwrap_or(&bytes).to_vec(),
+    let path = PathBuf::from(platform::os_string(
+        bytes.strip_suffix(b"\n").unwrap_or(&bytes),
     ));
     Ok(if path.is_absolute() {
         path
@@ -249,22 +244,27 @@ fn index_digest(cwd: &Path) -> Result<String> {
     }
 }
 fn path_digest(cwd: &Path, path: &[u8]) -> Result<String> {
-    let path = cwd.join(OsStr::from_bytes(path));
+    let path = cwd.join(platform::os_string(path));
     match fs::symlink_metadata(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(digest(b"missing")),
         Err(e) => Err(e.into()),
-        Ok(meta) if meta.file_type().is_symlink() => {
-            Ok(digest(fs::read_link(path)?.as_os_str().as_bytes()))
-        }
+        Ok(meta) if meta.file_type().is_symlink() => Ok(digest(&platform::os_bytes(
+            fs::read_link(path)?.as_os_str(),
+        ))),
         Ok(meta) if meta.is_dir() => {
             let mut state = query(&path, &["status", "--porcelain=v1", "-z"])?;
             state.extend_from_slice(head(&path).unwrap_or_default().as_bytes());
             Ok(digest(&state))
         }
         Ok(meta) => {
-            use std::os::unix::fs::PermissionsExt;
             let mut hash = Sha256::new();
-            hash.update(meta.permissions().mode().to_le_bytes());
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                hash.update(meta.permissions().mode().to_le_bytes());
+            }
+            #[cfg(not(unix))]
+            hash.update([u8::from(meta.permissions().readonly())]);
             let mut file = fs::File::open(path)?;
             let mut buf = [0; 65536];
             loop {
@@ -357,9 +357,9 @@ fn patch(
         }
     }
     args.push("--".into());
-    args.push(OsString::from_vec(path.to_vec()));
+    args.push(platform::os_string(path));
     if let Some(old) = old {
-        args.push(OsString::from_vec(old.to_vec()));
+        args.push(platform::os_string(old));
     }
     command(
         cwd,
@@ -488,7 +488,7 @@ pub fn capture(task: &Task, comparison: Comparison) -> Result<DiffSnapshot> {
 }
 
 fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapshot> {
-    let root = task.cwd.canonicalize()?;
+    let root = task.cwd.canonicalize().map(crate::platform::plain_path)?;
     for _ in 0..3 {
         let before = index_digest(&task.cwd)?;
         let observed_head = head(&task.cwd);
@@ -530,7 +530,7 @@ fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapsho
                 continue;
             }
             let observed = path_digest(&task.cwd, &path)?;
-            let full = task.cwd.join(OsStr::from_bytes(&path));
+            let full = task.cwd.join(platform::os_string(&path));
             let meta = fs::symlink_metadata(&full).ok();
             let (lines, notice) = if kind.contains('U') || kind == "AA" || kind == "DD" {
                 (
@@ -599,7 +599,7 @@ fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapsho
             stable &= observed == path_digest(&task.cwd, &path)?;
             entries.push(FileDelta {
                 repository: Some(root.clone()),
-                label: OsStr::from_bytes(&path).to_string_lossy().into(),
+                label: platform::os_string(&path).to_string_lossy().into(),
                 path,
                 old_path: old,
                 status: kind,
@@ -826,12 +826,8 @@ pub fn stage(task: &Task, snapshot: &DiffSnapshot, file: usize) -> Result<()> {
     );
     let index = index_path(cwd)?;
     let lock = index.with_file_name("index.lock");
-    let mut guard = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&lock)
-        .context("Git index is locked by another operation")?;
+    let mut guard =
+        platform::create_private(&lock).context("Git index is locked by another operation")?;
     let temp = index.with_file_name(format!("kodem-index-{}", new_id()));
     let result = (|| -> Result<()> {
         ensure!(
@@ -844,9 +840,9 @@ pub fn stage(task: &Task, snapshot: &DiffSnapshot, file: usize) -> Result<()> {
         let mut cmd = git_process(cwd)?;
         cmd.env("GIT_INDEX_FILE", &temp)
             .args(["add", "-A", "--"])
-            .arg(OsStr::from_bytes(&f.path));
+            .arg(platform::os_string(&f.path));
         if let Some(old) = &f.old_path {
-            cmd.arg(OsStr::from_bytes(old));
+            cmd.arg(platform::os_string(old));
         }
         let out = cmd.output()?;
         ensure!(
@@ -903,7 +899,7 @@ fn folder_files(cwd: &Path) -> Result<Vec<Vec<u8>>> {
         };
         for entry in entries.flatten() {
             let name = entry.file_name();
-            if name.as_bytes().starts_with(b".") {
+            if name.to_string_lossy().starts_with('.') {
                 continue;
             }
             let Ok(kind) = entry.file_type() else {
@@ -913,7 +909,7 @@ fn folder_files(cwd: &Path) -> Result<Vec<Vec<u8>>> {
             if kind.is_dir() {
                 folders.push_back(path);
             } else {
-                files.push(path.into_os_string().into_vec());
+                files.push(platform::os_bytes(path.as_os_str()));
                 if files.len() >= MAX_FOLDER_FILES {
                     return Ok(files);
                 }
@@ -924,9 +920,12 @@ fn folder_files(cwd: &Path) -> Result<Vec<Vec<u8>>> {
 }
 /// Reads a bounded regular file inside the task checkout without following outside symlinks.
 pub fn read_file(cwd: &Path, path: &[u8]) -> Result<String> {
-    let resolved = cwd.join(OsStr::from_bytes(path)).canonicalize()?;
+    let resolved = cwd
+        .join(platform::os_string(path))
+        .canonicalize()
+        .map(crate::platform::plain_path)?;
     ensure!(
-        resolved.starts_with(cwd.canonicalize()?),
+        resolved.starts_with(cwd.canonicalize().map(crate::platform::plain_path)?),
         "File resolves outside the task checkout"
     );
     ensure!(fs::metadata(&resolved)?.is_file(), "Choose a regular file");

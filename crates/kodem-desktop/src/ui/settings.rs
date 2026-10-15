@@ -125,6 +125,23 @@ pub(super) fn setting_group(label: &str, count: Option<usize>, theme: Theme) -> 
         .child(kit::section_header(label, count, theme))
 }
 
+/// The system that shows Kodem's notifications, as the interface names it.
+#[cfg(target_os = "macos")]
+pub(super) const NOTIFIER: &str = "macOS";
+#[cfg(windows)]
+pub(super) const NOTIFIER: &str = "Windows";
+#[cfg(not(any(target_os = "macos", windows)))]
+pub(super) const NOTIFIER: &str = "desktop";
+
+/// Where the user changes how the system presents Kodem's notifications.
+#[cfg(target_os = "macos")]
+const NOTIFICATION_CONTROL: &str =
+    "macOS controls notification permission, banners, sounds, and Focus settings.";
+#[cfg(windows)]
+const NOTIFICATION_CONTROL: &str = "Windows controls notification banners and Do Not Disturb in Settings > System > Notifications. Kodem plays its own sound.";
+#[cfg(not(any(target_os = "macos", windows)))]
+const NOTIFICATION_CONTROL: &str = "Your desktop's notification service controls banners and Do Not Disturb. Kodem plays its own sound through PipeWire, PulseAudio or ALSA.";
+
 /// Returns a short explanation in prose below a group header or between rows.
 pub(super) fn note(text: impl Into<SharedString>, theme: Theme) -> Div {
     div()
@@ -784,11 +801,11 @@ impl Shell {
         let delivery = self.workspace.as_ref().map(|w| &w.notification_delivery);
         let pending = matches!(delivery, Some(NotificationDelivery::Pending));
         let message = match delivery {
-            Some(NotificationDelivery::Pending) => {
-                Some("Waiting for macOS. Allow notifications if prompted.".into())
-            }
+            Some(NotificationDelivery::Pending) => Some(format!(
+                "Waiting for {NOTIFIER}. Allow notifications if prompted."
+            )),
             Some(NotificationDelivery::Submitted) => {
-                Some("Notification submitted to macOS.".into())
+                Some(format!("Notification submitted to {NOTIFIER}."))
             }
             Some(NotificationDelivery::Failed(error)) => Some(error.clone()),
             _ => None,
@@ -807,7 +824,7 @@ impl Shell {
             .child(
                 setting_group("Events", None, t)
                     .child(self.task_notifications_setting(
-                        "Send macOS notifications for the events selected below.",
+                        &format!("Send {NOTIFIER} notifications for the events selected below."),
                         cx,
                     ))
                     .child(self.notification_toggle(
@@ -842,14 +859,17 @@ impl Shell {
                         |n| &mut n.interrupted,
                         cx,
                     ))
-                    .child(self.notification_toggle(
-                        "notifications-while-focused",
-                        ("Show while Kodem is active", "Show the banner and play the sound when Kodem is the frontmost app. When off, these alerts go to Notification Center only."),
-                        self.settings.notifications.while_focused,
-                        muted,
-                        |n| &mut n.while_focused,
-                        cx,
-                    )),
+                    // Only macOS asks Kodem how to present an alert while it is active.
+                    .when(cfg!(target_os = "macos"), |group| {
+                        group.child(self.notification_toggle(
+                            "notifications-while-focused",
+                            ("Show while Kodem is active", "Show the banner and play the sound when Kodem is the frontmost app. When off, these alerts go to Notification Center only."),
+                            self.settings.notifications.while_focused,
+                            muted,
+                            |n| &mut n.while_focused,
+                            cx,
+                        ))
+                    }),
             )
             .child(
                 setting_group("Sound", None, t)
@@ -924,10 +944,7 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .gap(px(6.))
-                    .child(note(
-                        "macOS controls notification permission, banners, sounds, and Focus settings.",
-                        t,
-                    ))
+                    .child(note(NOTIFICATION_CONTROL, t))
                     .when_some(message, |d, message: String| {
                         d.child(note(message, t).when(failed, |d| d.text_color(t.removed)))
                     }),

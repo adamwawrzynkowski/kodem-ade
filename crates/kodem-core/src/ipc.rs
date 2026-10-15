@@ -1,17 +1,18 @@
 //! Bounded, user-scoped local transport. Blocking operations belong on background threads.
-use crate::model::*;
+use crate::{model::*, platform};
 use anyhow::{Context, Result, ensure};
+#[cfg(unix)]
+pub use std::os::unix::net::{UnixListener, UnixStream};
 use std::{
     env, fs,
     io::{BufRead, BufReader, Write},
-    os::unix::{
-        fs::{MetadataExt, PermissionsExt},
-        net::UnixStream,
-    },
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
+// Windows 10 1803 and newer provide Unix domain sockets that the standard library does not wrap.
+#[cfg(windows)]
+pub use uds_windows::{UnixListener, UnixStream};
 pub const PROTOCOL: u32 = 36;
 pub const MAX_PACKET: u64 = 32 * 1024 * 1024;
 /// Resolves the data directory, isolating Debug's host and store unless explicitly overridden.
@@ -24,11 +25,7 @@ pub fn data_dir() -> Result<PathBuf> {
     } else {
         "Kodem"
     };
-    Ok(
-        PathBuf::from(env::var_os("HOME").context("HOME is unavailable")?)
-            .join("Library/Application Support")
-            .join(directory),
-    )
+    Ok(platform::data_home()?.join(directory))
 }
 /// Returns the private local host endpoint.
 pub fn socket(root: &Path) -> PathBuf {
@@ -43,10 +40,10 @@ pub fn prepare(root: &Path) -> Result<()> {
         "Kodem data path must be a directory"
     );
     ensure!(
-        meta.uid() == unsafe { libc::geteuid() },
+        platform::owned_by_current_user(&meta),
         "Kodem data directory belongs to another user"
     );
-    fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
+    platform::restrict(root, 0o700)?;
     Ok(())
 }
 /// Reads one size-limited JSON frame, including its newline delimiter.
@@ -85,7 +82,10 @@ pub fn request(root: &Path, request: &Request) -> Result<Response> {
 }
 /// Connects to the packaged protocol, upgrading an idle older host without retrying mutations.
 pub fn connect_or_start(root: &Path) -> Result<()> {
-    connect_with_host(root, &env::current_exe()?.with_file_name("kodem-host"))
+    connect_with_host(
+        root,
+        &env::current_exe()?.with_file_name(platform::executable_name("kodem-host")),
+    )
 }
 fn connect_with_host(root: &Path, host: &Path) -> Result<()> {
     prepare(root)?;
@@ -126,7 +126,6 @@ fn connect_with_host(root: &Path, host: &Path) -> Result<()> {
         .append(true)
         .create(true)
         .open(root.join("host.log"))?;
-    use std::os::unix::process::CommandExt;
     let mut child = None;
     let until = Instant::now() + Duration::from_secs(10);
     while Instant::now() < until {
@@ -146,13 +145,14 @@ fn connect_with_host(root: &Path, host: &Path) -> Result<()> {
             })
         {
             child = Some(
-                Command::new(host)
-                    .env("KODEM_DATA_DIR", root)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::from(log.try_clone()?))
-                    .stderr(Stdio::from(log.try_clone()?))
-                    .process_group(0)
-                    .spawn()?,
+                platform::detach(
+                    Command::new(host)
+                        .env("KODEM_DATA_DIR", root)
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::from(log.try_clone()?))
+                        .stderr(Stdio::from(log.try_clone()?)),
+                )
+                .spawn()?,
             );
         }
         std::thread::sleep(Duration::from_millis(100));

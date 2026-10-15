@@ -1,20 +1,17 @@
 //! Bounded imports of project images into private, immutable icon files.
 use anyhow::{Context, Result, ensure};
+use kodem_core::platform;
 use std::{
     fs,
     io::{Cursor, Read, Write},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
 /// Decodes a selected image and saves a small PNG independent of the source file.
 pub(super) fn import(root: &Path, source: &Path) -> Result<PathBuf> {
     const FILE_LIMIT: u64 = 16 * 1024 * 1024;
-    let mut input = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(source)
-        .context("Cannot open the selected project image")?;
+    let mut input =
+        platform::open_nonblocking(source).context("Cannot open the selected project image")?;
     let metadata = input.metadata()?;
     ensure!(
         metadata.is_file() && metadata.len() <= FILE_LIMIT,
@@ -41,13 +38,9 @@ pub(super) fn import(root: &Path, source: &Path) -> Result<PathBuf> {
         .write_to(&mut png, image::ImageFormat::Png)?;
     let directory = root.join("project-icons");
     fs::create_dir_all(&directory)?;
-    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+    platform::restrict(&directory, 0o700)?;
     let path = directory.join(format!("{}.png", kodem_core::new_id()));
-    let mut output = fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&path)?;
+    let mut output = platform::create_private(&path)?;
     if let Err(error) = output
         .write_all(png.get_ref())
         .and_then(|_| output.sync_all())

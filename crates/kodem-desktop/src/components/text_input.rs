@@ -1333,8 +1333,40 @@ impl Focusable for TextInput {
     }
 }
 
-/// Registers standard macOS editing bindings for every native text input.
+/// Registers the platform's standard editing bindings for every native text input.
 pub fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("shift-up", SelectUp, Some("TextInput")),
+        KeyBinding::new("shift-down", SelectDown, Some("TextInput")),
+        KeyBinding::new("secondary-z", Undo, Some("TextInput")),
+        KeyBinding::new("secondary-shift-z", Redo, Some("TextInput")),
+        KeyBinding::new("backspace", Backspace, Some("TextInput")),
+        KeyBinding::new("delete", Delete, Some("TextInput")),
+        KeyBinding::new("left", Left, Some("TextInput")),
+        KeyBinding::new("right", Right, Some("TextInput")),
+        KeyBinding::new("shift-left", SelectLeft, Some("TextInput")),
+        KeyBinding::new("shift-right", SelectRight, Some("TextInput")),
+        KeyBinding::new("secondary-a", SelectAll, Some("TextInput")),
+        KeyBinding::new("secondary-a", SelectAll, Some("DiffDocument")),
+        KeyBinding::new("secondary-c", Copy, Some("DiffDocument")),
+        KeyBinding::new("secondary-v", Paste, Some("TextInput")),
+        KeyBinding::new("secondary-c", Copy, Some("TextInput")),
+        KeyBinding::new("secondary-x", Cut, Some("TextInput")),
+        KeyBinding::new("enter", Newline, Some("TextInput")),
+        KeyBinding::new("shift-enter", Newline, Some("TextInput")),
+        KeyBinding::new("enter", Submit, Some("Composer")),
+        KeyBinding::new("secondary-enter", SubmitAlternate, Some("Composer")),
+        KeyBinding::new("tab", AcceptCompletion, Some("Composer")),
+        KeyBinding::new("escape", DismissCompletion, Some("Composer")),
+        KeyBinding::new("up", Up, Some("TextInput")),
+        KeyBinding::new("down", Down, Some("TextInput")),
+    ]);
+    platform_bindings(cx);
+}
+
+/// Binds macOS's document, line, word and Emacs-style movement keys.
+#[cfg(target_os = "macos")]
+fn platform_bindings(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("home", Home, Some("TextInput")),
         KeyBinding::new("end", End, Some("TextInput")),
@@ -1363,32 +1395,31 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("alt-delete", DeleteWordRight, Some("TextInput")),
         KeyBinding::new("cmd-backspace", DeleteLineStart, Some("TextInput")),
         KeyBinding::new("cmd-delete", DeleteLineEnd, Some("TextInput")),
-        KeyBinding::new("shift-up", SelectUp, Some("TextInput")),
-        KeyBinding::new("shift-down", SelectDown, Some("TextInput")),
-        KeyBinding::new("cmd-z", Undo, Some("TextInput")),
-        KeyBinding::new("cmd-shift-z", Redo, Some("TextInput")),
-        KeyBinding::new("backspace", Backspace, Some("TextInput")),
-        KeyBinding::new("delete", Delete, Some("TextInput")),
-        KeyBinding::new("left", Left, Some("TextInput")),
-        KeyBinding::new("right", Right, Some("TextInput")),
-        KeyBinding::new("shift-left", SelectLeft, Some("TextInput")),
-        KeyBinding::new("shift-right", SelectRight, Some("TextInput")),
-        KeyBinding::new("cmd-a", SelectAll, Some("TextInput")),
-        KeyBinding::new("cmd-a", SelectAll, Some("DiffDocument")),
-        KeyBinding::new("cmd-c", Copy, Some("DiffDocument")),
         KeyBinding::new("cmd-up", Home, Some("TextInput")),
         KeyBinding::new("cmd-down", End, Some("TextInput")),
-        KeyBinding::new("cmd-v", Paste, Some("TextInput")),
-        KeyBinding::new("cmd-c", Copy, Some("TextInput")),
-        KeyBinding::new("cmd-x", Cut, Some("TextInput")),
-        KeyBinding::new("enter", Newline, Some("TextInput")),
-        KeyBinding::new("shift-enter", Newline, Some("TextInput")),
-        KeyBinding::new("enter", Submit, Some("Composer")),
-        KeyBinding::new("cmd-enter", SubmitAlternate, Some("Composer")),
-        KeyBinding::new("tab", AcceptCompletion, Some("Composer")),
-        KeyBinding::new("escape", DismissCompletion, Some("Composer")),
-        KeyBinding::new("up", Up, Some("TextInput")),
-        KeyBinding::new("down", Down, Some("TextInput")),
+    ]);
+}
+
+/// Binds the Windows and Linux conventions: Home and End act on the line, Ctrl on words and
+/// with Home and End on the whole text.
+#[cfg(not(target_os = "macos"))]
+fn platform_bindings(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("home", LineStart, Some("TextInput")),
+        KeyBinding::new("end", LineEnd, Some("TextInput")),
+        KeyBinding::new("shift-home", SelectLineStart, Some("TextInput")),
+        KeyBinding::new("shift-end", SelectLineEnd, Some("TextInput")),
+        KeyBinding::new("ctrl-home", Home, Some("TextInput")),
+        KeyBinding::new("ctrl-end", End, Some("TextInput")),
+        KeyBinding::new("ctrl-shift-home", SelectHome, Some("TextInput")),
+        KeyBinding::new("ctrl-shift-end", SelectEnd, Some("TextInput")),
+        KeyBinding::new("ctrl-left", WordLeft, Some("TextInput")),
+        KeyBinding::new("ctrl-right", WordRight, Some("TextInput")),
+        KeyBinding::new("ctrl-shift-left", SelectWordLeft, Some("TextInput")),
+        KeyBinding::new("ctrl-shift-right", SelectWordRight, Some("TextInput")),
+        KeyBinding::new("ctrl-backspace", DeleteWordLeft, Some("TextInput")),
+        KeyBinding::new("ctrl-delete", DeleteWordRight, Some("TextInput")),
+        KeyBinding::new("ctrl-y", Redo, Some("TextInput")),
     ]);
 }
 

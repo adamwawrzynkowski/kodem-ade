@@ -8,7 +8,9 @@ struct Alert {
     title: String,
     body: String,
     sound: Option<NotificationSound>,
-    /// Shows a banner and plays the sound while Kodem is the active application.
+    /// Shows a banner and plays the sound while Kodem is the active application. Only macOS
+    /// asks the host how to present an alert; elsewhere the banner always shows.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     foreground: bool,
 }
 
@@ -18,7 +20,7 @@ pub(super) struct Notifications {
 }
 
 impl Notifications {
-    /// Starts one delivery worker so authorization and macOS callbacks never block tasks.
+    /// Starts one delivery worker so authorization and system callbacks never block tasks.
     pub(super) fn start() -> Self {
         let (sender, receiver) = mpsc::channel::<Alert>();
         let status = Arc::new(Mutex::new(NotificationDelivery::Idle));
@@ -36,10 +38,7 @@ impl Notifications {
                     delivery.as_ref().unwrap().send(&alert)
                 });
                 #[cfg(not(target_os = "macos"))]
-                let result: Result<()> = {
-                    let _ = alert;
-                    Err(anyhow::anyhow!("Notifications require macOS"))
-                };
+                let result = desktop::send(&alert);
                 *worker_status.lock().unwrap() = match result {
                     Ok(()) => NotificationDelivery::Submitted,
                     Err(error) => {
@@ -130,6 +129,43 @@ fn alert_title(settings: &NotificationSettings, state: &RunState) -> Option<&'st
         RunState::Failed if settings.failed => Some("Task failed"),
         RunState::Interrupted if settings.interrupted => Some("Task interrupted"),
         _ => None,
+    }
+}
+
+/// Desktop notifications through the Windows toast service or the freedesktop.org notification
+/// service. Neither plays Kodem's own sounds, so the host plays the sound itself.
+#[cfg(not(target_os = "macos"))]
+mod desktop {
+    use super::Alert;
+    use anyhow::Result;
+
+    /// Shows one alert and starts its sound.
+    pub(super) fn send(alert: &Alert) -> Result<()> {
+        let mut notification = notify_rust::Notification::new();
+        notification.summary(&alert.title).body(&alert.body);
+        #[cfg(not(windows))]
+        {
+            // The Linux package carries its icon next to the executables, outside icon themes.
+            let icon = std::env::current_exe()
+                .ok()
+                .and_then(|executable| Some(executable.parent()?.join("kodem.png")))
+                .filter(|icon| icon.is_file());
+            let app_id = kodem_core::platform::app_id();
+            notification
+                .appname("Kodem")
+                .hint(notify_rust::Hint::DesktopEntry(app_id.into()));
+            match icon {
+                Some(icon) => notification.icon(&icon.to_string_lossy()),
+                None => notification.icon(app_id),
+            };
+        }
+        notification.show().map_err(|error| {
+            anyhow::anyhow!("The system did not accept the notification: {error}")
+        })?;
+        if let Some(sound) = alert.sound {
+            kodem_core::sound::play(sound)?;
+        }
+        Ok(())
     }
 }
 

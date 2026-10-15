@@ -35,8 +35,8 @@ pub fn preview(sound: NotificationSound) -> Result<()> {
     })
 }
 
-/// Reports that sound previews are unavailable on this platform.
+/// Plays a notification sound now, in place of a preview that is still playing.
 #[cfg(not(target_os = "macos"))]
-pub fn preview(_sound: NotificationSound) -> Result<()> {
-    anyhow::bail!("Sound previews require macOS")
+pub fn preview(sound: NotificationSound) -> Result<()> {
+    kodem_core::sound::play(sound)
 }

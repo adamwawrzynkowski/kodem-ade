@@ -102,6 +102,7 @@ impl AssetSource for Assets {
             "settings-2",
             "shield",
             "sparkles",
+            "square",
             "square-terminal",
             "star",
             "star-fill",
