@@ -702,3 +702,9 @@ Checked with `cargo build`, `cargo clippy -D warnings` (no findings) and `cargo 
 ## Send mode as an icon chip
 
 Recorded on 16 October 2026. At the user's request the composer's Queue/Steer chip shows only its arrow, down for queue and right for steer, in a square chip of the composer's chip height. The submit key shows the same arrow in the same mode. The mode name moved to the tooltip, which also says that a click switches the mode, and to the accessible label. Checked with `cargo build`, `cargo clippy -D warnings` and `cargo fmt --check` on macOS.
+
+## Depth for badges and chosen tabs
+
+Recorded on 16 October 2026. The user asked for a little more depth on status badges (FAILED, RUNNING and others), the workspace tabs on the left and the other badges. `kit::tint_fill` draws a tint that is half again as strong at the top as its mean and six tenths of it at the bottom. `kit::tint_light` adds a lighter line of the tone one point under the top edge, a deeper one above the bottom edge (both below a hairline border, so the border does not hide them) and a tight shadow of the deep tone. Both take only the tone, so `kit::chip` keeps its signature for its many callers. They apply to `kit::chip`, `kit::icon_tile`, the open workspace's tile in `ui/workspaces.rs` and `settings::chosen_layer`, which draws the chosen settings section, the chosen segment of a segmented control, the chosen footer action and the chosen account. `kit::keycap` gets a light line under its top edge and a heavier bottom edge in the theme's edge color. Selected rows of lists and menus are unchanged.
+
+Checked with `cargo build`, `cargo clippy -D warnings` (no findings) and `cargo fmt --check` on macOS. The look is not checked on a display under the no-visual-testing agreement.

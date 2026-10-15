@@ -68,14 +68,16 @@ impl CompactScope {
     }
 }
 
-/// The look of a chosen surface as one layer: the accent tint, dots that fade from its leading
-/// edge and the accent edge. Add it to a relatively positioned surface before its content.
+/// The look of a chosen surface as one layer: the accent tint with slight depth, dots that fade
+/// from its leading edge and the accent edge. Add it to a relatively positioned surface before
+/// its content.
 pub(super) fn chosen_layer(tone: Hsla, radius: f32) -> Div {
     div()
         .absolute()
         .inset_0()
         .rounded(px(radius))
-        .bg(tone.opacity(0.1))
+        .bg(kit::tint_fill(tone, 0.1))
+        .shadow(kit::tint_light(tone))
         .child(dither::row_wash(tone, radius, true, false))
         .child(kit::selection_edge(tone))
 }

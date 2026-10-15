@@ -354,12 +354,47 @@ pub(super) fn chip(label: impl Into<SharedString>, tone: Hsla) -> Div {
         .rounded(px(crate::theme::RADIUS_SMALL))
         .border_1()
         .border_color(tone.opacity(0.36))
-        .bg(tone.opacity(0.08))
+        .bg(tint_fill(tone, 0.08))
+        .shadow(tint_light(tone))
         .text_color(tone)
         .font_family(crate::theme::mono())
         .text_size(text_px(10.5))
         .line_height(relative(1.))
         .child(label.into())
+}
+
+/// Returns the fill of a tinted surface with slight depth: the tint a little stronger at the top
+/// than at the bottom, as if lit from above. `strength` is the mean alpha of the tint.
+pub(super) fn tint_fill(tone: Hsla, strength: f32) -> Background {
+    linear_gradient(
+        180.,
+        linear_color_stop(tone.opacity(strength * 1.5), 0.),
+        linear_color_stop(tone.opacity(strength * 0.6), 1.),
+    )
+}
+
+/// Returns the light of a tinted surface with slight depth: a lighter line of its tone inside
+/// its top edge, a deeper line inside its bottom edge and a tight shadow of the deep tone below.
+/// The lines sit one point inside the edge, so a hairline border does not hide them.
+pub(super) fn tint_light(tone: Hsla) -> Vec<BoxShadow> {
+    let line = |color: Hsla, y: f32| BoxShadow {
+        inset: true,
+        color,
+        offset: point(px(0.), gpui::px(y)),
+        blur_radius: px(0.),
+        spread_radius: px(0.),
+    };
+    vec![
+        line(toward(tone, 1., 0.5).opacity(0.3), 2.),
+        line(toward(tone, 0., 0.5).opacity(0.24), -2.),
+        BoxShadow {
+            inset: false,
+            color: toward(tone, 0., 0.7).opacity(0.32),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(1.5),
+            spread_radius: px(0.),
+        },
+    ]
 }
 
 /// Names the keys of the shortcuts in a label the way this platform does. Labels are written
@@ -423,6 +458,23 @@ pub(super) fn keycap(keys: impl Into<SharedString>, theme: Theme) -> Div {
         .border_1()
         .border_color(theme.border)
         .bg(theme.inset)
+        // A key stands a little: a light line under its top edge and a heavier bottom edge.
+        .shadow(vec![
+            BoxShadow {
+                inset: true,
+                color: gpui::white().opacity(if theme.light { 0.7 } else { 0.06 }),
+                offset: point(px(0.), gpui::px(2.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+            },
+            BoxShadow {
+                inset: false,
+                color: theme.edge,
+                offset: point(px(0.), gpui::px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+            },
+        ])
         .text_color(theme.subtle)
         .font_family(crate::theme::mono())
         .text_size(text_px(10.))
@@ -531,7 +583,8 @@ pub(super) fn icon_tile(glyph: &'static str, tone: Hsla, size: f32, animated: bo
         .overflow_hidden()
         .border_1()
         .border_color(tone.opacity(0.35))
-        .bg(tone.opacity(0.08))
+        .bg(tint_fill(tone, 0.08))
+        .shadow(tint_light(tone))
         .child(if animated { fill.animated() } else { fill }.layer())
         .child(
             div()

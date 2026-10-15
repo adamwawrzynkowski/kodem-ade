@@ -102,7 +102,8 @@ impl Shell {
             .text_color(t.muted)
             .accessibility_label(mode.label())
             .when(chosen, |tile| {
-                tile.bg(t.accent.opacity(0.12))
+                tile.bg(kit::tint_fill(t.accent, 0.12))
+                    .shadow(kit::tint_light(t.accent))
                     .border_color(t.accent.opacity(0.4))
                     .text_color(t.accent)
                     .child(kit::shade(t.accent.opacity(0.6), dither::Edge::Bottom))
