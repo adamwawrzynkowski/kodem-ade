@@ -1089,12 +1089,10 @@ impl Shell {
         } else {
             "arrow-up"
         };
-        // The submit key is round, like the glass keys it takes its depth from.
-        let round = 14.;
         let submit = if stop_only {
-            self.glass("composer-submit", submit_glyph, "", t.removed, round)
+            self.glass("composer-submit", submit_glyph, "", t.removed)
         } else {
-            self.glass("composer-submit", submit_glyph, "", t.accent, round)
+            self.primary("composer-submit", submit_glyph, "")
                 .disabled(blocked)
         };
         actions = actions.child(

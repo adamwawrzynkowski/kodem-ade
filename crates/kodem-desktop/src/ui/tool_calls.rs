@@ -71,6 +71,27 @@ fn work_rows(transcript: &[Message], index: usize) -> Range<usize> {
     start..end
 }
 
+// Returns the rows of a stretch where a shown tray starts, in order. Under a folded parent only
+// the runs with a failed call are shown.
+fn shown_trays(transcript: &[Message], rows: Range<usize>, failures_only: bool) -> Vec<usize> {
+    rows.clone()
+        .filter(|&row| {
+            let message = &transcript[row];
+            if is_thought(message) {
+                return !failures_only;
+            }
+            if row > rows.start && is_call(&transcript[row - 1]) {
+                return false;
+            }
+            !failures_only
+                || transcript[row..rows.end]
+                    .iter()
+                    .take_while(|message| is_call(message))
+                    .any(|message| tool_output::view(message).status == ToolStatus::Failed)
+        })
+        .collect()
+}
+
 // Counts the trays of a stretch of tool rows. Each thought is one tray, and so is each run of
 // calls.
 fn tray_count(messages: &[Message]) -> usize {
@@ -151,34 +172,35 @@ impl Shell {
                 && self.conversation_message_active(conversation, message)
         });
         let open = self.tray_open(conversation, &key, rows.end, running);
+        let trays = shown_trays(transcript, rows.clone(), !open);
         let header = (index == rows.start)
             .then(|| self.work_header(conversation, rows.clone(), &key, open, running, cx));
         let t = self.theme;
-        // Each row draws its own part of the rail, so the trays of a stretch read as one list
-        // under their parent.
-        let tray = self.work_tray(conversation, index, !open, cx).map(|tray| {
-            div()
-                .ml(px(11.))
-                .pl(px(6.))
-                .py(px(2.))
-                .border_l_1()
-                .border_color(t.border)
-                .child(tray)
-        });
+        // Each row draws its own slice of the well, so the trays of a stretch read as one
+        // recessed list under their parent's plate.
+        let (first_tray, last_tray) = (trays.first() == Some(&index), trays.last() == Some(&index));
+        let tray = self
+            .work_tray(conversation, index, !open, cx)
+            .map(|tray| kit::well(t, first_tray, last_tray).child(tray));
         if header.is_none() && tray.is_none() {
             return div().into_any_element();
         }
+        // The stretch ends after its last tray, or after its plate when nothing is under it.
+        let ends = last_tray || (header.is_some() && trays.is_empty());
         div()
             .w_full()
             .min_w_0()
             .px_5()
-            .when(header.is_some(), |row| row.pt(px(2.)))
+            .when(header.is_some(), |row| row.pt(px(4.)))
+            .when(ends, |row| row.pb(px(4.)))
             .children(header)
             .children(tray)
             .into_any_element()
     }
 
-    // The parent tray of a stretch of work: what all of its runs and thoughts did, in one line.
+    // The parent tray of a stretch of work: what all of its runs and thoughts did, in one line,
+    // on a raised plate. While trays hang below it in a recessed well, the plate squares its
+    // bottom corners onto the well.
     fn work_header(
         &self,
         conversation: &Conversation,
@@ -193,6 +215,9 @@ impl Shell {
             .conversation_messages(conversation)
             .and_then(|transcript| transcript.get(rows.clone()))
             .unwrap_or_default();
+        let well = self
+            .conversation_messages(conversation)
+            .is_some_and(|transcript| !shown_trays(transcript, rows.clone(), !open).is_empty());
         let views: Vec<Rc<ToolView>> = messages.iter().map(tool_output::view).collect();
         let (thoughts, calls): (Vec<_>, Vec<_>) = views
             .iter()
@@ -216,10 +241,16 @@ impl Shell {
             .gap(px(8.))
             .justify_start()
             .flex_wrap()
-            .bg(gpui::transparent_black())
-            .border_color(gpui::transparent_black())
+            .overflow_hidden()
+            .rounded(px(crate::theme::RADIUS_SURFACE))
+            .when(well, |plate| plate.rounded_b(px(0.)))
+            .bg(t.raised)
+            .border_color(t.border)
+            .shadow(kit::plate_light(t, !well))
+            .child(kit::shade(t.dot.opacity(0.5), dither::Edge::Bottom))
+            .child(kit::glint(t.accent.opacity(0.45), dither::Edge::Bottom))
             .text_color(t.muted)
-            .hover(move |s| s.bg(t.selected).text_color(t.text))
+            .hover(move |s| s.bg(t.control).text_color(t.text))
             .accessibility_label(format!(
                 "{} {label}",
                 if open { "Collapse" } else { "Expand" },

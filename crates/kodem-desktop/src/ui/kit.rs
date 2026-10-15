@@ -47,14 +47,16 @@ pub(super) enum Pose {
     Pressed,
 }
 
-/// Returns the body of a glass control with corners of `radius`: two rings around a flat face.
+/// Returns the body of a glass control: two rings around a flat face, with the corners of a
+/// control.
 ///
 /// The outer ring is a bezel, light at the top and the bottom and darkest across the middle. The
 /// inner ring catches a bright highlight at the top and the light that the glass bends back at
 /// the bottom. The face carries the dot texture: a sheen that thins out from the top, a shade
 /// along the bottom and more light under the pointer. Add it as the first child of the control,
 /// which must belong to [`GLASS`].
-pub(super) fn glass_body(tone: Hsla, radius: f32) -> Div {
+pub(super) fn glass_body(tone: Hsla) -> Div {
+    let radius = crate::theme::RADIUS_CONTROL;
     let face_radius = (radius - GLASS_RING * 2.).max(0.);
     let bezel = ring(
         radius,
@@ -229,6 +231,56 @@ fn face_dots(from: Edge, start: f32, color: Hsla, radius: f32, hover_only: bool)
 fn toward(mut color: Hsla, target: f32, amount: f32) -> Hsla {
     color.lightness += (target - color.lightness) * amount;
     color
+}
+
+/// Returns the light of a raised plate: a highlight inside its top edge and, while nothing is
+/// attached below it, a tight contact shadow.
+pub(super) fn plate_light(theme: Theme, grounded: bool) -> Vec<BoxShadow> {
+    let mut light = vec![BoxShadow {
+        inset: true,
+        color: theme.highlight,
+        offset: point(px(0.), px(1.)),
+        blur_radius: px(0.),
+        spread_radius: px(0.),
+    }];
+    if grounded {
+        light.push(BoxShadow {
+            inset: false,
+            color: theme.shadow,
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(2.),
+            spread_radius: px(0.),
+        });
+    }
+    light
+}
+
+/// One slice of a recessed well under a raised plate. Consecutive rows draw consecutive slices,
+/// so the well reads as one surface: the first slice takes the shadow that the plate casts into
+/// it, and the last closes it with rounded corners.
+pub(super) fn well(theme: Theme, first: bool, last: bool) -> Div {
+    let cast = gpui::black().opacity(if theme.light { 0.1 } else { 0.4 });
+    div()
+        .px(px(4.))
+        .py(px(1.))
+        .bg(theme.inset)
+        .border_l_1()
+        .border_r_1()
+        .border_color(theme.border)
+        .when(first, |well| {
+            well.pt(px(5.)).shadow(vec![BoxShadow {
+                inset: true,
+                color: cast,
+                offset: point(px(0.), px(3.)),
+                blur_radius: px(5.),
+                spread_radius: px(0.),
+            }])
+        })
+        .when(last, |well| {
+            well.pb(px(5.))
+                .border_b_1()
+                .rounded_b(px(crate::theme::RADIUS_SURFACE))
+        })
 }
 
 /// A section header: an uppercase mono label, an optional count, and a dotted rule that fills

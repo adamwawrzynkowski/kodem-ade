@@ -1880,23 +1880,16 @@ impl Shell {
         glyph: &'static str,
         label: impl Into<SharedString>,
     ) -> Button {
-        self.glass(
-            id,
-            glyph,
-            label,
-            self.theme.accent,
-            crate::theme::RADIUS_CONTROL,
-        )
+        self.glass(id, glyph, label, self.theme.accent)
     }
-    /// Returns a raised glass key in a tone with corners of `radius`: a bezel ring and a lens
-    /// ring around a dithered face, an engraved icon and a soft glow of the tone below it.
+    /// Returns a raised glass key in a tone: a bezel ring and a lens ring around a dithered
+    /// face, an engraved icon and a soft glow of the tone below it.
     fn glass(
         &self,
         id: impl Into<ElementId>,
         glyph: &'static str,
         label: impl Into<SharedString>,
         tone: Hsla,
-        radius: f32,
     ) -> Button {
         let theme = self.theme;
         // An empty label must not become a child: it would take a gap and push the icon of an
@@ -1906,8 +1899,7 @@ impl Shell {
             .group(kit::GLASS)
             .overflow_hidden()
             .px(px(12.))
-            .rounded(px(radius))
-            .child(kit::glass_body(tone, radius))
+            .child(kit::glass_body(tone))
             .child(kit::engraved(glyph, tone, 13.))
             .when(!label.is_empty(), |b| b.child(label))
             .bg(gpui::transparent_black())
