@@ -455,8 +455,9 @@ pub(super) fn remove(host: &Shared, root: &Path, provider: Provider, id: &str) -
     Ok(())
 }
 
+/// Quotes text as one word for a POSIX shell.
 #[cfg(unix)]
-fn quote(text: &str) -> String {
+pub(super) fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 
@@ -552,9 +553,10 @@ fn sign_in_script(account: &Account, executable: &Path) -> String {
     script
 }
 
-/// Runs a sign-in script in a new Terminal window.
+/// Runs a script in a new Terminal window. `manual` is the command that the user can run
+/// instead when no window opens.
 #[cfg(target_os = "macos")]
-fn open_terminal(script: &Path, provider: Provider) -> Result<()> {
+pub(super) fn open_terminal(script: &Path, manual: &str) -> Result<()> {
     let opened = output(
         {
             let mut command = Command::new("/usr/bin/open");
@@ -565,35 +567,48 @@ fn open_terminal(script: &Path, provider: Provider) -> Result<()> {
     )?;
     ensure!(
         opened.status.success(),
-        "Could not open Terminal for sign-in. Run {} there instead.",
-        provider.login_command()
+        "Could not open Terminal. Run {manual} there instead."
     );
     Ok(())
 }
 
-/// Runs a sign-in script in a new console window.
+/// Runs a batch or PowerShell script in a new console window. `manual` is the command that
+/// the user can run instead when no window opens.
 #[cfg(windows)]
-fn open_terminal(script: &Path, provider: Provider) -> Result<()> {
+pub(super) fn open_terminal(script: &Path, manual: &str) -> Result<()> {
     use std::os::windows::process::CommandExt;
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-    Command::new("cmd.exe")
-        .args(["/D", "/C"])
+    let mut command = if script
+        .extension()
+        .is_some_and(|extension| extension == "ps1")
+    {
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ]);
+        command
+    } else {
+        let mut command = Command::new("cmd.exe");
+        command.args(["/D", "/C"]);
+        command
+    };
+    command
         .arg(script)
         .creation_flags(CREATE_NEW_CONSOLE)
         .stdin(Stdio::null())
         .spawn()
-        .with_context(|| {
-            format!(
-                "Could not open a console for sign-in. Run {} there instead.",
-                provider.login_command()
-            )
-        })?;
+        .with_context(|| format!("Could not open a console. Run {manual} there instead."))?;
     Ok(())
 }
 
-/// Runs a sign-in script in the first terminal emulator that is installed.
+/// Runs a script in the first terminal emulator that is installed. `manual` is the command that
+/// the user can run instead when none is found.
 #[cfg(not(any(target_os = "macos", windows)))]
-fn open_terminal(script: &Path, provider: Provider) -> Result<()> {
+pub(super) fn open_terminal(script: &Path, manual: &str) -> Result<()> {
     let mut terminals: Vec<(String, &[&str])> = Vec::new();
     if let Ok(preferred) = std::env::var("TERMINAL")
         && !preferred.trim().is_empty()
@@ -631,10 +646,7 @@ fn open_terminal(script: &Path, provider: Provider) -> Result<()> {
             return Ok(());
         }
     }
-    bail!(
-        "Could not find a terminal emulator for sign-in. Run {} in a terminal instead.",
-        provider.login_command()
-    )
+    bail!("Could not find a terminal emulator. Run {manual} in a terminal instead.")
 }
 
 /// Opens the provider CLI's own sign-in in Terminal and watches for its result.
@@ -659,7 +671,7 @@ pub(super) fn sign_in(host: &Shared, root: &Path, provider: Provider, id: &str) 
         link_shared(provider, home)?;
     }
     let script = write_sign_in_script(root, &account)?;
-    open_terminal(&script, provider)?;
+    open_terminal(&script, provider.login_command())?;
     {
         let mut h = host.lock().unwrap();
         let status = h.accounts.entry((provider, id.to_owned())).or_default();

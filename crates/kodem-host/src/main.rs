@@ -10,6 +10,7 @@ mod provider;
 mod settlement;
 mod terminal;
 mod titles;
+mod tools;
 use anyhow::{Context, Result, ensure};
 use kodem_core::{git, ipc, platform, providers::codex, storage::Store, *};
 use serde_json::Value;
@@ -448,6 +449,11 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         }
         Request::RemoveAccount { provider, id } => {
             accounts::remove(host, root, provider, &id)?;
+            Ok(Response::Ok)
+        }
+        Request::InspectTools => Ok(Response::Tools(tools::inspect())),
+        Request::InstallTool { tool } => {
+            tools::install(root, tool)?;
             Ok(Response::Ok)
         }
         Request::SignInAccount { provider, id } => {

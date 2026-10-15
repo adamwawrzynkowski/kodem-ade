@@ -17,9 +17,11 @@ mod review;
 pub use repositories::{repositories, repository_baselines};
 pub use review::{PreparedReview, discard_review, prepare_review, review_targets};
 
-// Finder's PATH can omit installed tools. Git's filters and credential helpers, and GitHub CLI,
-// need the augmented PATH too, even when Git itself is already discoverable.
-fn search_path() -> Result<OsString> {
+/// Returns the PATH that Kodem gives Git, GitHub CLI and Git LFS. A desktop session's PATH can
+/// omit installed tools, and Git's filters and credential helpers need them too, even when Git
+/// itself is already discoverable. On Windows it also holds the folders where the installers of
+/// Git, Git LFS and GitHub CLI put them, which a running app's PATH does not have yet.
+pub fn search_path() -> Result<OsString> {
     let mut paths: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).collect())
         .unwrap_or_default();
@@ -27,8 +29,12 @@ fn search_path() -> Result<OsString> {
     #[cfg(unix)]
     fallbacks.extend(["/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(PathBuf::from));
     #[cfg(windows)]
-    if let Some(programs) = std::env::var_os("ProgramFiles") {
-        fallbacks.push(PathBuf::from(programs).join("Git").join("cmd"));
+    if let Some(programs) = std::env::var_os("ProgramFiles").map(PathBuf::from) {
+        fallbacks.extend([
+            programs.join("Git").join("cmd"),
+            programs.join("Git LFS"),
+            programs.join("GitHub CLI"),
+        ]);
     }
     for path in fallbacks {
         if !paths.contains(&path) {

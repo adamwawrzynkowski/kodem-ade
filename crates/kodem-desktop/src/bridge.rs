@@ -306,6 +306,8 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, mpsc::Rece
                         | Request::ConsumeUsageReset { .. }
                         | Request::ReviewTargets { .. }
                         | Request::CreateReview { .. }
+                        | Request::InspectTools
+                        | Request::InstallTool { .. }
                 ) {
                     let root = root.clone();
                     let replies = replies.clone();

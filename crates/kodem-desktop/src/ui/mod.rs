@@ -229,6 +229,11 @@ pub struct Shell {
     /// A press on a title bar that the app draws itself, which moves the window once the
     /// pointer moves. A press that ends in place stays a click.
     title_press: bool,
+    /// The versions of Git, Git LFS and GitHub CLI that the host read last. Empty until it
+    /// answers.
+    tools: Vec<ToolVersion>,
+    /// Tools whose installer runs in a terminal window and that were not found since.
+    tool_installers: Vec<Tool>,
     window_width: f32,
     window_placement: WindowBounds,
     window_save_task: Option<gpui::Task<()>>,
@@ -527,6 +532,8 @@ impl Shell {
             dragging_sidebar: false,
             dragging_review: false,
             title_press: false,
+            tools: Vec::new(),
+            tool_installers: Vec::new(),
             window_width: f32::from(window.viewport_size().width),
             window_placement: window.window_bounds(),
             window_save_task: None,
@@ -1207,6 +1214,14 @@ impl Shell {
                 }
             }
             Response::Terminal(terminal) => self.terminal = Some(terminal),
+            Response::Tools(tools) => {
+                self.tool_installers.retain(|installing| {
+                    tools
+                        .iter()
+                        .all(|found| found.tool != *installing || found.version.is_none())
+                });
+                self.tools = tools;
+            }
             // The bridge turns each answer of its watcher into a task view.
             Response::Watched(_) => {}
             // Answers to the tools that a provider agent calls. The desktop never asks for them.
@@ -1317,6 +1332,11 @@ impl Shell {
                 | core::Request::TerminalInput { .. }
                 | core::Request::TerminalResize { .. } => {}
                 core::Request::Shutdown => cx.quit(),
+                core::Request::InstallTool { tool } => {
+                    if !self.tool_installers.contains(&tool) {
+                        self.tool_installers.push(tool);
+                    }
+                }
                 _ => self.send(core::Request::Hello),
             },
             Response::Error(e) => {

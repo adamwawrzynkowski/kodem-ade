@@ -7,6 +7,43 @@ use std::{
 };
 use uuid::Uuid;
 
+/// A command-line program that Kodem runs and that the setup dialog can install.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Tool {
+    Claude,
+    Codex,
+    Git,
+    GitLfs,
+    GitHub,
+}
+impl Tool {
+    /// The tools besides the providers' CLIs, in the order that the setup dialog lists them.
+    pub const SUPPORT: [Tool; 3] = [Tool::Git, Tool::GitLfs, Tool::GitHub];
+    /// Returns the name that the interface shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude Code",
+            Self::Codex => "Codex",
+            Self::Git => "Git",
+            Self::GitLfs => "Git LFS",
+            Self::GitHub => "GitHub CLI",
+        }
+    }
+    /// Returns the CLI that runs a provider.
+    pub fn of(provider: Provider) -> Self {
+        match provider {
+            Provider::Claude => Self::Claude,
+            Provider::Codex => Self::Codex,
+        }
+    }
+}
+/// What a support tool reported when Kodem ran it. `version` is empty when it did not run.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolVersion {
+    pub tool: Tool,
+    pub version: Option<String>,
+}
+
 /// Integration that owns a conversation and its remote session identity.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Provider {
@@ -2086,6 +2123,12 @@ pub enum Request {
         provider: Provider,
         id: String,
     },
+    /// Runs each support tool to read its version. Answers with `Response::Tools`.
+    InspectTools,
+    /// Opens a terminal window that runs the official installer of a tool.
+    InstallTool {
+        tool: Tool,
+    },
     /// Opens the provider CLI's own sign-in for this account.
     SignInAccount {
         provider: Provider,
@@ -2377,6 +2420,7 @@ pub enum Response {
     Files(Vec<Vec<u8>>),
     Text(String),
     Terminal(TerminalView),
+    Tools(Vec<ToolVersion>),
     Ok,
     Error(String),
 }
