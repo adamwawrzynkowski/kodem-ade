@@ -389,7 +389,6 @@ struct FileContextMenuData {
     entry: StatusEntry,
     amend: bool,
     submodule_path: PathBuf,
-    submodule_available: bool,
     repository_path: String,
     hide_checkpoints: bool,
 }
@@ -810,10 +809,11 @@ impl ChangesView {
             entry,
             amend,
             submodule_path,
-            submodule_available,
             repository_path,
             hide_checkpoints,
         } = data;
+        // Read from disk when the menu opens, not for every row on every render.
+        let submodule_available = submodule_path.is_dir() && submodule_path.join(".git").exists();
         let staged = entry.staged;
         let conflicted = entry.kind == FileChangeKind::Conflicted;
         let is_submodule = entry.is_submodule;
@@ -1192,7 +1192,6 @@ impl ChangesView {
         let repository_root = self.state.read(cx).repo.path.clone();
         let repository_path = repository_root.display().to_string();
         let submodule_path = repository_root.join(&entry.path);
-        let submodule_available = submodule_path.is_dir() && submodule_path.join(".git").exists();
         let amend = self.amend;
         let hide = Self::hide_checkpoints(cx);
         let id = if conflicted {
@@ -1369,7 +1368,6 @@ impl ChangesView {
                         entry: entry_for_menu.clone(),
                         amend,
                         submodule_path: submodule_path.clone(),
-                        submodule_available,
                         repository_path: repository_path.clone(),
                         hide_checkpoints: hide,
                     },

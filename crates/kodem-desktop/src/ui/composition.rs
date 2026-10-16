@@ -51,7 +51,7 @@ impl Shell {
 
     /// Reports whether the draft has text or selected context to submit.
     pub(super) fn has_composer_content(&self, cx: &App) -> bool {
-        !self.input.read(cx).text().trim().is_empty()
+        !self.input.read(cx).is_blank()
             || self.view.as_ref().map_or_else(
                 || !self.pending_attachments.is_empty(),
                 |v| !v.task.feedback.is_empty() || !v.task.attachments.is_empty(),
@@ -428,6 +428,100 @@ impl Shell {
         card.into_any_element()
     }
 
+    /// Shows a long message of the user as a file. The file unfolds below its card to show the
+    /// text, which can be selected and copied.
+    pub(super) fn long_text_card(
+        &mut self,
+        conversation: &Conversation,
+        index: usize,
+        key: &str,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let t = self.theme;
+        let unfolded = self.unfolded_texts.contains(key);
+        let toggle_key = key.to_owned();
+        let toggle_conversation = conversation.clone();
+        let card = text_file_card(text, t).child(
+            self.icon_button(
+                (
+                    ElementId::from("toggle-long-text"),
+                    SharedString::from(key.to_owned()),
+                ),
+                if unfolded {
+                    "chevron-up"
+                } else {
+                    "chevron-down"
+                },
+                if unfolded { "Fold text" } else { "Unfold text" },
+            )
+            .size(px(20.))
+            .on_click(cx.listener(move |s, _, _, cx| {
+                if !s.unfolded_texts.remove(&toggle_key) {
+                    s.unfolded_texts.insert(toggle_key.clone());
+                }
+                s.remeasure_messages(&toggle_conversation, index..index + 1);
+                cx.notify();
+            })),
+        );
+        if !unfolded {
+            return card.into_any_element();
+        }
+        let input = self.readonly_streaming(format!("long-text:{key}"), text, false, cx);
+        input.update(cx, |input, _| input.set_wrap(true));
+        div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(card)
+            .child(
+                kit::block(t).child(
+                    div()
+                        .id(SharedString::from(format!("long-text-scroll:{key}")))
+                        .w_full()
+                        .max_h(px(LONG_TEXT_HEIGHT))
+                        .overflow_y_scroll()
+                        .px(px(12.))
+                        .py(px(10.))
+                        .font_family(crate::theme::mono())
+                        .text_size(code_px(Settings::CODE_FONT_SIZE))
+                        .line_height(relative(1.5))
+                        .child(input),
+                ),
+            )
+            .into_any_element()
+    }
+
+    /// Shows a long text that was pasted into the composer as a file beside the attachments.
+    /// It can move into the draft, or leave the message.
+    pub(super) fn folded_text_card(
+        &self,
+        index: usize,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        text_file_card(text, self.theme)
+            .child(
+                self.icon_button(("unfold-pasted-text", index), "pencil", "Edit in the draft")
+                    .size(px(20.))
+                    .on_click(cx.listener(move |s, _, window, cx| {
+                        s.input.update(cx, |input, cx| input.unfold(index, cx));
+                        window.focus(&s.input.read(cx).focus_handle(cx), cx);
+                    })),
+            )
+            .child(
+                self.icon_button(("remove-pasted-text", index), "close", "Remove text")
+                    .size(px(20.))
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.input
+                            .update(cx, |input, cx| input.remove_folded(index, cx));
+                    })),
+            )
+            .into_any_element()
+    }
+
     /// Shows only the path and captured range while retaining the full context in the payload.
     pub(super) fn context_card(
         &mut self,
@@ -631,7 +725,9 @@ impl Shell {
                                 .child(if outgoing.text.is_empty() {
                                     "Attached context".into()
                                 } else {
-                                    outgoing.text.clone()
+                                    // One line of the message, so a long one is not laid out
+                                    // whole for a label.
+                                    first_line(&outgoing.text)
                                 }),
                         )
                         .when(
@@ -675,7 +771,7 @@ impl Shell {
                                     )
                                     .size(px(22.))
                                     .disabled(
-                                        !self.input.read(cx).text().is_empty()
+                                        !self.input.read(cx).is_empty()
                                             || !task.attachments.is_empty()
                                             || !task.feedback.is_empty()
                                             || self.submitted_draft.is_some(),
@@ -786,6 +882,51 @@ impl Shell {
             .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
             .into_any_element()
     }
+}
+
+/// Most height of an unfolded long message of the user. A longer text scrolls inside it.
+const LONG_TEXT_HEIGHT: f32 = 420.;
+/// Characters of a text's first line that a label of one line shows.
+const LONG_TEXT_TITLE: usize = 120;
+
+// Returns the start of a text's first line that is not blank, for a label of one line.
+fn first_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+        .chars()
+        .take(LONG_TEXT_TITLE)
+        .collect()
+}
+
+// The card of a long text: a file icon, the text's first line and the text's size. Actions
+// follow it.
+fn text_file_card(text: &str, t: Theme) -> Div {
+    let title = first_line(text);
+    kit::block(t)
+        .w_auto()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .p(px(4.))
+        .pr(px(6.))
+        .flex_shrink_0()
+        .max_w(px(320.))
+        .child(kit::icon_tile("file-text", t.accent, 28., false))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .font_family(crate::theme::mono())
+                        .text_size(text_px(11.5))
+                        .text_ellipsis()
+                        .child(title),
+                )
+                .child(caps(format!("Text · {}", file_size(text.len() as u64)), t)),
+        )
 }
 
 fn file_size(bytes: u64) -> String {

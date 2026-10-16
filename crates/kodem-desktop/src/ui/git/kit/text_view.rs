@@ -38,7 +38,7 @@ fn readonly(key: String, text: &str, window: &mut Window, cx: &mut App) -> Entit
     let input = window.use_keyed_state(ElementId::Name(key.into()), cx, move |_, cx| {
         TextInput::readonly(initial, cx)
     });
-    if input.read(cx).text() != text {
+    if !input.read(cx).shows(text) {
         let text = text.to_owned();
         input.update(cx, |input, cx| input.set_text(text, cx));
     }
@@ -49,7 +49,7 @@ fn readonly(key: String, text: &str, window: &mut Window, cx: &mut App) -> Entit
 fn prose(key: String, text: RichText, window: &mut Window, cx: &mut App) -> AnyElement {
     let theme = cx.theme().kodem;
     let input = readonly(key, &text.text, window, cx);
-    input.update(cx, |input, _| input.prose(text.spans, theme));
+    input.update(cx, |input, _| input.prose(&text.spans, theme));
     div()
         .w_full()
         .min_w_0()
@@ -181,7 +181,7 @@ impl RenderOnce for TextView {
         // The document takes the text size and color of the element around it.
         div().w_full().min_w_0().child(blocks(
             &format!("git-text-view:{}", self.id),
-            markdown::blocks(&self.text),
+            markdown::blocks(&self.text).to_vec(),
             window,
             cx,
         ))

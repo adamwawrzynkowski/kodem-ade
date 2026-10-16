@@ -42,6 +42,7 @@ impl Shell {
     /// Builds the file browser, snapshot diff and contextual feedback editor.
     pub(super) fn review(&mut self, cx: &mut Context<Self>, center: bool) -> AnyElement {
         let t = self.theme;
+        let tree = self.change_tree();
         // The workspace rail, the sidebar when it is open, and the rules between the panes.
         let leading = workspaces::RAIL
             + if self.settings.collapsed {
@@ -223,22 +224,14 @@ impl Shell {
                     ),
                 );
             }
-            let files = self.changes_tree(snapshot, cx);
+            let (rows, totals) = tree.unwrap_or_default();
             if !self.reviewing_file
                 || (!center && self.settings.diff_placement == DiffPlacement::Conversation)
             {
-                let added = snapshot
-                    .files
+                let (added, removed) = totals
                     .iter()
-                    .flat_map(|f| &f.lines)
-                    .filter(|l| l.kind == LineKind::Added)
-                    .count();
-                let removed = snapshot
-                    .files
-                    .iter()
-                    .flat_map(|f| &f.lines)
-                    .filter(|l| l.kind == LineKind::Removed)
-                    .count();
+                    .fold((0, 0), |(a, r), (added, removed)| (a + added, r + removed));
+                let files = self.changes_tree(rows, totals, cx);
                 return motion::reveal(
                     "review-enter",
                     panel
@@ -317,14 +310,7 @@ impl Shell {
                             }),
                     );
                 }
-                let (added, removed) =
-                    file.lines
-                        .iter()
-                        .fold((0, 0), |(added, removed), line| match line.kind {
-                            LineKind::Added => (added + 1, removed),
-                            LineKind::Removed => (added, removed + 1),
-                            _ => (added, removed),
-                        });
+                let (added, removed) = totals.get(file_index).copied().unwrap_or_default();
                 panel = panel.child(
                     kit::block_title(
                         div()

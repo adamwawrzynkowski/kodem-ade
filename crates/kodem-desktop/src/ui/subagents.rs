@@ -275,7 +275,12 @@ impl Shell {
                 popup
                     .view
                     .as_ref()
-                    .map(|view| view.messages.iter().map(|message| message.seq).collect())
+                    .map(|view| {
+                        view.messages
+                            .iter()
+                            .map(|message| (message.seq, 0))
+                            .collect()
+                    })
                     .unwrap_or_default(),
                 px(0.),
             )
@@ -398,9 +403,7 @@ impl Shell {
                     .justify_center()
                     .child(
                         list(scroll, move |index, _, cx| {
-                            entity.update(cx, |s, cx| {
-                                s.conversation_message(&conversation, index, cx)
-                            })
+                            entity.update(cx, |s, cx| s.conversation_row(&conversation, index, cx))
                         })
                         .w_full()
                         .max_w(px(900.))

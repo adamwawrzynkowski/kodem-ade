@@ -60,7 +60,11 @@ impl Shell {
         }
         let view = self.view.as_ref()?;
         // The turn in view is the last sent message at or above the top of the list.
-        let top = self.chat_scroll.logical_scroll_top().item_ix;
+        // The list counts rows, and a long reply takes several.
+        let top = self
+            .chat_rows
+            .locate(self.chat_scroll.logical_scroll_top().item_ix)
+            .map_or(view.messages.len(), |(index, _)| index);
         let current = turns.iter().rposition(|index| *index <= top).unwrap_or(0);
         // The list's height comes from the frame before. A long conversation shows the ticks
         // around the turn in view.
@@ -179,7 +183,7 @@ impl Shell {
             return;
         };
         self.chat_scroll.scroll_to(ListOffset {
-            item_ix: index,
+            item_ix: self.chat_rows.rows(index..index + 1).start,
             offset_in_item: px(0.),
         });
         // An older turn stays in view while the agent writes. The list knows that the target

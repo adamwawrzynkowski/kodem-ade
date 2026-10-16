@@ -59,36 +59,62 @@ impl Shell {
     pub(super) fn message_blocks(
         &mut self,
         key: &str,
-        blocks: Vec<Block>,
+        blocks: &[Block],
         streaming: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.blocks_at(key, blocks, 0, streaming, cx)
+        self.blocks_at(key, blocks, 0, 0, streaming, cx)
+    }
+
+    /// Builds the part of a message's blocks that starts at block `first`. Keys and the
+    /// space above the part are those of the whole message, so the parts read as one message.
+    pub(super) fn message_part(
+        &mut self,
+        key: &str,
+        blocks: &[Block],
+        part: std::ops::Range<usize>,
+        streaming: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let first = part.start;
+        let content = self.blocks_at(key, &blocks[part], first, 0, streaming, cx);
+        match first.checked_sub(1).and_then(|above| blocks.get(above)) {
+            Some(above) => div()
+                .w_full()
+                .pt(px(block_gap(above, &blocks[first], false)))
+                .child(content)
+                .into_any_element(),
+            None => content,
+        }
     }
 
     // Builds the blocks of a message, or of a list item at `depth` lists inside the message.
+    // `first` is the index of the first block among its siblings, which names its key.
     fn blocks_at(
         &mut self,
         key: &str,
-        blocks: Vec<Block>,
+        blocks: &[Block],
+        first: usize,
         depth: usize,
         streaming: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
-        let gaps: Vec<f32> = blocks
-            .windows(2)
-            .map(|pair| block_gap(&pair[0], &pair[1], depth > 0))
-            .collect();
         let mut content = div().w_full().min_w_0().flex().flex_col();
-        for (index, block) in blocks.into_iter().enumerate() {
-            if index > 0 {
-                content = content.child(div().h(px(gaps[index - 1])).flex_shrink_0());
+        for (offset, block) in blocks.iter().enumerate() {
+            if offset > 0 {
+                content = content.child(
+                    div()
+                        .h(px(block_gap(&blocks[offset - 1], block, depth > 0)))
+                        .flex_shrink_0(),
+                );
             }
+            let index = first + offset;
             let key = format!("{key}:{index}");
             let element = match block {
                 Block::Text(text) => self.message_prose(&key, text, PROSE_LEADING, streaming, cx),
                 Block::Heading { level, text } => {
+                    let level = *level;
                     let extra = match level {
                         1 => 8.,
                         2 => 5.,
@@ -117,7 +143,7 @@ impl Shell {
                         .into_any_element()
                 }
                 Block::Code { language, text } => {
-                    self.message_code(&key, &language, &text, None, streaming, cx)
+                    self.message_code(&key, language, text, None, streaming, cx)
                 }
                 Block::Quote {
                     callout: None,
@@ -145,7 +171,7 @@ impl Shell {
                                 .grid(2., 1.),
                             ),
                     )
-                    .child(self.blocks_at(&key, blocks, depth, streaming, cx))
+                    .child(self.blocks_at(&key, blocks, 0, depth, streaming, cx))
                     .into_any_element(),
                 Block::Quote {
                     callout: Some(callout),
@@ -170,7 +196,7 @@ impl Shell {
                             div()
                                 .px(px(12.))
                                 .py(px(9.))
-                                .child(self.blocks_at(&key, blocks, depth, streaming, cx)),
+                                .child(self.blocks_at(&key, blocks, 0, depth, streaming, cx)),
                         )
                         .into_any_element()
                 }
@@ -178,6 +204,7 @@ impl Shell {
                     dither::DottedRule::horizontal(t.subtle.opacity(0.6)).into_any_element()
                 }
                 Block::List { start, items } => {
+                    let start = *start;
                     // A list whose items hold several paragraphs is loose: its items stand
                     // further apart, so that each reads as one unit.
                     let loose = items.iter().any(|item| {
@@ -191,7 +218,7 @@ impl Shell {
                         .flex()
                         .flex_col()
                         .gap(px(if loose { 10. } else { 5. }));
-                    for (index, item) in items.into_iter().enumerate() {
+                    for (index, item) in items.iter().enumerate() {
                         let marker = match item.checked {
                             Some(done) => icon(if done { "check-square" } else { "stop" })
                                 .size(px(14.))
@@ -240,7 +267,8 @@ impl Shell {
                                 )
                                 .child(div().flex_1().min_w_0().child(self.blocks_at(
                                     &format!("{key}:item:{index}"),
-                                    item.blocks,
+                                    &item.blocks,
+                                    0,
                                     depth + 1,
                                     streaming,
                                     cx,
@@ -256,7 +284,7 @@ impl Shell {
                 } => {
                     let widths: Vec<f32> = (0..alignments.len())
                         .map(|col| {
-                            std::iter::once(&header)
+                            std::iter::once(header)
                                 .chain(rows.iter())
                                 .filter_map(|row| row.get(col))
                                 .map(|cell| {
@@ -294,7 +322,7 @@ impl Shell {
                                 .border_b_1()
                                 .border_color(t.border)
                         });
-                        for (col, cell) in row.into_iter().enumerate() {
+                        for (col, cell) in row.iter().enumerate() {
                             line = line.child(
                                 div()
                                     .w(gpui::px(widths.get(col).copied().unwrap_or(120.)))
@@ -335,13 +363,13 @@ impl Shell {
     fn message_prose(
         &mut self,
         key: &str,
-        text: RichText,
+        text: &RichText,
         leading: f32,
         streaming: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let input = self.readonly_streaming(key.to_owned(), text.text, streaming, cx);
-        input.update(cx, |input, _| input.prose(text.spans, self.theme));
+        let input = self.readonly_streaming(key.to_owned(), &text.text, streaming, cx);
+        input.update(cx, |input, _| input.prose(&text.spans, self.theme));
         div()
             .w_full()
             .min_w_0()
@@ -361,7 +389,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
-        let input = self.readonly_streaming(format!("code:{key}"), text.to_owned(), streaming, cx);
+        let input = self.readonly_streaming(format!("code:{key}"), text, streaming, cx);
         input.update(cx, |input, _| input.code(language, self.theme.id));
         let width = text
             .lines()
@@ -371,7 +399,7 @@ impl Shell {
             * f32::from(code_px(Settings::CODE_FONT_SIZE))
             * 0.64
             + 24.;
-        let copied = text.to_owned();
+        let copied = input.clone();
         let lines = text.lines().count().max(1);
         kit::block(t)
             .child(
@@ -397,7 +425,8 @@ impl Shell {
                     .w(px(22.))
                     .h(px(22.))
                     .on_click(cx.listener(move |s, _, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
+                        let text = copied.read(cx).text();
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
                         let tone = s.theme.accent;
                         s.notify_user("Copied", tone, cx);
                     })),

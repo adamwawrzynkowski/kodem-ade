@@ -1,6 +1,8 @@
 //! Shared message presentation for the main conversation and child thread popups.
 use super::*;
-use crate::markdown;
+use crate::components::text_input::is_long_text;
+use crate::markdown::{self, Block};
+use std::ops::Range;
 
 /// How long after its creation a message that came whole still counts as arriving, in
 /// milliseconds.
@@ -11,6 +13,117 @@ const TURN_GAP: f32 = 18.;
 
 /// Name of the hover group of a reply, which shows the reply's actions under the pointer.
 const REPLY_GROUP: &str = "reply";
+
+/// Size in bytes from which a message of the agent can take more than one row of the main
+/// conversation. The list lays out only the rows in view, so a long reply costs its part in
+/// view instead of all of it.
+const SPLIT_BYTES: usize = 3000;
+/// Text in bytes that one row of a split message holds before the next block starts a row.
+const PART_BYTES: usize = 1200;
+/// Weight of a block beside its text, for its spacing and structure.
+const BLOCK_WEIGHT: usize = 48;
+
+/// Rows of the main conversation list. A long message of the agent takes one row for each part
+/// of its blocks; every other message takes one row.
+#[derive(Default)]
+pub(super) struct ChatRows {
+    /// The first row of each message, then the number of rows.
+    starts: Vec<usize>,
+}
+
+impl ChatRows {
+    /// Lays out the rows of a transcript.
+    pub(super) fn new(messages: &[Message]) -> Self {
+        let mut starts = Vec::with_capacity(messages.len() + 1);
+        let mut row = 0;
+        for message in messages {
+            starts.push(row);
+            row += message_parts(message).map_or(1, |parts| parts.len());
+        }
+        starts.push(row);
+        Self { starts }
+    }
+
+    /// Returns the number of rows.
+    pub(super) fn count(&self) -> usize {
+        self.starts.last().copied().unwrap_or(0)
+    }
+
+    /// Returns the rows of the messages in `messages`.
+    pub(super) fn rows(&self, messages: Range<usize>) -> Range<usize> {
+        let row = |message: usize| {
+            self.starts
+                .get(message)
+                .copied()
+                .unwrap_or_else(|| self.count())
+        };
+        row(messages.start)..row(messages.end.max(messages.start))
+    }
+
+    /// Returns the message of a row and the part of the message that the row shows. A row
+    /// after the last one belongs to no message.
+    pub(super) fn locate(&self, row: usize) -> Option<(usize, usize)> {
+        if row >= self.count() {
+            return None;
+        }
+        let message = self.starts.partition_point(|start| *start <= row) - 1;
+        Some((message, row - self.starts[message]))
+    }
+}
+
+// Reports whether a message is shown as Markdown blocks that can take several rows: a reply,
+// notice, error or check result that is not a divider.
+fn splits(message: &Message) -> bool {
+    !matches!(
+        message.kind,
+        MessageKind::User | MessageKind::Tool | MessageKind::Subagent
+    ) && message.transfer.is_none()
+        && message.text.len() >= SPLIT_BYTES
+}
+
+/// Returns the ranges of a message's blocks that show as one row of the main conversation each,
+/// or nothing for a message that takes one row.
+fn message_parts(message: &Message) -> Option<Vec<Range<usize>>> {
+    splits(message).then(|| split_parts(&markdown::blocks(&message.text)))
+}
+
+// Groups blocks into parts of about `PART_BYTES` each. A title stays with the block after it.
+fn split_parts(blocks: &[Block]) -> Vec<Range<usize>> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut weight = 0;
+    for (index, block) in blocks.iter().enumerate() {
+        weight += block_bytes(block) + BLOCK_WEIGHT;
+        let next = index + 1;
+        if weight >= PART_BYTES && next < blocks.len() && !matches!(block, Block::Heading { .. }) {
+            parts.push(start..next);
+            start = next;
+            weight = 0;
+        }
+    }
+    parts.push(start..blocks.len());
+    parts
+}
+
+// Returns the size of the text that a block shows, in bytes.
+fn block_bytes(block: &Block) -> usize {
+    match block {
+        Block::Text(text) | Block::Heading { text, .. } => text.text.len(),
+        Block::Code { text, .. } => text.len(),
+        Block::Quote { blocks, .. } => blocks.iter().map(block_bytes).sum(),
+        Block::List { items, .. } => items
+            .iter()
+            .flat_map(|item| &item.blocks)
+            .map(block_bytes)
+            .sum(),
+        Block::Table { header, rows, .. } => std::iter::once(header)
+            .chain(rows)
+            .flatten()
+            .map(|cell| cell.text.len())
+            .sum(),
+        Block::Rule => 0,
+    }
+}
 
 // Reports whether a reply is the last word of its turn: no work and no reply of the agent
 // follows it before the next message of the user.
@@ -125,21 +238,52 @@ impl Shell {
         }
     }
 
+    /// Renders the rows of the conversation's list: one message, or one part of a long message
+    /// of the main conversation.
+    pub(super) fn conversation_row(
+        &mut self,
+        conversation: &Conversation,
+        row: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let located = match conversation {
+            Conversation::Main => self.chat_rows.locate(row),
+            Conversation::Subagent(_) => Some((row, 0)),
+        };
+        match located {
+            Some((index, part)) => self.conversation_message(conversation, index, part, cx),
+            None => div().into_any_element(),
+        }
+    }
+
+    /// Measures the rows of the messages in `messages` again, after their height changed.
+    pub(super) fn remeasure_messages(&self, conversation: &Conversation, messages: Range<usize>) {
+        let rows = match conversation {
+            Conversation::Main => self.chat_rows.rows(messages),
+            Conversation::Subagent(_) => messages,
+        };
+        if let Some(scroll) = self.conversation_scroll(conversation) {
+            scroll.remeasure_items(rows);
+        }
+    }
+
     /// Renders shared message styling and registers selectable blocks in the owning thread.
-    pub(super) fn conversation_message(
+    /// `part` is the part of a long message that the row shows.
+    fn conversation_message(
         &mut self,
         conversation: &Conversation,
         index: usize,
+        part: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.selection_inputs = Some(Vec::new());
-        let content = self.message_content(conversation, index, cx);
+        let content = self.message_content(conversation, index, part, cx);
         let inputs = self.selection_inputs.take().unwrap_or_default();
         if let Some(message) = self
             .conversation_messages(conversation)
             .and_then(|messages| messages.get(index))
         {
-            let order = message.seq;
+            let order = (message.seq, part);
             let selection = match conversation {
                 Conversation::Main => Some(&self.chat_selection),
                 Conversation::Subagent(thread) => self
@@ -158,9 +302,10 @@ impl Shell {
         &mut self,
         conversation: &Conversation,
         index: usize,
+        part: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let content = self.message_body(conversation, index, cx);
+        let content = self.message_body(conversation, index, part, cx);
         if self.message_undone(conversation, index) {
             // A turn that the user undid stays readable, but it no longer counts.
             return div()
@@ -245,6 +390,7 @@ impl Shell {
         &mut self,
         conversation: &Conversation,
         index: usize,
+        part: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some((message, closes_turn)) =
@@ -298,10 +444,29 @@ impl Shell {
                 )
                 .into_any_element();
         }
+        // A long message of the agent shows in parts, one row of the list each. The first part
+        // has the message's heading and context, the last its actions.
+        let blocks = markdown::blocks(&message.text);
+        let parts = match conversation {
+            Conversation::Main => message_parts(&message),
+            Conversation::Subagent(_) => None,
+        };
+        let shown = match &parts {
+            Some(parts) => match parts.get(part) {
+                Some(range) => range.clone(),
+                None => return div().into_any_element(),
+            },
+            None => 0..blocks.len(),
+        };
+        let first = shown.start == 0;
+        let last = shown.end == blocks.len();
         let message_active = self.conversation_message_active(conversation, &message);
         let message_key = format!("{}:{}", message.task_id, message.id);
-        let text = message.text.clone();
-        let mut outer = div().w_full().px_5().py_2();
+        let mut outer = div()
+            .w_full()
+            .px_5()
+            .when(first, |outer| outer.pt_2())
+            .when(last, |outer| outer.pb_2());
         let mut block = div().w_full();
         if user {
             outer = outer.pt(px(TURN_GAP)).flex().justify_end();
@@ -320,7 +485,7 @@ impl Shell {
                 .rounded(px(crate::theme::MESSAGE_RADIUS))
                 .p(px(crate::theme::MESSAGE_PADDING))
                 .child(dither::edge_shade(t.dot, 0.3, crate::theme::MESSAGE_RADIUS));
-        } else if message.kind != MessageKind::Assistant {
+        } else if message.kind != MessageKind::Assistant && first {
             let (name, glyph, color) = match message.kind {
                 MessageKind::Error => ("Error", "circle-x", t.removed),
                 MessageKind::Check => ("Check result", "check-square", t.added),
@@ -353,7 +518,7 @@ impl Shell {
                     ),
             );
         }
-        if !message.attachments.is_empty() {
+        if first && !message.attachments.is_empty() {
             let mut files = div()
                 .flex()
                 .flex_wrap()
@@ -364,20 +529,35 @@ impl Shell {
             }
             block = block.child(files);
         }
-        for feedback in &message.feedback {
-            block = block.child(self.context_card(feedback, None, cx));
+        if first {
+            for feedback in &message.feedback {
+                block = block.child(self.context_card(feedback, None, cx));
+            }
         }
-        if !user || !message.text.is_empty() {
+        if user && is_long_text(&message.text) {
+            // A long message of the user shows as a file that unfolds, like the text that was
+            // pasted into the composer for it.
+            block = block.child(self.long_text_card(
+                conversation,
+                index,
+                &message_key,
+                &message.text,
+                cx,
+            ));
+        } else if !user || !message.text.is_empty() {
+            let arriving = self.message_arriving(conversation, &message);
+            let key = format!("message:{message_key}");
             block = block.child(div().relative().text_size(text_px(13.)).child(
-                self.message_blocks(
-                    &format!("message:{message_key}"),
-                    markdown::blocks(&message.text),
-                    self.message_arriving(conversation, &message),
-                    cx,
-                ),
+                if parts.is_some() {
+                    self.message_part(&key, &blocks, shown, arriving, cx)
+                } else {
+                    self.message_blocks(&key, &blocks, arriving, cx)
+                },
             ));
         }
         if !user {
+            let copy_conversation = conversation.clone();
+            let copy_id = message.id.clone();
             let copy = self
                 .icon_button(
                     (
@@ -391,7 +571,16 @@ impl Shell {
                 .h(px(20.))
                 .text_color(t.subtle)
                 .on_click(cx.listener(move |s, _, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                    // The message is read when it is copied, so a long reply is not copied on
+                    // every frame.
+                    let Some(text) = s
+                        .conversation_messages(&copy_conversation)
+                        .and_then(|messages| messages.iter().find(|m| m.id == copy_id))
+                        .map(|message| message.text.clone())
+                    else {
+                        return;
+                    };
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
                     let tone = s.theme.accent;
                     s.notify_user("Copied", tone, cx);
                 }));
@@ -400,23 +589,26 @@ impl Shell {
             // action shows under the pointer, in the padding beside the reply, and takes no
             // room.
             if message_active || closes_turn || message.kind != MessageKind::Assistant {
-                block = block.child(div().flex().items_center().gap_2().mt_1().child(copy).when(
-                    message_active,
-                    |row| {
-                        row.child(div().text_size(text_px(10.)).text_color(t.subtle).child(
-                            motion::gleam(
-                                if message.kind == MessageKind::Assistant {
-                                    "Writing…"
-                                } else {
-                                    "In progress…"
-                                },
-                                t,
-                                cx.reduce_motion(),
-                            ),
-                        ))
-                    },
-                ));
-            } else {
+                if last {
+                    block =
+                        block.child(div().flex().items_center().gap_2().mt_1().child(copy).when(
+                            message_active,
+                            |row| {
+                                row.child(div().text_size(text_px(10.)).text_color(t.subtle).child(
+                                    motion::gleam(
+                                        if message.kind == MessageKind::Assistant {
+                                            "Writing…"
+                                        } else {
+                                            "In progress…"
+                                        },
+                                        t,
+                                        cx.reduce_motion(),
+                                    ),
+                                ))
+                            },
+                        ));
+                }
+            } else if first {
                 outer = outer.relative().group(REPLY_GROUP).child(
                     div()
                         .absolute()

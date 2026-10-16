@@ -1,18 +1,40 @@
 // Adapted from GPUI input example 0.3.4; Apache-2.0.
-use std::{ops::Range, time::Instant};
+use std::{ops::Range, rc::Rc, time::Instant};
 
 use gpui::{
-    App, Bounds, ClipboardItem, ColorExt, Context, CursorStyle, ElementId, ElementInputHandler,
-    Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
-    SharedString, Style, TextRun, UTF16Selection, Window, actions, div, fill, hsla, point,
-    prelude::*, px, relative, rgb, size,
+    App, Bounds, ClipboardItem, ColorExt, Context, CursorStyle, Div, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable, Font, GlobalElementId,
+    Hsla, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PaintQuad, Pixels, Point, SharedString, Style, TextRun, UTF16Selection, Window, actions, div,
+    fill, hsla, point, prelude::*, px, relative, rgb, size,
 };
 
 use unicode_segmentation::*;
 
 /// Time between redraws while streamed text settles into place.
 const REVEAL_FRAME: std::time::Duration = std::time::Duration::from_millis(28);
+
+/// Size in bytes, and number of lines, from which a text is long. A long text that is pasted
+/// into a composer that folds it becomes a card, and a long message of the user shows folded.
+const LONG_TEXT_BYTES: usize = 4000;
+const LONG_TEXT_LINES: usize = 60;
+
+/// Separates the typed draft from each folded text in the composed message.
+const FOLD_SEPARATOR: &str = "\n\n";
+
+/// Compositions with folded texts that the composer remembers, so that a draft that leaves the
+/// composer and comes back keeps its cards.
+const REMEMBERED_FOLDS: usize = 8;
+
+/// Reports whether a text is long enough to show folded instead of in full.
+pub fn is_long_text(text: &str) -> bool {
+    text.len() >= LONG_TEXT_BYTES
+        || text
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .nth(LONG_TEXT_LINES - 1)
+            .is_some()
+}
 
 actions!(
     text_input,
@@ -89,9 +111,26 @@ pub enum SelectionInput {
 #[derive(Clone)]
 struct EditState {
     content: SharedString,
+    folded: Vec<SharedString>,
     selection: Range<usize>,
     reversed: bool,
 }
+
+/// The lines of one shaping, and what they were shaped from. Layout measures a text more than
+/// once a frame and the window draws many frames of the same text, so the lines are reused
+/// until the text, its styles, the font or the width change.
+struct Shaped {
+    content: SharedString,
+    revision: u64,
+    width: Option<Pixels>,
+    font_size: Pixels,
+    font: Font,
+    color: Hsla,
+    lines: Rc<Vec<(usize, super::inline_bubbles::TextLine)>>,
+}
+
+/// Shapings kept at once: the unwrapped one that layout measures, and the wrapped one.
+const SHAPINGS: usize = 2;
 
 pub struct TextInput {
     focus_handle: FocusHandle,
@@ -100,7 +139,7 @@ pub struct TextInput {
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
-    last_layout: Vec<(usize, super::inline_bubbles::TextLine)>,
+    last_layout: Rc<Vec<(usize, super::inline_bubbles::TextLine)>>,
     line_height: Pixels,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
@@ -124,6 +163,17 @@ pub struct TextInput {
     streaming: super::streaming_text::StreamingText,
     /// Whether a redraw for the streamed-text reveal is already scheduled.
     reveal_pending: bool,
+    /// Recent shapings of the text, newest first.
+    shaped: Vec<Shaped>,
+    /// Changes when a style that shaping depends on changes, beside the text itself.
+    revision: u64,
+    /// Whether a long pasted text becomes a card instead of draft text.
+    folds_long_text: bool,
+    /// Long texts that are part of the message but show as cards beside the draft. They follow
+    /// the typed text, each after a blank line.
+    folded: Vec<SharedString>,
+    /// Recent compositions with folded texts: the whole text, the typed text and the folds.
+    remembered: Vec<(String, SharedString, Vec<SharedString>)>,
 }
 
 impl TextInput {
@@ -136,7 +186,7 @@ impl TextInput {
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
-            last_layout: Vec::new(),
+            last_layout: Rc::default(),
             line_height: px(22.),
             last_bounds: None,
             is_selecting: false,
@@ -156,6 +206,11 @@ impl TextInput {
             prose: None,
             streaming: Default::default(),
             reveal_pending: false,
+            shaped: Vec::new(),
+            revision: 0,
+            folds_long_text: false,
+            folded: Vec::new(),
+            remembered: Vec::new(),
         }
     }
     /// Creates a prompt editor where Enter submits and Shift-Enter inserts a newline.
@@ -172,6 +227,7 @@ impl TextInput {
     pub fn set_masked(&mut self, masked: bool, cx: &mut Context<Self>) {
         if self.masked != masked {
             self.masked = masked;
+            self.revision += 1;
             cx.notify();
         }
     }
@@ -179,8 +235,45 @@ impl TextInput {
     pub fn set_placeholder(&mut self, placeholder: &str, cx: &mut Context<Self>) {
         if self.placeholder.as_ref() != placeholder {
             self.placeholder = placeholder.to_owned().into();
+            self.revision += 1;
             cx.notify();
         }
+    }
+    /// Makes a long pasted text a card beside the draft instead of draft text.
+    pub fn set_folds_long_text(&mut self, folds: bool) {
+        self.folds_long_text = folds;
+    }
+    /// Returns the long texts that show as cards beside the draft.
+    pub fn folded(&self) -> &[SharedString] {
+        &self.folded
+    }
+    /// Moves a folded text into the draft, after the typed text, as one undoable edit. The
+    /// composed text keeps the same words.
+    pub fn unfold(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.folded.len() || self.marked_range.is_some() {
+            return;
+        }
+        self.remember_edit();
+        let text = self.folded.remove(index);
+        let mut content = self.content.to_string();
+        if !content.is_empty() {
+            content.push_str(FOLD_SEPARATOR);
+        }
+        content.push_str(&text);
+        self.streaming = Default::default();
+        self.content = content.into();
+        self.selected_range = self.content.len()..self.content.len();
+        self.selection_reversed = false;
+        cx.notify();
+    }
+    /// Removes a folded text from the message as one undoable edit.
+    pub fn remove_folded(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.folded.len() {
+            return;
+        }
+        self.remember_edit();
+        self.folded.remove(index);
+        cx.notify();
     }
     /// Returns the slash token at a collapsed caret outside an IME composition.
     pub fn slash_query(&self) -> Option<(Range<usize>, String)> {
@@ -269,15 +362,59 @@ impl TextInput {
     pub fn text_len(&self) -> usize {
         self.content.len()
     }
-    /// Returns the current draft.
+    /// Returns the current draft, with its folded texts after the typed text.
     pub fn text(&self) -> String {
-        self.content.to_string()
+        compose(&self.content, &self.folded)
+    }
+    /// Reports whether the draft and its folded texts are empty, without composing them.
+    pub fn is_empty(&self) -> bool {
+        self.content.is_empty() && self.folded.is_empty()
+    }
+    /// Reports whether the draft and its folded texts hold only white space.
+    pub fn is_blank(&self) -> bool {
+        self.content.trim().is_empty() && self.folded.iter().all(|text| text.trim().is_empty())
+    }
+    /// Reports whether the shown text is `text`, without copying it.
+    pub fn shows(&self, text: &str) -> bool {
+        self.content.as_ref() == text
     }
     /// Replaces the draft and resets selection after switching tasks.
+    ///
+    /// In a composer that folds long text, a draft that left with folded texts comes back
+    /// with them, and another long draft comes back folded.
     pub fn set_text(&mut self, text: String, cx: &mut Context<Self>) {
         self.undo.clear();
         self.redo.clear();
-        self.content = text.into();
+        if self.folds_long_text {
+            if !self.folded.is_empty() {
+                let composed = self.text();
+                self.remembered.retain(|(text, _, _)| *text != composed);
+                self.remembered.insert(
+                    0,
+                    (
+                        composed,
+                        self.content.clone(),
+                        std::mem::take(&mut self.folded),
+                    ),
+                );
+                self.remembered.truncate(REMEMBERED_FOLDS);
+            }
+            if let Some((_, typed, folded)) = self
+                .remembered
+                .iter()
+                .find(|(composed, _, _)| *composed == text)
+            {
+                self.content = typed.clone();
+                self.folded = folded.clone();
+            } else if is_long_text(&text) {
+                self.content = SharedString::default();
+                self.folded = vec![text.into()];
+            } else {
+                self.content = text.into();
+            }
+        } else {
+            self.content = text.into();
+        }
         self.prose = None;
         self.selected_range = self.content.len()..self.content.len();
         self.marked_range = None;
@@ -288,6 +425,7 @@ impl TextInput {
         if let Some((extension, theme)) = &self.syntax {
             self.colors = crate::syntax::spans(&self.content, extension, *theme);
         }
+        self.revision += 1;
         cx.notify();
     }
     /// Updates streamed text while keeping existing letters and selections in place.
@@ -314,7 +452,9 @@ impl TextInput {
     /// Configures wrapping and syntax colors for a captured code block, in the code colors
     /// of `theme`.
     pub fn code(&mut self, extension: &str, theme: kodem_core::ThemeId) {
-        self.prose = None;
+        if self.prose.take().is_some() {
+            self.revision += 1;
+        }
         self.wrap = false;
         if self
             .syntax
@@ -323,6 +463,7 @@ impl TextInput {
         {
             self.syntax = Some((extension.into(), theme));
             self.colors = crate::syntax::spans(&self.content, extension, theme);
+            self.revision += 1;
         }
     }
     /// Sets whether text wraps to its available width without changing syntax colors.
@@ -330,15 +471,25 @@ impl TextInput {
         self.wrap = wrap;
     }
     /// Applies Markdown styles to selectable prose and restores wrapping after a block changes kind.
-    pub fn prose(&mut self, spans: Vec<crate::markdown::Span>, theme: crate::theme::Theme) {
+    pub fn prose(&mut self, spans: &[crate::markdown::Span], theme: crate::theme::Theme) {
         self.wrap = true;
+        if self.syntax.is_none()
+            && self.colors.is_empty()
+            && self
+                .prose
+                .as_ref()
+                .is_some_and(|(old, old_theme)| old.as_slice() == spans && *old_theme == theme)
+        {
+            return;
+        }
         self.syntax = None;
         self.colors.clear();
-        self.prose = Some((spans, theme));
+        self.prose = Some((spans.to_vec(), theme));
+        self.revision += 1;
     }
     fn visual_line_boundary(&self, end: bool) -> usize {
         let byte = self.cursor_offset();
-        for (start, line) in &self.last_layout {
+        for (start, line) in self.last_layout.iter() {
             if byte >= *start
                 && byte <= start + line.len()
                 && let Some(position) = line.position_for_index(byte - start, self.line_height)
@@ -361,7 +512,7 @@ impl TextInput {
             return;
         };
         let mut y = px(0.);
-        for (start, line) in &self.last_layout {
+        for (start, line) in self.last_layout.iter() {
             if self.cursor_offset() >= *start
                 && self.cursor_offset() <= start + line.len()
                 && let Some(position) =
@@ -495,6 +646,7 @@ impl TextInput {
     fn edit_state(&self) -> EditState {
         EditState {
             content: self.content.clone(),
+            folded: self.folded.clone(),
             selection: self.selected_range.clone(),
             reversed: self.selection_reversed,
         }
@@ -512,6 +664,7 @@ impl TextInput {
     fn restore_edit(&mut self, state: EditState, cx: &mut Context<Self>) {
         self.streaming = Default::default();
         self.content = state.content;
+        self.folded = state.folded;
         self.selected_range = state.selection;
         self.selection_reversed = state.reversed;
         self.marked_range = None;
@@ -733,6 +886,13 @@ impl TextInput {
             .and_then(|item| crate::clipboard::content(item, self.composer))
         {
             match content {
+                crate::clipboard::PasteContent::Text(text)
+                    if self.folds_long_text && is_long_text(&text) =>
+                {
+                    self.remember_edit();
+                    self.folded.push(text.into());
+                    cx.notify();
+                }
                 crate::clipboard::PasteContent::Text(text) => {
                     self.replace_text_in_range(None, &text, window, cx);
                 }
@@ -790,7 +950,7 @@ impl TextInput {
             return 0;
         };
         let mut y = position.y - bounds.top();
-        for (start, line) in &self.last_layout {
+        for (start, line) in self.last_layout.iter() {
             let height = line.size(self.line_height).height;
             if y < height {
                 let index = line
@@ -869,6 +1029,55 @@ impl TextInput {
             .grapheme_indices(true)
             .find_map(|(idx, _)| (idx > offset).then_some(idx))
             .unwrap_or(self.content.len())
+    }
+
+    // Returns the lines of the text at `width`, shaped again only when the text, a style or
+    // the font changed. Streamed text changes its runs on every step of its reveal, so it is
+    // shaped each time.
+    fn lines(
+        &mut self,
+        style: &gpui::TextStyle,
+        font_size: Pixels,
+        width: Option<Pixels>,
+        window: &mut Window,
+    ) -> Rc<Vec<(usize, super::inline_bubbles::TextLine)>> {
+        if self.streaming.start().is_some() {
+            return Rc::new(shape(self, style, font_size, width, window));
+        }
+        let font = style.font();
+        let color = style.color;
+        let found = self.shaped.iter().position(|shaped| {
+            shaped.revision == self.revision
+                && shaped.width == width
+                && shaped.font_size == font_size
+                && shaped.color == color
+                && shaped.font == font
+                // The text is immutable and the shaping holds it, so the same address and
+                // length are the same text.
+                && shaped.content.as_ptr() == self.content.as_ptr()
+                && shaped.content.len() == self.content.len()
+        });
+        if let Some(index) = found {
+            let shaped = self.shaped.remove(index);
+            let lines = shaped.lines.clone();
+            self.shaped.insert(0, shaped);
+            return lines;
+        }
+        let lines = Rc::new(shape(self, style, font_size, width, window));
+        self.shaped.insert(
+            0,
+            Shaped {
+                content: self.content.clone(),
+                revision: self.revision,
+                width,
+                font_size,
+                font,
+                color,
+                lines: lines.clone(),
+            },
+        );
+        self.shaped.truncate(SHAPINGS);
+        lines
     }
 }
 
@@ -999,7 +1208,7 @@ impl EntityInputHandler for TextInput {
     ) -> Option<Bounds<Pixels>> {
         let range = self.range_from_utf16(&range_utf16);
         let mut y = px(0.);
-        for (start, line) in &self.last_layout {
+        for (start, line) in self.last_layout.iter() {
             if range.start >= *start && range.start <= start + line.len() {
                 let position = line.position_for_index(range.start - start, self.line_height)?;
                 return Some(Bounds::new(
@@ -1026,7 +1235,7 @@ struct TextElement {
 }
 
 struct PrepaintState {
-    lines: Vec<(usize, super::inline_bubbles::TextLine)>,
+    lines: Rc<Vec<(usize, super::inline_bubbles::TextLine)>>,
     cursor: Option<PaintQuad>,
     selections: Vec<PaintQuad>,
 }
@@ -1060,18 +1269,15 @@ impl Element for TextElement {
         style.size.width = relative(1.).into();
         (
             window.request_measured_layout(style, move |known, available, window, cx| {
-                let input = input.read(cx);
                 let width = known.width.or(match available.width {
                     gpui::AvailableSpace::Definite(w) => Some(w),
                     _ => None,
                 });
-                let lines = shape(
-                    input,
-                    &text_style,
-                    font_size,
-                    if input.wrap { width } else { None },
-                    window,
-                );
+                let lines = input.update(cx, |input, _| {
+                    let width = if input.wrap { width } else { None };
+                    input.lines(&text_style, font_size, width, window)
+                });
+                let input = input.read(cx);
                 let measured = lines
                     .iter()
                     .map(|(_, l)| l.size(height).height)
@@ -1111,24 +1317,22 @@ impl Element for TextElement {
             || crate::theme::Theme::default().accent,
             |theme| theme.accent,
         );
-        let input = self.input.read(cx);
         let style = window.text_style();
         let height = window.line_height();
-        let lines = shape(
-            input,
-            &style,
-            style.font_size.to_pixels(window.rem_size()),
-            if input.wrap {
-                Some(bounds.size.width)
-            } else {
-                None
-            },
-            window,
-        );
+        let lines = self.input.update(cx, |input, _| {
+            let width = input.wrap.then_some(bounds.size.width);
+            input.lines(
+                &style,
+                style.font_size.to_pixels(window.rem_size()),
+                width,
+                window,
+            )
+        });
+        let input = self.input.read(cx);
         let mut selections = Vec::new();
         let mut cursor = None;
         let mut y = px(0.);
-        for (start, line) in &lines {
+        for (start, line) in lines.iter() {
             let selected = &input.selected_range;
             let a = selected.start.saturating_sub(*start).min(line.len());
             let b = selected.end.saturating_sub(*start).min(line.len());
@@ -1189,12 +1393,16 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let input = self.input.clone();
-        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-            if phase == gpui::DispatchPhase::Bubble && input.read(cx).is_selecting {
-                input.update(cx, |input, cx| input.on_mouse_move(event, window, cx));
-            }
-        });
+        // A drag that started in this text keeps selecting outside it. A press starts the drag
+        // and redraws, so the listener exists only while a selection is being made.
+        if self.input.read(cx).is_selecting {
+            let input = self.input.clone();
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                if phase == gpui::DispatchPhase::Bubble && input.read(cx).is_selecting {
+                    input.update(cx, |input, cx| input.on_mouse_move(event, window, cx));
+                }
+            });
+        }
         let focus = self.input.read(cx).focus_handle.clone();
         window.handle_input(
             &focus,
@@ -1206,7 +1414,7 @@ impl Element for TextElement {
         if let Some((_, theme)) = self.input.read(cx).prose.as_ref() {
             let theme = *theme;
             let mut y = px(0.);
-            for (_, line) in &prepaint.lines {
+            for (_, line) in prepaint.lines.iter() {
                 let line_bounds =
                     Bounds::new(point(bounds.left(), bounds.top() + y), line.size(height));
                 if !line_bounds.dilate(height).intersects(&visible) {
@@ -1227,7 +1435,7 @@ impl Element for TextElement {
         }
         let mut y = px(0.);
         let now = Instant::now();
-        for (_, line) in &prepaint.lines {
+        for (_, line) in prepaint.lines.iter() {
             let line_bounds =
                 Bounds::new(point(bounds.left(), bounds.top() + y), line.size(height));
             if !line_bounds.dilate(height).intersects(&visible) {
@@ -1258,7 +1466,7 @@ impl Element for TextElement {
             window.paint_quad(cursor);
         }
         self.input.update(cx, |input, _| {
-            input.last_layout = std::mem::take(&mut prepaint.lines);
+            input.last_layout = prepaint.lines.clone();
             input.last_bounds = Some(bounds);
             input.line_height = height;
         });
@@ -1291,7 +1499,10 @@ impl Render for TextInput {
                 }
             }
         }
-        div()
+        // Read-only text takes keys only while it is focused. A transcript holds many of them,
+        // and a press focuses one and redraws before a key can reach it.
+        let takes_keys = !self.readonly || self.focus_handle.is_focused(window);
+        let root = div()
             .flex()
             .key_context(if self.composer {
                 "TextInput Composer"
@@ -1301,8 +1512,32 @@ impl Render for TextInput {
                 "TextInput"
             })
             .track_focus(&self.focus_handle(cx))
-            .cursor(CursorStyle::IBeam)
-            .on_action(cx.listener(Self::word_left))
+            .cursor(CursorStyle::IBeam);
+        let root = if takes_keys {
+            Self::key_actions(root, cx)
+        } else {
+            root
+        };
+        root.on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .w_full()
+            .line_height(relative(1.5))
+            .child(
+                super::InputBase::new("input-frame")
+                    .min_h(px(if self.readonly { 18. } else { 24. }))
+                    .w_full()
+                    .p(px(if self.readonly { 0. } else { 4. }))
+                    .child(TextElement { input: cx.entity() }),
+            )
+    }
+}
+
+impl TextInput {
+    // Adds the editing, movement, clipboard and completion actions of a text input.
+    fn key_actions(root: Div, cx: &mut Context<Self>) -> Div {
+        root.on_action(cx.listener(Self::word_left))
             .on_action(cx.listener(Self::word_right))
             .on_action(cx.listener(Self::select_word_left))
             .on_action(cx.listener(Self::select_word_right))
@@ -1340,19 +1575,6 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::completion_dismiss))
             .on_action(cx.listener(Self::up))
             .on_action(cx.listener(Self::down))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .w_full()
-            .line_height(relative(1.5))
-            .child(
-                super::InputBase::new("input-frame")
-                    .min_h(px(if self.readonly { 18. } else { 24. }))
-                    .w_full()
-                    .p(px(if self.readonly { 0. } else { 4. }))
-                    .child(TextElement { input: cx.entity() }),
-            )
     }
 }
 
@@ -1641,6 +1863,18 @@ fn shape(
         })
         .collect()
 }
+// Joins the typed draft and its folded texts into the text of the message.
+fn compose(typed: &str, folded: &[SharedString]) -> String {
+    let mut text = typed.to_owned();
+    for fold in folded {
+        if !text.is_empty() {
+            text.push_str(FOLD_SEPARATOR);
+        }
+        text.push_str(fold);
+    }
+    text
+}
+
 fn hsla_from_rgb(color: [u8; 3]) -> gpui::Hsla {
     gpui::rgb_to_hsla(rgb(((color[0] as u32) << 16)
         | ((color[1] as u32) << 8)

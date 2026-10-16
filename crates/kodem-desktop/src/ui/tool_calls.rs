@@ -480,9 +480,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.tray_choices.insert(key.to_owned(), open);
-        if let Some(scroll) = self.conversation_scroll(conversation) {
-            scroll.remeasure_items(rows);
-        }
+        self.remeasure_messages(conversation, rows);
         cx.notify();
     }
 
@@ -593,7 +591,7 @@ impl Shell {
                     .text_color(t.muted)
                     .child(self.message_blocks(
                         &format!("tool-thought:{message_key}"),
-                        crate::markdown::blocks(&view.output),
+                        &crate::markdown::blocks(&view.output),
                         self.message_arriving(conversation, message),
                         cx,
                     )),
@@ -612,9 +610,7 @@ impl Shell {
         if !self.folded.remove(key) {
             self.folded.insert(key.to_owned());
         }
-        if let Some(scroll) = self.conversation_scroll(conversation) {
-            scroll.remeasure_items(index..index + 1);
-        }
+        self.remeasure_messages(conversation, index..index + 1);
         cx.notify();
     }
 

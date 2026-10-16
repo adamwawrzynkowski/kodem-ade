@@ -2,7 +2,7 @@
 use pulldown_cmark::{
     Alignment, BlockQuoteKind, CodeBlockKind, Event, Options, Parser, Tag, TagEnd,
 };
-use std::{iter::Peekable, ops::Range};
+use std::{iter::Peekable, ops::Range, rc::Rc};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InlineStyle {
@@ -351,8 +351,8 @@ const CACHED_MESSAGES: usize = 192;
 
 #[derive(Default)]
 struct BlockCache {
-    recent: std::collections::HashMap<(u64, usize), Vec<Block>>,
-    older: std::collections::HashMap<(u64, usize), Vec<Block>>,
+    recent: std::collections::HashMap<(u64, usize), Rc<Vec<Block>>>,
+    older: std::collections::HashMap<(u64, usize), Rc<Vec<Block>>>,
 }
 
 thread_local! {
@@ -362,8 +362,8 @@ thread_local! {
 /// Parses message Markdown while retaining nested blocks and inline UTF-8 style ranges.
 ///
 /// A conversation renders its visible messages again on every frame, so the blocks of the
-/// messages seen lately are kept and only changed text is parsed.
-pub fn blocks(text: &str) -> Vec<Block> {
+/// messages seen lately are kept and shared, and only changed text is parsed.
+pub fn blocks(text: &str) -> Rc<Vec<Block>> {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut hasher);
@@ -375,7 +375,7 @@ pub fn blocks(text: &str) -> Vec<Block> {
         }
         let blocks = match cache.older.remove(&key) {
             Some(blocks) => blocks,
-            None => parse_blocks(text),
+            None => Rc::new(parse_blocks(text)),
         };
         if cache.recent.len() >= CACHED_MESSAGES {
             cache.older = std::mem::take(&mut cache.recent);

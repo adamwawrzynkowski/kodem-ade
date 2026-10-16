@@ -15,14 +15,18 @@ struct Position {
     byte: usize,
 }
 
+/// Reading order of the blocks of one list row: a message's sequence number, then the part of
+/// the message that the row shows.
+pub type RowOrder = (u64, usize);
+
 #[derive(Default)]
 pub struct TextDocument {
-    groups: BTreeMap<u64, Vec<Block>>,
+    groups: BTreeMap<RowOrder, Vec<Block>>,
     anchor: Option<Position>,
     head: Option<Position>,
     dragging: bool,
     scroll: Option<ListState>,
-    orders: Vec<u64>,
+    orders: Vec<RowOrder>,
     bottom_inset: Pixels,
     pointer: Option<Point<Pixels>>,
     scrolling: bool,
@@ -30,7 +34,7 @@ pub struct TextDocument {
 
 impl TextDocument {
     /// Shares the virtual transcript's current order and viewport for drag selection.
-    pub fn set_viewport(&mut self, scroll: ListState, orders: Vec<u64>, bottom_inset: Pixels) {
+    pub fn set_viewport(&mut self, scroll: ListState, orders: Vec<RowOrder>, bottom_inset: Pixels) {
         self.scroll = Some(scroll);
         self.orders = orders;
         self.bottom_inset = bottom_inset;
@@ -123,8 +127,13 @@ impl TextDocument {
         .detach();
     }
 
-    /// Registers a message's blocks in reading order, preserving selection on re-render.
-    pub fn register(&mut self, order: u64, inputs: Vec<Entity<TextInput>>, cx: &mut Context<Self>) {
+    /// Registers a row's blocks in reading order, preserving selection on re-render.
+    pub fn register(
+        &mut self,
+        order: RowOrder,
+        inputs: Vec<Entity<TextInput>>,
+        cx: &mut Context<Self>,
+    ) {
         if self.groups.get(&order).is_none_or(|blocks| {
             !blocks
                 .iter()

@@ -775,3 +775,21 @@ Recorded on 16 October 2026. The user asked to prevent sleep while an agent work
 | Switch | Settings → Workspace → Tasks → "Keep the computer awake" (`AWAKE_LABEL` in `ui/settings.rs`) |
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. `awake.rs` passed Clippy with `-D warnings` for `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin` in a scratch crate; the first Windows run found the reason text unused there and it was fixed. Temporary probes, removed afterward with the scratch crate and the two Rust targets: on this Mac `pmset -g assertions` listed the assertion while it was held and not after release, and `Store::working` was true for `Running` and `Starting` and false for `Waiting`, `Completed` and an empty store. Not checked: the Windows and Linux locks on those systems, and the switch on a display.
+
+## Performance of long text, many working agents and large diffs
+
+Recorded on 16 October 2026. The user reported lag while scrolling long replies and long prompts, with many working agents and with large diffs, and asked for long sent and pasted text to show as a file that unfolds. Animations, their frame rates and their look are unchanged.
+
+The cause: every animation step of a working agent, every step of a streamed reveal and every scroll event renders the workspace view again, and the chat list lays out every row in view on each frame. A long message was one row, so each frame built and measured all of its blocks and shaped all of its text again.
+
+| Part | Where |
+| --- | --- |
+| Shaping | `TextInput` keeps its last two shapings (`Shaped`) and reuses them until the text, a style, the font or the width changes. Layout and prepaint no longer shape the same text again on every frame. Streamed text that is still revealing is shaped each time, as before |
+| Read-only text | A read-only `TextInput` registers its 38 key actions only while it is focused; a press focuses it and redraws first. The mouse-move listener for drag selection exists only while a selection is being made |
+| Markdown | `markdown::blocks` returns shared `Rc` blocks, and blocks render by reference. A block's text is copied only when it changed, and the copy buttons read the text when clicked |
+| Chat rows | `conversation::ChatRows`: a reply, notice, error or check result of 3000 bytes or more takes one list row for each part of about 1200 bytes of its blocks. A title stays with the block after it. The first part has the heading, attachments and context, the last part the actions. Text selection orders rows by `(seq, part)`; the history rail, tool trays and transcript updates map messages to rows. Subagent popups keep one row a message |
+| Long user text | A pasted text of 4000 bytes or 60 lines or more becomes a file card in the composer (`TextInput::folded`). The pencil moves it into the draft and the cross removes it; both can be undone. `text()` still returns the whole message, so drafts, sending and restoring are unchanged. A draft that leaves the composer with cards comes back with them; another long draft comes back as one card. A sent user message of that size shows as a file card that unfolds to its text, plain and in a scrolling box |
+| Review panel | The changes tree and each file's line totals are built once per snapshot and folded folders (`ChangeTree`), not on every frame |
+| Git workspace | A file row of the Changes list no longer reads the disk twice on every render; the submodule check runs when its menu opens. Queued message labels show one line |
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Three temporary tests passed and were removed: the parts of a long reply cover every block once and keep titles with their section; `ChatRows` maps messages to rows and back; and the long-text limits and the composition of a draft with its cards. Not checked: frame times in the running app and the look of the cards and split replies, under the no-visual-testing agreement. The Git workspace's Changes list still lays out every file row when it renders; it renders when its repository state changes, not on animation frames.

@@ -33,12 +33,14 @@ impl Shell {
                 },
             ));
         if let Some(view) = &self.view {
+            let orders = (0..self.chat_rows.count())
+                .filter_map(|row| {
+                    let (index, part) = self.chat_rows.locate(row)?;
+                    Some((view.messages.get(index)?.seq, part))
+                })
+                .collect();
             self.chat_selection.update(cx, |doc, _| {
-                doc.set_viewport(
-                    self.chat_scroll.clone(),
-                    view.messages.iter().map(|m| m.seq).collect(),
-                    px(8.),
-                )
+                doc.set_viewport(self.chat_scroll.clone(), orders, px(8.))
             });
             panel = panel.child(self.chat_selection.clone());
             let state = &view.task.state;
@@ -164,11 +166,7 @@ impl Shell {
                                         // in the reading column.
                                         list(self.chat_scroll.clone(), move |index, _, cx| {
                                             let row = entity.update(cx, |s, cx| {
-                                                s.conversation_message(
-                                                    &Conversation::Main,
-                                                    index,
-                                                    cx,
-                                                )
+                                                s.conversation_row(&Conversation::Main, index, cx)
                                             });
                                             div()
                                                 .w_full()
@@ -758,6 +756,15 @@ impl Shell {
                 ));
             }
         }
+        // Long pasted texts are files of the message, after its attachments.
+        let folded: Vec<SharedString> = self.input.read(cx).folded().to_vec();
+        if !folded.is_empty() {
+            let mut texts = div().flex().flex_wrap().flex_shrink_0().gap_2();
+            for (index, text) in folded.iter().enumerate() {
+                texts = texts.child(self.folded_text_card(index, text, cx));
+            }
+            attachments = attachments.child(texts);
+        }
         let importing = self.pasting_images > 0
             || self
                 .selected
@@ -767,6 +774,7 @@ impl Shell {
             attachments = attachments.child(kit::loader_row("Importing attachments", t));
         }
         let has_context = importing
+            || !folded.is_empty()
             || task.as_ref().map_or_else(
                 || !self.pending_attachments.is_empty(),
                 |v| !v.feedback.is_empty() || !v.attachments.is_empty(),

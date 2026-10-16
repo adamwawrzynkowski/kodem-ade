@@ -214,13 +214,19 @@ pub struct Shell {
     comparison: Comparison,
     split: bool,
     chat_scroll: ListState,
+    /// The rows of `chat_scroll`: a long reply takes several, so the list lays out only its
+    /// part in view.
+    chat_rows: conversation::ChatRows,
     follow: bool,
     /// Sequence number of the sent message whose history tick is under the pointer.
     history_hover: Option<u64>,
     folded: HashSet<String>,
+    /// Long messages of the user that show their text instead of only their card.
+    unfolded_texts: HashSet<String>,
     /// Tool runs and thoughts the user opened or folded by hand; the others follow their work.
     tray_choices: HashMap<String, bool>,
     collapsed_changes: HashSet<String>,
+    change_tree: Option<change_tree::ChangeTree>,
     text_views: HashMap<String, (Entity<TextInput>, Subscription)>,
     chat_selection: Entity<crate::components::text_document::TextDocument>,
     selection_inputs: Option<Vec<Entity<TextInput>>>,
@@ -291,8 +297,12 @@ impl Shell {
         window.focus(&focus, cx);
         let (tx, rx) = bridge::start();
         let (update_tx, update_rx) = mpsc::channel();
-        let input =
-            cx.new(|cx| TextInput::composer("Describe what you want to build or change…", cx));
+        let input = cx.new(|cx| {
+            let mut input = TextInput::composer("Describe what you want to build or change…", cx);
+            // A long paste shows as a file beside the draft instead of in it.
+            input.set_folds_long_text(true);
+            input
+        });
         let aux = cx.new(|cx| TextInput::new("Type here…", cx));
         let search = cx.new(|cx| TextInput::new("Search tasks…", cx));
         let palette_input =
@@ -527,11 +537,14 @@ impl Shell {
             comparison: Comparison::WorkingTree,
             split: false,
             chat_scroll: ListState::new(0, ListAlignment::Bottom, px(600.)),
+            chat_rows: Default::default(),
             follow: true,
             history_hover: None,
             folded: HashSet::new(),
+            unfolded_texts: HashSet::new(),
             tray_choices: HashMap::new(),
             collapsed_changes: HashSet::new(),
+            change_tree: None,
             text_views: HashMap::new(),
             chat_selection: cx.new(|_| Default::default()),
             selection_inputs: None,
@@ -1006,15 +1019,19 @@ impl Shell {
                                 || a.file_edits != b.file_edits
                         })
                 });
+                let rows = conversation::ChatRows::new(&view.messages);
                 if changed {
                     self.follow =
                         !older && self.chat_scroll.is_scrolled_to_end().unwrap_or(self.follow);
+                    // The row at the top stays at the top: the same part of the same message.
                     let mut anchor = self.chat_scroll.logical_scroll_top();
                     if let Some(current) = &self.view
-                        && let Some(message) = current.messages.get(anchor.item_ix)
+                        && let Some((index, part)) = self.chat_rows.locate(anchor.item_ix)
+                        && let Some(message) = current.messages.get(index)
                         && let Some(index) = view.messages.iter().position(|m| m.id == message.id)
                     {
-                        anchor.item_ix = index;
+                        let parts = rows.rows(index..index + 1);
+                        anchor.item_ix = (parts.start + part).min(parts.end.saturating_sub(1));
                     }
                     if let Some(current) = &self.view
                         && current.messages.len() <= view.messages.len()
@@ -1025,39 +1042,63 @@ impl Shell {
                             .all(|(a, b)| a.id == b.id)
                     {
                         let previous_count = current.messages.len();
+                        let old_total = self.chat_rows.count();
                         if previous_count < view.messages.len() {
-                            self.chat_scroll.splice(
-                                previous_count..previous_count,
-                                view.messages.len() - previous_count,
-                            );
+                            let added = rows.count() - rows.rows(0..previous_count).end;
+                            self.chat_scroll.splice(old_total..old_total, added);
+                        }
+                        // The last messages first, so that the rows before each keep their
+                        // places while a message gains or loses parts.
+                        for (index, (a, b)) in current
+                            .messages
+                            .iter()
+                            .zip(&view.messages)
+                            .enumerate()
+                            .rev()
+                        {
+                            let old = self.chat_rows.rows(index..index + 1);
+                            let new = rows.rows(index..index + 1);
+                            let edited = a.text != b.text
+                                || a.complete != b.complete
+                                || a.file_edits != b.file_edits;
+                            if old.len() != new.len() {
+                                let kept = old.len().min(new.len());
+                                self.chat_scroll
+                                    .remeasure_items(old.start..old.start + kept);
+                                self.chat_scroll
+                                    .splice(old.start + kept..old.end, new.len() - kept);
+                            } else if edited && b.kind != MessageKind::Tool {
+                                self.chat_scroll.remeasure_items(old);
+                            }
+                        }
+                        if previous_count < view.messages.len() {
                             // A new tool item extends the summary rendered at the group's first
                             // row, and any new item folds the trays that ended the transcript.
                             // The reply before those rows gives up its row of actions when
                             // work follows it.
                             let row =
                                 tool_rows_start(&view.messages, previous_count).saturating_sub(1);
-                            self.chat_scroll.remeasure_items(row..previous_count + 1);
+                            self.chat_scroll
+                                .remeasure_items(rows.rows(row..previous_count + 1));
                         }
                         for (index, (a, b)) in
                             current.messages.iter().zip(&view.messages).enumerate()
                         {
-                            if a.text != b.text
-                                || a.complete != b.complete
-                                || a.file_edits != b.file_edits
+                            if b.kind == MessageKind::Tool
+                                && (a.text != b.text
+                                    || a.complete != b.complete
+                                    || a.file_edits != b.file_edits)
                             {
                                 // A tool item can open or fold the parent tray of its
                                 // stretch, which sizes every row of the stretch.
-                                let rows = if b.kind == MessageKind::Tool {
+                                self.chat_scroll.remeasure_items(rows.rows(
                                     tool_rows_start(&view.messages, index)
-                                        ..tool_rows_end(&view.messages, index)
-                                } else {
-                                    index..index + 1
-                                };
-                                self.chat_scroll.remeasure_items(rows);
+                                        ..tool_rows_end(&view.messages, index),
+                                ));
                             }
                         }
                     } else {
-                        self.chat_scroll.reset(view.messages.len());
+                        self.chat_scroll.reset(rows.count());
                     }
                     if self.follow {
                         self.chat_scroll.scroll_to_end();
@@ -1075,12 +1116,13 @@ impl Shell {
                     let row = tool_rows_start(&view.messages, end);
                     if row < end {
                         let at_end = self.chat_scroll.is_scrolled_to_end().unwrap_or(self.follow);
-                        self.chat_scroll.remeasure_items(row..end);
+                        self.chat_scroll.remeasure_items(rows.rows(row..end));
                         if at_end {
                             self.chat_scroll.scroll_to_end();
                         }
                     }
                 }
+                self.chat_rows = rows;
                 // A result that arrives while its task is open is read as it arrives.
                 if !view.task.state.active()
                     && view
@@ -1419,6 +1461,7 @@ impl Shell {
         self.terminal = None;
         self.file_text = None;
         self.text_views.clear();
+        self.unfolded_texts.clear();
         self.chat_selection = cx.new(|_| Default::default());
         self.input
             .update(cx, |input, cx| input.set_text(String::new(), cx));
@@ -1482,6 +1525,7 @@ impl Shell {
         self.diff_subscription = None;
         self.new_diff = None;
         self.text_views.clear();
+        self.unfolded_texts.clear();
         self.chat_selection = cx.new(|_| Default::default());
         self.question_inputs.clear();
         self.answering.clear();
@@ -1637,22 +1681,24 @@ impl Shell {
         cx.notify();
     }
     fn readonly(&mut self, key: String, text: String, cx: &mut Context<Self>) -> Entity<TextInput> {
-        self.readonly_streaming(key, text, false, cx)
+        self.readonly_streaming(key, &text, false, cx)
     }
     fn readonly_streaming(
         &mut self,
         key: String,
-        text: String,
+        text: &str,
         streaming: bool,
         cx: &mut Context<Self>,
     ) -> Entity<TextInput> {
         let animate = streaming && !cx.reduce_motion();
         let input = if let Some((input, _)) = self.text_views.get(&key) {
-            if input.read(cx).text() != text {
+            if !input.read(cx).shows(text) {
+                let text = text.to_owned();
                 input.update(cx, |input, cx| input.set_streamed_text(text, animate, cx));
             }
             input.clone()
         } else {
+            let text = text.to_owned();
             let input = cx.new(|cx| {
                 let mut input = TextInput::readonly(String::new(), cx);
                 input.set_streamed_text(text, animate, cx);

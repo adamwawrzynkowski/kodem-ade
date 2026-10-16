@@ -1,6 +1,6 @@
 //! Folder-first changes navigation. Leaves retain their immutable snapshot index.
 use super::*;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, rc::Rc};
 
 #[derive(Default)]
 struct Folder {
@@ -49,8 +49,21 @@ impl Folder {
         }
     }
 }
+/// The rows of the changes tree and the added and removed lines of each file, for one diff
+/// snapshot and one set of folded folders. The review panel is drawn again on every step of an
+/// animation, and a large diff has many files to sort and lines to count.
+pub(super) struct ChangeTree {
+    snapshot: (String, u64),
+    collapsed: HashSet<String>,
+    rows: Rc<Vec<TreeRow>>,
+    totals: Rc<Vec<(usize, usize)>>,
+}
+
+/// Added and removed lines of each file of a diff, in the order of the snapshot's files.
+pub(super) type LineTotals = Rc<Vec<(usize, usize)>>;
+
 #[derive(Clone)]
-struct TreeRow {
+pub(super) struct TreeRow {
     name: String,
     path: String,
     depth: usize,
@@ -59,48 +72,53 @@ struct TreeRow {
     repository: Option<std::path::PathBuf>,
 }
 impl Shell {
+    /// Returns the rows of the open diff's tree and its line totals, built again only after the
+    /// diff or the folded folders changed.
+    pub(super) fn change_tree(&mut self) -> Option<(Rc<Vec<TreeRow>>, LineTotals)> {
+        let snapshot = self.diff.as_ref()?;
+        let key = (snapshot.id.clone(), snapshot.captured);
+        if self
+            .change_tree
+            .as_ref()
+            .is_none_or(|tree| tree.snapshot != key || tree.collapsed != self.collapsed_changes)
+        {
+            let totals = snapshot
+                .files
+                .iter()
+                .map(|file| {
+                    file.lines
+                        .iter()
+                        .fold((0, 0), |(added, removed), line| match line.kind {
+                            LineKind::Added => (added + 1, removed),
+                            LineKind::Removed => (added, removed + 1),
+                            _ => (added, removed),
+                        })
+                })
+                .collect();
+            self.change_tree = Some(ChangeTree {
+                snapshot: key,
+                collapsed: self.collapsed_changes.clone(),
+                rows: Rc::new(tree_rows(snapshot, &self.collapsed_changes)),
+                totals: Rc::new(totals),
+            });
+        }
+        self.change_tree
+            .as_ref()
+            .map(|tree| (tree.rows.clone(), tree.totals.clone()))
+    }
+
     /// Groups changes by owning checkout, then renders foldable folders and file totals.
     pub(super) fn changes_tree(
         &self,
-        snapshot: &DiffSnapshot,
+        rows: Rc<Vec<TreeRow>>,
+        totals: LineTotals,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let mut groups = BTreeMap::<_, Folder>::new();
-        for (i, file) in snapshot.files.iter().enumerate() {
-            groups
-                .entry(file.repository.clone())
-                .or_default()
-                .insert(&file.label, i);
-        }
-        let mut rows = Vec::new();
-        for (repository, folder) in groups {
-            if let Some(root) = repository {
-                let name = snapshot
-                    .repositories
-                    .iter()
-                    .find(|repo| repo.root == root)
-                    .map_or_else(|| root.display().to_string(), |repo| repo.label.clone());
-                let path = format!("repo:{root:?}/");
-                rows.push(TreeRow {
-                    name,
-                    path: path.clone(),
-                    depth: 0,
-                    file: None,
-                    count: folder.count,
-                    repository: Some(root),
-                });
-                if !self.collapsed_changes.contains(&path) {
-                    folder.rows(&path, 1, &self.collapsed_changes, &mut rows);
-                }
-            } else {
-                folder.rows("", 0, &self.collapsed_changes, &mut rows);
-            }
-        }
         let entity = cx.entity();
         uniform_list("changed-files", rows.len(), move |range, _, cx| {
             entity.update(cx, |s, cx| {
                 range
-                    .map(|index| s.change_tree_row(index, rows[index].clone(), cx))
+                    .map(|index| s.change_tree_row(index, rows[index].clone(), &totals, cx))
                     .collect::<Vec<_>>()
             })
         })
@@ -116,6 +134,7 @@ impl Shell {
         &self,
         row_index: usize,
         row: TreeRow,
+        totals: &[(usize, usize)],
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
@@ -140,16 +159,7 @@ impl Shell {
             .text_size(text_px(11.5));
         if let Some(i) = row.file {
             let file = &snapshot.files[i];
-            let added = file
-                .lines
-                .iter()
-                .filter(|l| l.kind == LineKind::Added)
-                .count();
-            let removed = file
-                .lines
-                .iter()
-                .filter(|l| l.kind == LineKind::Removed)
-                .count();
+            let (added, removed) = totals.get(i).copied().unwrap_or_default();
             let (glyph, color) = match row.name.rsplit('.').next().unwrap_or("") {
                 "rs" | "swift" | "ts" | "tsx" | "js" | "cs" | "cpp" | "h" => ("code", t.muted),
                 "sh" | "command" => ("square-terminal", t.muted),
@@ -285,4 +295,41 @@ impl Shell {
         }
         entry.into_any_element()
     }
+}
+
+// Lists the rows of the changes tree: each checkout, then its folders and files. A folded
+// folder hides its rows.
+fn tree_rows(snapshot: &DiffSnapshot, collapsed: &HashSet<String>) -> Vec<TreeRow> {
+    let mut groups = BTreeMap::<_, Folder>::new();
+    for (i, file) in snapshot.files.iter().enumerate() {
+        groups
+            .entry(file.repository.clone())
+            .or_default()
+            .insert(&file.label, i);
+    }
+    let mut rows = Vec::new();
+    for (repository, folder) in groups {
+        if let Some(root) = repository {
+            let name = snapshot
+                .repositories
+                .iter()
+                .find(|repo| repo.root == root)
+                .map_or_else(|| root.display().to_string(), |repo| repo.label.clone());
+            let path = format!("repo:{root:?}/");
+            rows.push(TreeRow {
+                name,
+                path: path.clone(),
+                depth: 0,
+                file: None,
+                count: folder.count,
+                repository: Some(root),
+            });
+            if !collapsed.contains(&path) {
+                folder.rows(&path, 1, collapsed, &mut rows);
+            }
+        } else {
+            folder.rows("", 0, collapsed, &mut rows);
+        }
+    }
+    rows
 }

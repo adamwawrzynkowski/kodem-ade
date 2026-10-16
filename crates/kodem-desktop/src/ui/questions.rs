@@ -155,7 +155,7 @@ impl Shell {
                     .py(px(10.))
                     .child(self.message_blocks(
                         &format!("plan-review:{request_key}"),
-                        crate::markdown::blocks(&plan),
+                        &crate::markdown::blocks(&plan),
                         false,
                         cx,
                     )),
