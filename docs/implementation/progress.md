@@ -717,6 +717,10 @@ Recorded on 16 October 2026. While a turn ran with a draft, the composer showed 
 
 Recorded on 16 October 2026. The user found the arrows of the send mode chip uninformative. Queue now shows Lucide `list-end`, a list with an arrow that turns into its end, and steer shows Lucide `ship-wheel`, at 14 points. Both come from `lucide-static` 1.55.0 with the geometry unchanged, written in the one-line form of the other control icons and listed in `assets/THIRD_PARTY.md`. Checked with `cargo build`, `cargo clippy -D warnings` and `cargo fmt --check` on macOS.
 
+## Depth for agent links and flat buttons
+
+Recorded on 16 October 2026. The user asked for the badge depth on the buttons that open agents and on the other flat buttons. `kit::raised_fill` draws a neutral fill four hundredths lighter at the top and darker at the bottom; `kit::raised_light` adds the theme highlight one point under the top edge, a darker line above the bottom edge and a tight shadow in the theme's shadow color. They apply to `agent_link` in `ui/subagents.rs` (the agent strip above the composer and the agent link in the conversation) and to the neutral `button` builder in `ui/mod.rs`. The `tinted` builder now uses `tint_fill` and `tint_light`. Hover keeps the depth on the hover fill; a press drops the light, so the button sinks flat. Ghost, icon and glass buttons and the buttons of the Git workspace's own kit are unchanged. Checked with `cargo build`, `cargo clippy -D warnings` (no findings) and `cargo fmt --check` on macOS. The look is not checked on a display under the no-visual-testing agreement.
+
 ## Git workspace (Beta): Liquid merged into Kodem
 
 Recorded on 16 October 2026. The user asked to merge the standalone Liquid Git client completely into Kodem as the fourth workspace of the rail, with all its features, design and elements. The Git tile takes the branch glyph that Review used and carries a BETA badge; Review now shows Lucide `scan-eye`.

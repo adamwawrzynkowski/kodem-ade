@@ -1859,11 +1859,14 @@ impl Shell {
             .child(kit::glint(theme.accent.opacity(0.5), dither::Edge::Bottom))
             .child(icon(glyph).size(px(13.)))
             .when(!label.is_empty(), |b| b.child(label))
+            .bg(kit::raised_fill(theme.control))
+            .shadow(kit::raised_light(theme))
             .hover(move |s| {
-                s.bg(theme.control_hover)
+                s.bg(kit::raised_fill(theme.control_hover))
                     .border_color(theme.accent.opacity(0.5))
             })
-            .active(move |s| s.bg(theme.control_active))
+            // A pressed button sinks flat: its light goes out.
+            .active(move |s| s.bg(theme.control_active).shadow(Vec::new()))
             .on_press(move |position, cx| fx::ripple(position, theme.text, cx))
     }
     /// Returns a button with no surface until the pointer is over it.
@@ -1961,11 +1964,15 @@ impl Shell {
             .child(kit::glint(tone.opacity(0.6), dither::Edge::Bottom))
             .child(icon(glyph).size(px(13.)))
             .when(!label.is_empty(), |b| b.child(label))
-            .bg(tone.opacity(0.09))
+            .bg(kit::tint_fill(tone, 0.09))
+            .shadow(kit::tint_light(tone))
             .border_color(tone.opacity(0.45))
             .text_color(tone)
-            .hover(move |s| s.bg(tone.opacity(0.16)).border_color(tone.opacity(0.7)))
-            .active(move |s| s.bg(tone.opacity(0.22)))
+            .hover(move |s| {
+                s.bg(kit::tint_fill(tone, 0.16))
+                    .border_color(tone.opacity(0.7))
+            })
+            .active(move |s| s.bg(tone.opacity(0.22)).shadow(Vec::new()))
             .on_press(move |position, cx| fx::ripple(position, tone, cx))
     }
 }

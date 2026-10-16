@@ -397,6 +397,43 @@ pub(super) fn tint_light(tone: Hsla) -> Vec<BoxShadow> {
     ]
 }
 
+/// Returns the fill of a neutral raised surface with the same slight depth as `tint_fill`: the
+/// fill a little lighter at the top than at the bottom.
+pub(super) fn raised_fill(fill: Hsla) -> Background {
+    linear_gradient(
+        180.,
+        linear_color_stop(toward(fill, 1., 0.04), 0.),
+        linear_color_stop(toward(fill, 0., 0.04), 1.),
+    )
+}
+
+/// Returns the light of a neutral raised surface with the same slight depth as `tint_light`: the
+/// theme highlight inside its top edge, a darker line inside its bottom edge and a tight shadow
+/// below. The lines sit one point inside the edge, so a hairline border does not hide them.
+pub(super) fn raised_light(theme: Theme) -> Vec<BoxShadow> {
+    let line = |color: Hsla, y: f32| BoxShadow {
+        inset: true,
+        color,
+        offset: point(px(0.), gpui::px(y)),
+        blur_radius: px(0.),
+        spread_radius: px(0.),
+    };
+    vec![
+        line(theme.highlight, 2.),
+        line(
+            gpui::black().opacity(if theme.light { 0.05 } else { 0.22 }),
+            -2.,
+        ),
+        BoxShadow {
+            inset: false,
+            color: theme.shadow,
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(1.5),
+            spread_radius: px(0.),
+        },
+    ]
+}
+
 /// Names the keys of the shortcuts in a label the way this platform does. Labels are written
 /// with macOS symbols, so `⇧⌘M` reads `Ctrl+Shift+M` on Windows and Linux.
 pub(super) fn shortcut(label: impl Into<SharedString>) -> SharedString {

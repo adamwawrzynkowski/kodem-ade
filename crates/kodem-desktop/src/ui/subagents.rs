@@ -117,8 +117,11 @@ impl Shell {
         )
         .h(px(28.))
         .px(px(8.))
-        .bg(t.control)
+        .bg(kit::raised_fill(t.control))
         .border_color(t.edge)
+        .shadow(kit::raised_light(t))
+        .hover(move |s| s.bg(kit::raised_fill(t.control_hover)).text_color(t.text))
+        .active(move |s| s.bg(t.control_active).shadow(Vec::new()))
         .child(if agent.state.active() {
             motion::active_icon("loader", t.accent, true, cx.reduce_motion())
         } else {
