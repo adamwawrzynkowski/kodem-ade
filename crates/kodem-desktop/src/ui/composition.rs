@@ -143,6 +143,7 @@ impl Shell {
             attachment_ids: view.task.attachments.iter().map(|a| a.id.clone()).collect(),
             mode,
         });
+        backdrop::spark_send(cx);
         cx.notify();
     }
 
@@ -185,6 +186,7 @@ impl Shell {
         self.empty_draft = self.input.read(cx).text();
         self.creating_task = true;
         self.send(request);
+        backdrop::spark_send(cx);
         cx.notify();
     }
 

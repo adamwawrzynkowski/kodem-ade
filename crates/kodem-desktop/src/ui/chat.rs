@@ -18,8 +18,8 @@ impl Shell {
             .flex()
             .flex_col()
             .overflow_hidden()
-            // The surface and its light field are painted beneath the workspace, in the mood of
-            // the open task.
+            // The surface and its glyph field are painted beneath the workspace, in the mood of
+            // the open task. A press on the surface starts a wave there.
             .child(backdrop::surface(
                 backdrop::Mood::of(self.view.as_ref().map(|view| &view.task)),
                 // The conversation and the new-task column are centered at these widths.
@@ -312,7 +312,7 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(10.))
-            // The header is chrome: it keeps a solid fill over the light field behind the chat.
+            // The header is chrome: it keeps a solid fill over the glyph field behind the chat.
             .bg(self.theme.canvas)
             .child(
                 div()

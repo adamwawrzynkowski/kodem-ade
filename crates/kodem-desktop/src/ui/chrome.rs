@@ -446,7 +446,7 @@ impl Render for Shell {
             .font_weight(FontWeight::NORMAL)
             .text_color(t.text)
             // No fill: the window root paints the backdrop color, and the chat surface with its
-            // light field lies beneath this view.
+            // glyph field lies beneath this view.
             .on_action(cx.listener(Self::open_project))
             .on_action(cx.listener(Self::new_task))
             .on_action(cx.listener(Self::submit))
