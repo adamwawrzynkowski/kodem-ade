@@ -74,7 +74,7 @@ apply_ruleset Main "$(cat <<JSON
       "parameters": {
         "strict_required_status_checks_policy": true,
         "required_status_checks": [
-          { "context": "Format and licenses", "integration_id": $actions_app },
+          { "context": "Format", "integration_id": $actions_app },
           { "context": "Clippy (macos-14)", "integration_id": $actions_app },
           { "context": "Clippy (windows-2022)", "integration_id": $actions_app },
           { "context": "Clippy (ubuntu-22.04)", "integration_id": $actions_app }

@@ -1,5 +1,6 @@
-# Checks every pull request and every change to main: formatting, the license snapshot, and Clippy
-# with warnings denied on macOS, Windows and Linux. The main branch ruleset requires these checks.
+# Checks every pull request and every change to main: formatting and Clippy with warnings denied
+# on macOS, Windows and Linux. The main branch ruleset requires these checks. Licenses are checked
+# only by release builds (scripts/licenses.py prepare in the build scripts).
 # Pull requests from forks run with a read-only token and no secrets.
 name: Checks
 
@@ -17,7 +18,7 @@ concurrency:
 
 jobs:
   format:
-    name: Format and licenses
+    name: Format
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -25,7 +26,6 @@ jobs:
         with:
           persist-credentials: false
       - run: cargo fmt --all -- --check
-      - run: python3 scripts/licenses.py check
 
   clippy:
     name: Clippy (${{ matrix.os }})
