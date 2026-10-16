@@ -197,6 +197,26 @@ fn palette(id: ThemeId) -> Palette {
             warning: 0xf2bc4b,
             info: 0x6ba6ff,
         },
+        // Kodem's own night theme: plum-black surfaces, lilac text, a hot pink accent and a
+        // violet light. Mint, coral and gold carry the states without leaving the dusk.
+        ThemeId::Adys => Palette {
+            backdrop: 0x0d0912,
+            canvas: 0x17111f,
+            sidebar: 0x120d19,
+            header: 0x1c1526,
+            raised: 0x221a2e,
+            inset: 0x110c17,
+            control: [0x2a2038, 0x342843, 0x3e304f],
+            text: 0xf4ecf8,
+            muted: 0xc6b6d4,
+            subtle: 0x9583ab,
+            accent: 0xff6ac1,
+            on_accent: 0x1a0a1e,
+            added: 0x6ef2b8,
+            removed: 0xff5f6d,
+            warning: 0xf9cb76,
+            info: 0xb69cff,
+        },
         ThemeId::Monokai => Palette {
             backdrop: 0x171814,
             canvas: 0x272822,

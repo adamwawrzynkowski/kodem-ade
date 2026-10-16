@@ -185,6 +185,7 @@ pub struct Project {
 pub enum ThemeId {
     #[default]
     Graphite,
+    Adys,
     Monokai,
     Dracula,
     OneDark,
@@ -201,8 +202,9 @@ pub enum ThemeId {
 }
 impl ThemeId {
     /// Every theme in picker order: the dark themes, then the light ones.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Graphite,
+        Self::Adys,
         Self::Monokai,
         Self::Dracula,
         Self::OneDark,
@@ -221,6 +223,7 @@ impl ThemeId {
     pub fn label(self) -> &'static str {
         match self {
             Self::Graphite => "Graphite",
+            Self::Adys => "Adys",
             Self::Monokai => "Monokai",
             Self::Dracula => "Dracula",
             Self::OneDark => "One Dark",

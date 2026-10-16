@@ -64,6 +64,9 @@ impl CodeColors {
 // that syntect bundles.
 fn code_colors(id: ThemeId) -> Option<CodeColors> {
     let colors = CodeColors::new(match id {
+        ThemeId::Adys => [
+            0xe9dff3, 0x8d7ba6, 0xff6ac1, 0xffb38a, 0xf09bff, 0xb69cff, 0x7fd6ff, 0xffc6e4,
+        ],
         ThemeId::Monokai => [
             0xf8f8f2, 0x88846f, 0xf92672, 0xe6db74, 0xae81ff, 0xa6e22e, 0x66d9ef, 0xfd971f,
         ],
