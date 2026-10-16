@@ -9,6 +9,7 @@ impl Shell {
         self.sync_slash(cx);
         self.sync_context_arrivals(window, cx);
         let history = self.message_history(window, cx);
+        let cover = self.chat_cover();
         let t = self.theme;
         let mut panel = div()
             .relative()
@@ -152,11 +153,9 @@ impl Shell {
                             .min_h_0()
                             .flex()
                             .justify_center()
-                            // The conversation ends where the composer begins. Nothing covers
-                            // the area around the composer, so the background shows down to
-                            // the bottom of the chat.
-                            .pb((gpui::px(self.composer_height) - px(COMPOSER_LEAD))
-                                .max(gpui::px(0.)))
+                            // The conversation runs on behind the composer's glass box and
+                            // ends at the box's bottom edge, so its hints below stay clear.
+                            .pb(gpui::px(self.composer_tail))
                             .child(
                                 div()
                                     .relative()
@@ -187,10 +186,20 @@ impl Shell {
                                         .w_full()
                                         .min_w_0()
                                         .h_full()
-                                        .pb(px(8.)),
+                                        // At its end the last message rests above the box.
+                                        .pb(gpui::px(cover) + px(8.)),
                                     )
-                                    // The history rail and its preview lie over the list.
-                                    .children(history),
+                                    // The history rail and its preview lie over the list,
+                                    // above the box.
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .top_0()
+                                            .left_0()
+                                            .right_0()
+                                            .bottom(gpui::px(cover))
+                                            .children(history),
+                                    ),
                             ),
                     );
                 }
@@ -239,6 +248,16 @@ impl Shell {
                                     if (s.composer_height - height).abs() > 0.5 {
                                         s.composer_height = height;
                                         cx.notify();
+                                    }
+                                    // The box laid out before this point. Its spring offset is
+                                    // left out, so the conversation stays still while it bounces.
+                                    if let Some(editor) = fx::anchor_bounds(COMPOSER_ANCHOR, cx) {
+                                        let rest = editor.bottom() - px(s.composer_spring.offset);
+                                        let tail = f32::from(bounds.bottom() - rest).ceil().max(0.);
+                                        if (s.composer_tail - tail).abs() > 0.5 {
+                                            s.composer_tail = tail;
+                                            cx.notify();
+                                        }
                                     }
                                     // The list laid out before this point, and its layout
                                     // resumes following when the user scrolls back to the end.
@@ -821,7 +840,9 @@ impl Shell {
             .rounded(px(motion::COMPOSER_RADIUS))
             // The meter tab continues this corner upward.
             .rounded_tr(px(0.))
-            .bg(t.raised)
+            // Glass like the side panels, but denser, because the draft is read over the
+            // conversation behind it. The meter tab on its edge is the same glass.
+            .map(|editor| kit::glass(editor, t.raised, COMPOSER_GLASS_FILL))
             .border_1()
             .border_color(if focused {
                 t.accent.opacity(0.6)
@@ -1198,6 +1219,9 @@ impl Shell {
                 .relative()
                 .mt(px(METER_TAB_HEIGHT - 1.))
                 .top(px(self.composer_spring.offset))
+                // The conversation scrolls behind the box. The box holds the pointer, so the
+                // wheel over it scrolls the draft and not the conversation under it.
+                .occlude()
                 .child(dither::shadow(t, motion::COMPOSER_RADIUS, 4.))
                 .child(editor)
                 .child(tab),
@@ -1296,7 +1320,11 @@ impl Shell {
 
 /// Height of the strip above the floating composer that holds the jump-to-latest button. The
 /// conversation runs beneath it.
-const COMPOSER_LEAD: f32 = 28.;
+pub(super) const COMPOSER_LEAD: f32 = 28.;
+
+/// Share of the composer's tone over the blur behind its box and its meter tab. Half as much
+/// shows through as through the side panels, so the draft reads clearly over the conversation.
+const COMPOSER_GLASS_FILL: f32 = 0.625;
 
 /// Height of the meter tab on the composer's top edge, and the run of its slanted side.
 const METER_TAB_HEIGHT: f32 = 24.;
@@ -1305,6 +1333,8 @@ const METER_TAB_SLANT: f32 = 14.;
 /// from each corner of the slant its rounding starts.
 const METER_TAB_FOOT: f32 = 7.;
 const METER_TAB_ROUNDING: f32 = 6.;
+/// Steps of the glass blur that follow the tab's slant.
+const METER_TAB_SLANT_STEPS: usize = 5;
 
 // Paints the meter tab: a surface with a slanted leading side and a rounded trailing corner
 // that continues the composer's corner. The slant curves out of the composer's edge at its
@@ -1346,15 +1376,43 @@ fn paint_meter_tab(
         builder.curve_to(point(right, top + radius), point(right, top));
         builder.line_to(point(right, bottom));
     };
-    // The fill is thin where the foot leaves the composer's edge, and a second translucent line
-    // over that edge would show as a brighter stretch. The composer's edge is covered under the
-    // whole tab, so the tab's own stroke is the only line there. A hover tone lies over the
-    // whole surface in the same shape.
+    // The tab is glass like the composer: the field behind its shape is blurred, then tinted.
+    // A backdrop is a rounded rectangle, so the flat top is one and narrow steps follow the
+    // slant. The blur stops above the composer's edge.
+    let seam_top = bottom - gpui::px(1.);
+    let blur = [Filter::Blur(px(kit::GLASS_BLUR))];
+    window.paint_backdrop_filter(
+        Bounds::from_corners(point(head.x, bounds.top()), point(bounds.right(), seam_top)),
+        Corners {
+            top_right: radius,
+            ..Corners::default()
+        },
+        &blur,
+    );
+    let step = (head.x - foot.x) / METER_TAB_SLANT_STEPS as f32;
+    for index in 0..METER_TAB_SLANT_STEPS {
+        let start = foot.x + step * index as f32;
+        // The slant's height at the middle of the step, from the foot up to the head.
+        let share = (index as f32 + 0.5) / METER_TAB_SLANT_STEPS as f32;
+        let edge = bottom - (bottom - top) * share;
+        window.paint_backdrop_filter(
+            Bounds::from_corners(point(start, edge), point(start + step, seam_top)),
+            Corners::default(),
+            &blur,
+        );
+    }
+    // The composer's edge runs under the tab's bottom row. A see-through fill would show it as
+    // a line across the tab, so that row stays solid in the surface tone and the tab's own
+    // stroke is the only line there. A hover tone lies over the whole surface in the same shape.
     let seam = Bounds::new(
-        point(bounds.left(), bottom - gpui::px(1.)),
+        point(bounds.left(), seam_top),
         size(bounds.size.width - gpui::px(1.), gpui::px(1.)),
     );
-    for tone in [Some(surface), hover].into_iter().flatten() {
+    window.paint_quad(fill(seam, surface));
+    for tone in [Some(surface.opacity(COMPOSER_GLASS_FILL)), hover]
+        .into_iter()
+        .flatten()
+    {
         let mut body = PathBuilder::fill();
         outline(&mut body, bottom);
         body.close();

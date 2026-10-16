@@ -74,7 +74,14 @@ impl Shell {
             .when(!center, |d| d.w(px(width)).h_full().flex_shrink_0())
             .flex()
             .flex_col()
-            .bg(if center { t.canvas } else { t.sidebar })
+            // The side pane is glass over the background; the centered one is the chat's own.
+            .map(|panel| {
+                if center {
+                    panel.bg(t.canvas)
+                } else {
+                    kit::panel_glass(panel, t)
+                }
+            })
             .overflow_hidden()
             .when(!center, |panel| {
                 panel.child(

@@ -21,6 +21,9 @@
 //! user; green after a finished turn and red after a failure. A change of mood blends, so
 //! nothing jumps.
 //!
+//! The field covers the whole window. The panels at its sides are glass that blurs it; the calm
+//! column and the composer belong to the chat.
+//!
 //! Each light is one blurred shape that the GPU draws. Each lit cell is one glyph sprite from
 //! GPUI's atlas. The grid lies on whole device pixels,
 //! so each character is rasterized once and every later frame reuses its sprite. A frame
@@ -635,6 +638,10 @@ impl Render for Backdrop {
             return layer;
         };
         state.borrow_mut().painted = Some((bounds, mood, column, composer));
+        // The field covers the whole window, beneath the panels at its sides, which blur it.
+        // The calm column and the composer belong to the chat surface.
+        let chat = bounds;
+        let bounds = Bounds::new(point(Pixels::ZERO, Pixels::ZERO), window.viewport_size());
         let target = Field::of(mood, theme);
         let now = Instant::now();
         // A long pause, such as a hidden window, must not turn into one large jump.
@@ -683,6 +690,7 @@ impl Render for Backdrop {
         let neutral = hsla_to_rgba(theme.muted);
         let frame = Frame {
             bounds,
+            chat,
             column,
             composer,
             clock: self.clock,
@@ -827,10 +835,13 @@ impl Ring {
 
 // Everything that one frame of the field is painted from.
 struct Frame {
+    /// The window, which the field covers.
     bounds: Bounds<Pixels>,
-    /// Width of the reading column, in window pixels.
+    /// The chat surface, which holds the calm column and the composer.
+    chat: Bounds<Pixels>,
+    /// Width of the reading column, centered on the chat, in window pixels.
     column: f32,
-    /// Height at the bottom of the surface that the composer covers, in window pixels.
+    /// Height at the bottom of the chat that the composer covers, in window pixels.
     composer: f32,
     grid: Grid,
     clock: f64,
@@ -1018,7 +1029,6 @@ fn paint(frame: &Frame, window: &mut Window) {
 
 // Returns the lit cells of one frame.
 fn lay_out(frame: &Frame) -> Vec<Lit> {
-    let bounds = frame.bounds;
     let Grid {
         origin,
         cell,
@@ -1030,10 +1040,10 @@ fn lay_out(frame: &Frame) -> Vec<Lit> {
     let scale = crate::theme::ui_scale();
     let clock = frame.clock as f32;
     // The calm column: how much of it lies over each column and each row of cells.
-    let middle = f32::from(bounds.center().x);
+    let middle = f32::from(frame.chat.center().x);
     let reach = VEIL_REACH * scale;
     let half = frame.column / 2.;
-    let limit = f32::from(bounds.bottom()) - frame.composer;
+    let limit = f32::from(frame.chat.bottom()) - frame.composer;
     let across: Vec<f32> = (0..columns)
         .map(|column| {
             if frame.column <= 0. {
@@ -1137,7 +1147,7 @@ fn sway(clock: f64, pace: f32, start: f32) -> f32 {
 // behind the composer, so that it is dense over the last message and the light around the
 // composer stays.
 fn light_veil(frame: &Frame) -> (Bounds<Pixels>, Pixels) {
-    let bounds = frame.bounds;
+    let bounds = frame.chat;
     let blur = px(LIGHT_VEIL_BLUR * crate::theme::ui_scale());
     let reach = blur * LIGHT_VEIL_REACH;
     let half = px(frame.column / 2.) + reach;

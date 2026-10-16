@@ -71,7 +71,7 @@ impl Shell {
                         cx.listener(|s, _, _, _| s.title_press = false),
                     )
             })
-            .bg(t.sidebar)
+            .map(|header| kit::panel_glass(header, t))
             .border_b_1()
             .border_color(t.border)
             .when(self.reveals.sidebar > 0., |d| {
@@ -1010,7 +1010,7 @@ impl Shell {
             .w(px(self.settings.sidebar_width))
             .flex_shrink_0()
             .h_full()
-            .bg(t.sidebar)
+            .map(|panel| kit::panel_glass(panel, t))
             .overflow_hidden()
             .child(content)
             .into_any_element()

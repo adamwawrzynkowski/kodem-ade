@@ -896,6 +896,23 @@ pub(super) fn tab_indicator(accent: Hsla) -> Div {
         )
 }
 
+/// Share of a glass surface's tone that covers the background field, and the blur of the
+/// field that shows through, in points.
+const GLASS_FILL: f32 = 0.25;
+pub(super) const GLASS_BLUR: f32 = 6.;
+
+/// Gives a surface glass in `tone`: the share `fill` of the tone over a blur of what lies
+/// behind it. GPUI's renderers on macOS (Metal), Linux (wgpu) and Windows (DirectX) all draw the
+/// blur, clipped to the surface's rounded rectangle.
+pub(super) fn glass<E: Styled>(surface: E, tone: Hsla, fill: f32) -> E {
+    surface.bg(tone.opacity(fill)).backdrop_blur(px(GLASS_BLUR))
+}
+
+/// Gives a panel at a side of the window its glass, in the panel tone.
+pub(super) fn panel_glass<E: Styled>(panel: E, theme: Theme) -> E {
+    glass(panel, theme.sidebar, GLASS_FILL)
+}
+
 /// A card surface: raised fill, hairline edge and a dithered shade along its bottom edge.
 pub(super) fn card(theme: Theme) -> Div {
     div()

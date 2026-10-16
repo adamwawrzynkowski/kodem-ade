@@ -68,8 +68,10 @@ impl Shell {
         let current = turns.iter().rposition(|index| *index <= top).unwrap_or(0);
         // The list's height comes from the frame before. A long conversation shows the ticks
         // around the turn in view.
-        let height =
-            f32::from(self.chat_scroll.viewport_bounds().size.height) / crate::theme::ui_scale();
+        // The part of the list behind the composer's box holds no ticks.
+        let height = (f32::from(self.chat_scroll.viewport_bounds().size.height)
+            - self.chat_cover())
+            / crate::theme::ui_scale();
         let capacity = if height > 0. {
             (((height - 2. * MARGIN) / PITCH).floor() as usize).max(1)
         } else {

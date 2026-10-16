@@ -285,6 +285,9 @@ pub struct Shell {
     auto_submit_task: Option<String>,
     new_submission_origin: Option<Point<Pixels>>,
     composer_height: f32,
+    /// Height below the floating composer's box, at rest: its hints and its margin, in window
+    /// pixels. The conversation ends at the box, so it passes behind the box's glass only.
+    composer_tail: f32,
     composer_spring: motion::ComposerSpring,
     reveals: motion::Reveals,
     settings_section: usize,
@@ -603,6 +606,7 @@ impl Shell {
             auto_submit_task: None,
             new_submission_origin: None,
             composer_height: 170.,
+            composer_tail: 0.,
             composer_spring: motion::ComposerSpring::default(),
             reveals: motion::Reveals::default(),
             settings_section: 0,
@@ -1465,6 +1469,12 @@ impl Shell {
             }
         }
         cx.notify();
+    }
+    /// Returns the height at the bottom of the conversation list that the composer's box covers,
+    /// in window pixels. The list keeps it as padding, so its end rests above the box and the
+    /// messages before scroll behind the box's glass.
+    pub(super) fn chat_cover(&self) -> f32 {
+        (self.composer_height - f32::from(px(chat::COMPOSER_LEAD)) - self.composer_tail).max(0.)
     }
     /// Reports whether the jump to the latest message belongs on screen: the user scrolled the
     /// conversation away from its end.

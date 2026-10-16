@@ -34,7 +34,7 @@ impl Shell {
             .w(px(RAIL))
             .flex_shrink_0()
             .h_full()
-            .bg(t.sidebar)
+            .map(|rail| kit::panel_glass(rail, t))
             .flex()
             .flex_col()
             .items_center()

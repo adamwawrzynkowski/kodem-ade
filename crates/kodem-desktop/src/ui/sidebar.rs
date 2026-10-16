@@ -123,7 +123,7 @@ impl Shell {
             .w(px(self.settings.sidebar_width))
             .flex_shrink_0()
             .h_full()
-            .bg(t.sidebar)
+            .map(|panel| kit::panel_glass(panel, t))
             .flex()
             .flex_col()
             .overflow_hidden()
