@@ -107,7 +107,9 @@ jobs:
     name: macOS
     needs: plan
     if: contains(inputs.platforms, 'macos')
-    runs-on: macos-14
+    # AppKit draws the window controls and other system chrome in the style of the SDK that
+    # the app links against, so the release must link against the macOS 27 SDK.
+    runs-on: xcode-27
     timeout-minutes: 120
     env:
       KODEM_RELEASE_VERSION: ${{ needs.plan.outputs.version }}
@@ -124,6 +126,11 @@ jobs:
       # cache prunes files inside them, and the build refuses to replace a bundle it cannot read.
       - name: Remove packages restored by the cache
         run: rm -rf "target/$KODEM_CHANNEL"
+      - name: Require the macOS 27 SDK
+        run: |
+          sdk_version=$(xcrun --sdk macosx --show-sdk-version)
+          echo "macOS SDK $sdk_version"
+          [[ "${sdk_version%%.*}" -ge 27 ]] || { echo "The release must link against the macOS 27 SDK or newer." >&2; exit 1; }
       - name: Build and package
         run: scripts/build-macos.sh "$KODEM_CHANNEL"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
