@@ -1,6 +1,6 @@
 {
   "inputs": {
-    "Cargo.lock": "52045e91bd6927786a66d48118e96717ab21ba91fb6c4b88541fa48d0c44dce2",
+    "Cargo.lock": "7b078527f4d432fbd3576296bff5e8751813a34e8e1eb2cdd867fec95555bfe6",
     "Cargo.toml": "c5566f6149a5b120d17c0427785faf40a617d52c91a3666c81362cb6575f3381",
     "LICENSE": "7de28eeff500ea66eaaa1d950319b5d760bf9a50a2c335427838a4b11bad6c1b",
     "about.toml": "da2721a9cea560519bd9a618e80605826bfe8fa13336a5c9346b27018bd3d671",
@@ -21,7 +21,7 @@
     "crates/kodem-desktop/Cargo.toml": "dd75a5c4103628e02d509bd266dca0c081c181c49d99a9014b01064466139447",
     "crates/kodem-git/Cargo.toml": "b828078a998864c282a918db1af5b3dc8b96b98305c70f48306508373147cce3",
     "crates/kodem-host/Cargo.toml": "148abeb8808da4d5b0158dc6f8c929334775dc36613d23eea56083f734c58b68",
-    "crates/kodem-update/Cargo.toml": "3b7a0f4572c736896678b0ffd22bf33d6209446e223a8035bf9a0a26888317e3",
+    "crates/kodem-update/Cargo.toml": "91012c5e438e97fd33d09b050f40eed3bc644bb6396f313ae1d101599ad187ac",
     "licensing/README.md": "3bed85358a49108ae18bfc6b1f5b1d4a40799632a3f4b8c72d5ee19d420122c2",
     "licensing/clarifications.json": "dec88b30659fabbe6ca866705ad71e7ff78e4afdb6b6dc139b3d7adb3b7824a0",
     "rust-toolchain.toml": "559f488c181e0e9e77cf17c29de663977f036ec7ff2e2060585714bf53c52d62",

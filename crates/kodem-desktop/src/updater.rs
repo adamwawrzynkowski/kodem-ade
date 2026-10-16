@@ -1,6 +1,6 @@
 //! GitHub channel discovery and verified updates, run outside the UI thread. macOS installs an
 //! app bundle; Windows and Linux replace the folder that holds the executables. The
-//! `kodem-update` helper of the installed version moves the folders after the desktop exits.
+//! `kodem-update` helper of the downloaded version moves the folders after the desktop exits.
 use anyhow::{Context, Result, bail, ensure};
 use kodem_core::platform;
 use semver::Version;
@@ -680,18 +680,23 @@ fn run(command: &mut Command) -> Result<()> {
 /// the running helper and its log in that folder until the helper exits.
 const FINISHED: &str = "finished";
 
-/// Starts the installed version's `kodem-update` helper from the stage folder and waits until
-/// it is ready, before the desktop may exit. The helper waits for that exit by reading its
-/// standard input, which stays open until this process ends.
+/// Starts the `kodem-update` helper of the downloaded version from the stage folder and waits
+/// until it is ready, before the desktop may exit. The helper waits for that exit by reading
+/// its standard input, which stays open until this process ends.
+///
+/// The new version's helper runs, so a fixed helper installs its own release. Its contract
+/// stays the same across versions: the arguments are the installed folder, the new package and
+/// the stage, the end of standard input starts the installation, and `ready` in the stage
+/// means the desktop may exit.
 pub fn install(prepared: PreparedUpdate) -> Result<()> {
     ensure_unchanged(&prepared.destination)?;
     let stage = prepared.directory.path();
     let name = platform::executable_name("kodem-update");
-    // A helper inside the installed folder would keep Windows from moving that folder.
+    // A helper inside the installed folder or the new package would keep Windows from moving
+    // that folder.
     let helper = stage.join(&name);
-    fs::copy(std::env::current_exe()?.with_file_name(&name), &helper).context(
-        "This installation has no update helper. Install Kodem again from its installer.",
-    )?;
+    fs::copy(package_helper(&prepared.bundle, &name), &helper)
+        .context("The update has no update helper. Retry the download.")?;
     let log = File::create(stage.join("install.log"))?;
     // The helper must not start in the installed folder, where the app usually starts: Windows
     // refuses to move a folder that a process uses as its working directory.
@@ -728,6 +733,18 @@ pub fn install(prepared: PreparedUpdate) -> Result<()> {
     let _ = child.kill();
     let _ = child.wait();
     bail!("Update installer did not become ready. Retry the download.")
+}
+
+/// Returns the path of the update helper in a verified package.
+fn package_helper(package: &Path, name: &str) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        package.join("Contents/MacOS").join(name)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        package.join(name)
+    }
 }
 
 /// Removes the stage folders that `kodem-update` finished with beside the installed app. A

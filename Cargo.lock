@@ -3058,6 +3058,7 @@ name = "kodem-update"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "embed-resource",
  "serde_json",
  "windows-sys 0.61.2",
 ]
