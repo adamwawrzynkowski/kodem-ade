@@ -72,6 +72,7 @@ impl Shell {
             || self.panel != Panel::None
             || self.pasting_images > 0
             || self.submitted_draft.is_some()
+            || self.launch.is_some()
             || (!starting_review && !self.has_composer_content(cx))
         {
             return;
@@ -107,6 +108,9 @@ impl Shell {
             self.report_error("Check delivery history before sending another message.", cx);
             return;
         }
+        // The first message starts the thread quietly; later ones send a wave across the
+        // background.
+        let starts_thread = view.messages.is_empty();
         let id = new_id();
         self.submitted_draft = Some(PendingSubmission {
             task_id: view.task.id.clone(),
@@ -114,14 +118,10 @@ impl Shell {
             text: text.clone(),
             revision: self.draft_revision,
             origin: self
-                .new_submission_origin
-                .take()
-                .or_else(|| {
-                    self.input
-                        .read(cx)
-                        .text_bounds()
-                        .map(|bounds| bounds.origin)
-                })
+                .input
+                .read(cx)
+                .text_bounds()
+                .map(|bounds| bounds.origin)
                 .map(|origin| {
                     origin
                         - point(
@@ -143,7 +143,9 @@ impl Shell {
             attachment_ids: view.task.attachments.iter().map(|a| a.id.clone()).collect(),
             mode,
         });
-        backdrop::spark_send(cx);
+        if !starts_thread {
+            backdrop::spark_send(cx);
+        }
         cx.notify();
     }
 
@@ -178,16 +180,32 @@ impl Shell {
                 }
             }
         };
-        self.new_submission_origin = self
-            .input
-            .read(cx)
-            .text_bounds()
-            .map(|bounds| bounds.origin);
         self.empty_draft = self.input.read(cx).text();
         self.creating_task = true;
         self.send(request);
-        backdrop::spark_send(cx);
+        self.begin_launch(cx);
         cx.notify();
+    }
+
+    /// Moves the start screen's composer to the bottom of the chat while the host creates the
+    /// task, and dissolves the rest of the start screen. The message is sent once the composer
+    /// arrives. With reduced motion the task opens as soon as it exists.
+    pub(super) fn begin_launch(&mut self, cx: &mut Context<Self>) {
+        if cx.reduce_motion() {
+            return;
+        }
+        let Some(from) = fx::anchor_bounds(chat::COMPOSER_ANCHOR, cx) else {
+            return;
+        };
+        self.launch = Some(motion::Launch::new(from));
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(motion::LAUNCH).await;
+            let _ = this.update(cx, |s, cx| {
+                s.finish_launch(cx);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Imports dropped or chosen paths through the host without blocking the UI.

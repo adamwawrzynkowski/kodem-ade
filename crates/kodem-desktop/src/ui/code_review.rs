@@ -221,9 +221,7 @@ impl Shell {
             .as_ref()
             .and_then(|targets| targets.default_branch.clone())
             .unwrap_or_default();
-        let input = self.input.read(cx);
-        self.new_submission_origin = input.text_bounds().map(|bounds| bounds.origin);
-        self.empty_draft = review_request(&target, &base, &input.text());
+        self.empty_draft = review_request(&target, &base, &self.input.read(cx).text());
         self.creating_task = true;
         let mut preferences = self.composer_preferences();
         // A review has no plan mode: it starts with the approval rule alone.
@@ -235,6 +233,7 @@ impl Shell {
             target,
             preferences,
         });
+        self.begin_launch(cx);
         cx.notify();
     }
 
@@ -271,7 +270,6 @@ impl Shell {
             return;
         };
         self.launch_draft = Some(prompt);
-        self.new_submission_origin = None;
         self.creating_task = true;
         self.send(request);
         cx.notify();

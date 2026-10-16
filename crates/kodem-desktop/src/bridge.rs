@@ -1,4 +1,5 @@
 //! Blocking host transport kept outside GPUI's foreground executor.
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use kodem_core::{Request, Response, ipc};
 use std::{
     path::{Path, PathBuf},
@@ -56,7 +57,7 @@ impl Watcher {
         }
     }
     /// Follows `task`, or nothing. The same task as before keeps its watcher and its cursor.
-    fn follow(&mut self, root: &Path, task: Option<String>, replies: &mpsc::Sender<Reply>) {
+    fn follow(&mut self, root: &Path, task: Option<String>, replies: &UnboundedSender<Reply>) {
         if self.task == task {
             return;
         }
@@ -91,7 +92,7 @@ fn watch(
     task_id: String,
     generation: u64,
     current: &AtomicU64,
-    replies: &mpsc::Sender<Reply>,
+    replies: &UnboundedSender<Reply>,
 ) {
     let mut after = None;
     while current.load(Ordering::SeqCst) == generation {
@@ -113,7 +114,7 @@ fn watch(
                     connected: true,
                     result: Ok(Response::Task(view)),
                 };
-                if replies.send(reply).is_err() {
+                if replies.unbounded_send(reply).is_err() {
                     return;
                 }
             }
@@ -124,19 +125,21 @@ fn watch(
 }
 
 /// Creates ordered interaction and repository workers for this window.
-pub fn start() -> (mpsc::Sender<Command>, mpsc::Receiver<Reply>) {
+///
+/// Replies arrive on an asynchronous channel, so the window applies each one as it comes.
+pub fn start() -> (mpsc::Sender<Command>, UnboundedReceiver<Reply>) {
     start_at(ipc::data_dir().map_err(|e| format!("{e:#}")))
 }
-fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, mpsc::Receiver<Reply>) {
+fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, UnboundedReceiver<Reply>) {
     let (tx, commands) = mpsc::channel();
-    let (replies, rx) = mpsc::channel();
+    let (replies, rx) = unbounded();
     let (repository_tx, repository_rx) = mpsc::channel::<(PathBuf, Request)>();
     let repository_replies = replies.clone();
     std::thread::spawn(move || {
         while let Ok((root, request)) = repository_rx.recv() {
             let result = ipc::request(&root, &request).map_err(|e| format!("{e:#}"));
             if repository_replies
-                .send(Reply {
+                .unbounded_send(Reply {
                     request,
                     poll_complete: false,
                     connected: true,
@@ -151,6 +154,9 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, mpsc::Rece
     std::thread::spawn(move || {
         let mut paused = false;
         let mut watcher = Watcher::new();
+        // The host answered the handshake and nothing failed since. The handshake reads the
+        // whole workspace, so it runs only to start or check a host, not before each request.
+        let mut verified = false;
         while let Ok(command) = commands.recv() {
             let poll = matches!(command, Command::Poll(..));
             // Each poll names the conversation to follow: the selected task once the window
@@ -198,6 +204,7 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, mpsc::Rece
                     paused = result.is_ok();
                     if paused {
                         watcher.stop();
+                        verified = false;
                     }
                     let _ = done.send(result);
                     continue;
@@ -246,7 +253,7 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, mpsc::Rece
             if paused {
                 let count = requests.len();
                 for (index, request) in requests.into_iter().enumerate() {
-                    let _ = replies.send(Reply {
+                    let _ = replies.unbounded_send(Reply {
                         request,
                         poll_complete: poll && index + 1 == count,
                         connected: false,
@@ -258,7 +265,10 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, mpsc::Rece
             // Keep this worker alive after a failed handshake. Polls and the explicit
             // refresh action reconnect; rejected mutations are reported, never replayed.
             let connection = root.as_ref().map_err(Clone::clone).and_then(|root| {
-                ipc::connect_or_start(root).map_err(|e| format!("{e:#}"))?;
+                if !verified {
+                    ipc::connect_or_start(root).map_err(|e| format!("{e:#}"))?;
+                    verified = true;
+                }
                 Ok(root)
             });
             let root = match connection {
@@ -266,7 +276,7 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, mpsc::Rece
                 Err(error) => {
                     watcher.stop();
                     if replies
-                        .send(Reply {
+                        .unbounded_send(Reply {
                             request: requests.into_iter().next().unwrap(),
                             poll_complete: poll,
                             connected: false,
@@ -313,7 +323,7 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, mpsc::Rece
                     let replies = replies.clone();
                     std::thread::spawn(move || {
                         let result = ipc::request(&root, &request).map_err(|e| format!("{e:#}"));
-                        let _ = replies.send(Reply {
+                        let _ = replies.unbounded_send(Reply {
                             request,
                             poll_complete: false,
                             connected: true,
@@ -322,10 +332,23 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, mpsc::Rece
                     });
                     continue;
                 }
-                let result = ipc::request(root, &request).map_err(|e| format!("{e:#}"));
+                let mut result = ipc::request(root, &request);
+                if result.as_ref().is_err_and(ipc::unreachable) {
+                    // The host stopped since the handshake and never received the request, so
+                    // it goes once more to a host that runs.
+                    result =
+                        ipc::connect_or_start(root).and_then(|()| ipc::request(root, &request));
+                }
+                // A failure or a host of another protocol is checked by the next handshake.
+                verified = match &result {
+                    Ok(Response::Workspace(workspace)) => workspace.protocol == ipc::PROTOCOL,
+                    Ok(_) => true,
+                    Err(_) => false,
+                };
+                let result = result.map_err(|e| format!("{e:#}"));
                 let connected = result.is_ok() || !matches!(request, Request::Hello);
                 if replies
-                    .send(Reply {
+                    .unbounded_send(Reply {
                         request,
                         poll_complete: poll && (index + 1 == request_count || !connected),
                         connected,

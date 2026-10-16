@@ -230,7 +230,7 @@ impl Shell {
     /// Opens another workspace. The task that was open in it comes back; without one, its start
     /// screen shows.
     pub(super) fn set_mode(&mut self, mode: TaskKind, cx: &mut Context<Self>) {
-        if self.creating_task {
+        if self.creating_task || self.launch.is_some() {
             return;
         }
         if self.git_open {

@@ -287,33 +287,60 @@ impl Shell {
                     ),
             );
             panel = panel.child(timeline.child(floating));
+        } else if self.selected.is_some() {
+            // A task whose conversation is loading shows its composer where the conversation
+            // keeps it, so the start screen does not flash between two tasks.
+            panel = panel.child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.docked_composer(false, window, cx)),
+            );
         } else {
+            let launch = self
+                .launch
+                .as_ref()
+                .map(|launch| (launch.from, launch.vanished()));
+            // While the composer launches, an empty box of its size keeps the rest in place.
+            let composer = match launch {
+                Some((from, _)) => div()
+                    .h(gpui::px(f32::from(from.size.height)) + px(METER_TAB_HEIGHT - 1.))
+                    .into_any_element(),
+                None => self.composer(true, window, cx),
+            };
+            let column = div()
+                .w_full()
+                .max_w(px(780.))
+                .mx_auto()
+                .px(px(32.))
+                .pt(px(48.))
+                .pb(px(32.))
+                .child(self.empty_chat_greeting(cx))
+                .when(self.mode == TaskKind::Review, |column| {
+                    column.child(self.review_picker(cx))
+                })
+                .children(
+                    self.account_notice(cx)
+                        .map(|notice| div().mx(px(-20.)).child(notice)),
+                )
+                .child(composer)
+                .child(self.shortcut_hints());
             panel = panel.child(
                 div()
                     .flex_1()
                     .min_h_0()
                     .id("new-task-scroll")
                     .overflow_y_scroll()
-                    .child(
-                        div()
-                            .w_full()
-                            .max_w(px(780.))
-                            .mx_auto()
-                            .px(px(32.))
-                            .pt(px(48.))
-                            .pb(px(32.))
-                            .child(self.empty_chat_greeting(cx))
-                            .when(self.mode == TaskKind::Review, |column| {
-                                column.child(self.review_picker(cx))
-                            })
-                            .children(
-                                self.account_notice(cx)
-                                    .map(|notice| div().mx(px(-20.)).child(notice)),
-                            )
-                            .child(self.composer(true, window, cx))
-                            .child(self.shortcut_hints()),
-                    ),
+                    .child(motion::vanish(
+                        column,
+                        launch.map_or(0., |(_, vanished)| vanished),
+                        t.canvas,
+                    )),
             );
+            if launch.is_some() {
+                panel = panel.child(self.docked_composer(true, window, cx));
+            }
         }
         let terminal_open = self.reveals.terminal;
         if terminal_open > 0. && self.has_checkout() {
@@ -333,6 +360,19 @@ impl Shell {
             });
         }
         panel.into_any_element()
+    }
+
+    /// Returns the composer where a conversation keeps it: over the bottom of its parent, below
+    /// the room for the jump to the latest message. The parent must be positioned.
+    fn docked_composer(&mut self, empty: bool, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        div()
+            .absolute()
+            .bottom_0()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(div().h(px(COMPOSER_LEAD)).flex_shrink_0())
+            .child(div().w_full().child(self.composer(empty, window, cx)))
     }
 
     // The task's title, state, live change totals and actions.
@@ -716,13 +756,47 @@ impl Shell {
                             .is_some_and(usage::limit_reached),
                 )
             });
+        // A start screen's composer that launches takes the place of a conversation's composer
+        // and changes into it: `docking` goes from 0, the start screen's, to 1, the docked one.
+        let launch = self.launch.as_ref().filter(|_| empty).map(|launch| {
+            let progress = launch.progress();
+            (progress, launch.from.origin, launch.box_width(progress))
+        });
+        let docked = !empty || launch.is_some();
+        let docking = if empty {
+            launch.map_or(0., |(progress, ..)| progress)
+        } else {
+            1.
+        };
         let mut wrapper = div()
             .relative()
             .w_full()
             .flex_shrink_0()
             .max_w(px(900.))
             .mx_auto()
-            .when(!empty, |d| d.px(px(20.)).pb(px(10.)));
+            .when(docked, |d| d.px(px(20.)).pb(px(10.)));
+        if launch.is_some() {
+            // The box ends as wide as the docked composer, which is measured here every frame.
+            let entity = cx.entity();
+            wrapper = wrapper.child(
+                canvas(
+                    move |bounds, _, cx| {
+                        entity.update(cx, |s, cx| {
+                            let width = f32::from(bounds.size.width - px(40.));
+                            if let Some(launch) = &mut s.launch
+                                && launch.width != Some(width)
+                            {
+                                launch.width = Some(width);
+                                cx.notify();
+                            }
+                        })
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            );
+        }
         let mut attachments = div()
             .id("composer-context")
             .max_h(px(160.))
@@ -874,11 +948,11 @@ impl Shell {
                 d.child(div().px(px(12.)).pt(px(10.)).child(attachments))
             });
         // A new review names what it examines in a row above the draft.
-        if empty && mode == TaskKind::Review {
-            editor = editor.child(self.review_pick_status());
+        if empty && mode == TaskKind::Review && docking < 1. {
+            editor = editor.child(launch_fold(self.review_pick_status(), docking));
         }
         // A new task says where it will work in a row above the draft.
-        if empty && mode == TaskKind::Coding {
+        if empty && mode == TaskKind::Coding && docking < 1. {
             let worktree = self.composer_worktree();
             // A folder without Git has no worktrees, so its task always edits the folder.
             let has_git = self
@@ -916,15 +990,15 @@ impl Shell {
                     cx.notify();
                 })),
             );
-            editor = editor.child(status);
+            editor = editor.child(launch_fold(status, docking));
         }
         editor = editor.child(
             div()
                 .id("composer-editor")
                 .px(px(14.))
-                .pt(px(if empty { 6. } else { 12. }))
+                .pt(px(6. + 6. * docking))
                 .pb(px(6.))
-                .min_h(px(if empty { 92. } else { 56. }))
+                .min_h(px(92. - 36. * docking))
                 .max_h(px(180.))
                 .overflow_y_scroll()
                 .text_size(text_px(13.))
@@ -1118,6 +1192,7 @@ impl Shell {
         let blocked = unknown
             || importing
             || self.creating_task
+            || self.launch.is_some()
             || (empty && !ready)
             || self.submitted_draft.is_some()
             || (needs_content && !has_content);
@@ -1225,19 +1300,26 @@ impl Shell {
                 .size_full()
                 .into_any_element()
             });
-        wrapper = wrapper.child(
-            div()
-                .relative()
-                .mt(px(METER_TAB_HEIGHT - 1.))
-                .top(px(self.composer_spring.offset))
-                // The conversation scrolls behind the box. The box holds the pointer, so the
-                // wheel over it scrolls the draft and not the conversation under it.
-                .occlude()
-                .child(dither::shadow(t, motion::COMPOSER_RADIUS, 4.))
-                .child(editor)
-                .child(tab),
-        );
-        if !empty {
+        let composer_box = div()
+            .relative()
+            .mt(px(METER_TAB_HEIGHT - 1.))
+            .top(px(self.composer_spring.offset))
+            // The conversation scrolls behind the box. The box holds the pointer, so the
+            // wheel over it scrolls the draft and not the conversation under it.
+            .occlude()
+            .child(dither::shadow(t, motion::COMPOSER_RADIUS, 4.))
+            .child(editor)
+            .child(tab);
+        wrapper = wrapper.child(match launch {
+            // The box widens or narrows to the docked width while it travels there.
+            Some((progress, from, width)) => motion::morph(
+                composer_box.w(gpui::px(width)).flex_shrink_0(),
+                from,
+                progress,
+            ),
+            None => composer_box.into_any_element(),
+        });
+        if docked {
             let hint: &[(&str, &str)] = if steering {
                 if steer {
                     &[("⏎", "steer"), ("⌘⏎", "queue"), ("⇧⏎", "newline")]
@@ -1284,7 +1366,7 @@ impl Shell {
                     .child(kit::keycap(*keys, t).ml(px(4.)))
                     .child(caps(label, t));
             }
-            wrapper = wrapper.child(footer);
+            wrapper = wrapper.child(footer.opacity(docking));
         }
         wrapper
             .child(self.slash_menu(empty, window, cx))
@@ -1437,6 +1519,20 @@ fn paint_meter_tab(
     if let Ok(path) = stroke.build() {
         window.paint_path(path, edge);
     }
+}
+
+// Folds a row of the start screen's composer away while the composer docks. `docking` goes from
+// 0, the row in full, to 1, folded.
+fn launch_fold(row: impl IntoElement, docking: f32) -> AnyElement {
+    if docking <= 0. {
+        return row.into_any_element();
+    }
+    div()
+        .max_h(px(40. * (1. - docking)))
+        .overflow_hidden()
+        .opacity(1. - docking)
+        .child(row)
+        .into_any_element()
 }
 
 /// Returns a tinted state chip for the conversation header.

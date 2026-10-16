@@ -71,7 +71,7 @@ Eleventh revision recorded on 16 October 2026. The user reported that notices at
 | Event | Effect |
 | --- | --- |
 | A press on any button | Ripple in the button's tone |
-| A new task is created | A chip with the first prompt line flies from the composer to the thread feed and lands with an impact |
+| A new task is created | The start screen's composer moves and resizes to its place at the bottom of the conversation in 420 ms, while the rest of the start screen fades out under a Bayer dissolve. The message is sent when the composer arrives and lands with the usual send transition. The new thread row grows into the feed, slides in and clears out of a dissolve |
 | A message is queued during a turn | A chip glides from the composer into the queue tray |
 | A turn completes, fails, or starts waiting for input | Impact on that task's thread row, in green, red or amber |
 | A task is deleted | Its thread row crumbles |

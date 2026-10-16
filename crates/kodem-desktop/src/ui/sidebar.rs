@@ -2,9 +2,6 @@ use super::*;
 use crate::thread_list::{Row, Section};
 use dither::{Dither, DitherField};
 
-/// Name of the effect anchor on the thread feed, where chips for new tasks land.
-pub(super) const FEED_ANCHOR: &str = "thread-feed";
-
 /// Returns the effect anchor name of one thread row.
 pub(super) fn thread_anchor(task_id: &str) -> SharedString {
     SharedString::from(format!("thread:{task_id}"))
@@ -20,6 +17,19 @@ impl Shell {
     pub(super) fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         self.sync_feed(cx);
+        // The list measures a row once, so a row that opens is measured again on each frame,
+        // and once more on the frame it is done.
+        if !self.entering_tasks.is_empty() {
+            for (index, row) in self.sidebar_rows.iter().enumerate() {
+                if row
+                    .task_id()
+                    .is_some_and(|id| self.entering_tasks.contains_key(id))
+                {
+                    self.sidebar_scroll.remeasure_items(index..index + 1);
+                }
+            }
+            self.entering_tasks.retain(|_, entrance| !entrance.done());
+        }
         // A closed sidebar draws nothing; the workspace rail holds its quick actions. While it
         // slides, the full sidebar is drawn and clipped.
         if self.reveals.sidebar <= 0. {
@@ -215,7 +225,6 @@ impl Shell {
                     .min_h(px(96.))
                     .flex()
                     .flex_col()
-                    .child(fx::anchor(FEED_ANCHOR))
                     .child(feed),
                 t.sidebar,
                 4.,
@@ -488,10 +497,15 @@ impl Shell {
         };
         let project = project.and_then(|project| workspace.projects.get(project));
         // List measures the root's height without its margins; keep the gap inside the row.
-        div()
+        let row = div()
             .pb(px(2.))
-            .child(self.task_card(task, project, settled, cx))
-            .into_any_element()
+            .child(self.task_card(task, project, settled, cx));
+        match self.entering_tasks.get(&task.id) {
+            Some(entrance) if !cx.reduce_motion() => {
+                motion::row_enter(row, entrance.progress(), self.theme.sidebar)
+            }
+            _ => row.into_any_element(),
+        }
     }
     // A search unfolds the settled tasks, so that its matches among them show.
     fn settled_open(&self, cx: &App) -> bool {

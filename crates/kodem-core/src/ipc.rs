@@ -68,9 +68,21 @@ pub fn write_frame<T: serde::Serialize>(stream: &mut UnixStream, value: &T) -> R
     stream.flush()?;
     Ok(())
 }
+/// The error of a request that found no host listening, so the host never received it.
+#[derive(Debug)]
+pub struct Unreachable;
+impl std::fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Kodem host is unavailable")
+    }
+}
+/// Reports whether `error` came from a request that never reached the host.
+pub fn unreachable(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<Unreachable>().is_some()
+}
 /// Sends a typed operation to the local host without retrying mutations.
 pub fn request(root: &Path, request: &Request) -> Result<Response> {
-    let mut stream = UnixStream::connect(socket(root)).context("Kodem host is unavailable")?;
+    let mut stream = UnixStream::connect(socket(root)).context(Unreachable)?;
     stream.set_read_timeout(Some(Duration::from_secs(120)))?;
     stream.set_write_timeout(Some(Duration::from_secs(15)))?;
     write_frame(&mut stream, request)?;

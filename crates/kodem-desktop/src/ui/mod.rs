@@ -50,6 +50,7 @@ use crate::{
 };
 pub use chrome::Stage;
 use conversation::Conversation;
+use futures::StreamExt;
 use gpui::{prelude::*, *};
 use kit::Layers;
 use kodem_core::{self as core, *};
@@ -286,7 +287,10 @@ pub struct Shell {
     empty_draft: String,
     creating_task: bool,
     auto_submit_task: Option<String>,
-    new_submission_origin: Option<Point<Pixels>>,
+    /// The start screen's composer moving to the bottom of the task it creates.
+    launch: Option<motion::Launch>,
+    /// Rows of the thread feed that open because their tasks were just created.
+    entering_tasks: HashMap<String, motion::Entrance>,
     composer_height: f32,
     /// Height below the floating composer's box, at rest: its hints and its margin, in window
     /// pixels. The conversation ends at the box, so it passes behind the box's glass only.
@@ -309,7 +313,7 @@ impl Shell {
         cx.set_reduce_motion(motion::system_reduce_motion());
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
-        let (tx, rx) = bridge::start();
+        let (tx, mut rx) = bridge::start();
         let (update_tx, update_rx) = mpsc::channel();
         let input = cx.new(|cx| {
             let mut input = TextInput::composer("Describe what you want to build or change…", cx);
@@ -392,15 +396,31 @@ impl Shell {
             cx.observe(&review_filter, |_, _, cx| cx.notify()),
             cx.observe(&icon_filter, |_, _, cx| cx.notify()),
         ];
+        // Each host reply applies as it arrives, together with any that came with it.
+        cx.spawn(async move |this, cx| {
+            while let Some(reply) = rx.next().await {
+                let mut updates = vec![reply];
+                while let Ok(reply) = rx.try_recv() {
+                    updates.push(reply);
+                }
+                if this
+                    .update(cx, |s, cx| {
+                        for reply in updates {
+                            s.apply(reply, cx);
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(100))
                     .await;
-                let mut updates = Vec::new();
-                while let Ok(reply) = rx.try_recv() {
-                    updates.push(reply);
-                }
                 if this
                     .update(cx, |s, cx| {
                         while let Ok(state) = update_rx.try_recv() {
@@ -414,9 +434,6 @@ impl Shell {
                             )
                         {
                             s.check_for_updates(cx);
-                        }
-                        for reply in updates {
-                            s.apply(reply, cx);
                         }
                     })
                     .is_err()
@@ -608,7 +625,8 @@ impl Shell {
             empty_draft: String::new(),
             creating_task: false,
             auto_submit_task: None,
-            new_submission_origin: None,
+            launch: None,
+            entering_tasks: HashMap::new(),
             composer_height: 170.,
             composer_tail: 0.,
             composer_spring: motion::ComposerSpring::default(),
@@ -798,11 +816,11 @@ impl Shell {
                 ) {
                     self.creating_task = false;
                     self.launch_draft = None;
-                    self.new_submission_origin = None;
+                    // The composer returns to the start screen with its draft.
+                    self.launch = None;
                 }
                 if matches!(reply.request, core::Request::ImportAttachments { .. }) {
                     self.auto_submit_task = None;
-                    self.new_submission_origin = None;
                 }
                 self.report_error(e, cx);
                 return;
@@ -953,20 +971,6 @@ impl Shell {
                 let launched = self.launch_draft.take();
                 let from_composer = launched.is_none();
                 let draft = launched.unwrap_or_else(|| std::mem::take(&mut self.empty_draft));
-                // The new task leaves the composer as a chip and lands in the thread feed.
-                let label = draft
-                    .lines()
-                    .find(|line| !line.trim().is_empty())
-                    .unwrap_or("New task")
-                    .to_owned();
-                fx::fly_between(
-                    chat::COMPOSER_ANCHOR,
-                    sidebar::FEED_ANCHOR,
-                    label,
-                    self.theme.accent,
-                    Duration::ZERO,
-                    cx,
-                );
                 if !draft.is_empty() {
                     self.send(core::Request::EditTask {
                         task_id: task.id.clone(),
@@ -980,11 +984,24 @@ impl Shell {
                 if submit {
                     self.auto_submit_task = Some(task.id.clone());
                 }
-                self.input
-                    .update(cx, |input, cx| input.set_text(String::new(), cx));
-                self.select_task(task.id, cx);
-                self.panel = Panel::None;
+                // A draft of the composer stays in it until the task's conversation loads it
+                // again, so the composer never shows empty on its way.
+                if !from_composer {
+                    self.input
+                        .update(cx, |input, cx| input.set_text(String::new(), cx));
+                }
+                // The task's row opens in the thread feed as soon as the workspace lists it.
+                self.entering_tasks
+                    .insert(task.id.clone(), motion::Entrance::new());
                 self.send(core::Request::Hello);
+                self.panel = Panel::None;
+                match &mut self.launch {
+                    Some(launch) => {
+                        launch.task = Some(task.id);
+                        self.finish_launch(cx);
+                    }
+                    None => self.select_task(task.id, cx),
+                }
             }
             Response::ReviewTargets(targets) => self.receive_review_targets(targets),
             Response::SubagentThread(view) => {
@@ -1522,12 +1539,12 @@ impl Shell {
         self.question_inputs.clear();
         self.answering.clear();
         self.auto_submit_task = None;
-        self.new_submission_origin = None;
         self.sync_placeholder(cx);
     }
     fn select_task(&mut self, id: String, cx: &mut Context<Self>) {
         self.agent_popup = None;
-        if self.creating_task {
+        // Another task waits until the one being created opens.
+        if self.creating_task || self.launch.is_some() {
             return;
         }
         // A task opens in the workspace of its kind.
@@ -1556,14 +1573,14 @@ impl Shell {
             });
         }
         self.submitted_draft = None;
-        self.input
-            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        // A new task keeps its first message in the composer until its conversation loads it.
+        if self.auto_submit_task.as_ref() != Some(&id) {
+            self.input
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
+        }
         self.draft_dirty = false;
         self.slash = Default::default();
         self.send_arrivals.clear();
-        if self.auto_submit_task.as_ref() != Some(&id) {
-            self.new_submission_origin = None;
-        }
         self.selected = Some(id.clone());
         self.history_hover = None;
         self.files.clear();
@@ -1583,20 +1600,35 @@ impl Shell {
         self.reviewing_file = false;
         self.terminal = None;
         self.file_text = None;
-        self.settings.selected_task = Some(id.clone());
-        self.settings.viewed.insert(id.clone(), now());
-        self.sidebar_dirty = true;
-        self.save_settings();
+        // The conversation is asked for first, so the settings write does not delay it.
         self.send(core::Request::Task {
-            task_id: id,
+            task_id: id.clone(),
             before: None,
         });
+        self.settings.selected_task = Some(id.clone());
+        self.settings.viewed.insert(id, now());
+        self.sidebar_dirty = true;
+        self.save_settings();
         if self.has_checkout() {
             self.refresh_diff();
             self.refresh_task_changes();
         }
         self.sync_placeholder(cx);
         cx.notify();
+    }
+    /// Opens the task of the launch once its composer has arrived and the host created the task.
+    /// Until both happen the composer waits at the bottom of the chat.
+    pub(super) fn finish_launch(&mut self, cx: &mut Context<Self>) {
+        let Some(task) = self
+            .launch
+            .as_ref()
+            .filter(|launch| launch.arrived())
+            .and_then(|launch| launch.task.clone())
+        else {
+            return;
+        };
+        self.launch = None;
+        self.select_task(task, cx);
     }
     /// Reports that a task is open and works in a Git checkout. A chat has none, so it has no
     /// changes, files or terminal.
