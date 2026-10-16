@@ -869,6 +869,152 @@ pub fn stage(task: &Task, snapshot: &DiffSnapshot, file: usize) -> Result<()> {
     let _ = fs::remove_file(&lock);
     result
 }
+/// Reads both sides of one captured file for editing: the text that the snapshot's comparison
+/// compares it with, and its working-tree text with the digest that a save must still find.
+pub fn editable_file(task: &Task, snapshot: &DiffSnapshot, file: usize) -> Result<EditableFile> {
+    ensure!(
+        snapshot.task_id == task.id,
+        "Snapshot belongs to another task"
+    );
+    let f = snapshot.files.get(file).context("Unknown file")?;
+    ensure!(
+        !f.status.contains('U') && f.status != "AA" && f.status != "DD",
+        "Resolve this conflict before editing"
+    );
+    let cwd = captured_checkout(task, snapshot, f.repository.as_deref())?;
+    let base = snapshot
+        .repositories
+        .iter()
+        .find(|repo| Some(&repo.root) == f.repository.as_ref())
+        .map_or(snapshot.baseline.as_deref(), |repo| {
+            repo.baseline.as_deref()
+        });
+    // An empty revision names the index, which unstaged changes are compared with.
+    let revision = match snapshot.comparison {
+        Comparison::Staged => bail!("Staged changes are in the index; edit the working tree"),
+        Comparison::Unstaged => Some(""),
+        Comparison::WorkingTree | Comparison::Baseline | Comparison::Branch => base,
+    };
+    let mut before = Vec::new();
+    if let Some(revision) = revision {
+        let old_path = f
+            .old_path
+            .as_deref()
+            .filter(|_| snapshot.comparison != Comparison::Branch);
+        for path in std::iter::once(f.path.as_slice()).chain(old_path) {
+            if let Some(bytes) = blob(&cwd, revision, path)? {
+                before = bytes;
+                break;
+            }
+        }
+    }
+    ensure!(
+        before.len() as u64 <= MAX_FILE,
+        "The compared file exceeds the 2 MiB editing limit"
+    );
+    let before = String::from_utf8(before)
+        .ok()
+        .filter(|text| !text.contains('\0'))
+        .context("The compared file is binary or not UTF-8")?;
+    let bytes = fs::read(working_file(&cwd, &f.path)?)?;
+    let digest = digest(&bytes);
+    let after = String::from_utf8(bytes)
+        .ok()
+        .filter(|text| !text.contains('\0'))
+        .context("Binary or non-UTF8 files cannot be edited here")?;
+    Ok(EditableFile {
+        before,
+        after,
+        digest,
+    })
+}
+/// Writes `text` over a working-tree file of a task, in a repository that `snapshot` captured.
+/// The file must still hold the content with the digest `expected`, so that a save never
+/// overwrites a change made after editing began.
+pub fn save_file(
+    task: &Task,
+    snapshot: &DiffSnapshot,
+    repository: Option<&Path>,
+    path: &[u8],
+    expected: &str,
+    text: &str,
+) -> Result<()> {
+    ensure!(
+        text.len() as u64 <= MAX_FILE,
+        "File exceeds the 2 MiB editing limit"
+    );
+    let cwd = captured_checkout(task, snapshot, repository)?;
+    let full = working_file(&cwd, path)?;
+    ensure!(
+        digest(&fs::read(&full)?) == expected,
+        "The file changed on disk after editing began. Revert and edit it again to keep the newer file."
+    );
+    fs::write(&full, text)?;
+    Ok(())
+}
+// Returns the checkout of a task file: a repository that the task's capture found, or the
+// task's own checkout for snapshots without one. The capture already searched the linked
+// repositories, which takes several scans of the working tree.
+fn captured_checkout(
+    task: &Task,
+    snapshot: &DiffSnapshot,
+    repository: Option<&Path>,
+) -> Result<PathBuf> {
+    ensure!(
+        snapshot.task_id == task.id,
+        "Snapshot belongs to another task"
+    );
+    let Some(root) = repository else {
+        return Ok(task.cwd.clone());
+    };
+    ensure!(
+        snapshot.repositories.iter().any(|repo| repo.root == root),
+        "Repository is not part of this capture. Refresh before editing."
+    );
+    Ok(root.to_owned())
+}
+// Resolves a regular file of a checkout from its repository-relative path. The path may not
+// leave the checkout, and neither the file nor a folder above it may be a link out of it.
+fn working_file(cwd: &Path, path: &[u8]) -> Result<PathBuf> {
+    let relative = PathBuf::from(platform::os_string(path));
+    ensure!(
+        relative
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_))),
+        "Choose a file inside the checkout"
+    );
+    let full = cwd.join(&relative);
+    let meta = fs::symlink_metadata(&full).context("The file is not in the working tree")?;
+    ensure!(meta.is_file(), "Only regular files can be edited");
+    ensure!(
+        meta.len() <= MAX_FILE,
+        "File exceeds the 2 MiB editing limit"
+    );
+    let folder = full
+        .parent()
+        .context("Choose a file inside the checkout")?
+        .canonicalize()
+        .map(crate::platform::plain_path)?;
+    ensure!(
+        folder.starts_with(cwd.canonicalize().map(crate::platform::plain_path)?),
+        "File resolves outside the task checkout"
+    );
+    Ok(full)
+}
+// Returns the bytes of `path` at `revision`, where an empty revision names the index, or
+// nothing when the revision has no such file.
+fn blob(cwd: &Path, revision: &str, path: &[u8]) -> Result<Option<Vec<u8>>> {
+    let mut object = OsString::from(format!("{revision}:"));
+    object.push(platform::os_string(path));
+    let exists = git_process(cwd)?
+        .args(["cat-file", "-e"])
+        .arg(&object)
+        .output()?;
+    if !exists.status.success() {
+        return Ok(None);
+    }
+    command(cwd, &[OsStr::new("cat-file"), OsStr::new("blob"), &object]).map(Some)
+}
 /// Lists tracked and untracked files as original path bytes.
 ///
 /// A folder without Git has no ignore rules that leave out generated files, so its list skips

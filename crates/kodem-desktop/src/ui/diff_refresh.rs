@@ -87,7 +87,8 @@ impl Shell {
     }
 
     /// Replaces a displayed snapshot while keeping the same selected file whenever it still exists.
-    pub(super) fn install_diff(&mut self, diff: DiffSnapshot) {
+    /// A file that is being edited keeps its view, which shows the edited text.
+    pub(super) fn install_diff(&mut self, diff: DiffSnapshot, cx: &App) {
         let selected_path = self
             .diff
             .as_ref()
@@ -105,10 +106,18 @@ impl Shell {
                 self.reviewing_file = false;
             }
         }
+        self.prune_edits(&diff, cx);
+        let editing = self.reviewing_file
+            && diff
+                .files
+                .get(self.file)
+                .is_some_and(|file| self.file_edit(&diff, file).is_some());
         self.diff = Some(diff);
         self.new_diff = None;
-        self.diff_view = None;
-        self.diff_subscription = None;
+        if !editing {
+            self.diff_view = None;
+            self.diff_subscription = None;
+        }
         self.text_views.retain(|key, _| !key.starts_with("diff:"));
     }
 }

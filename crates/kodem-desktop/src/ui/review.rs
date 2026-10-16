@@ -42,6 +42,7 @@ impl Shell {
     /// Builds the file browser, snapshot diff and contextual feedback editor.
     pub(super) fn review(&mut self, cx: &mut Context<Self>, center: bool) -> AnyElement {
         let t = self.theme;
+        self.load_edit(cx);
         let tree = self.change_tree();
         // The workspace rail, the sidebar when it is open, and the rules between the panes.
         let leading = workspaces::RAIL
@@ -175,7 +176,7 @@ impl Shell {
                                     .on_click(cx.listener(|s, _, _, cx| {
                                         s.panel = Panel::None;
                                         if let Some(diff) = s.new_diff.take() {
-                                            s.install_diff(diff);
+                                            s.install_diff(diff, cx);
                                         }
                                         cx.notify();
                                     })),
@@ -278,6 +279,7 @@ impl Shell {
             }
             if let Some(file) = snapshot.files.get(self.file) {
                 let file_index = self.file;
+                let edit = self.file_edit(snapshot, file);
                 if let Some(root) = &file.repository {
                     let hint = format!("Repository: {}", root.display());
                     panel = panel.child(
@@ -317,7 +319,56 @@ impl Shell {
                             }),
                     );
                 }
-                let (added, removed) = totals.get(file_index).copied().unwrap_or_default();
+                // A file whose text arrives, or is read again, keeps its view and caret.
+                if let (Some(edit), Some(view)) = (&edit, &self.diff_view)
+                    && view.read(cx).same_file(file)
+                    && !view.read(cx).shows(&snapshot.id, self.file, Some(edit))
+                {
+                    view.update(cx, |view, cx| view.attach(edit.clone(), cx));
+                }
+                let replace = self.diff_view.as_ref().is_none_or(|view| {
+                    !view.read(cx).shows(&snapshot.id, self.file, edit.as_ref())
+                });
+                if replace {
+                    let view = cx.new(|cx| {
+                        diff_view::DiffView::new(
+                            snapshot,
+                            self.file,
+                            self.split,
+                            self.settings.wrap_diff,
+                            t,
+                            edit.clone(),
+                            cx,
+                        )
+                    });
+                    let task_id = snapshot.task_id.clone();
+                    self.diff_subscription = Some(cx.subscribe(
+                        &view,
+                        move |shell, _, event: &diff_view::ContextRequested, cx| {
+                            shell.send(core::Request::AddFeedbackRows {
+                                task_id: task_id.clone(),
+                                snapshot_id: event.snapshot_id.clone(),
+                                file: event.file,
+                                first_row: event.first_row,
+                                last_row: event.last_row,
+                                comment: event.comment.clone(),
+                            });
+                            cx.notify();
+                        },
+                    ));
+                    self.diff_view = Some(view);
+                }
+                if let Some(view) = &self.diff_view {
+                    view.update(cx, |view, cx| {
+                        view.retarget(snapshot, file_index);
+                        view.configure(self.split, self.settings.wrap_diff, t, cx)
+                    });
+                }
+                // An edited file counts the lines of its edited text.
+                let (added, removed) = match (&edit, &self.diff_view) {
+                    (Some(_), Some(view)) => view.read(cx).totals(),
+                    _ => totals.get(file_index).copied().unwrap_or_default(),
+                };
                 panel = panel.child(
                     kit::block_title(
                         div()
@@ -334,6 +385,9 @@ impl Shell {
                     .h(px(34.))
                     .pr(px(6.))
                     .child(kit::diffstat(added, removed, t))
+                    .when_some(edit.as_ref(), |title, edit| {
+                        title.child(self.edit_controls(edit, cx))
+                    })
                     .child(
                         self.icon_button(
                             "diff-mode",
@@ -429,43 +483,7 @@ impl Shell {
                             .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
                     );
                 }
-                let replace = self
-                    .diff_view
-                    .as_ref()
-                    .is_none_or(|view| !view.read(cx).matches(&snapshot.id, self.file));
-                if replace {
-                    let view = cx.new(|cx| {
-                        diff_view::DiffView::new(
-                            snapshot,
-                            self.file,
-                            self.split,
-                            self.settings.wrap_diff,
-                            t,
-                            cx,
-                        )
-                    });
-                    let task_id = snapshot.task_id.clone();
-                    let snapshot_id = snapshot.id.clone();
-                    self.diff_subscription = Some(cx.subscribe(
-                        &view,
-                        move |shell, _, event: &diff_view::ContextRequested, cx| {
-                            shell.send(core::Request::AddFeedbackRows {
-                                task_id: task_id.clone(),
-                                snapshot_id: snapshot_id.clone(),
-                                file: file_index,
-                                first_row: event.first_row,
-                                last_row: event.last_row,
-                                comment: event.comment.clone(),
-                            });
-                            cx.notify();
-                        },
-                    ));
-                    self.diff_view = Some(view);
-                }
                 if let Some(view) = &self.diff_view {
-                    view.update(cx, |view, cx| {
-                        view.configure(self.split, self.settings.wrap_diff, t, cx)
-                    });
                     panel = panel.child(view.clone());
                 }
                 panel = panel
@@ -497,7 +515,11 @@ impl Shell {
                                     .font_family(crate::theme::mono())
                                     .text_size(text_px(10.5))
                                     .text_color(t.subtle)
-                                    .child("Select to copy · drag line numbers to comment"),
+                                    .child(if edit.is_some() {
+                                        kit::shortcut("Type to edit · ⌘S save · ⌘Z undo · drag line numbers to comment")
+                                    } else {
+                                        "Select to copy · drag line numbers to comment".into()
+                                    }),
                             ),
                     );
             }

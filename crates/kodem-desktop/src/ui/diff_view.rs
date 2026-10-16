@@ -1,10 +1,63 @@
-//! Virtualized diff document with shared text selection and snapshot-backed comments.
+//! Virtualized diff document with shared text selection and snapshot-backed comments. When the
+//! file's working-tree text is loaded, every line of it in the diff is editable, and the hunks
+//! follow each edit.
+use super::file_edit::{Caret, FileEdit};
 use super::*;
-use crate::components::text_input::{SelectionInput, TextInput};
+use crate::components::text_input::{Redo, RowEdit, SelectionInput, TextInput, Undo};
 use std::ops::Range;
+
+actions!(diff_view, [SaveEdits]);
 
 /// Width of one character of a diff line at the default code size, in window pixels.
 const CELL_WIDTH: f32 = 7.5;
+
+// Returns the width of the longest line at the default code size.
+fn text_width(lines: &[DiffLine]) -> f32 {
+    lines
+        .iter()
+        .map(|l| {
+            l.text
+                .chars()
+                .map(|c| if c == '\t' { 4 } else { 1 })
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0) as f32
+        * CELL_WIDTH
+}
+
+// Splits the text of an edited row at its line breaks, without a carriage return before a
+// break, and finds the caret's part and byte among the parts.
+fn split_typed(text: &str, cursor: usize) -> (Vec<String>, Caret) {
+    let mut parts = Vec::new();
+    let mut caret = Caret { line: 0, byte: 0 };
+    let mut start = 0;
+    let count = text.split('\n').count();
+    for (index, part) in text.split('\n').enumerate() {
+        let kept = if index + 1 < count {
+            part.strip_suffix('\r').unwrap_or(part)
+        } else {
+            part
+        };
+        if cursor >= start && cursor <= start + part.len() {
+            caret = Caret {
+                line: index,
+                byte: (cursor - start).min(kept.len()),
+            };
+        }
+        parts.push(kept.to_owned());
+        start += part.len() + 1;
+    }
+    (parts, caret)
+}
+
+// Returns the length of the common start of two texts, at a character boundary.
+fn common_prefix(a: &str, b: &str) -> usize {
+    a.char_indices()
+        .zip(b.chars())
+        .find(|((_, x), y)| x != y)
+        .map_or(a.len().min(b.len()), |((index, _), _)| index)
+}
 
 // Returns the height of one diff row. It follows the interface scale, and never gets tighter
 // than a line of code at the code size.
@@ -78,6 +131,8 @@ enum Drag {
 }
 /// A comment ready to attach to the current composer.
 pub(super) struct ContextRequested {
+    pub snapshot_id: String,
+    pub file: usize,
     pub first_row: usize,
     pub last_row: usize,
     pub comment: String,
@@ -109,42 +164,52 @@ pub(super) struct DiffView {
     text_width: f32,
     /// Height of the rows that the list was last laid out with.
     row_height: Pixels,
+    /// The working-tree file that this view edits instead of showing the snapshot.
+    edit: Option<Entity<FileEdit>>,
+    /// The snapshot's rows of the file, which comments refer to.
+    snapshot_lines: Vec<DiffLine>,
+    /// The repository and path of the file.
+    file_path: (Option<PathBuf>, Vec<u8>),
+    /// An edit that replaces the view's rows in the next frame, which can see where the caret
+    /// is.
+    attaching: Option<Entity<FileEdit>>,
+    /// In edit mode, the id of each row's line of the edited text.
+    line_ids: Vec<Option<u64>>,
+    /// In edit mode, the editors of the lines in view, by line id.
+    editors: HashMap<u64, (Entity<TextInput>, Subscription)>,
+    /// The line, by id, and byte that the caret moves to in the next frame.
+    pending_focus: Option<(u64, usize)>,
 }
 impl EventEmitter<ContextRequested> for DiffView {}
 impl DiffView {
-    /// Creates a virtual document without constructing inputs for off-screen rows.
+    /// Creates a virtual document without constructing inputs for off-screen rows. With
+    /// `edit`, its rows are the hunks of that edited working-tree text.
     pub(super) fn new(
         snapshot: &DiffSnapshot,
         file: usize,
         split: bool,
         wrap: bool,
         theme: Theme,
+        edit: Option<Entity<FileEdit>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let delta = &snapshot.files[file];
-        let text_width = delta
-            .lines
-            .iter()
-            .map(|l| {
-                l.text
-                    .chars()
-                    .map(|c| if c == '\t' { 4 } else { 1 })
-                    .sum::<usize>()
-            })
-            .max()
-            .unwrap_or(0) as f32
-            * CELL_WIDTH;
+        let (lines, line_ids) = match &edit {
+            Some(edit) => edit.update(cx, |edit, _| edit.rows()),
+            None => (delta.lines.clone(), Vec::new()),
+        };
         let comment = cx.new(|cx| TextInput::new("Add context for the agent…", cx));
         Self {
             snapshot: snapshot.id.clone(),
             file,
-            lines: delta.lines.clone(),
+            text_width: text_width(&lines),
+            list: ListState::new(lines.len(), ListAlignment::Top, px(240.))
+                .with_uniform_item_height(row_height()),
+            lines,
             extension: delta.label.rsplit('.').next().unwrap_or("").into(),
             split,
             wrap,
             theme,
-            list: ListState::new(delta.lines.len(), ListAlignment::Top, px(240.))
-                .with_uniform_item_height(row_height()),
             horizontal: ScrollHandle::new(),
             text: None,
             gutter: None,
@@ -158,13 +223,310 @@ impl DiffView {
             subscriptions: HashMap::new(),
             autoscroll_running: false,
             focus: cx.focus_handle(),
-            text_width,
             row_height: row_height(),
+            edit,
+            snapshot_lines: delta.lines.clone(),
+            file_path: (delta.repository.clone(), delta.path.clone()),
+            attaching: None,
+            line_ids,
+            editors: HashMap::new(),
+            pending_focus: None,
         }
     }
-    /// Identifies the immutable file currently displayed.
-    pub(super) fn matches(&self, snapshot: &str, file: usize) -> bool {
-        self.snapshot == snapshot && self.file == file
+    /// Reports whether this view shows the immutable file, or edits with the given edit.
+    pub(super) fn shows(
+        &self,
+        snapshot: &str,
+        file: usize,
+        edit: Option<&Entity<FileEdit>>,
+    ) -> bool {
+        match (edit, &self.edit) {
+            (Some(edit), _) if self.attaching.as_ref() == Some(edit) => true,
+            (Some(edit), Some(own)) => edit == own,
+            (None, None) => self.snapshot == snapshot && self.file == file,
+            _ => false,
+        }
+    }
+    /// Reports whether the view shows a file at the path of `file`.
+    pub(super) fn same_file(&self, file: &FileDelta) -> bool {
+        self.file_path.0 == file.repository && self.file_path.1 == file.path
+    }
+    /// Makes the view edit with `edit` from the next frame, in place: the scroll position
+    /// stays, and a caret in the file stays on its line.
+    pub(super) fn attach(&mut self, edit: Entity<FileEdit>, cx: &mut Context<Self>) {
+        self.attaching = Some(edit);
+        cx.notify();
+    }
+    /// Points comments at a newer capture of the same file, whose rows the view keeps while
+    /// it edits.
+    pub(super) fn retarget(&mut self, snapshot: &DiffSnapshot, file: usize) {
+        if self.edit.is_some() && (self.snapshot != snapshot.id || self.file != file) {
+            self.snapshot = snapshot.id.clone();
+            self.file = file;
+            self.snapshot_lines = snapshot.files[file].lines.clone();
+        }
+    }
+    // Switches to the edit that `attach` gave, and returns the line of the new text and the
+    // byte where the caret was: in a focused line editor, or in a selected line of the diff.
+    fn finish_attach(&mut self, window: &Window, cx: &mut Context<Self>) {
+        // A comment being written keeps the rows that it refers to.
+        if self.comment_open || self.pending_comment {
+            return;
+        }
+        let Some(edit) = self.attaching.take() else {
+            return;
+        };
+        let caret = match &self.edit {
+            Some(old) => self.editors.iter().find_map(|(id, (input, _))| {
+                let input = input.read(cx);
+                if !input.focus_handle(cx).is_focused(window) {
+                    return None;
+                }
+                Some((old.read(cx).index_of(*id)?, input.cursor()))
+            }),
+            None => self
+                .text
+                .as_ref()
+                .filter(|selection| self.focus.is_focused(window) && selection.column != 1)
+                .and_then(|selection| {
+                    let line = self.lines.get(selection.head.row)?.new?;
+                    Some((line as usize - 1, selection.head.byte))
+                }),
+        };
+        self.edit = Some(edit.clone());
+        self.text = None;
+        self.gutter = None;
+        self.drag = None;
+        self.rows.clear();
+        self.subscriptions.clear();
+        self.editors.clear();
+        self.rebuild(cx);
+        if let Some((line, byte)) = caret {
+            let edit = edit.read(cx);
+            self.pending_focus = Some((edit.id(line.min(edit.line_count() - 1)), byte));
+        }
+    }
+    /// Counts the added and removed lines that the view shows.
+    pub(super) fn totals(&self) -> (usize, usize) {
+        self.lines
+            .iter()
+            .fold((0, 0), |(added, removed), line| match line.kind {
+                LineKind::Added => (added + 1, removed),
+                LineKind::Removed => (added, removed + 1),
+                _ => (added, removed),
+            })
+    }
+    /// Undoes the last edit and moves the caret to where it was before it.
+    pub(super) fn undo(&mut self, cx: &mut Context<Self>) {
+        self.restore(FileEdit::undo, cx);
+    }
+    /// Applies the last undone edit again.
+    pub(super) fn redo(&mut self, cx: &mut Context<Self>) {
+        self.restore(FileEdit::redo, cx);
+    }
+    /// Restores the text on disk as one edit that can be undone.
+    pub(super) fn revert(&mut self, cx: &mut Context<Self>) {
+        self.restore(|edit| Some(edit.revert()), cx);
+    }
+    // Applies an undo, redo or revert to the edited text, shows the new text in the editors in
+    // view and moves the caret.
+    fn restore(
+        &mut self,
+        change: impl FnOnce(&mut FileEdit) -> Option<Caret>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(edit) = self.edit.clone() else {
+            return;
+        };
+        let Some(caret) = edit.update(cx, |edit, _| change(edit)) else {
+            return;
+        };
+        let updates: Vec<(Entity<TextInput>, String)> = {
+            let edit = edit.read(cx);
+            let texts: HashMap<u64, &str> = (0..edit.line_count())
+                .map(|line| (edit.id(line), edit.text(line)))
+                .collect();
+            self.pending_focus = Some((edit.id(caret.line.min(edit.line_count() - 1)), caret.byte));
+            self.editors
+                .iter()
+                .filter_map(|(id, (input, _))| {
+                    let text = texts.get(id)?;
+                    (!input.read(cx).shows(text)).then(|| (input.clone(), (*text).to_owned()))
+                })
+                .collect()
+        };
+        for (input, text) in updates {
+            input.update(cx, |input, cx| input.set_text(text, cx));
+        }
+        self.rebuild(cx);
+    }
+    // Reads the rows of the edited text again after an edit. An open comment closes, because
+    // its rows moved.
+    fn rebuild(&mut self, cx: &mut Context<Self>) {
+        let Some(edit) = self.edit.clone() else {
+            return;
+        };
+        if !self.pending_comment {
+            self.gutter = None;
+            self.comment_open = false;
+        }
+        let (lines, line_ids) = edit.update(cx, |edit, _| edit.rows());
+        self.text_width = text_width(&lines);
+        self.lines = lines;
+        self.line_ids = line_ids;
+        self.reset_list();
+        cx.notify();
+    }
+    // Applies an edit that a line's editor reports to the edited text.
+    fn row_edit(
+        &mut self,
+        id: u64,
+        input: Entity<TextInput>,
+        event: RowEdit,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(edit) = self.edit.clone() else {
+            return;
+        };
+        let Some(line) = edit.read(cx).index_of(id) else {
+            return;
+        };
+        let current = edit.read(cx).text(line).to_owned();
+        match event {
+            RowEdit::Changed => {
+                let (text, cursor) = {
+                    let input = input.read(cx);
+                    (input.text(), input.cursor())
+                };
+                if text == current {
+                    return;
+                }
+                let before = Caret {
+                    line,
+                    byte: common_prefix(&current, &text),
+                };
+                if text.contains('\n') {
+                    let (parts, caret) = split_typed(&text, cursor);
+                    let first = parts[0].clone();
+                    let caret = Caret {
+                        line: line + caret.line,
+                        byte: caret.byte,
+                    };
+                    edit.update(cx, |edit, _| edit.replace(line, 1, parts, before, caret));
+                    input.update(cx, |input, cx| input.set_text(first, cx));
+                    self.pending_focus = Some((edit.read(cx).id(caret.line), caret.byte));
+                } else {
+                    let after = Caret { line, byte: cursor };
+                    edit.update(cx, |edit, _| {
+                        edit.replace(line, 1, vec![text], before, after)
+                    });
+                }
+            }
+            RowEdit::JoinPrevious => {
+                if line == 0 {
+                    return;
+                }
+                let (above, above_id) = {
+                    let edit = edit.read(cx);
+                    (edit.text(line - 1).to_owned(), edit.id(line - 1))
+                };
+                let byte = above.len();
+                let joined = above + &current;
+                let (before, after) = (
+                    Caret { line, byte: 0 },
+                    Caret {
+                        line: line - 1,
+                        byte,
+                    },
+                );
+                edit.update(cx, |edit, _| {
+                    edit.replace(line - 1, 2, vec![joined.clone()], before, after)
+                });
+                if let Some((editor, _)) = self.editors.get(&above_id) {
+                    editor.update(cx, |editor, cx| editor.set_text(joined, cx));
+                }
+                self.pending_focus = Some((above_id, byte));
+            }
+            RowEdit::JoinNext => {
+                if line + 1 >= edit.read(cx).line_count() {
+                    return;
+                }
+                let joined = current.clone() + edit.read(cx).text(line + 1);
+                let caret = Caret {
+                    line,
+                    byte: current.len(),
+                };
+                edit.update(cx, |edit, _| {
+                    edit.replace(line, 2, vec![joined.clone()], caret, caret)
+                });
+                input.update(cx, |input, cx| input.set_text(joined, cx));
+                self.pending_focus = Some((id, current.len()));
+            }
+            RowEdit::Previous(byte) | RowEdit::Next(byte) => {
+                // The caret moves to the editable row above or below, across hunk headers and
+                // removed lines.
+                let Some(row) = self.line_ids.iter().position(|line| *line == Some(id)) else {
+                    return;
+                };
+                let target = if matches!(event, RowEdit::Previous(_)) {
+                    self.line_ids[..row].iter().rev().find_map(|line| *line)
+                } else {
+                    self.line_ids[row + 1..].iter().find_map(|line| *line)
+                };
+                if let Some(target) = target {
+                    self.pending_focus = Some((target, byte));
+                    cx.notify();
+                }
+                return;
+            }
+        }
+        self.rebuild(cx);
+    }
+    // Returns the editor of a line of the edited text, made when it first comes into view.
+    fn editor(&mut self, id: u64, cx: &mut Context<Self>) -> Option<Entity<TextInput>> {
+        if let Some((input, _)) = self.editors.get(&id) {
+            return Some(input.clone());
+        }
+        let text = {
+            let edit = self.edit.as_ref()?.read(cx);
+            edit.text(edit.index_of(id)?).to_owned()
+        };
+        let (extension, theme) = (self.extension.clone(), self.theme.id);
+        let input = cx.new(|cx| {
+            let mut input = TextInput::new("", cx);
+            input.delegate_row_edits();
+            input.set_text(text, cx);
+            input.code(&extension, theme);
+            input
+        });
+        let subscription = cx.subscribe(&input, move |view, input, event: &RowEdit, cx| {
+            view.row_edit(id, input, *event, cx)
+        });
+        self.editors.insert(id, (input.clone(), subscription));
+        Some(input)
+    }
+    // Returns the read-only text of an old line or a hunk header in edit mode. An old line is
+    // kept by its old line number, which edits do not change; a header by its row, and made
+    // again when its text changed.
+    fn old_input(&mut self, row: usize, column: u8, cx: &mut Context<Self>) -> Entity<TextInput> {
+        let line = &self.lines[row];
+        let key = match line.old {
+            Some(old) => (old as usize, column),
+            None => (usize::MAX - row, column),
+        };
+        if let Some(input) = self.rows.get(&key)
+            && input.read(cx).shows(&line.text)
+        {
+            return input.clone();
+        }
+        let text = self.lines[row].text.clone();
+        let input = cx.new(|cx| {
+            let mut input = TextInput::readonly(text, cx);
+            input.code(&self.extension, self.theme.id);
+            input
+        });
+        self.rows.insert(key, input.clone());
+        input
     }
     /// Applies presentation preferences while preserving document selection and scroll.
     pub(super) fn configure(
@@ -223,6 +585,30 @@ impl DiffView {
     }
     fn range(&self) -> Option<(usize, usize)> {
         self.gutter.map(|(a, b)| (a.min(b), a.max(b)))
+    }
+    // Returns the selected rows as rows of the snapshot, which a comment refers to. Without
+    // unsaved edits, the edited text's rows are the snapshot's rows by their line numbers.
+    fn comment_rows(&self) -> Option<(usize, usize)> {
+        let (first, last) = self.range()?;
+        if self.edit.is_none() {
+            return Some((first, last));
+        }
+        let snapshot_row = |row: &DiffLine| {
+            self.snapshot_lines.iter().position(|line| {
+                line.kind == row.kind && line.old == row.old && line.new == row.new
+            })
+        };
+        let rows = &self.lines[first..=last];
+        let first = rows
+            .iter()
+            .filter(|row| row.kind != LineKind::Header)
+            .find_map(snapshot_row)?;
+        let last = rows
+            .iter()
+            .rev()
+            .filter(|row| row.kind != LineKind::Header)
+            .find_map(snapshot_row)?;
+        (first <= last).then_some((first, last))
     }
     fn comment_index(&self) -> Option<usize> {
         self.comment_open
@@ -355,7 +741,14 @@ impl DiffView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.pending_comment || self.lines[row].kind == LineKind::Header {
+        // Comments refer to the snapshot's rows, which unsaved edits no longer match.
+        if self.pending_comment
+            || self.lines[row].kind == LineKind::Header
+            || self
+                .edit
+                .as_ref()
+                .is_some_and(|edit| edit.read(cx).is_dirty())
+        {
             return;
         }
         if self.comment_open {
@@ -520,7 +913,22 @@ impl DiffView {
                 .bg(t.inset)
                 .into_any_element();
         }
-        let input = self.row_input(row, column, cx);
+        // In edit mode a line of the edited text is editable, and an old line is read-only.
+        let editable = self.edit.is_some() && column != 1 && line.new.is_some();
+        let input = if editable {
+            self.line_ids[row].and_then(|id| self.editor(id, cx))
+        } else if self.edit.is_some() {
+            Some(self.old_input(row, column, cx))
+        } else {
+            Some(self.row_input(row, column, cx))
+        };
+        let Some(input) = input else {
+            return div()
+                .min_h(row_height())
+                .flex_1()
+                .min_w_0()
+                .into_any_element();
+        };
         input.update(cx, |input, _| {
             input.code(&self.extension, self.theme.id);
             input.set_wrap(self.wrap);
@@ -548,10 +956,13 @@ impl DiffView {
         };
         div()
             .id(("diff-cell", row * 3 + column as usize))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, _, window, cx| window.focus(&view.focus, cx)),
-            )
+            // An editor keeps the focus that a press gives it.
+            .when(!editable, |d| {
+                d.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|view, _, window, cx| window.focus(&view.focus, cx)),
+                )
+            })
             .relative()
             .flex()
             .min_h(row_height())
@@ -723,10 +1134,12 @@ impl DiffView {
                                 .on_click(cx.listener(
                                     |view, _, _, cx| {
                                         if !view.pending_comment
-                                            && let Some((first_row, last_row)) = view.range()
+                                            && let Some((first_row, last_row)) = view.comment_rows()
                                         {
                                             view.pending_comment = true;
                                             cx.emit(ContextRequested {
+                                                snapshot_id: view.snapshot.clone(),
+                                                file: view.file,
                                                 first_row,
                                                 last_row,
                                                 comment: view.comment.read(cx).text(),
@@ -791,10 +1204,31 @@ fn action_button(
 }
 impl Render for DiffView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.finish_attach(window, cx);
+        if let Some((id, byte)) = self.pending_focus.take()
+            && let Some(input) = self.editor(id, cx)
+        {
+            input.update(cx, |input, cx| input.set_selection(byte..byte, cx));
+            window.focus(&input.read(cx).focus_handle(cx), cx);
+            if let Some(row) = self.line_ids.iter().position(|line| *line == Some(id)) {
+                self.list.scroll_to_reveal_item(row);
+            }
+        }
         let top = self.list.logical_scroll_top().item_ix;
         self.rows.retain(|(row, _), input| {
             row.abs_diff(top) < 256 || input.read(cx).focus_handle(cx).is_focused(window)
         });
+        if self.edit.is_some() {
+            let end = (top + 256).min(self.line_ids.len());
+            let near: HashSet<u64> = self.line_ids[top.saturating_sub(256).min(end)..end]
+                .iter()
+                .flatten()
+                .copied()
+                .collect();
+            self.editors.retain(|id, (input, _)| {
+                near.contains(id) || input.read(cx).focus_handle(cx).is_focused(window)
+            });
+        }
         self.subscriptions
             .retain(|key, _| self.rows.contains_key(key));
         let entity = cx.entity();
@@ -823,8 +1257,15 @@ impl Render for DiffView {
             .on_action(
                 cx.listener(|view, _: &crate::components::text_input::Copy, _, cx| view.copy(cx)),
             )
+            .when(self.edit.is_some(), |d| {
+                d.on_action(cx.listener(|view, _: &Undo, _, cx| view.undo(cx)))
+                    .on_action(cx.listener(|view, _: &Redo, _, cx| view.redo(cx)))
+            })
             .on_action(cx.listener(
                 |view, _: &crate::components::text_input::SelectAll, _, cx| {
+                    if view.edit.is_some() {
+                        return;
+                    }
                     let column = view
                         .text
                         .as_ref()

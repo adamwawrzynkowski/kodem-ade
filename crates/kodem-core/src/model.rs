@@ -2039,6 +2039,16 @@ impl DiffSnapshot {
             && self.files == other.files
     }
 }
+/// Both sides of one captured file, read so that its working-tree side can be edited.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EditableFile {
+    /// The text that the snapshot's comparison compares the file with; empty for a new file.
+    pub before: String,
+    /// The text of the file in the working tree.
+    pub after: String,
+    /// The SHA-256 digest of the working-tree bytes, which a save must still find on disk.
+    pub digest: String,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Feedback {
     /// Owning checkout for repository-relative source paths.
@@ -2357,6 +2367,22 @@ pub enum Request {
         snapshot_id: String,
         file: usize,
     },
+    /// Reads the old side of one snapshot file and its working-tree text for editing.
+    ReadEditableFile {
+        task_id: String,
+        snapshot_id: String,
+        file: usize,
+    },
+    /// Writes `text` over a working-tree file of the task, in a repository of the capture
+    /// `snapshot_id`, when the file still has the content digest `expected`.
+    SaveFile {
+        task_id: String,
+        snapshot_id: String,
+        repository: Option<PathBuf>,
+        path: Vec<u8>,
+        expected: String,
+        text: String,
+    },
     ComposerCatalog {
         provider: Provider,
         #[serde(default)]
@@ -2489,6 +2515,7 @@ pub enum Response {
     Created(Task),
     ReviewTargets(ReviewTargets),
     Diff(DiffSnapshot),
+    EditableFile(EditableFile),
     TaskChanges {
         task_id: String,
         summary: ChangeSummary,

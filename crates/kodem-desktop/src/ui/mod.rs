@@ -16,6 +16,7 @@ mod diff_refresh;
 mod diff_view;
 mod dither;
 mod effort_slider;
+mod file_edit;
 mod fx;
 mod git;
 mod history;
@@ -286,6 +287,13 @@ pub struct Shell {
     clipboard_images: HashMap<std::path::PathBuf, tempfile::TempPath>,
     pasting_images: usize,
     diff_view: Option<Entity<diff_view::DiffView>>,
+    /// Unsaved edits of working-tree files, by task, repository and path.
+    edits: HashMap<file_edit::EditKey, Entity<file_edit::FileEdit>>,
+    /// The file whose sides the host is reading so that its diff can be edited, with the
+    /// comparison and the capture's digest of the file that it is read for.
+    opening_edit: Option<(file_edit::EditKey, Comparison, String)>,
+    /// The file, and its capture digest, that could not be read for editing.
+    failed_edit: Option<(file_edit::EditKey, String)>,
     sidebar_rows: Vec<crate::thread_list::Row>,
     sidebar_scroll: ListState,
     sidebar_dirty: bool,
@@ -626,6 +634,9 @@ impl Shell {
             clipboard_images: HashMap::new(),
             pasting_images: 0,
             diff_view: None,
+            edits: HashMap::new(),
+            opening_edit: None,
+            failed_edit: None,
             sidebar_rows: Vec::new(),
             sidebar_scroll: ListState::new(0, ListAlignment::Top, px(100.)),
             sidebar_dirty: true,
@@ -817,6 +828,10 @@ impl Shell {
                     && let Some(viewer) = &self.diff_view
                 {
                     viewer.update(cx, |v, cx| v.context_failed(cx));
+                }
+                if self.edit_failed(&reply.request, cx) {
+                    cx.notify();
+                    return;
                 }
                 if matches!(
                     reply.request,
@@ -1276,7 +1291,7 @@ impl Shell {
                 {
                     self.new_diff = Some(diff);
                 } else {
-                    self.install_diff(diff);
+                    self.install_diff(diff, cx);
                 }
             }
             Response::Accepted {
@@ -1359,6 +1374,7 @@ impl Shell {
                 self.files = files;
                 self.files_loaded();
             }
+            Response::EditableFile(file) => self.edit_opened(file, cx),
             Response::Text(text) => {
                 if let core::Request::ReadFile { path, .. } = reply.request {
                     self.file_text = Some((String::from_utf8_lossy(&path).into(), text));
@@ -1461,6 +1477,7 @@ impl Shell {
                     self.send(core::Request::Hello);
                 }
                 core::Request::StageFile { .. } => self.refresh_diff(),
+                ref request @ core::Request::SaveFile { .. } => self.edit_saved(request, true, cx),
                 core::Request::EditTask {
                     task_id,
                     edit:
@@ -1516,6 +1533,10 @@ impl Shell {
                     && let Some(viewer) = &self.diff_view
                 {
                     viewer.update(cx, |v, cx| v.context_failed(cx));
+                }
+                if self.edit_failed(&reply.request, cx) {
+                    cx.notify();
+                    return;
                 }
                 // The setup dialog reports a provider that did not start in that provider's row.
                 if self.panel != Panel::Setup
@@ -2283,6 +2304,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-shift-o", CloneRepository, None),
         KeyBinding::new("escape", Cancel, None),
         KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("secondary-s", diff_view::SaveEdits, Some("DiffDocument")),
     ]);
     cx.set_menus(vec![
         Menu {

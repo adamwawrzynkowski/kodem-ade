@@ -1183,6 +1183,49 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             git::stage(&task, &snapshot, file)?;
             Ok(Response::Ok)
         }
+        Request::ReadEditableFile {
+            task_id,
+            snapshot_id,
+            file,
+        } => {
+            let (task, snapshot) = {
+                let h = host.lock().unwrap();
+                (h.store.task(&task_id)?, h.store.snapshot(&snapshot_id)?)
+            };
+            ensure!(
+                task.kind != TaskKind::Review,
+                "A review does not change the repository"
+            );
+            Ok(Response::EditableFile(git::editable_file(
+                &task, &snapshot, file,
+            )?))
+        }
+        Request::SaveFile {
+            task_id,
+            snapshot_id,
+            repository,
+            path,
+            expected,
+            text,
+        } => {
+            let (task, snapshot) = {
+                let h = host.lock().unwrap();
+                (h.store.task(&task_id)?, h.store.snapshot(&snapshot_id)?)
+            };
+            ensure!(
+                task.kind != TaskKind::Review,
+                "A review does not change the repository"
+            );
+            git::save_file(
+                &task,
+                &snapshot,
+                repository.as_deref(),
+                &path,
+                &expected,
+                &text,
+            )?;
+            Ok(Response::Ok)
+        }
         Request::ComposerCatalog {
             provider,
             account,

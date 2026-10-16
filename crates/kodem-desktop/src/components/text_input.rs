@@ -98,6 +98,21 @@ pub enum CompletionInput {
     Dismiss,
 }
 
+/// Edits that an editable row of a document reports to the document that owns its lines.
+#[derive(Clone, Copy)]
+pub enum RowEdit {
+    /// The row's text changed, and may hold line breaks that the document splits off.
+    Changed,
+    /// Backspace at the start of the row: the row joins the line above.
+    JoinPrevious,
+    /// Delete at the end of the row: the line below joins the row.
+    JoinNext,
+    /// Up on the first visual line, with the caret's byte offset.
+    Previous(usize),
+    /// Down on the last visual line, with the caret's byte offset.
+    Next(usize),
+}
+
 /// Pointer and clipboard operations delegated by a row to its document owner.
 #[derive(Clone)]
 pub enum SelectionInput {
@@ -156,6 +171,9 @@ pub struct TextInput {
     masked: bool,
     completion_open: bool,
     delegated_selection: bool,
+    /// One line of an editable document: line joins, moves past the text and undo go to the
+    /// document through `RowEdit` events and propagated actions.
+    row_edits: bool,
     wrap: bool,
     syntax: Option<(String, kodem_core::ThemeId)>,
     colors: Vec<(Range<usize>, [u8; 3])>,
@@ -204,6 +222,7 @@ impl TextInput {
             masked: false,
             completion_open: false,
             delegated_selection: false,
+            row_edits: false,
             wrap: true,
             syntax: None,
             colors: Vec::new(),
@@ -350,6 +369,14 @@ impl TextInput {
     /// Lets a document coordinate selection across separately rendered rows.
     pub fn delegate_selection(&mut self) {
         self.delegated_selection = true;
+    }
+    /// Makes this input one editable line of a document that owns undo and the line breaks.
+    pub fn delegate_row_edits(&mut self) {
+        self.row_edits = true;
+    }
+    /// Returns the byte offset of the caret.
+    pub fn cursor(&self) -> usize {
+        self.cursor_offset()
     }
     /// Applies a document-owned byte selection to this row.
     pub fn set_selection(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
@@ -548,9 +575,32 @@ impl TextInput {
             y += line.size(self.line_height).height;
         }
     }
+    // Reports whether the caret is on the last visual line of the text, or on the first one.
+    fn caret_on_edge(&self, last: bool) -> bool {
+        let cursor = self.cursor_offset();
+        let Some((index, (start, line))) = self
+            .last_layout
+            .iter()
+            .enumerate()
+            .find(|(_, (start, line))| cursor >= *start && cursor <= start + line.len())
+        else {
+            return true;
+        };
+        let Some(position) = line.position_for_index(cursor - start, self.line_height) else {
+            return true;
+        };
+        if last {
+            index + 1 == self.last_layout.len()
+                && position.y + self.line_height >= line.size(self.line_height).height
+        } else {
+            index == 0 && position.y < self.line_height
+        }
+    }
     fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
         if self.completion_open && self.marked_range.is_none() {
             cx.emit(CompletionInput::Previous);
+        } else if self.row_edits && self.caret_on_edge(false) {
+            cx.emit(RowEdit::Previous(self.cursor_offset()));
         } else {
             self.vertical(-1., false, cx);
         }
@@ -558,6 +608,8 @@ impl TextInput {
     fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
         if self.completion_open && self.marked_range.is_none() {
             cx.emit(CompletionInput::Next);
+        } else if self.row_edits && self.caret_on_edge(true) {
+            cx.emit(RowEdit::Next(self.cursor_offset()));
         } else {
             self.vertical(1., false, cx);
         }
@@ -686,7 +738,9 @@ impl TextInput {
         cx.notify();
     }
     fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
-        if self.readonly {
+        // A document row and read-only text leave undo to the document around them.
+        if self.row_edits || self.readonly {
+            cx.propagate();
             return;
         }
         if let Some(state) = self.undo.pop() {
@@ -695,7 +749,9 @@ impl TextInput {
         }
     }
     fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
-        if self.readonly {
+        // A document row and read-only text leave undo to the document around them.
+        if self.row_edits || self.readonly {
+            cx.propagate();
             return;
         }
         if let Some(state) = self.redo.pop() {
@@ -771,6 +827,10 @@ impl TextInput {
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
             let prev = self.previous_boundary(self.cursor_offset());
+            if self.cursor_offset() == prev && self.row_edits && !self.readonly {
+                cx.emit(RowEdit::JoinPrevious);
+                return;
+            }
             if self.cursor_offset() == prev {
                 window.play_system_bell();
                 return;
@@ -783,6 +843,10 @@ impl TextInput {
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
             let next = self.next_boundary(self.cursor_offset());
+            if self.cursor_offset() == next && self.row_edits && !self.readonly {
+                cx.emit(RowEdit::JoinNext);
+                return;
+            }
             if self.cursor_offset() == next {
                 window.play_system_bell();
                 return;
@@ -993,6 +1057,16 @@ impl TextInput {
         cx.notify()
     }
 
+    // Colors edited code again and tells a document that one of its rows changed.
+    fn edited(&mut self, cx: &mut Context<Self>) {
+        if let Some((extension, theme)) = &self.syntax {
+            self.colors = self.highlighted.update(&self.content, extension, *theme);
+        }
+        if self.row_edits {
+            cx.emit(RowEdit::Changed);
+        }
+    }
+
     fn offset_from_utf16(&self, offset: usize) -> usize {
         let mut utf8_offset = 0;
         let mut utf16_count = 0;
@@ -1171,6 +1245,7 @@ impl EntityInputHandler for TextInput {
         }
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.marked_range.take();
+        self.edited(cx);
         cx.notify();
     }
 
@@ -1211,6 +1286,7 @@ impl EntityInputHandler for TextInput {
             })
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
 
+        self.edited(cx);
         cx.notify();
     }
 
@@ -1306,7 +1382,7 @@ impl Element for TextElement {
                 };
                 size(
                     width.unwrap_or_else(|| {
-                        if input.readonly {
+                        if input.readonly || input.row_edits {
                             natural_width()
                         } else {
                             px(400.)
@@ -1546,9 +1622,17 @@ impl Render for TextInput {
             .line_height(relative(1.5))
             .child(
                 super::InputBase::new("input-frame")
-                    .min_h(px(if self.readonly { 18. } else { 24. }))
+                    .min_h(px(if self.readonly || self.row_edits {
+                        18.
+                    } else {
+                        24.
+                    }))
                     .w_full()
-                    .p(px(if self.readonly { 0. } else { 4. }))
+                    .p(px(if self.readonly || self.row_edits {
+                        0.
+                    } else {
+                        4.
+                    }))
                     .child(TextElement { input: cx.entity() }),
             )
     }
@@ -1603,6 +1687,7 @@ impl gpui::EventEmitter<ReferenceInput> for TextInput {}
 impl gpui::EventEmitter<CompletionInput> for TextInput {}
 impl gpui::EventEmitter<crate::clipboard::PastedAttachments> for TextInput {}
 impl gpui::EventEmitter<SelectionInput> for TextInput {}
+impl gpui::EventEmitter<RowEdit> for TextInput {}
 
 impl Focusable for TextInput {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -1626,6 +1711,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-a", SelectAll, Some("TextInput")),
         KeyBinding::new("secondary-a", SelectAll, Some("DiffDocument")),
         KeyBinding::new("secondary-c", Copy, Some("DiffDocument")),
+        KeyBinding::new("secondary-z", Undo, Some("DiffDocument")),
+        KeyBinding::new("secondary-shift-z", Redo, Some("DiffDocument")),
         KeyBinding::new("secondary-v", Paste, Some("TextInput")),
         KeyBinding::new("secondary-c", Copy, Some("TextInput")),
         KeyBinding::new("secondary-x", Cut, Some("TextInput")),
@@ -1699,6 +1786,7 @@ fn platform_bindings(cx: &mut App) {
         KeyBinding::new("ctrl-backspace", DeleteWordLeft, Some("TextInput")),
         KeyBinding::new("ctrl-delete", DeleteWordRight, Some("TextInput")),
         KeyBinding::new("ctrl-y", Redo, Some("TextInput")),
+        KeyBinding::new("ctrl-y", Redo, Some("DiffDocument")),
     ]);
 }
 

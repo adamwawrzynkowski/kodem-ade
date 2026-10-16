@@ -539,6 +539,7 @@ impl Render for Shell {
             .on_action(cx.listener(|s, _: &ShowChat, _, cx| s.set_mode(TaskKind::Chat, cx)))
             .on_action(cx.listener(|s, _: &ShowReview, _, cx| s.set_mode(TaskKind::Review, cx)))
             .on_action(cx.listener(|s, _: &ShowGit, _, cx| s.open_git(cx)))
+            .on_action(cx.listener(|s, _: &diff_view::SaveEdits, _, cx| s.save_edit(cx)))
             .on_action(cx.listener(|s, _: &CloneRepository, window, cx| {
                 s.open_git(cx);
                 let git = s.git_workspace(window, cx);

@@ -307,10 +307,13 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, UnboundedR
                 }
                 // Account operations and catalog discovery do not depend on task mutations.
                 // Provider latency must not block Send, Stop, or conversation polling. Listing
-                // review targets and starting a review can wait for GitHub and a fetch.
+                // review targets and starting a review can wait for GitHub and a fetch. Reading
+                // and saving an edited file must not wait behind a capture of the changes.
                 if matches!(
                     request,
                     Request::ComposerCatalog { .. }
+                        | Request::ReadEditableFile { .. }
+                        | Request::SaveFile { .. }
                         | Request::ConnectRuntime { .. }
                         | Request::RefreshUsage { .. }
                         | Request::ConsumeUsageReset { .. }
