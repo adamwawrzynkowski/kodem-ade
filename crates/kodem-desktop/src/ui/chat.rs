@@ -1421,8 +1421,6 @@ const METER_TAB_SLANT: f32 = 14.;
 /// from each corner of the slant its rounding starts.
 const METER_TAB_FOOT: f32 = 7.;
 const METER_TAB_ROUNDING: f32 = 6.;
-/// Steps of the glass blur that follow the tab's slant.
-const METER_TAB_SLANT_STEPS: usize = 5;
 
 // Paints the meter tab: a surface with a slanted leading side and a rounded trailing corner
 // that continues the composer's corner. The slant curves out of the composer's edge at its
@@ -1464,31 +1462,19 @@ fn paint_meter_tab(
         builder.curve_to(point(right, top + radius), point(right, top));
         builder.line_to(point(right, bottom));
     };
-    // The tab is glass like the composer: the field behind its shape is blurred, then tinted.
-    // A backdrop is a rounded rectangle, so the flat top is one and narrow steps follow the
-    // slant. The blur stops above the composer's edge.
+    // The tab is glass like the composer: the field behind its flat top is blurred, then tinted.
+    // A backdrop is a rounded rectangle, and GPUI blurs the whole window for each one, so the
+    // slant has no blur of its own and shows its tint only. The blur stops above the composer's
+    // edge.
     let seam_top = bottom - gpui::px(1.);
-    let blur = [Filter::Blur(px(kit::GLASS_BLUR))];
     window.paint_backdrop_filter(
         Bounds::from_corners(point(head.x, bounds.top()), point(bounds.right(), seam_top)),
         Corners {
             top_right: radius,
             ..Corners::default()
         },
-        &blur,
+        &[Filter::Blur(px(kit::GLASS_BLUR))],
     );
-    let step = (head.x - foot.x) / METER_TAB_SLANT_STEPS as f32;
-    for index in 0..METER_TAB_SLANT_STEPS {
-        let start = foot.x + step * index as f32;
-        // The slant's height at the middle of the step, from the foot up to the head.
-        let share = (index as f32 + 0.5) / METER_TAB_SLANT_STEPS as f32;
-        let edge = bottom - (bottom - top) * share;
-        window.paint_backdrop_filter(
-            Bounds::from_corners(point(start, edge), point(start + step, seam_top)),
-            Corners::default(),
-            &blur,
-        );
-    }
     // The composer's edge runs under the tab's bottom row. A see-through fill would show it as
     // a line across the tab, so that row stays solid in the surface tone and the tab's own
     // stroke is the only line there. A hover tone lies over the whole surface in the same shape.

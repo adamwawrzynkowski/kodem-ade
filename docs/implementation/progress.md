@@ -949,3 +949,13 @@ What looks different: the one-pixel dotted rule between the rail and the sidebar
 Not changed: the meter tab's six blurs and the composer's blur, because fewer steps along the slant would change its edge; the field's frame rate; and GPUI's blur, which would need a patched renderer to blur only around each shape.
 
 Checked with a locked macOS `cargo clippy --workspace --all-targets -D warnings` (no findings), `cargo fmt --check` and a debug build of the app bundle. The look is not checked under the no-visual-testing agreement.
+
+## The GPU limits macOS release builds
+
+Recorded on 16 October 2026. The user reported that every scroll view of the Nightly build lagged on macOS, with hovers and clicks up to three seconds late, on a Mac Studio (M1 Max, three 4K displays at 144 Hz) and on a MacBook Pro (M3 Pro), while the Debug build on the same Mac and the Nightly build in a Windows virtual machine were smooth. Data, settings (the interface scale was tried at 90, 100 and 110%) and the scroll utility were ruled out. Passive measurements of Nightly 0.1.44: `sample` found the main thread idle about 73% of the time while the user scrolled, with no blocking call; the IORegistry's `Device Utilization %` was 83–100% while scrolling and 92–97% at rest, with WindowServer at about 45% of the GPU, Kodem at 22–28% and another app at 16%.
+
+A release build produces frames as fast as the display asks: on every refresh while the user scrolls or types, 25–60 a second for the glyph field, and, for one second after fast input, GPUI presents again on every refresh, which renders the whole scene on the GPU (`Window::present` calls `renderer.draw`). Each frame paid for every backdrop blur, and in `gpui_ce_macos` each blur ends the render pass and blurs the whole window. At 144 Hz in 4K the demand passed what the GPU could do, so frames and input queued. A Debug build runs Kodem's code unoptimized, draws fewer frames and stays under the limit.
+
+`b1f03c2` made the side panels share one blur. `paint_meter_tab` now blurs only the tab's flat top; the five steps along its slant are gone, so the slant shows its tint over the unblurred conversation. A frame has three blurs instead of about eleven: the field under the panels, the composer and the tab.
+
+Checked with a locked macOS `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. No release build was made, at the user's request, so the GPU use of the new build is not measured; the look is not checked under the no-visual-testing agreement.
