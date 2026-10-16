@@ -3,7 +3,8 @@
 //!
 //! Runs and thoughts that follow one another without a reply between them are one stretch of
 //! work. A stretch of more than one tray has a parent tray over all of them, which folds the
-//! whole stretch into one line. Its trays stay foldable inside it.
+//! whole stretch into one line. Its trays stay foldable inside it. A stretch of one tray has no
+//! parent: the tray's own line is the plate, and its calls or its thought hang in the well.
 //!
 //! A tray is open while its turn can still add to it and folds when the work moves on. Failed
 //! calls stay visible while their run or their stretch is folded.
@@ -137,6 +138,28 @@ fn work_label(calls: &[Rc<ToolView>], thoughts: usize, edits: &EditSummary) -> S
     label
 }
 
+// Raises the summary line of a stretch of work into a plate. While a well hangs under it, the
+// plate squares its bottom corners onto the well. GPUI takes one hover style per element, so
+// this sets the line's only one.
+fn plate(line: Button, t: Theme, well: bool) -> Button {
+    line.overflow_hidden()
+        .rounded(px(crate::theme::RADIUS_SURFACE))
+        .when(well, |plate| plate.rounded_b(px(0.)))
+        .bg(t.raised)
+        .border_color(t.border)
+        .shadow(kit::plate_light(t, !well))
+        .child(kit::shade(t.dot.opacity(0.5), dither::Edge::Bottom))
+        .child(kit::glint(t.accent.opacity(0.45), dither::Edge::Bottom))
+        .hover(move |s| s.bg(t.control).text_color(t.text))
+}
+
+// Lays the summary line of a tray flat inside a well. It sets the line's only hover style.
+fn flat(line: Button, t: Theme) -> Button {
+    line.bg(gpui::transparent_black())
+        .border_color(gpui::transparent_black())
+        .hover(move |s| s.bg(t.selected).text_color(t.text))
+}
+
 impl Shell {
     /// Renders the tray of one transcript row of tool work: the run of calls that starts at the
     /// row, or the thought of the row. The first row of a stretch of several trays also carries
@@ -155,12 +178,12 @@ impl Shell {
             return div().into_any_element();
         };
         if tray_count(&transcript[rows.clone()]) < 2 {
-            return match self.work_tray(conversation, index, false, cx) {
+            return match self.work_tray(conversation, index, false, true, cx) {
                 Some(tray) => div()
                     .w_full()
                     .min_w_0()
                     .px_5()
-                    .py(px(2.))
+                    .py(px(4.))
                     .child(tray)
                     .into_any_element(),
                 None => div().into_any_element(),
@@ -180,7 +203,7 @@ impl Shell {
         // recessed list under their parent's plate.
         let (first_tray, last_tray) = (trays.first() == Some(&index), trays.last() == Some(&index));
         let tray = self
-            .work_tray(conversation, index, !open, cx)
+            .work_tray(conversation, index, !open, false, cx)
             .map(|tray| kit::well(t, first_tray, last_tray).child(tray));
         if header.is_none() && tray.is_none() {
             return div().into_any_element();
@@ -241,16 +264,8 @@ impl Shell {
             .gap(px(8.))
             .justify_start()
             .flex_wrap()
-            .overflow_hidden()
-            .rounded(px(crate::theme::RADIUS_SURFACE))
-            .when(well, |plate| plate.rounded_b(px(0.)))
-            .bg(t.raised)
-            .border_color(t.border)
-            .shadow(kit::plate_light(t, !well))
-            .child(kit::shade(t.dot.opacity(0.5), dither::Edge::Bottom))
-            .child(kit::glint(t.accent.opacity(0.45), dither::Edge::Bottom))
+            .map(|line| plate(line, t, well))
             .text_color(t.muted)
-            .hover(move |s| s.bg(t.control).text_color(t.text))
             .accessibility_label(format!(
                 "{} {label}",
                 if open { "Collapse" } else { "Expand" },
@@ -292,12 +307,13 @@ impl Shell {
 
     // Returns the tray that starts at a row: a thought, or the run of calls whose first call
     // is the row. With `failures_only`, the parent of the row is folded, and only the failed
-    // calls of a run remain.
+    // calls of a run remain. A `plated` tray has no parent, so its line is the plate.
     fn work_tray(
         &mut self,
         conversation: &Conversation,
         index: usize,
         failures_only: bool,
+        plated: bool,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let transcript = self.conversation_messages(conversation)?;
@@ -307,12 +323,12 @@ impl Shell {
                 return None;
             }
             let message = message.clone();
-            return Some(self.thought_tray(conversation, &message, index, cx));
+            return Some(self.thought_tray(conversation, &message, index, plated, cx));
         }
         if index > 0 && is_call(&transcript[index - 1]) {
             return None;
         }
-        self.tool_run(conversation, index, failures_only, cx)
+        self.tool_run(conversation, index, failures_only, plated, cx)
     }
 
     // One run of calls: its summary line and its individually expandable calls.
@@ -321,6 +337,7 @@ impl Shell {
         conversation: &Conversation,
         index: usize,
         failures_only: bool,
+        plated: bool,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let transcript = self.conversation_messages(conversation)?;
@@ -349,7 +366,8 @@ impl Shell {
             .filter(|(_, view)| expanded || view.status == ToolStatus::Failed)
             .map(|(message, view)| (message.clone(), view.clone()))
             .collect();
-        if failures_only && shown.is_empty() {
+        let any_shown = !shown.is_empty();
+        if failures_only && !any_shown {
             return None;
         }
         let label = work_label(&views, 0, &edits);
@@ -371,10 +389,14 @@ impl Shell {
             .gap(px(8.))
             .justify_start()
             .flex_wrap()
-            .bg(gpui::transparent_black())
-            .border_color(gpui::transparent_black())
+            .map(|line| {
+                if plated {
+                    plate(line, t, any_shown)
+                } else {
+                    flat(line, t)
+                }
+            })
             .text_color(t.muted)
-            .hover(move |s| s.bg(t.selected).text_color(t.text))
             .accessibility_label(accessible_label)
             .child(
                 icon(if expanded {
@@ -383,10 +405,11 @@ impl Shell {
                     "chevron-right"
                 })
                 .size(px(12.))
-                .text_color(t.subtle),
+                .text_color(if plated { t.muted } else { t.subtle }),
             )
             // The run reads as a section header: a mono label, its totals, then a dotted rule.
-            .child(caps(&label, t).text_color(t.muted))
+            // A plate is brighter than the lines in a well.
+            .child(caps(&label, t).text_color(if plated { t.text } else { t.muted }))
             .when_some(edits.lines.filter(|_| edits.files > 0), |button, lines| {
                 button.child(kit::diffstat(lines.added, lines.removed, t))
             })
@@ -446,12 +469,15 @@ impl Shell {
                     .border_l_1()
                     .border_color(t.border)
             });
-        let any_shown = !shown.is_empty();
         for (message, view) in &shown {
             calls = calls.child(self.tool_call(conversation, message, view, index, cx));
         }
         if any_shown {
-            group = group.child(calls);
+            group = group.child(if plated {
+                kit::well(t, true, true).child(calls).into_any_element()
+            } else {
+                calls.into_any_element()
+            });
         }
         Some(group.into_any_element())
     }
@@ -490,6 +516,7 @@ impl Shell {
         conversation: &Conversation,
         message: &Message,
         index: usize,
+        plated: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
@@ -499,6 +526,7 @@ impl Shell {
         let active = view.status == ToolStatus::Running
             && self.conversation_message_active(conversation, message);
         let expanded = self.tray_open(conversation, &key, index + 1, active);
+        let open_text = expanded && !view.output.is_empty();
         let title: String = view
             .title
             .lines()
@@ -519,10 +547,14 @@ impl Shell {
             .px(px(6.))
             .gap(px(8.))
             .justify_start()
-            .bg(gpui::transparent_black())
-            .border_color(gpui::transparent_black())
+            .map(|line| {
+                if plated {
+                    plate(line, t, open_text)
+                } else {
+                    flat(line, t)
+                }
+            })
             .text_color(t.muted)
-            .hover(move |s| s.bg(t.selected).text_color(t.text))
             .accessibility_label(format!(
                 "{} thought: {title}",
                 if expanded { "Collapse" } else { "Expand" },
@@ -534,7 +566,7 @@ impl Shell {
                     "chevron-right"
                 })
                 .size(px(12.))
-                .text_color(t.subtle),
+                .text_color(if plated { t.muted } else { t.subtle }),
             )
             .child(if active {
                 dither::pulse(t.accent, cx.reduce_motion())
@@ -544,7 +576,7 @@ impl Shell {
                     .text_color(t.subtle)
                     .into_any_element()
             })
-            .child(caps(label, t).text_color(t.muted))
+            .child(caps(label, t).text_color(if plated { t.text } else { t.muted }))
             // The open tray shows the whole thought, so its header does not repeat the start.
             .when(!expanded, |header| {
                 header.child(
@@ -578,24 +610,27 @@ impl Shell {
                 )
             }));
         let mut tray = div().w_full().min_w_0().child(header);
-        if expanded && !view.output.is_empty() {
-            tray = tray.child(
-                div()
-                    .ml(px(11.))
-                    .pl(px(17.))
-                    .pt(px(2.))
-                    .pb(px(6.))
-                    .border_l_1()
-                    .border_color(t.border)
-                    .text_size(text_px(12.))
-                    .text_color(t.muted)
-                    .child(self.message_blocks(
-                        &format!("tool-thought:{message_key}"),
-                        &crate::markdown::blocks(&view.output),
-                        self.message_arriving(conversation, message),
-                        cx,
-                    )),
-            );
+        if open_text {
+            let text = div()
+                .ml(px(11.))
+                .pl(px(17.))
+                .pt(px(2.))
+                .pb(px(6.))
+                .border_l_1()
+                .border_color(t.border)
+                .text_size(text_px(12.))
+                .text_color(t.muted)
+                .child(self.message_blocks(
+                    &format!("tool-thought:{message_key}"),
+                    &crate::markdown::blocks(&view.output),
+                    self.message_arriving(conversation, message),
+                    cx,
+                ));
+            tray = tray.child(if plated {
+                kit::well(t, true, true).child(text).into_any_element()
+            } else {
+                text.into_any_element()
+            });
         }
         tray.into_any_element()
     }
