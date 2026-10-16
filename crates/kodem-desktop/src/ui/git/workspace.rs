@@ -10,8 +10,8 @@ use gpui::ColorExt as _;
 use gpui::prelude::*;
 use gpui::{
     Anchor, Animation, AnimationExt as _, AnyElement, AnyView, App, Bounds, Context, Div,
-    ElementId, Entity, EventEmitter, Focusable, Hsla, IntoElement, MouseButton, PathPromptOptions,
-    Pixels, Render, SharedString, Stateful, Subscription, Window, canvas, div, point,
+    ElementId, Entity, EventEmitter, Focusable, Hsla, IntoElement, PathPromptOptions, Pixels,
+    Render, SharedString, Stateful, Subscription, Window, canvas, div, point,
 };
 use kodem_core::Project;
 use kodem_git::git::{FetchOptions, GitRepo, PullOptions, PushOptions};
@@ -939,8 +939,9 @@ impl GitWorkspace {
                         .border_1()
                         .border_color(cx.theme().border)
                         .bg(cx.theme().muted)
-                        // A press on the actions must not start a move of the window.
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        // A press on the actions must not start a move of the window: they
+                        // occlude the title bar under them.
+                        .occlude()
                         .child(
                             Popover::new("fetch-popup")
                                 .appearance(false)

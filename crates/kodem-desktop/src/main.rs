@@ -94,6 +94,9 @@ fn main() {
                         appears_transparent: true,
                         traffic_light_position: Some(point(px(12.), px(12.))),
                     }),
+                    // The title bar moves the window from its empty areas only, so AppKit must
+                    // not move it from the whole strip, the title bar's controls included.
+                    app_owns_titlebar_drag: true,
                     // Linux finds the window's desktop entry and icon by this identity.
                     app_id: Some(kodem_core::platform::app_id().into()),
                     // Linux keeps the compositor's frame where it draws one.

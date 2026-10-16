@@ -815,3 +815,15 @@ Recorded on 16 October 2026. The user reported that the corners of the dithered 
 | Glass rings | Both blends of a ring cover the whole ring with stops at the middle, instead of two half-height quads, so they keep the ring's corners at any height |
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary test passed and was removed: `inner_corners` for a bordered control, a borderless surface, mixed borders on one side, a square bordered box and `rounded_full`. The look is not checked on a display under the no-visual-testing agreement. Other dithered layers with a fixed radius on unbordered surfaces, such as Git workspace panels and loaders, are unchanged.
+
+## The title bar moves the window only from its empty areas
+
+Recorded on 16 October 2026. The user reported that holding the pointer down on a button or the command palette field in the title bar and moving it moved the window, and asked that only the bar's empty areas move it. On macOS AppKit moved the window from the whole transparent title bar strip, controls included, because GPUI leaves that to AppKit by default. On Windows the bar's `WindowControlArea::Drag` made the system's hit test answer "caption" over the bar's controls too, since their hitboxes did not hide the bar.
+
+| Part | Where |
+| --- | --- |
+| macOS | `WindowOptions.app_owns_titlebar_drag` is on (`main.rs`), so AppKit no longer moves the window from the strip. A press on the bar itself calls `start_window_move`; a double click calls `titlebar_double_click`, which follows the system's double-click setting |
+| Controls | Every control in the bar occludes it: the sidebar toggles, the waiting chip, the command palette field, the files, terminal and changes buttons, the window buttons of Windows and Linux and the Git workspace's fetch, pull and push group. GPUI's hit test stops at them, so the bar's handlers and its drag area miss the press there. Labels such as the project name, the branch and the running count stay draggable |
+| Linux | The compositor move starts only while the button that pressed the bar is still down, so a press that ended over a control cannot move the window later |
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Moving the window is not checked in the running app under the no-visual-testing agreement, nor on Windows or Linux.

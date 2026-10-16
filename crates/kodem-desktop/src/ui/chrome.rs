@@ -33,7 +33,19 @@ impl Shell {
             .flex_shrink_0()
             .flex()
             .items_center()
+            // Only the bar's empty areas move the window. Every control in it occludes the bar
+            // under it, so these handlers and the system's hit test on Windows miss it there.
             .window_control_area(WindowControlArea::Drag)
+            .when(cfg!(target_os = "macos"), |header| {
+                // The app owns the drag of the title bar, so AppKit leaves the controls alone.
+                header.on_mouse_down(MouseButton::Left, |event: &MouseDownEvent, window, _| {
+                    if event.click_count == 2 {
+                        window.titlebar_double_click();
+                    } else {
+                        window.start_window_move();
+                    }
+                })
+            })
             .when(client_decorations(window), |header| {
                 // A Linux compositor moves the window only when the app asks it to.
                 header
@@ -47,11 +59,12 @@ impl Shell {
                             }
                         }),
                     )
-                    .on_mouse_move(cx.listener(|s, _, window, _| {
-                        if s.title_press {
-                            s.title_press = false;
+                    .on_mouse_move(cx.listener(|s, event: &MouseMoveEvent, window, _| {
+                        // A press that ended away from the bar must not move the window later.
+                        if s.title_press && event.dragging() {
                             window.start_window_move();
                         }
+                        s.title_press = false;
                     }))
                     .on_mouse_up(
                         MouseButton::Left,
@@ -106,6 +119,7 @@ impl Shell {
                         .child(div().flex_1())
                         .child(
                             self.icon_button("header-sidebar", "panel-left", "Toggle sidebar · ⌘B")
+                                .occlude()
                                 .on_click(cx.listener(|s, _, _, cx| {
                                     s.settings.collapsed = true;
                                     s.save_settings();
@@ -125,6 +139,7 @@ impl Shell {
             .when(self.reveals.sidebar <= 0., |d| {
                 d.pl(gpui::px(WINDOW_CONTROLS)).child(
                     self.icon_button("expand-sidebar", "panel-left", "Show sidebar · ⌘B")
+                        .occlude()
                         .on_click(cx.listener(|s, _, _, cx| {
                             s.settings.collapsed = false;
                             s.save_settings();
@@ -186,6 +201,7 @@ impl Shell {
             .when(waiting > 0, |d| {
                 d.child(
                     self.control("titlebar-waiting")
+                        .occlude()
                         .h(px(22.))
                         .px(px(7.))
                         .gap(px(6.))
@@ -235,6 +251,7 @@ impl Shell {
                     .when(self.reveals.sidebar <= 0., |d| {
                         d.pl(gpui::px(WINDOW_CONTROLS)).child(
                             self.icon_button("expand-sidebar", "panel-left", "Show sidebar · ⌘B")
+                                .occlude()
                                 .on_click(cx.listener(|s, _, _, cx| {
                                     s.settings.collapsed = false;
                                     s.save_settings();
@@ -255,6 +272,7 @@ impl Shell {
             .child(readout)
             .child(
                 self.control("header-palette")
+                    .occlude()
                     .h(px(24.))
                     .w(px(220.))
                     .flex_shrink(1.)
@@ -287,6 +305,7 @@ impl Shell {
                     .px(px(10.))
                     .child(
                         self.icon_button("header-files", "file-text", "Browse project files")
+                            .occlude()
                             .disabled(!enabled)
                             .on_click(cx.listener(|s, _, _, cx| {
                                 s.panel = Panel::Files;
@@ -304,6 +323,7 @@ impl Shell {
                             "square-terminal",
                             "Toggle terminal · ⌃`",
                         )
+                        .occlude()
                         .disabled(!enabled)
                         .when(self.show_terminal, |b| {
                             b.bg(t.accent.opacity(0.14)).text_color(t.accent)
@@ -316,6 +336,7 @@ impl Shell {
                     )
                     .child(
                         self.icon_button("header-review", "panel-right", "Toggle changes · ⌘D")
+                            .occlude()
                             .disabled(!enabled)
                             .when(self.show_review && enabled, |b| {
                                 b.bg(t.accent.opacity(0.14)).text_color(t.accent)
@@ -352,6 +373,8 @@ impl Shell {
                 .items_center()
                 .justify_center()
                 .text_color(t.muted)
+                // Over the bar's drag area, the button is the only control area that it hits.
+                .occlude()
                 .window_control_area(area)
                 .hover(move |s| {
                     s.bg(hover).text_color(if area == WindowControlArea::Close {
