@@ -361,24 +361,6 @@ impl Shell {
                     })),
             );
         }
-        div()
-            .h(px(520.))
-            .flex()
-            .child(navigation)
-            .child(region::cached(
-                &self.settings_region,
-                StyleRefinement::default().flex_1().min_w_0().h_full(),
-            ))
-            .into_any_element()
-    }
-
-    /// Builds the scrolling content of the chosen preferences section, which renders as a
-    /// region of its own.
-    pub(super) fn settings_content(
-        &mut self,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
         let section = match self.settings_section {
             PROJECTS => self.project_settings(cx),
             ACCOUNTS => self.account_settings(cx),
@@ -390,12 +372,20 @@ impl Shell {
             _ => self.shortcut_settings(),
         };
         div()
-            .id("preferences-content")
-            .size_full()
-            .overflow_y_scroll()
-            .px(px(28.))
-            .py(px(24.))
-            .child(section)
+            .h(px(520.))
+            .flex()
+            .child(navigation)
+            .child(
+                div()
+                    .id("preferences-content")
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .overflow_y_scroll()
+                    .px(px(28.))
+                    .py(px(24.))
+                    .child(section),
+            )
             .into_any_element()
     }
 

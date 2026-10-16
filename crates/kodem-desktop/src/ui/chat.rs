@@ -4,30 +4,6 @@ use super::*;
 pub(super) const COMPOSER_ANCHOR: &str = "composer";
 
 impl Shell {
-    /// Builds the list of the open conversation, which renders as a region of its own.
-    pub(super) fn chat_list(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let cover = self.chat_cover();
-        let entity = cx.entity();
-        // The list spans the chat, so the wheel scrolls it from the margins too. Each row
-        // centers its content in the reading column.
-        list(self.chat_scroll.clone(), move |index, _, cx| {
-            let row = entity.update(cx, |s, cx| {
-                s.conversation_row(&Conversation::Main, index, cx)
-            });
-            div()
-                .w_full()
-                .flex()
-                .justify_center()
-                .child(div().w_full().max_w(px(900.)).min_w_0().child(row))
-                .into_any_element()
-        })
-        .size_full()
-        .min_w_0()
-        // At its end the last message rests above the box.
-        .pb(gpui::px(cover) + px(8.))
-        .into_any_element()
-    }
-
     /// Builds the conversation with a measured floating composer and a clear review viewport.
     pub(super) fn chat(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.sync_slash(cx);
@@ -164,6 +140,7 @@ impl Shell {
                             )),
                     );
                 } else {
+                    let entity = cx.entity();
                     timeline = timeline.child(
                         div()
                             .w_full()
@@ -191,10 +168,33 @@ impl Shell {
                                             cx.notify();
                                         }),
                                     )
-                                    .child(region::cached(
-                                        &self.chat_region,
-                                        StyleRefinement::default().w_full().min_w_0().h_full(),
-                                    ))
+                                    .child(
+                                        // The list spans the chat, so the wheel scrolls it
+                                        // from the margins too. Each row centers its content
+                                        // in the reading column.
+                                        list(self.chat_scroll.clone(), move |index, _, cx| {
+                                            let row = entity.update(cx, |s, cx| {
+                                                s.conversation_row(&Conversation::Main, index, cx)
+                                            });
+                                            div()
+                                                .w_full()
+                                                .flex()
+                                                .justify_center()
+                                                .child(
+                                                    div()
+                                                        .w_full()
+                                                        .max_w(px(900.))
+                                                        .min_w_0()
+                                                        .child(row),
+                                                )
+                                                .into_any_element()
+                                        })
+                                        .w_full()
+                                        .min_w_0()
+                                        .h_full()
+                                        // At its end the last message rests above the box.
+                                        .pb(gpui::px(cover) + px(8.)),
+                                    )
                                     // The history rail and its preview lie over the list,
                                     // above the box.
                                     .child(

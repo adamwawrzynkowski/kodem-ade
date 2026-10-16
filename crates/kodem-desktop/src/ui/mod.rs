@@ -31,7 +31,6 @@ mod palette;
 mod panels;
 mod projects;
 mod questions;
-mod region;
 mod review;
 mod settings;
 mod sidebar;
@@ -224,11 +223,6 @@ pub struct Shell {
     /// The rows of `chat_scroll`: a long reply takes several, so the list lays out only its
     /// part in view.
     chat_rows: conversation::ChatRows,
-    /// The conversation list, the sidebar's feed and the preferences' content, each a view of
-    /// its own, so that a scroll or an animation in one does not lay out the others again.
-    chat_region: Entity<region::Region>,
-    feed_region: Entity<region::Region>,
-    settings_region: Entity<region::Region>,
     /// Whether the jump to the latest message was on screen in the last frame. The list stops
     /// and resumes following its end during layout, after the frame rendered the button.
     latest_shown: bool,
@@ -584,18 +578,6 @@ impl Shell {
                 list
             },
             chat_rows: Default::default(),
-            chat_region: {
-                let shell = cx.weak_entity();
-                cx.new(|_| region::Region::new(shell, Shell::chat_list))
-            },
-            feed_region: {
-                let shell = cx.weak_entity();
-                cx.new(|_| region::Region::new(shell, Shell::sidebar_feed))
-            },
-            settings_region: {
-                let shell = cx.weak_entity();
-                cx.new(|_| region::Region::new(shell, Shell::settings_content))
-            },
             latest_shown: false,
             unseen_below: false,
             history_hover: None,

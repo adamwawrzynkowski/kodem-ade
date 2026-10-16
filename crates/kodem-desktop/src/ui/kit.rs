@@ -909,8 +909,11 @@ pub(super) fn glass<E: Styled>(surface: E, tone: Hsla, fill: f32) -> E {
 }
 
 /// Gives a panel at a side of the window its glass, in the panel tone.
+///
+/// Only the field lies behind the panels, and the field blurs itself beneath all of them at
+/// once, so a panel adds only its tone.
 pub(super) fn panel_glass<E: Styled>(panel: E, theme: Theme) -> E {
-    glass(panel, theme.sidebar, GLASS_FILL)
+    panel.bg(theme.sidebar.opacity(GLASS_FILL))
 }
 
 /// A card surface: raised fill, hairline edge and a dithered shade along its bottom edge.
