@@ -117,7 +117,7 @@ impl Shell {
                         Ok(()) => cx.quit(),
                         Err((error, prepared)) => {
                             let _ = bridge.send(bridge::Command::ResumeAfterUpdate);
-                            s.error = Some(error.clone());
+                            s.report_error(error.clone(), cx);
                             s.update_state =
                                 prepared.map_or_else(|| State::Failed(error), State::Ready);
                             cx.notify();

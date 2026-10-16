@@ -1065,8 +1065,7 @@ impl Shell {
     // Plays a notification sound in this process, so no notification is sent.
     fn preview_sound(&mut self, sound: NotificationSound, cx: &mut Context<Self>) {
         if let Err(error) = crate::sound::preview(sound) {
-            self.error = Some(format!("Could not preview the sound: {error:#}"));
-            cx.notify();
+            self.report_error(format!("Could not preview the sound: {error:#}"), cx);
         }
     }
 

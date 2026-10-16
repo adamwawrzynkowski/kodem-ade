@@ -884,7 +884,8 @@ pub(super) fn reset_time(reset: Option<u64>) -> String {
     }
 }
 
-fn duration(seconds: u64) -> String {
+/// Names a span of seconds compactly, such as `12s`, `4m` or `1h 12m`.
+pub(super) fn duration(seconds: u64) -> String {
     if seconds >= 86400 {
         format!(
             "{}d {}h {}m",

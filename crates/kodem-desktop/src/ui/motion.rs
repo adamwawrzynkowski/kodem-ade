@@ -200,19 +200,67 @@ pub(super) fn floating(
     )
 }
 
-/// Content that springs in from the left, overshoots a little and settles, fading in as it arrives.
-pub(super) fn toast(id: impl Into<ElementId>, element: impl IntoElement) -> AnyElement {
+/// How long a floating notice takes to leave.
+pub(super) const NOTICE_LEAVE: Duration = Duration::from_millis(220);
+
+/// A floating notice that springs in from the right, overshoots a little and settles, fading in
+/// while a Bayer dissolve in its surface color clears from it. `radius` is the card's corner.
+pub(super) fn notice_enter(
+    id: impl Into<ElementId>,
+    element: impl IntoElement,
+    theme: Theme,
+    radius: f32,
+) -> AnyElement {
     div()
         .relative()
         .child(element)
         .with_animation(
             id,
             Animation::new(Duration::from_millis(420)),
-            |toast, delta| {
+            move |notice, delta| {
                 let remaining = 1. - fx::ease_out_back(delta);
-                toast
-                    .left(px(-28. * remaining))
-                    .opacity((delta * 2.5).min(1.))
+                let notice = notice
+                    .left(px(32. * remaining))
+                    .opacity((delta * 2.5).min(1.));
+                // The dissolve clears in the first part of the spring, before it settles.
+                let cleared = (delta * 1.6).min(1.);
+                if cleared >= 1. {
+                    return notice;
+                }
+                notice.child(
+                    dither::Dither::new(dither::DitherField::Dissolve(cleared))
+                        .color(theme.raised)
+                        .grid(3., 3.)
+                        .corner_radius(radius)
+                        .layer(),
+                )
+            },
+        )
+        .into_any_element()
+}
+
+/// A floating notice that slides back to the right and fades out while a Bayer dissolve in its
+/// surface color covers it. It takes `NOTICE_LEAVE`.
+pub(super) fn notice_leave(
+    id: impl Into<ElementId>,
+    element: impl IntoElement,
+    theme: Theme,
+    radius: f32,
+) -> AnyElement {
+    div()
+        .relative()
+        .child(element)
+        .with_animation(
+            id,
+            Animation::new(NOTICE_LEAVE).with_easing(quadratic),
+            move |notice, delta| {
+                notice.left(px(36. * delta)).opacity(1. - delta).child(
+                    dither::Dither::new(dither::DitherField::Dissolve(1. - delta))
+                        .color(theme.raised)
+                        .grid(3., 3.)
+                        .corner_radius(radius)
+                        .layer(),
+                )
             },
         )
         .into_any_element()

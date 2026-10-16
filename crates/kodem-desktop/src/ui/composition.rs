@@ -104,8 +104,7 @@ impl Shell {
             return;
         }
         if view.task.state == RunState::DeliveryUnknown {
-            self.error = Some("Check delivery history before sending another message.".into());
-            cx.notify();
+            self.report_error("Check delivery history before sending another message.", cx);
             return;
         }
         let id = new_id();
@@ -205,8 +204,7 @@ impl Shell {
             return;
         }
         if !self.accepts_images() {
-            self.error = Some("The selected provider and model do not support image attachments. Choose another model before pasting an image.".into());
-            cx.notify();
+            self.report_error("The selected provider and model do not support image attachments. Choose another model before pasting an image.", cx);
             return;
         }
         let pasted = pasted.clone();
@@ -223,7 +221,7 @@ impl Shell {
                 match result {
                     Ok((mut paths, images)) => {
                         if selected.is_none() && (s.selected.is_some() || s.composer_preferences() != preferences) {
-                            s.error = Some("Image paste cancelled because the task, provider or model changed. Paste again in the intended conversation.".into());
+                            s.report_error("Image paste cancelled because the task, provider or model changed. Paste again in the intended conversation.", cx);
                         } else {
                             for image in images {
                                 let path = image.to_path_buf();
@@ -238,7 +236,7 @@ impl Shell {
                             }
                         }
                     }
-                    Err(error) => s.error = Some(format!("Could not paste image: {error:#}")),
+                    Err(error) => s.report_error(format!("Could not paste image: {error:#}"), cx),
                 }
                 cx.notify();
             });
@@ -255,8 +253,7 @@ impl Shell {
             return;
         }
         if !self.selected_runtime().files {
-            self.error = Some("Attachments are unavailable for the selected provider. Refresh its connection or choose another provider.".into());
-            cx.notify();
+            self.report_error("Attachments are unavailable for the selected provider. Refresh its connection or choose another provider.", cx);
             return;
         }
         if let Some(task_id) = self.selected.clone() {
@@ -288,8 +285,7 @@ impl Shell {
     /// Opens the native picker of files and folders used by the composer paperclip.
     pub(super) fn choose_attachments(&mut self, cx: &mut Context<Self>) {
         if !self.selected_runtime().files {
-            self.error = Some("Attachments are unavailable for the selected provider. Refresh its connection or choose another provider.".into());
-            cx.notify();
+            self.report_error("Attachments are unavailable for the selected provider. Refresh its connection or choose another provider.", cx);
             return;
         }
         let picked = cx.prompt_for_paths(PathPromptOptions {

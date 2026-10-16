@@ -30,6 +30,7 @@ impl Shell {
             Panel::DeleteTask => "Delete thread?",
             Panel::None
             | Panel::Usage
+            | Panel::Notifications
             | Panel::Models
             | Panel::Reasoning
             | Panel::Access
@@ -462,6 +463,7 @@ impl Shell {
             }
             Panel::None
             | Panel::Usage
+            | Panel::Notifications
             | Panel::Models
             | Panel::Reasoning
             | Panel::Access

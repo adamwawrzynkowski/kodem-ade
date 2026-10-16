@@ -813,17 +813,15 @@ impl Shell {
             return;
         }
         if self.account_limit_locked() {
-            self.error = Some(
-                "This task's account reached its usage limit. The conversation stays on it until the limit resets."
-                    .into(),
+            self.report_error(
+                "This task's account reached its usage limit. The conversation stays on it until the limit resets.",
+                cx,
             );
-            cx.notify();
             return;
         }
         if let Some(view) = &self.view {
             if view.task.state.active() || view.task.state == RunState::DeliveryUnknown {
-                self.error = Some("Change the account after this turn finishes.".into());
-                cx.notify();
+                self.report_error("Change the account after this turn finishes.", cx);
                 return;
             }
             self.send(core::Request::EditTask {

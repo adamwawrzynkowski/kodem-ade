@@ -92,6 +92,7 @@ impl Shell {
         )
         .child(div().flex_1())
         .child(self.update_control(true, cx))
+        .child(self.notification_bell("rail-notifications", cx))
         .child(
             self.icon_button("rail-settings", "settings", "Settings · ⌘,")
                 .on_click(cx.listener(|s, _, _, cx| {

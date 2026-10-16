@@ -24,6 +24,7 @@ mod menus;
 mod message_content;
 mod model_picker;
 mod motion;
+mod notices;
 mod onboarding;
 mod palette;
 mod panels;
@@ -122,16 +123,11 @@ enum Panel {
     Palette,
     Mode,
     WhatsNew,
+    Notifications,
 }
 struct ThreadMenu {
     task_id: String,
     position: Point<Pixels>,
-}
-/// A short confirmation that leaves on its own.
-struct Toast {
-    text: SharedString,
-    tone: Hsla,
-    sequence: u64,
 }
 struct PendingSubmission {
     task_id: String,
@@ -185,8 +181,7 @@ pub struct Shell {
     thread_menu: Option<ThreadMenu>,
     deleting_task: Option<String>,
     error: Option<String>,
-    toast: Option<Toast>,
-    toast_sequence: u64,
+    notices: notices::Notices,
     host_connected: bool,
     new_worktree_override: Option<bool>,
     new_preferences: Option<AgentPreferences>,
@@ -504,8 +499,7 @@ impl Shell {
             thread_menu: None,
             deleting_task: None,
             error: None,
-            toast: None,
-            toast_sequence: 0,
+            notices: notices::Notices::default(),
             host_connected: false,
             new_worktree_override: None,
             new_preferences: None,
@@ -774,8 +768,7 @@ impl Shell {
                     self.auto_submit_task = None;
                     self.new_submission_origin = None;
                 }
-                self.error = Some(e);
-                cx.notify();
+                self.report_error(e, cx);
                 return;
             }
         };
@@ -1403,7 +1396,7 @@ impl Shell {
                 if self.panel != Panel::Setup
                     || !matches!(reply.request, core::Request::ConnectRuntime { .. })
                 {
-                    self.error = Some(e);
+                    self.report_error(e, cx);
                 }
             }
         }
@@ -1676,61 +1669,37 @@ impl Shell {
         }
         input
     }
-    /// Shows a short confirmation that leaves on its own after a few seconds.
-    pub(super) fn notify_user(
-        &mut self,
-        text: impl Into<SharedString>,
-        tone: Hsla,
-        cx: &mut Context<Self>,
-    ) {
-        self.toast_sequence += 1;
-        let sequence = self.toast_sequence;
-        self.toast = Some(Toast {
-            text: text.into(),
-            tone,
-            sequence,
-        });
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(3600))
-                .await;
-            let _ = this.update(cx, |s, cx| {
-                if s.toast
-                    .as_ref()
-                    .is_some_and(|toast| toast.sequence == sequence)
-                {
-                    s.toast = None;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-
     // Marks the moment a task changes hands: a finished turn, a failure, or a request for input
-    // lands as an impact on its thread row.
+    // lands as an impact on its thread row. The notification center keeps the events of tasks
+    // other than the open one.
     fn celebrate_transitions(&mut self, incoming: &Workspace, cx: &mut Context<Self>) {
         let Some(current) = &self.workspace else {
             return;
         };
         let t = self.theme;
+        let mut events = Vec::new();
         for task in &incoming.tasks {
             let Some(previous) = current.tasks.iter().find(|old| old.id == task.id) else {
                 continue;
             };
-            let tone = if !previous.needs_input() && task.needs_input() {
-                Some(t.warning)
+            let kind = if !previous.needs_input() && task.needs_input() {
+                Some(notices::NoticeKind::NeedsInput)
             } else if previous.state.active() && task.state == RunState::Completed {
-                Some(t.added)
+                Some(notices::NoticeKind::Finished)
             } else if previous.state.active() && task.is_blocked() {
-                Some(t.removed)
+                Some(notices::NoticeKind::Blocked)
             } else {
                 None
             };
-            if let Some(tone) = tone {
-                fx::impact(&sidebar::thread_anchor(&task.id), tone, cx);
+            if let Some(kind) = kind {
+                fx::impact(&sidebar::thread_anchor(&task.id), kind.tone(t), cx);
+                if self.selected.as_ref() != Some(&task.id) {
+                    events.push((kind, task.id.clone(), task.title.clone()));
+                }
             }
+        }
+        for (kind, task_id, title) in events {
+            self.record_task_event(kind, task_id, title, cx);
         }
     }
 

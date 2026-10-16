@@ -389,88 +389,6 @@ impl Shell {
             .into_any_element()
     }
 
-    // Floating notices above the workspace: a persistent error card and a short confirmation.
-    fn notices(&self, cx: &mut Context<Self>) -> AnyElement {
-        let t = self.theme;
-        let mut stack = div()
-            .absolute()
-            .bottom(px(18.))
-            .left_0()
-            .right_0()
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(8.));
-        if let Some(error) = &self.error {
-            stack = stack.child(motion::toast(
-                "error-toast",
-                div()
-                    .relative()
-                    .max_w(px(620.))
-                    .child(dither::shadow(t, crate::theme::RADIUS_SURFACE, 5.))
-                    .child(
-                        div()
-                            .id("error-notice")
-                            .occlude()
-                            .flex()
-                            .items_start()
-                            .gap(px(10.))
-                            .pl(px(12.))
-                            .pr(px(6.))
-                            .py(px(8.))
-                            .rounded(px(crate::theme::RADIUS_SURFACE))
-                            .bg(t.raised)
-                            .border_1()
-                            .border_color(t.removed.opacity(0.5))
-                            .text_size(text_px(12.))
-                            .child(div().pt(px(3.)).child(kit::marker(t.removed)))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.))
-                                    .child(caps("Error", t).text_color(t.removed))
-                                    .child(div().text_color(t.text).child(error.clone())),
-                            )
-                            .child(
-                                self.icon_button("dismiss-error", "close", "Dismiss error")
-                                    .on_click(cx.listener(|s, _, _, cx| {
-                                        s.error = None;
-                                        cx.notify();
-                                    })),
-                            ),
-                    ),
-            ));
-        }
-        if let Some(toast) = &self.toast {
-            stack = stack.child(motion::toast(
-                ("toast", toast.sequence as usize),
-                div()
-                    .relative()
-                    .child(dither::shadow(t, crate::theme::RADIUS_CONTROL, 4.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .h(px(30.))
-                            .px(px(12.))
-                            .rounded(px(crate::theme::RADIUS_CONTROL))
-                            .bg(t.raised)
-                            .border_1()
-                            .border_color(toast.tone.opacity(0.5))
-                            .font_family(crate::theme::mono())
-                            .text_size(text_px(11.5))
-                            .child(kit::marker(toast.tone))
-                            .child(toast.text.clone()),
-                    ),
-            ));
-        }
-        stack.into_any_element()
-    }
-
     fn go_to_task(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(id) = self.feed_tasks(cx).get(index) {
             self.close_git(cx);
@@ -495,6 +413,7 @@ impl Render for Shell {
         self.window_width = f32::from(window.viewport_size().width) / crate::theme::ui_scale();
         backdrop::begin_frame(window, cx);
         self.sync_reveals(cx);
+        self.sync_error_notices(cx);
         self.sync_censor();
         fx::begin_frame(cx);
         dither::begin_frame();
@@ -778,15 +697,14 @@ impl Render for Shell {
         }
         // The handles come last, so they sit above the panes on both sides of a divider.
         root = root.child(body.relative().children(handles));
-        if self.error.is_some() || self.toast.is_some() {
-            root = root.child(self.notices(cx));
-        }
+        root = root.children(self.floating_notices(cx));
         if self.panel == Panel::Palette {
             root = root.child(self.palette(window, cx));
         } else if matches!(
             self.panel,
             Panel::Models
                 | Panel::Usage
+                | Panel::Notifications
                 | Panel::Reasoning
                 | Panel::Access
                 | Panel::Mode

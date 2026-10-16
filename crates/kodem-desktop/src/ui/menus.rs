@@ -73,6 +73,10 @@ impl Shell {
                 width = 320.;
                 menu = menu.child(self.usage_panel(cx));
             }
+            Panel::Notifications => {
+                width = 340.;
+                menu = menu.child(self.notification_center(cx));
+            }
             Panel::Projects | Panel::ChatProjects => {
                 let chat_picker = self.panel == Panel::ChatProjects;
                 width = if chat_picker {

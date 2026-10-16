@@ -254,6 +254,7 @@ impl Shell {
                                 cx.notify();
                             })),
                     )
+                    .child(self.notification_bell("notification-center", cx))
                     .child(div().flex_1())
                     .child(self.update_control(false, cx))
                     .child(
