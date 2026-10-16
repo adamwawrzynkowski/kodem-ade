@@ -156,6 +156,7 @@ impl Shell {
                                         s.new_preferences = None;
                                     }
                                     s.selected_project = Some(id.clone());
+                                    s.save_settings();
                                     s.panel = Panel::None;
                                     if chat_picker && s.selected_runtime().models.is_empty() {
                                         s.connect_runtime();

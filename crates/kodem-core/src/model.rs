@@ -1504,6 +1504,8 @@ pub struct Settings {
     pub group_tasks_by_project: bool,
     pub collapsed_projects: std::collections::HashSet<String>,
     pub selected_task: Option<String>,
+    /// The project that a new task starts in, as it was chosen last.
+    pub selected_project: Option<String>,
     /// The workspace that was open last.
     pub mode: TaskKind,
     /// The Git workspace was open last. It covers the workspace of `mode` while it is open.
@@ -1542,6 +1544,7 @@ impl Default for Settings {
             group_tasks_by_project: false,
             collapsed_projects: Default::default(),
             selected_task: None,
+            selected_project: None,
             mode: TaskKind::default(),
             git_workspace: false,
             viewed: Default::default(),

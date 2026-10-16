@@ -800,6 +800,10 @@ impl Shell {
             }
             Response::Workspace(workspace) => {
                 self.sidebar_dirty = true;
+                if self.workspace.is_none() {
+                    // A new task starts in the project that was chosen last.
+                    self.selected_project = workspace.settings.selected_project.clone();
+                }
                 if !workspace
                     .projects
                     .iter()
@@ -896,6 +900,7 @@ impl Shell {
                     self.open_empty_chat(cx);
                 }
                 self.selected_project = Some(project.id);
+                self.save_settings();
                 self.folder_without_git = None;
                 self.panel = Panel::None;
                 self.send(core::Request::Hello);
@@ -1568,6 +1573,7 @@ impl Shell {
         settings.show_review = self.show_review;
         settings.show_terminal = self.show_terminal;
         settings.split_diff = self.split;
+        settings.selected_project = self.selected_project.clone();
         settings
     }
     fn open_project(&mut self, _: &OpenProject, window: &mut Window, cx: &mut Context<Self>) {

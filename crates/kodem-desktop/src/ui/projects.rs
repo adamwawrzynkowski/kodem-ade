@@ -261,6 +261,7 @@ impl Shell {
                                         // The agent menu of a new task in this project owns the choice.
                                         s.open_empty_chat(cx);
                                         s.selected_project = Some(project_id.clone());
+                                        s.save_settings();
                                         s.new_preferences = None;
                                         s.open_agent_menu(Panel::Models, window, cx);
                                     })),
