@@ -13,7 +13,7 @@ use std::{
 // Windows 10 1803 and newer provide Unix domain sockets that the standard library does not wrap.
 #[cfg(windows)]
 pub use uds_windows::{UnixListener, UnixStream};
-pub const PROTOCOL: u32 = 37;
+pub const PROTOCOL: u32 = 38;
 pub const MAX_PACKET: u64 = 32 * 1024 * 1024;
 /// Resolves the data directory, isolating Debug's host and store unless explicitly overridden.
 pub fn data_dir() -> Result<PathBuf> {

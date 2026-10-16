@@ -41,6 +41,10 @@ const THEME_PREVIEW: f32 = 86.;
 const ARTIFACTS_LABEL: &str = "Artifacts, /design and /slides";
 /// What the Artifacts switch does and what it needs.
 const ARTIFACTS_DETAIL: &str = "Claude Code keeps Artifacts off in sessions that an app starts. Turn this on so that /design and /slides publish to claude.ai. This needs a claude.ai sign-in on a Pro, Max, Team or Enterprise plan. Each task applies the change with its next message.";
+/// Name of the switch that keeps the computer awake while an agent works.
+const AWAKE_LABEL: &str = "Keep the computer awake";
+/// What the switch that keeps the computer awake does.
+const AWAKE_DETAIL: &str = "While an agent works, the computer does not go to sleep on its own, also with the window closed. The display can still turn off. Closing the lid still puts a laptop to sleep.";
 
 // One place where a compaction rule is stored: the shared rule, a provider or one of its models.
 #[derive(Clone)]
@@ -774,7 +778,21 @@ impl Shell {
                             },
                             cx,
                         ),
-                    )),
+                    ))
+                    .child(
+                        self.setting_row(
+                            AWAKE_LABEL,
+                            AWAKE_DETAIL,
+                            controls::Switch::new("prevent-sleep", self.settings.prevent_sleep)
+                                .label(AWAKE_LABEL)
+                                .on_click(cx.listener(|s, enabled: &bool, _, cx| {
+                                    s.settings.prevent_sleep = *enabled;
+                                    s.save_settings();
+                                    cx.notify();
+                                }))
+                                .into_any_element(),
+                        ),
+                    ),
             )
             .child(
                 setting_group("Layout", None, t)

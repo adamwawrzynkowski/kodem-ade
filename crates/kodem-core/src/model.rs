@@ -1483,6 +1483,9 @@ pub struct Settings {
     /// The setup dialog opened once by itself. Later it opens only on request.
     pub onboarded: bool,
     pub notifications: NotificationSettings,
+    /// Keeps the computer from sleeping on its own while an agent starts or runs a turn. The
+    /// host holds the lock, so it works with the window closed. The display can still sleep.
+    pub prevent_sleep: bool,
     pub sidebar_width: f32,
     pub review_width: f32,
     pub collapsed: bool,
@@ -1523,6 +1526,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             notifications: NotificationSettings::default(),
+            prevent_sleep: true,
             sidebar_width: 260.,
             review_width: 520.,
             collapsed: false,

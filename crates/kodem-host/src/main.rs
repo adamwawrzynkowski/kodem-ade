@@ -1,6 +1,7 @@
 //! On-demand local host. Window closure never drops provider or PTY ownership.
 mod accounts;
 mod attachments;
+mod awake;
 mod delegation;
 mod mcp;
 mod notifications;
@@ -150,6 +151,8 @@ fn run() -> Result<()> {
         settlement_refreshing: false,
     }));
     let mut activity = Instant::now();
+    // Taken and released on this thread, which Windows requires.
+    let mut awake = awake::Awake::default();
     loop {
         match listener.accept() {
             Ok((mut stream, _)) => {
@@ -177,6 +180,12 @@ fn run() -> Result<()> {
             let h = host.lock().unwrap();
             if h.shutdown {
                 break;
+            }
+            if awake.due() {
+                // A failed read releases the lock rather than stopping the host.
+                let wanted = h.store.settings().is_ok_and(|s| s.prevent_sleep)
+                    && h.store.working().unwrap_or(false);
+                awake.set(wanted);
             }
             if activity.elapsed() > Duration::from_secs(300) {
                 let active = !h.checks.is_empty()

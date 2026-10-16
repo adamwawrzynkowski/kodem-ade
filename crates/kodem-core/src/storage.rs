@@ -305,6 +305,16 @@ impl Store {
     pub fn tasks(&self) -> Result<Vec<Task>> {
         self.read_json("SELECT json FROM tasks")
     }
+    /// Reports whether the agent of any task is starting or running a turn. It reads only the
+    /// state of each record, so the host can ask often.
+    pub fn working(&self) -> Result<bool> {
+        Ok(self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks \
+             WHERE json_extract(json, '$.state') IN ('Starting', 'Running'))",
+            [],
+            |r| r.get(0),
+        )?)
+    }
     /// Reads one task or reports that it no longer exists.
     pub fn task(&self, id: &str) -> Result<Task> {
         let json: String = self

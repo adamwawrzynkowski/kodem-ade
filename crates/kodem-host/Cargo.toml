@@ -18,6 +18,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 notify-rust = "4.18"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Power"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 block2 = "0.6"
