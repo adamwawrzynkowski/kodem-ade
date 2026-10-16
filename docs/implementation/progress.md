@@ -827,3 +827,7 @@ Recorded on 16 October 2026. The user reported that holding the pointer down on 
 | Linux | The compositor move starts only while the button that pressed the bar is still down, so a press that ended over a control cannot move the window later |
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Moving the window is not checked in the running app under the no-visual-testing agreement, nor on Windows or Linux.
+
+## The meter tab lights as a whole
+
+Recorded on 16 October 2026. The user asked that the hover of the CTX and USE meters fill the whole tab on the composer's top edge. The meters were a small rounded button inside the tab, so only that rectangle lit. Now the tab itself is the meters' control (`usage_meters` returns the `Button`, and `chat.rs` gives it the tab's geometry). Its slanted surface is a layer under the meters, and `paint_meter_tab` lays the `selected` tone over the whole shape, the seam over the composer's edge included, while the pointer is over the tab (`Shell::meter_tab_hovered`, set by `on_hover`), while the usage panel is open and while the tab has keyboard focus (`Shell::meter_tab_focus`). A press no longer darkens the meters. The meters keep their place in the tab. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. The look is not checked on a display under the no-visual-testing agreement.

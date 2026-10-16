@@ -243,6 +243,9 @@ pub struct Shell {
     /// A press on a title bar that the app draws itself, which moves the window once the
     /// pointer moves. A press that ends in place stays a click.
     title_press: bool,
+    // The pointer is over the meter tab on the composer, which paints its own hover fill.
+    meter_tab_hovered: bool,
+    meter_tab_focus: FocusHandle,
     /// The versions of Git, Git LFS and GitHub CLI that the host read last. Empty until it
     /// answers.
     tools: Vec<ToolVersion>,
@@ -559,6 +562,8 @@ impl Shell {
             dragging_sidebar: false,
             dragging_review: false,
             title_press: false,
+            meter_tab_hovered: false,
+            meter_tab_focus: cx.focus_handle(),
             tools: Vec::new(),
             tool_installers: Vec::new(),
             whats_new_due: crate::release_notes::take_unseen(),

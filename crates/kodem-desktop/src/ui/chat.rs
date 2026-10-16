@@ -1128,26 +1128,46 @@ impl Shell {
         } else {
             t.edge
         };
-        let tab = div()
+        // The whole tab is the meters' control, so its hover fills the tab's own shape: while
+        // the pointer is over it, while its panel is open and while it has keyboard focus.
+        let lit = self.meter_tab_hovered || self.panel == Panel::Usage;
+        let focus = self.meter_tab_focus.clone();
+        let tab = self
+            .usage_meters(cx)
             .absolute()
             .right_0()
             .top(px(1. - METER_TAB_HEIGHT))
             .h(px(METER_TAB_HEIGHT))
-            .pl(px(METER_TAB_FOOT + METER_TAB_SLANT + 6.))
-            .pr(px(6.))
-            .flex()
-            .items_center()
-            .child(
+            .pl(px(METER_TAB_FOOT + METER_TAB_SLANT + 12.))
+            .pr(px(12.))
+            .track_focus(&self.meter_tab_focus)
+            .on_hover(cx.listener(|s, hovered: &bool, _, cx| {
+                if s.meter_tab_hovered != *hovered {
+                    s.meter_tab_hovered = *hovered;
+                    cx.notify();
+                }
+            }))
+            .layer(move |_: Corners<Pixels>| {
                 canvas(
                     |_, _, _| {},
-                    move |bounds, _, window, _| paint_meter_tab(bounds, t.raised, tab_edge, window),
+                    move |bounds, _, window, _| {
+                        let lit =
+                            lit || (focus.is_focused(window) && window.last_input_was_keyboard());
+                        paint_meter_tab(
+                            bounds,
+                            t.raised,
+                            lit.then_some(t.selected),
+                            tab_edge,
+                            window,
+                        )
+                    },
                 )
                 .absolute()
                 .top_0()
                 .left_0()
-                .size_full(),
-            )
-            .child(self.usage_meters(cx));
+                .size_full()
+                .into_any_element()
+            });
         wrapper = wrapper.child(
             div()
                 .relative()
@@ -1265,7 +1285,13 @@ const METER_TAB_ROUNDING: f32 = 6.;
 // that continues the composer's corner. The slant curves out of the composer's edge at its
 // foot and into the top edge at its head. The bottom side has no edge, because it joins the
 // composer.
-fn paint_meter_tab(bounds: Bounds<Pixels>, surface: Hsla, edge: Hsla, window: &mut Window) {
+fn paint_meter_tab(
+    bounds: Bounds<Pixels>,
+    surface: Hsla,
+    hover: Option<Hsla>,
+    edge: Hsla,
+    window: &mut Window,
+) {
     let radius = px(motion::COMPOSER_RADIUS);
     // The edge runs through pixel centers, which keeps a one-pixel stroke sharp. The stroke
     // stays one window pixel wide at every interface scale.
@@ -1295,22 +1321,23 @@ fn paint_meter_tab(bounds: Bounds<Pixels>, surface: Hsla, edge: Hsla, window: &m
         builder.curve_to(point(right, top + radius), point(right, top));
         builder.line_to(point(right, bottom));
     };
-    let mut body = PathBuilder::fill();
-    outline(&mut body, bottom);
-    body.close();
-    if let Ok(path) = body.build() {
-        window.paint_path(path, surface);
-    }
     // The fill is thin where the foot leaves the composer's edge, and a second translucent line
     // over that edge would show as a brighter stretch. The composer's edge is covered under the
-    // whole tab, so the tab's own stroke is the only line there.
-    window.paint_quad(fill(
-        Bounds::new(
-            point(bounds.left(), bottom - gpui::px(1.)),
-            size(bounds.size.width - gpui::px(1.), gpui::px(1.)),
-        ),
-        surface,
-    ));
+    // whole tab, so the tab's own stroke is the only line there. A hover tone lies over the
+    // whole surface in the same shape.
+    let seam = Bounds::new(
+        point(bounds.left(), bottom - gpui::px(1.)),
+        size(bounds.size.width - gpui::px(1.), gpui::px(1.)),
+    );
+    for tone in [Some(surface), hover].into_iter().flatten() {
+        let mut body = PathBuilder::fill();
+        outline(&mut body, bottom);
+        body.close();
+        if let Ok(path) = body.build() {
+            window.paint_path(path, tone);
+        }
+        window.paint_quad(fill(seam, tone));
+    }
     let mut stroke = PathBuilder::stroke(gpui::px(1.));
     outline(&mut stroke, bottom - half);
     if let Ok(path) = stroke.build() {

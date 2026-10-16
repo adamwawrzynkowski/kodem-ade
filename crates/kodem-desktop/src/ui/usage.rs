@@ -11,8 +11,9 @@ pub(super) struct UsageActions {
 
 impl Shell {
     /// Shows context occupancy and the account's fullest limit as dot-matrix meters. Both open
-    /// the usage panel, which holds the compaction and limit actions.
-    pub(super) fn usage_meters(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// the usage panel, which holds the compaction and limit actions. The caller gives the
+    /// control its surface and its hover and focus feedback.
+    pub(super) fn usage_meters(&self, cx: &mut Context<Self>) -> Button {
         let t = self.theme;
         let context = self
             .view
@@ -25,16 +26,10 @@ impl Shell {
         let highest = usage.as_ref().and_then(highest_usage);
         // One control for both meters: they open the same panel.
         Button::new("usage-meters")
-            .h(px(20.))
-            .px(px(6.))
             .flex()
             .items_center()
             .gap(px(6.))
-            .rounded(px(crate::theme::RADIUS_CONTROL))
             .cursor_pointer()
-            .hover(move |s| s.bg(t.selected))
-            .focus_visible(move |s| s.bg(t.selected))
-            .active(move |s| s.bg(t.control_active))
             .selected(self.panel == Panel::Usage)
             .accessibility_label("Context usage, compaction and account limits")
             .child(caps("Ctx", t))
@@ -66,7 +61,6 @@ impl Shell {
                 s.menu_anchor = Some(*bounds);
                 cx.notify();
             }))
-            .into_any_element()
     }
 
     /// Shows the composer account's identity and limit windows above the sidebar footer.
