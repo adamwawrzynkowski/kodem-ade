@@ -15,8 +15,9 @@ use super::*;
 use gpui::px;
 use std::{cell::RefCell, f32::consts::TAU, rc::Rc, sync::Arc, time::Instant};
 
-/// Cells per side of a cached texture tile; a multiple of the Bayer period.
-const TILE_CELLS: u32 = 32;
+/// Cells per side of a cached texture tile; a multiple of the Bayer period. A window-wide scrim
+/// takes about a hundred tiles of this size, where tiles of 32 cells took two thousand.
+const TILE_CELLS: u32 = 128;
 
 /// Returns the threshold of a window-grid cell in the open interval (0, 1).
 fn threshold(x: i64, y: i64) -> f32 {
@@ -571,18 +572,27 @@ fn paint_tiles(
         Pattern::Ramp { .. } => f32::from(bounds.top()),
     };
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
-        let mut y = top;
-        while y < f32::from(bounds.bottom()) {
-            let mut x = left;
-            while x < f32::from(bounds.right()) {
-                let region =
-                    Bounds::new(point(px(x), px(y)), size(px(tile_width), px(tile_height)));
-                let _ =
-                    window.paint_image(region, region, Corners::default(), image.clone(), 0, false);
-                x += tile_width;
+        // The tiles do not overlap, so they share one layer and GPUI orders it once.
+        window.paint_layer(bounds, |window| {
+            let mut y = top;
+            while y < f32::from(bounds.bottom()) {
+                let mut x = left;
+                while x < f32::from(bounds.right()) {
+                    let region =
+                        Bounds::new(point(px(x), px(y)), size(px(tile_width), px(tile_height)));
+                    let _ = window.paint_image(
+                        region,
+                        region,
+                        Corners::default(),
+                        image.clone(),
+                        0,
+                        false,
+                    );
+                    x += tile_width;
+                }
+                y += tile_height;
             }
-            y += tile_height;
-        }
+        });
     });
 }
 

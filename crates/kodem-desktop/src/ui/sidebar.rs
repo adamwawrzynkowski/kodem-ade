@@ -13,6 +13,23 @@ const TASK_TILE: f32 = 30.;
 const TASK_TILE_GLYPH: f32 = 18.;
 
 impl Shell {
+    /// Builds the feed of the sidebar's tasks, which renders as a region of its own.
+    pub(super) fn sidebar_feed(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let entity = cx.entity();
+        list(self.sidebar_scroll.clone(), move |index, _, cx| {
+            // List positions rows at its left edge; horizontal gutters belong inside each row.
+            div()
+                .w_full()
+                .px(px(6.))
+                .child(entity.update(cx, |s, cx| s.sidebar_row(index, cx)))
+                .into_any_element()
+        })
+        .size_full()
+        .pt(px(6.))
+        .pb_2()
+        .into_any_element()
+    }
+
     /// Builds the attention-first thread feed with status, branch and saved review metadata.
     pub(super) fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
@@ -194,20 +211,10 @@ impl Shell {
                     .px(px(10.))
                     .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
             );
-        let entity = cx.entity();
-        let feed = list(self.sidebar_scroll.clone(), move |index, _, cx| {
-            // List positions rows at its left edge; horizontal gutters belong inside each row.
-            div()
-                .w_full()
-                .px(px(6.))
-                .child(entity.update(cx, |s, cx| s.sidebar_row(index, cx)))
-                .into_any_element()
-        })
-        .flex_1()
-        .min_h_0()
-        .w_full()
-        .pt(px(6.))
-        .pb_2();
+        let feed = region::cached(
+            &self.feed_region,
+            StyleRefinement::default().flex_1().min_h_0().w_full(),
+        );
         let connected = self.host_connected && self.workspace.is_some();
         let settled_open = self.settled_open(cx);
         let settled_header =

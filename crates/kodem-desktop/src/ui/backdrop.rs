@@ -1019,18 +1019,22 @@ fn paint(frame: &Frame, window: &mut Window) {
     let set = frame.set.len();
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         paint_lights(frame, window);
-        for cell in &lit {
-            let (font_id, glyph_id) = frame.set[cell.glyph % set];
-            window
-                .paint_glyph(
-                    cell.origin,
-                    font_id,
-                    glyph_id,
-                    frame.size,
-                    frame.tones[cell.layer].opacity(cell.alpha),
-                )
-                .ok();
-        }
+        // The glyphs share one layer above the lights. GPUI then orders the layer once instead
+        // of placing each of thousands of glyphs in its bounds tree on every frame.
+        window.paint_layer(bounds, |window| {
+            for cell in &lit {
+                let (font_id, glyph_id) = frame.set[cell.glyph % set];
+                window
+                    .paint_glyph(
+                        cell.origin,
+                        font_id,
+                        glyph_id,
+                        frame.size,
+                        frame.tones[cell.layer].opacity(cell.alpha),
+                    )
+                    .ok();
+            }
+        });
     });
 }
 
