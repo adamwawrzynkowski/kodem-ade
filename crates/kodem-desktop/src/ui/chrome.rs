@@ -85,6 +85,7 @@ impl Shell {
                                     - WINDOW_CONTROLS)
                                     * self.reveals.sidebar,
                         ))
+                        .relative()
                         .overflow_hidden()
                         .h_full()
                         .flex_shrink_0()
@@ -93,6 +94,10 @@ impl Shell {
                         .flex()
                         .items_center()
                         .gap(px(10.))
+                        .child(channel_art::titlebar_art(
+                            (workspaces::RAIL + 1. + self.settings.sidebar_width) * scale,
+                            t,
+                        ))
                         .child(
                             // The mark and the name in the interface's own mono face.
                             div()
@@ -114,7 +119,7 @@ impl Shell {
                             div()
                                 .min_w_0()
                                 .overflow_hidden()
-                                .child(caps(crate::updater::version_label(), t).text_ellipsis()),
+                                .child(channel_art::channel_badge(t)),
                         )
                         .child(div().flex_1())
                         .child(

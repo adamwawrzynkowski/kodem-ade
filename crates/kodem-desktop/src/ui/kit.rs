@@ -279,9 +279,9 @@ fn face_dots(
     }
 }
 
-// Moves a color's lightness the share `amount` of the way to `target` and keeps its hue,
-// saturation and alpha.
-fn toward(mut color: Hsla, target: f32, amount: f32) -> Hsla {
+/// Moves a color's lightness the share `amount` of the way to `target` and keeps its hue,
+/// saturation and alpha.
+pub(super) fn toward(mut color: Hsla, target: f32, amount: f32) -> Hsla {
     color.lightness += (target - color.lightness) * amount;
     color
 }

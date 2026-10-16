@@ -28,7 +28,8 @@ pub(super) fn cell_threshold(column: i32, row: i32) -> f32 {
     threshold(column as i64, row as i64)
 }
 
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+/// Returns a smooth step from 0 at `edge0` to 1 at `edge1`.
+pub(super) fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0., 1.);
     t * t * (3. - 2. * t)
 }
@@ -273,6 +274,41 @@ impl Grid {
             ),
         )
     }
+}
+
+/// Paints a still scene of dots across `bounds` from a cached sprite.
+///
+/// `source` gives the color of each lit cell of a grid with a pitch of `cell` and dots of `dot`,
+/// both in window pixels. `content` digests everything that decides the scene, so the sprite is
+/// baked again only when the scene changes.
+pub(super) fn paint_scene(
+    bounds: Bounds<Pixels>,
+    cell: f32,
+    dot: f32,
+    content: u64,
+    source: &dyn Fn(i32, i32) -> Option<Hsla>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let scale = window.scale_factor();
+    let snap = |value: f32| (value * scale).round() / scale;
+    let grid = Grid {
+        left: snap(f32::from(bounds.origin.x)),
+        top: snap(f32::from(bounds.origin.y)),
+        columns: (f32::from(bounds.size.width) / cell).floor().max(0.) as u32,
+        rows: (f32::from(bounds.size.height) / cell).floor().max(0.) as u32,
+        cell,
+        dot,
+    };
+    paint_dots(
+        window,
+        cx,
+        grid,
+        (grid.columns, grid.rows),
+        Some(content),
+        Corners::default(),
+        source,
+    );
 }
 
 // Paints the dots that `source` lights. With `content`, the grid is drawn from a cached sprite of
@@ -764,7 +800,8 @@ pub(super) fn pulse(color: Hsla, reduce_motion: bool) -> AnyElement {
     .into_any_element()
 }
 
-fn hash(x: i32, y: i32, seed: u32) -> f32 {
+/// Returns a stable random value from 0 to 1 for one cell and seed.
+pub(super) fn hash(x: i32, y: i32, seed: u32) -> f32 {
     let mut value = (x as u32).wrapping_mul(0x8DA6_B343)
         ^ (y as u32).wrapping_mul(0xD816_3841)
         ^ seed.wrapping_mul(0xCB1A_B31F);
@@ -789,8 +826,8 @@ fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
     lerp(top, bottom, sy)
 }
 
-// Two octaves of value noise, normalized to 0..1.
-fn fractal_noise(x: f32, y: f32, seed: u32) -> f32 {
+/// Returns two octaves of value noise, normalized to 0..1.
+pub(super) fn fractal_noise(x: f32, y: f32, seed: u32) -> f32 {
     value_noise(x, y, seed) * 0.65
         + value_noise(x * 2.03 + 17., y * 2.03 + 5., seed ^ 0x9E37) * 0.35
 }
@@ -1071,8 +1108,9 @@ struct PaintSpec {
     time: f32,
 }
 
-// Returns the dot alpha for one intensity. Three steps keep the limited palette of retro displays.
-fn tone(intensity: f32) -> f32 {
+/// Returns the dot alpha for one intensity. Three steps keep the limited palette of retro
+/// displays.
+pub(super) fn tone(intensity: f32) -> f32 {
     if intensity > 0.82 {
         1.
     } else if intensity > 0.5 {

@@ -57,6 +57,14 @@ impl Channel {
             Self::Production => "production",
         }
     }
+    /// Returns the name of the build type, as the title bar's badge shows it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Debug => "Debug",
+            Self::Nightly => "Nightly",
+            Self::Production => "Release",
+        }
+    }
     /// Returns the application name of the channel, as windows and installed files show it.
     pub fn app_name(self) -> &'static str {
         match self {
@@ -91,15 +99,6 @@ impl Channel {
             Self::Nightly => "dev.kodem.ade.nightly",
             Self::Production => "dev.kodem.ade",
         }
-    }
-}
-
-/// Formats the compact titlebar badge from the installed build metadata.
-pub fn version_label() -> String {
-    if Channel::current() == Channel::Nightly {
-        format!("Nightly {VERSION}")
-    } else {
-        VERSION.into()
     }
 }
 

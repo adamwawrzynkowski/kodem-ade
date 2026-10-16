@@ -5,6 +5,7 @@ mod backdrop;
 mod browser;
 mod censor;
 mod change_tree;
+mod channel_art;
 mod chat;
 mod chrome;
 mod code_review;
