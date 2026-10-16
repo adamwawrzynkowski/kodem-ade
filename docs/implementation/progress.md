@@ -959,3 +959,21 @@ A release build produces frames as fast as the display asks: on every refresh wh
 `b1f03c2` made the side panels share one blur. `paint_meter_tab` now blurs only the tab's flat top; the five steps along its slant are gone, so the slant shows its tint over the unblurred conversation. A frame has three blurs instead of about eleven: the field under the panels, the composer and the tab.
 
 Checked with a locked macOS `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. No release build was made, at the user's request, so the GPU use of the new build is not measured; the look is not checked under the no-visual-testing agreement.
+
+## A blur that costs its region
+
+Recorded on 16 October 2026. With three blurs a frame, Nightly still used about 25% of the GPU at rest on a 4K display. The user asked to rewrite the blur for the most performance. Kodem patches GPUI's macOS renderer: `vendor/gpui_ce_macos` is `gpui_ce_macos` 0.1.0, wired in through `[patch.crates-io]` and excluded from the workspace. Only `metal_renderer.rs`, `shaders.metal`, `gpui_macos.rs` and the new `region_blur.rs` differ from the published crate.
+
+| Before | After |
+| --- | --- |
+| Each blur downsampled the whole window, ran two gaussian passes over the whole half-size window, and composited in a render pass of its own | `BlurJob` works out the half-res texels that the composite reads, grown by the kernel's reach, and the downsample and both gaussian passes run as compute kernels over those regions only |
+| Every pixel of each gaussian pass evaluated `exp` for each of its 37 taps | `BlurKernel::weights` normalizes the weights once per blur; a texel adds mirrored taps |
+| A blur broke the scene's render pass twice | The composite draws in the resumed scene pass. Consecutive blurs of a batch share the passes and one break when none reads pixels that an earlier one composites and they share a kernel |
+
+The blurred values are the old ones. A temporary GPU harness (Swift, removed) ran the original shader's full-window passes and the new kernels on one 1003 × 701 image for six cases: the panel radius, a strip along the window's edge, a corner region, larger radii including spread taps, and a tiny shape. In each region the composite reads, at most 1 of 255 differed, in at most 9 of up to 184,000 channels, from weights normalized on the CPU.
+
+A blur now costs its region, so `b1f03c2`'s single blur of the whole window is reverted: each side panel has its glass blur again, the field is painted once, and the one-frame lag of the blurred edge and the blurred dotted rule are gone. The meter tab keeps one blur, because the steps along its slant touch one another and would each break the render pass.
+
+Third-party notices: `scripts/licenses.py` rejected the patched crate, which has no registry source, as a private workspace crate. It now accepts crates under `vendor/` as third-party, hashes their top-level files as notice inputs and marks them as modified in `Rust-THIRD-PARTY.txt`; each changed file states its change, as Apache-2.0 asks. The notices were refreshed and still cover 385 external packages.
+
+Checked with a locked macOS `cargo build` and `cargo clippy --workspace --all-targets -D warnings` (no findings), `cargo fmt --check`, rustfmt on the patched files, and a compile of the stitched shader with the system Metal framework, which built both compute pipelines. GPU use in the app is not measured until a release build runs; the look is not checked under the no-visual-testing agreement.

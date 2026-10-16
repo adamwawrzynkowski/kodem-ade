@@ -1,7 +1,7 @@
 {
   "inputs": {
-    "Cargo.lock": "7b078527f4d432fbd3576296bff5e8751813a34e8e1eb2cdd867fec95555bfe6",
-    "Cargo.toml": "c5566f6149a5b120d17c0427785faf40a617d52c91a3666c81362cb6575f3381",
+    "Cargo.lock": "4bc1b1cefad3cb0ac7aca65a4be254d801b79c7c03d0d96f4dd8d29cd334d41c",
+    "Cargo.toml": "df75771a7cf209a0197cb1eee42573131812ed1cb2764ed576a25a05a999237f",
     "LICENSE": "7de28eeff500ea66eaaa1d950319b5d760bf9a50a2c335427838a4b11bad6c1b",
     "about.toml": "da2721a9cea560519bd9a618e80605826bfe8fa13336a5c9346b27018bd3d671",
     "assets/THIRD_PARTY.md": "2f0efade5bc91bcd8f0152f2bc301ebf45d78fc0aa60b309cc5a39fae8205f32",
@@ -25,10 +25,13 @@
     "licensing/README.md": "3bed85358a49108ae18bfc6b1f5b1d4a40799632a3f4b8c72d5ee19d420122c2",
     "licensing/clarifications.json": "dec88b30659fabbe6ca866705ad71e7ff78e4afdb6b6dc139b3d7adb3b7824a0",
     "rust-toolchain.toml": "559f488c181e0e9e77cf17c29de663977f036ec7ff2e2060585714bf53c52d62",
-    "scripts/licenses.py": "8ca5f8b1d74dd38c911e4253f42345f0c4eedca25fe356eef4ca3246121f8f19"
+    "scripts/licenses.py": "48b64c08fd93a61b0ae1930d0b695848dddd74927274999328f7cc690643b1c0",
+    "vendor/gpui_ce_macos/Cargo.toml": "0b86e2cf89137a17508c35062f5554a5427b04adc0ba613d25548b3ba8462409",
+    "vendor/gpui_ce_macos/LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a",
+    "vendor/gpui_ce_macos/build.rs": "9cbba68fe455aba60cc490d2292fac65007cd323653471e7eb49025102815cd5"
   },
   "outputs": {
-    "assets/licenses/Rust-THIRD-PARTY.txt": "9d65406f6d505c9191b848cc3ad49f1f8c9a8847e0dd0cd1443dd3137fde8515",
+    "assets/licenses/Rust-THIRD-PARTY.txt": "fd49e6e2f036ca869c32f5ea607c6d848146a625e78c0fcb04a07aaae098e2da",
     "assets/licenses/Rust-standard-library.html": "0a65bb747c49c7bb816cbc7188319bd6e4e8d08091c1190b8a3c0971c47968ed",
     "assets/licenses/option-ext-0.2.0-source.tar.gz": "98db8d44c96295b9bfa85a4aacfedd6690c3155123b10b3090e74fea0cab5925"
   },

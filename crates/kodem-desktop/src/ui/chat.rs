@@ -1463,9 +1463,9 @@ fn paint_meter_tab(
         builder.line_to(point(right, bottom));
     };
     // The tab is glass like the composer: the field behind its flat top is blurred, then tinted.
-    // A backdrop is a rounded rectangle, and GPUI blurs the whole window for each one, so the
-    // slant has no blur of its own and shows its tint only. The blur stops above the composer's
-    // edge.
+    // A backdrop is a rounded rectangle, and each blur that touches another one breaks the
+    // window's render pass, so the slant has no blur of its own and shows its tint only. The blur
+    // stops above the composer's edge.
     let seam_top = bottom - gpui::px(1.);
     window.paint_backdrop_filter(
         Bounds::from_corners(point(head.x, bounds.top()), point(bounds.right(), seam_top)),

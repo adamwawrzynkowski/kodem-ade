@@ -7276,6 +7276,7 @@ Upstream authors: Nathan Sobo <nathan@zed.dev>
 gpui_ce_collections@0.2.2 | https://github.com/gpui-ce/gpui-ce
 gpui_ce_derive_refineable@0.2.2 | https://crates.io/crates/gpui_ce_derive_refineable
 gpui_ce_macos@0.1.0 | https://crates.io/crates/gpui_ce_macos
+Modified by Kodem: the changed files state their changes.
 gpui_ce_macros@0.1.0 | https://crates.io/crates/gpui_ce_macros
 gpui_ce_media@0.2.2 | https://crates.io/crates/gpui_ce_media
 gpui_ce_platform@0.1.0 | https://crates.io/crates/gpui_ce_platform

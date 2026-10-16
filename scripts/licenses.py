@@ -24,6 +24,8 @@ STANDARD_LIBRARY = "assets/licenses/Rust-standard-library.html"
 OUTPUTS = [NOTICE, SOURCE, STANDARD_LIBRARY]
 SNAPSHOT = "licensing/snapshot.json"
 BUILD_ROOT = ROOT / "target/licensing"
+# Third-party crates that Kodem patches, built from the repository through `[patch.crates-io]`.
+VENDOR = ROOT / "vendor"
 
 
 def digest(path):
@@ -35,6 +37,7 @@ def inputs():
     """Hash dependency declarations and the reviewed licensing inputs."""
     paths = [ROOT / p for p in ["Cargo.lock", "Cargo.toml", "rust-toolchain.toml", "about.toml", "LICENSE", "scripts/licenses.py", "assets/THIRD_PARTY.md"]]
     paths += list((ROOT / "crates").glob("*/Cargo.toml"))
+    paths += [p for p in VENDOR.glob("*/*") if p.is_file()]
     paths += [p for p in (ROOT / "licensing").rglob("*") if p.is_file() and p != ROOT / SNAPSHOT]
     paths += [p for p in (ROOT / "assets/licenses").rglob("*") if p.is_file() and str(p.relative_to(ROOT)) not in OUTPUTS]
     return {str(p.relative_to(ROOT)): digest(p) for p in sorted(paths)}
@@ -115,6 +118,11 @@ def prepare(target=TARGET):
     check(BUILD_ROOT)
 
 
+def vendored(package):
+    """Report whether a package is a third-party crate that Kodem patches under vendor/."""
+    return Path(package["manifest_path"]).resolve().is_relative_to(VENDOR)
+
+
 def source_archive(package):
     """Bundle the complete unmodified MPL crate with reproducible archive metadata."""
     root = Path(package["manifest_path"]).parent
@@ -141,7 +149,7 @@ def refresh(artifact_root=ROOT, install_tools=False, target=TARGET):
         result = json.loads(output.read_text(encoding="utf-8"))
     overrides = json.loads((ROOT / "licensing/clarifications.json").read_text(encoding="utf-8"))
     packages = {p["package"]["id"]: p["package"] for p in result["crates"]}
-    if any(p["source"] is None for p in packages.values()):
+    if any(p["source"] is None and not vendored(p) for p in packages.values()):
         raise SystemExit("Private workspace crates must be excluded from third-party notices")
     groups = {}
     for license_entry in result["licenses"]:
@@ -176,6 +184,8 @@ def refresh(artifact_root=ROOT, install_tools=False, target=TARGET):
         lines += ["=" * 72, identifier, ""]
         for key, package in sorted(users.items()):
             lines.append(key + " | " + (package["repository"] or "https://crates.io/crates/" + package["name"]))
+            if vendored(package):
+                lines.append("Modified by Kodem: the changed files state their changes.")
             if package["authors"]:
                 lines.append("Upstream authors: " + "; ".join(package["authors"]))
         lines += ["", text.strip(), ""]

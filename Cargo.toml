@@ -1,5 +1,7 @@
 [workspace]
 members = ["crates/kodem-core", "crates/kodem-host", "crates/kodem-desktop", "crates/kodem-git", "crates/kodem-update"]
+# Patched copies of dependencies build as dependencies, not as members.
+exclude = ["vendor"]
 resolver = "2"
 
 [workspace.package]
@@ -30,3 +32,8 @@ opt-level = 3
 lto = "thin"
 codegen-units = 8
 strip = "debuginfo"
+
+# GPUI's macOS renderer, patched so that a blur works on the region around its shape. See
+# vendor/gpui_ce_macos/src/region_blur.rs.
+[patch.crates-io]
+gpui_ce_macos = { path = "vendor/gpui_ce_macos" }

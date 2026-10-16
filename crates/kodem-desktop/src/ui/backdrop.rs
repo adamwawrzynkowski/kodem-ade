@@ -21,9 +21,8 @@
 //! user; green after a finished turn and red after a failure. A change of mood blends, so
 //! nothing jumps.
 //!
-//! The field covers the whole window. The panels at its sides are glass over it: the field is
-//! blurred once beneath them all and painted sharp again over the chat. The calm column and the
-//! composer belong to the chat.
+//! The field covers the whole window. The panels at its sides are glass that blurs it; the calm
+//! column and the composer belong to the chat.
 //!
 //! Each light is one blurred shape that the GPU draws. Each lit cell is one glyph sprite from
 //! GPUI's atlas. The grid lies on whole device pixels,
@@ -1009,11 +1008,7 @@ struct Lit {
     glyph: usize,
 }
 
-// Paints the surface, the glow and the lit cells of one frame over the window.
-//
-// The panels beside the chat are glass over the field. A blur costs the GPU passes over the
-// whole window, however small its shape, so the panels share one: the field is blurred once
-// beneath all of them, and the chat surface is painted sharp again above the blur.
+// Paints the surface, the glow and the lit cells of one frame, clipped to the chat surface.
 fn paint(frame: &Frame, window: &mut Window) {
     let bounds = frame.bounds;
     window.paint_quad(fill(bounds, frame.surface));
@@ -1021,48 +1016,13 @@ fn paint(frame: &Frame, window: &mut Window) {
         return;
     }
     let lit = lay_out(frame);
-    let chat = frame.chat.intersect(&bounds);
-    if chat == bounds {
-        paint_field(frame, bounds, lit.iter(), window);
-        return;
-    }
-    let blur = crate::theme::px(kit::GLASS_BLUR);
-    // The blur reaches three times its radius. Cells farther inside the chat are painted over
-    // before anything shows them.
-    let covered = chat.dilate(-blur * 3.);
-    paint_field(
-        frame,
-        bounds,
-        lit.iter().filter(|cell| !covered.contains(&cell.origin)),
-        window,
-    );
-    window.paint_backdrop_filter(bounds, Corners::default(), &[Filter::Blur(blur)]);
-    window.paint_quad(fill(chat, frame.surface));
-    // A glyph lies within a cell from its origin, so cells up to one cell outside the chat
-    // reach into it.
-    let near = chat.dilate(px(frame.grid.cell.0.max(frame.grid.cell.1)));
-    paint_field(
-        frame,
-        chat,
-        lit.iter().filter(|cell| near.contains(&cell.origin)),
-        window,
-    );
-}
-
-// Paints the glow and `cells` of one frame, clipped to `mask`.
-fn paint_field<'a>(
-    frame: &Frame,
-    mask: Bounds<Pixels>,
-    cells: impl Iterator<Item = &'a Lit>,
-    window: &mut Window,
-) {
     let set = frame.set.len();
-    window.with_content_mask(Some(ContentMask { bounds: mask }), |window| {
+    window.with_content_mask(Some(ContentMask { bounds }), |window| {
         paint_lights(frame, window);
         // The glyphs share one layer above the lights. GPUI then orders the layer once instead
         // of placing each of thousands of glyphs in its bounds tree on every frame.
-        window.paint_layer(mask, |window| {
-            for cell in cells {
+        window.paint_layer(bounds, |window| {
+            for cell in &lit {
                 let (font_id, glyph_id) = frame.set[cell.glyph % set];
                 window
                     .paint_glyph(
