@@ -12,8 +12,10 @@
 #   publish releases.
 #   The Release packages workflow cannot create these tags: it stages a draft release, and an
 #   owner account publishes it, which creates the tag.
-# - Actions: read-only token by default, GitHub's own actions and the pinned cache action only,
-#   actions pinned to full commit SHAs, approval for every outside contributor's workflow run.
+# - Actions: read-only token by default, GitHub's own actions, the pinned cache action and
+#   SignPath's signing action only, actions pinned to full commit SHAs, approval for every
+#   outside contributor's workflow run. GitHub checks the list when it loads a workflow, so the
+#   release workflow needs the SignPath action allowed even while SignPath is not configured.
 # - Security: secret scanning with push protection, Dependabot alerts, private vulnerability
 #   reporting.
 set -euo pipefail
@@ -125,7 +127,7 @@ gh api -X PUT "$api/actions/permissions" --input - >/dev/null <<'JSON'
 { "enabled": true, "allowed_actions": "selected", "sha_pinning_required": true }
 JSON
 gh api -X PUT "$api/actions/permissions/selected-actions" --input - >/dev/null <<'JSON'
-{ "github_owned_allowed": true, "verified_allowed": false, "patterns_allowed": ["Swatinem/rust-cache@*"] }
+{ "github_owned_allowed": true, "verified_allowed": false, "patterns_allowed": ["Swatinem/rust-cache@*", "signpath/github-action-submit-signing-request@*"] }
 JSON
 gh api -X PUT "$api/actions/permissions/workflow" --input - >/dev/null <<'JSON'
 { "default_workflow_permissions": "read", "can_approve_pull_request_reviews": false }
