@@ -213,17 +213,8 @@ impl Shell {
                                 )
                                 .on_click(cx.listener(
                                     move |s, _, w, cx| {
-                                        s.aux.update(cx, |input, cx| {
-                                            input.set_text(editing.name.clone(), cx)
-                                        });
-                                        s.icon_filter.update(cx, |input, cx| {
-                                            input.set_text(String::new(), cx)
-                                        });
-                                        s.editing_project = Some(editing.clone());
-                                        s.error = None;
-                                        s.panel = Panel::CustomizeProject;
+                                        s.open_project_editor(editing.clone(), cx);
                                         w.focus(&s.aux.read(cx).focus_handle(cx), cx);
-                                        cx.notify();
                                     },
                                 )),
                             ),
@@ -332,6 +323,7 @@ impl Shell {
             );
         }
         let icons = self.icon_picker(&project, cx);
+        let commands = self.command_editor(&project, cx);
         div()
             .flex()
             .flex_col()
@@ -407,6 +399,7 @@ impl Shell {
                     ),
             )
             .child(icons)
+            .child(commands)
             .when_some(self.error.clone(), |d, error| {
                 d.child(settings::error_block("Error", error, t))
             })
@@ -439,6 +432,7 @@ impl Shell {
                                         name: s.aux.read(cx).text(),
                                         color: project.color,
                                         icon: project.icon.clone(),
+                                        commands: s.edited_commands(project, cx),
                                     });
                                 }
                             })),

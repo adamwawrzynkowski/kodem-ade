@@ -205,13 +205,14 @@ impl Store {
             .filter(|project| !project.removed)
             .collect())
     }
-    /// Saves project presentation without changing its repository identity.
+    /// Saves project presentation and commands without changing its repository identity.
     pub fn customize_project(
         &self,
         id: &str,
         name: &str,
         color: Option<u32>,
         icon: ProjectIcon,
+        commands: Vec<ProjectCommand>,
     ) -> Result<()> {
         ensure!(
             !name.trim().is_empty() && name.len() < 512 && !name.chars().any(char::is_control),
@@ -221,6 +222,31 @@ impl Store {
             color.is_none_or(|color| color <= 0xffffff),
             "Invalid project color"
         );
+        ensure!(commands.len() <= 64, "A project holds up to 64 commands");
+        for command in &commands {
+            ensure!(
+                command.name.len() < 512 && !command.name.chars().any(char::is_control),
+                "Enter command names under 512 bytes without control characters"
+            );
+            ensure!(
+                !command.steps.is_empty(),
+                "Add a step to {}, or remove it",
+                command.label()
+            );
+            ensure!(
+                command.steps.len() <= ProjectCommand::MAX_STEPS,
+                "A command holds up to {} steps",
+                ProjectCommand::MAX_STEPS
+            );
+            // A step is typed into a shell as one line, so it must be text without line breaks.
+            ensure!(
+                command.steps.iter().all(|step| step
+                    .to_str()
+                    .is_some_and(|text| !text.is_empty() && !text.contains(char::is_control))),
+                "The steps of {} need paths without control characters",
+                command.label()
+            );
+        }
         let mut project = self
             .projects()?
             .into_iter()
@@ -229,6 +255,7 @@ impl Store {
         project.name = name.trim().into();
         project.color = color;
         project.icon = icon;
+        project.commands = commands;
         self.save_project(&project)
     }
     /// Removes a project from navigation while retaining its files and restorable history.
@@ -294,6 +321,7 @@ impl Store {
             icon: ProjectIcon::default(),
             removed: false,
             defaults: None,
+            commands: Vec::new(),
         };
         self.db.execute(
             "INSERT INTO projects VALUES(?1,?2,?3)",

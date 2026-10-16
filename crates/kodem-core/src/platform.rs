@@ -1,5 +1,5 @@
 //! Operating-system differences shared by the desktop and the local host.
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use std::{
     ffi::{OsStr, OsString},
     fs, io,
@@ -219,6 +219,114 @@ pub fn shell_command(line: &str) -> Command {
         command.args(["-lc", line]);
         command
     }
+}
+
+/// Builds the line that a terminal's interactive shell runs to enter `cwd` and start `programs`
+/// in order. Each program starts when the one before it succeeds. An app runs until it quits.
+pub fn program_sequence(cwd: &Path, programs: &[PathBuf]) -> Result<String> {
+    ensure!(!programs.is_empty(), "Add a step to this command");
+    for path in std::iter::once(cwd).chain(programs.iter().map(PathBuf::as_path)) {
+        let text = path
+            .to_str()
+            .with_context(|| format!("{} is not a UTF-8 path", path.display()))?;
+        ensure!(
+            !text.contains(char::is_control),
+            "{} contains control characters",
+            path.display()
+        );
+    }
+    if cfg!(windows) {
+        // Windows PowerShell 5.1 has no `&&`, so each step runs in the success branch of the
+        // step before it.
+        let mut line = format!("Set-Location -LiteralPath {}", powershell_quote(cwd));
+        for program in programs {
+            line.push_str("; if ($?) { ");
+            line.push_str(&powershell_step(program));
+        }
+        line.push_str(&" }".repeat(programs.len()));
+        Ok(line)
+    } else {
+        let mut steps = vec![format!("cd {}", posix_quote(cwd))];
+        steps.extend(programs.iter().map(|program| posix_step(program)));
+        Ok(steps.join(" && "))
+    }
+}
+
+// Returns the shell words that start one program and wait for it. A macOS app waits until it
+// quits; a script without the executable bit runs through `sh`.
+fn posix_step(program: &Path) -> String {
+    let quoted = posix_quote(program);
+    let app = program
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("app"));
+    if cfg!(target_os = "macos") && app {
+        format!("open -W {quoted}")
+    } else if program.is_file() && !executable(program) {
+        format!("/bin/sh {quoted}")
+    } else {
+        quoted
+    }
+}
+
+// Quotes a UTF-8 path as one word for POSIX shells and fish.
+fn posix_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', r"'\''"))
+}
+
+// Returns the PowerShell statement that starts one program and waits for it. The call operator
+// returns at once from a windowed program, so one starts through `Start-Process -Wait`.
+fn powershell_step(program: &Path) -> String {
+    let quoted = powershell_quote(program);
+    if windowed_executable(program) {
+        format!("Start-Process -Wait -FilePath {quoted}")
+    } else {
+        format!("& {quoted}")
+    }
+}
+
+// Quotes a UTF-8 path as one PowerShell literal string.
+fn powershell_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "''"))
+}
+
+// Reports whether a file has an executable permission bit. Other platforms have none.
+fn executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        true
+    }
+}
+
+// Reports whether a file is a Windows executable for the GUI subsystem, read from its PE header.
+fn windowed_executable(path: &Path) -> bool {
+    use std::io::Read;
+    if !path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+    {
+        return false;
+    }
+    let mut header = Vec::with_capacity(4096);
+    if fs::File::open(path)
+        .and_then(|file| file.take(4096).read_to_end(&mut header))
+        .is_err()
+    {
+        return false;
+    }
+    let field = |at: usize, len: usize| header.get(at..at + len);
+    let Some(pe) = field(0x3c, 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+    else {
+        return false;
+    };
+    // The optional header follows the 4-byte signature and the 20-byte file header; its
+    // subsystem field is at the same offset for 32-bit and 64-bit images.
+    field(pe, 4) == Some(b"PE\0\0".as_slice()) && field(pe + 24 + 68, 2) == Some([2, 0].as_slice())
 }
 
 /// Uses the configured absolute shell, or the platform's default shell.

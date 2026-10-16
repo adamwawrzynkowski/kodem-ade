@@ -29,6 +29,7 @@ mod notices;
 mod onboarding;
 mod palette;
 mod panels;
+mod project_commands;
 mod projects;
 mod questions;
 mod review;
@@ -118,6 +119,7 @@ enum Panel {
     Access,
     Projects,
     TaskMenu,
+    ProjectCommands,
     ThreadMenu,
     SelectionMenu,
     DeleteTask,
@@ -198,6 +200,8 @@ pub struct Shell {
     // Project chosen for the next task, independent of the currently viewed thread.
     selected_project: Option<String>,
     editing_project: Option<Project>,
+    // Name fields of the edited project's commands, by command id.
+    command_names: HashMap<String, Entity<TextInput>>,
     // Folder without Git that waits for the user to choose how it opens.
     folder_without_git: Option<PathBuf>,
     // Narrows the built-in icons in the project editor by name.
@@ -553,6 +557,7 @@ impl Shell {
             settings_provider: Provider::default(),
             selected_project: None,
             editing_project: None,
+            command_names: HashMap::new(),
             folder_without_git: None,
             icon_filter,
             greeting_name: user_first_name(),
@@ -1476,7 +1481,8 @@ impl Shell {
                 | core::Request::SaveSettings(_)
                 | core::Request::TestNotification { .. }
                 | core::Request::TerminalInput { .. }
-                | core::Request::TerminalResize { .. } => {}
+                | core::Request::TerminalResize { .. }
+                | core::Request::RunProjectCommand { .. } => {}
                 core::Request::Shutdown => cx.quit(),
                 core::Request::InstallTool { tool } => {
                     if !self.tool_installers.contains(&tool) {

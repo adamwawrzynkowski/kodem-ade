@@ -530,6 +530,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             name,
             color,
             icon,
+            commands,
         } => {
             let previous = host
                 .lock()
@@ -552,11 +553,13 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             let saved_icon = imported
                 .as_ref()
                 .map_or(icon, |path| ProjectIcon::Image(path.clone()));
-            let result =
-                host.lock()
-                    .unwrap()
-                    .store
-                    .customize_project(&project_id, &name, color, saved_icon);
+            let result = host.lock().unwrap().store.customize_project(
+                &project_id,
+                &name,
+                color,
+                saved_icon,
+                commands,
+            );
             if result.is_err()
                 && let Some(path) = imported
             {
@@ -1238,6 +1241,41 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 .get_mut(&task_id)
                 .context("Open the terminal first")?
                 .resize(rows, cols)?;
+            Ok(Response::Ok)
+        }
+        Request::RunProjectCommand {
+            task_id,
+            command_id,
+            rows,
+            cols,
+        } => {
+            let mut h = host.lock().unwrap();
+            ensure!(!h.shutdown, "Host is restarting. Retry after reconnecting.");
+            let task = h.store.task(&task_id)?;
+            let project = h
+                .store
+                .projects()?
+                .into_iter()
+                .find(|project| project.id == task.project_id)
+                .context("Project not found")?;
+            let command = project
+                .commands
+                .iter()
+                .find(|command| command.id == command_id)
+                .context("This command was removed from the project")?;
+            let programs = command.programs(&task.cwd, &project.path);
+            if let Some(missing) = programs.iter().find(|program| !program.exists()) {
+                anyhow::bail!("{} was not found", missing.display());
+            }
+            let line = platform::program_sequence(&task.cwd, &programs)?;
+            // A shell that exited cannot take the line, so a new one starts in its place.
+            if !h.terminals.get(&task_id).is_some_and(|t| t.running()) {
+                h.terminals
+                    .insert(task_id.clone(), terminal::Terminal::start(&task.cwd)?);
+            }
+            let terminal = h.terminals.get_mut(&task_id).unwrap();
+            terminal.resize(rows, cols)?;
+            terminal.write(format!("{line}\r").as_bytes())?;
             Ok(Response::Ok)
         }
         Request::RunCheck { task_id, command } => {

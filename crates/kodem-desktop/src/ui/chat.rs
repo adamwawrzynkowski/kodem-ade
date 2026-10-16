@@ -420,6 +420,39 @@ impl Shell {
                     },
                 ))
             })
+            .when(task.kind.has_project(), |d| {
+                let count = self
+                    .task_project()
+                    .map_or(0, |project| project.commands.len());
+                d.child(
+                    self.control("task-commands")
+                        .h(px(24.))
+                        .px(px(7.))
+                        .gap(px(6.))
+                        .bg(gpui::transparent_black())
+                        .border_color(t.border)
+                        .hover(move |s| s.bg(t.selected).border_color(t.accent.opacity(0.5)))
+                        .when(self.panel == Panel::ProjectCommands, |b| {
+                            b.bg(t.accent.opacity(0.14))
+                                .border_color(t.accent.opacity(0.5))
+                        })
+                        .accessibility_label("Run a project command")
+                        .child(icon("play").size(px(12.)).text_color(t.muted))
+                        .when(count > 0, |b| b.child(figure(count.to_string(), t.muted)))
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| Hint {
+                                text: "Run a project command in the terminal".into(),
+                                theme: t,
+                            })
+                            .into()
+                        })
+                        .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
+                            s.menu_anchor = Some(*bounds);
+                            s.panel = Panel::ProjectCommands;
+                            cx.notify();
+                        })),
+                )
+            })
             .when_some(changes, |d, summary| {
                 let files = summary.files;
                 let omitted = summary.omitted_files;

@@ -2,7 +2,7 @@
 pub use crate::project_icons::ProjectIcon;
 use serde::{Deserialize, Serialize};
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
@@ -179,6 +179,61 @@ pub struct Project {
     /// Provider, account, model and access used for new tasks in this project.
     #[serde(default)]
     pub defaults: Option<AgentPreferences>,
+    /// Scripts and apps that a task of this project runs in its terminal, in list order.
+    #[serde(default)]
+    pub commands: Vec<ProjectCommand>,
+}
+/// A named sequence of scripts or apps that runs in a task's terminal. Each step starts when the
+/// step before it succeeds.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ProjectCommand {
+    pub id: String,
+    /// The name that the command list shows. An empty name shows the first step's file name.
+    #[serde(default)]
+    pub name: String,
+    /// Programs in run order. A program inside the project is relative to the project's root,
+    /// so that it runs from the task's own checkout.
+    pub steps: Vec<PathBuf>,
+}
+impl ProjectCommand {
+    /// The most steps that one command holds.
+    pub const MAX_STEPS: usize = 32;
+    /// Returns the name that the command list shows.
+    pub fn label(&self) -> String {
+        let name = self.name.trim();
+        if !name.is_empty() {
+            return name.to_owned();
+        }
+        self.steps
+            .first()
+            .map_or_else(|| "Untitled command".to_owned(), |step| step_label(step))
+    }
+    /// Returns each step as an absolute program path. A relative step resolves in the task's
+    /// `checkout`, or in the project's root when the checkout does not hold it, such as a file
+    /// that Git does not track.
+    pub fn programs(&self, checkout: &Path, project: &Path) -> Vec<PathBuf> {
+        self.steps
+            .iter()
+            .map(|step| {
+                if step.is_absolute() {
+                    return step.clone();
+                }
+                let own = checkout.join(step);
+                if own.exists() {
+                    own
+                } else {
+                    project.join(step)
+                }
+            })
+            .collect()
+    }
+}
+/// Returns the file name of a command step, or the whole step when it has none.
+pub fn step_label(step: &Path) -> String {
+    step.file_name()
+        .unwrap_or(step.as_os_str())
+        .to_string_lossy()
+        .into_owned()
 }
 /// Named color themes of the workspace. The window maps each one to its palette.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -2175,6 +2230,8 @@ pub enum Request {
         name: String,
         color: Option<u32>,
         icon: ProjectIcon,
+        #[serde(default)]
+        commands: Vec<ProjectCommand>,
     },
     RemoveProject {
         project_id: String,
@@ -2338,6 +2395,14 @@ pub enum Request {
     RunCheck {
         task_id: String,
         command: String,
+    },
+    /// Types a project command into the task's terminal, which starts when it is not running,
+    /// after sizing the terminal to `rows` and `cols`.
+    RunProjectCommand {
+        task_id: String,
+        command_id: String,
+        rows: u16,
+        cols: u16,
     },
     Shutdown,
     /// Restores the files of a coding task to the checkpoint from before its last turn that is

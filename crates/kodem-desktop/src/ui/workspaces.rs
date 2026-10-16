@@ -480,14 +480,7 @@ impl Shell {
                         .cloned()
                 });
                 if let Some(project) = project {
-                    let name = project.name.clone();
-                    self.aux.update(cx, |input, cx| input.set_text(name, cx));
-                    self.icon_filter
-                        .update(cx, |input, cx| input.set_text(String::new(), cx));
-                    self.editing_project = Some(project);
-                    self.error = None;
-                    self.panel = Panel::CustomizeProject;
-                    cx.notify();
+                    self.open_project_editor(project, cx);
                 }
             }
         }

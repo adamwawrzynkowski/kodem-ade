@@ -1,7 +1,7 @@
 use super::*;
 
 // The rule between two groups of menu items.
-fn separator(theme: Theme) -> Div {
+pub(super) fn separator(theme: Theme) -> Div {
     div()
         .my(px(3.))
         .mx(px(4.))
@@ -467,6 +467,16 @@ impl Shell {
                         })),
                     );
                 }
+            }
+            Panel::ProjectCommands => {
+                width = 300.;
+                menu = menu
+                    .child(menu_title(
+                        "Commands",
+                        self.task_project().map(|project| project.commands.len()),
+                        t,
+                    ))
+                    .child(self.command_menu(cx));
             }
             Panel::Models | Panel::Reasoning | Panel::Access | Panel::Mode => {
                 width = if self.panel == Panel::Models {

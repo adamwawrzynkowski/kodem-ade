@@ -1,5 +1,8 @@
 use super::*;
 
+/// Rows of the task terminal that fit its pane.
+pub(super) const TERMINAL_ROWS: u16 = 12;
+
 // Returns the dotted rule that separates the content of a dialog from its actions.
 fn footer_rule(theme: Theme) -> Div {
     div()
@@ -38,6 +41,7 @@ impl Shell {
             | Panel::Projects
             | Panel::ChatProjects
             | Panel::TaskMenu
+            | Panel::ProjectCommands
             | Panel::ThreadMenu
             | Panel::SelectionMenu
             | Panel::Sort
@@ -472,6 +476,7 @@ impl Shell {
             | Panel::Projects
             | Panel::ChatProjects
             | Panel::TaskMenu
+            | Panel::ProjectCommands
             | Panel::ThreadMenu
             | Panel::SelectionMenu
             | Panel::Sort
@@ -488,7 +493,7 @@ impl Shell {
         let danger = matches!(self.panel, Panel::DeleteTask | Panel::RemoveProject);
         let tone = if danger { theme.removed } else { theme.accent };
         let presentation = match self.panel {
-            Panel::CustomizeProject => Some(("palette", "Name, accent and icon")),
+            Panel::CustomizeProject => Some(("palette", "Name, accent, icon and commands")),
             Panel::RemoveProject => Some(("trash-2", "Files and local history stay on disk")),
             Panel::NoRepository => Some(("folder", "Choose how this folder opens")),
             Panel::Setup => Some(("sparkles", "Check the providers and make the first choices")),
@@ -590,6 +595,20 @@ impl Shell {
             ))
             .into_any_element()
     }
+    /// Returns how many columns of the terminal fit the width beside the side panes.
+    pub(super) fn terminal_columns(&self, window: &Window) -> u16 {
+        // The panes are in points of the interface scale; a cell is as wide as a character of
+        // the code text.
+        ((f32::from(window.viewport_size().width)
+            - f32::from(px(self.settings.sidebar_width
+                + if self.show_review {
+                    self.settings.review_width
+                } else {
+                    0.
+                })))
+            / f32::from(code_px(7.2)))
+        .clamp(20., 400.) as u16
+    }
     /// Builds the task terminal surface and forwards explicit keyboard input.
     pub(super) fn terminal_panel(
         &mut self,
@@ -662,17 +681,7 @@ impl Shell {
                 rows.into_iter()
                     .map(|line| div().h(code_px(17.)).child(line)),
             );
-        // The panes are in points of the interface scale; a cell is as wide as a character of
-        // the code text.
-        let cols = ((f32::from(window.viewport_size().width)
-            - f32::from(px(self.settings.sidebar_width
-                + if self.show_review {
-                    self.settings.review_width
-                } else {
-                    0.
-                })))
-            / f32::from(code_px(7.2)))
-        .clamp(20., 400.) as u16;
+        let cols = self.terminal_columns(window);
         div()
             .border_t_1()
             .border_color(theme.border)
@@ -700,7 +709,7 @@ impl Shell {
                                 if let Some(task_id) = &s.selected {
                                     s.send(core::Request::TerminalResize {
                                         task_id: task_id.clone(),
-                                        rows: 12,
+                                        rows: TERMINAL_ROWS,
                                         cols,
                                     });
                                 }
