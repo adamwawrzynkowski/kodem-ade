@@ -955,7 +955,7 @@ impl Shell {
             .rounded_tr(px(0.))
             // Glass like the side panels, but denser, because the draft is read over the
             // conversation behind it. The meter tab on its edge is the same glass.
-            .map(|editor| kit::glass(editor, t.raised, COMPOSER_GLASS_FILL))
+            .map(|editor| kit::glass(editor, t.raised, kit::SURFACE_GLASS_FILL))
             .border_1()
             .border_color(if focused {
                 t.accent.opacity(0.6)
@@ -1443,10 +1443,6 @@ impl Shell {
 /// conversation runs beneath it.
 pub(super) const COMPOSER_LEAD: f32 = 28.;
 
-/// Share of the composer's tone over the blur behind its box and its meter tab. Half as much
-/// shows through as through the side panels, so the draft reads clearly over the conversation.
-const COMPOSER_GLASS_FILL: f32 = 0.625;
-
 /// Height of the meter tab on the composer's top edge, and the run of its slanted side.
 const METER_TAB_HEIGHT: f32 = 24.;
 const METER_TAB_SLANT: f32 = 14.;
@@ -1516,7 +1512,7 @@ fn paint_meter_tab(
         size(bounds.size.width - gpui::px(1.), gpui::px(1.)),
     );
     window.paint_quad(fill(seam, surface));
-    for tone in [Some(surface.opacity(COMPOSER_GLASS_FILL)), hover]
+    for tone in [Some(surface.opacity(kit::SURFACE_GLASS_FILL)), hover]
         .into_iter()
         .flatten()
     {

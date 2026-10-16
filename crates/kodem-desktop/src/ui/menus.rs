@@ -538,6 +538,12 @@ impl Shell {
             div()
                 .relative()
                 .child(dither::shadow(t, crate::theme::RADIUS_FLOATING, 5.))
+                // The glass lies beneath the scrolling list, so its dots stay at the bottom edge.
+                .child(kit::floating_face(
+                    t.raised,
+                    crate::theme::RADIUS_FLOATING,
+                    t,
+                ))
                 .child(
                     div()
                         .id("context-menu")
@@ -546,10 +552,8 @@ impl Shell {
                         .overflow_y_scroll()
                         .p(px(4.))
                         .rounded(px(crate::theme::RADIUS_FLOATING))
-                        .bg(t.raised)
                         .border_1()
-                        .border_color(t.edge)
-                        .shadow(t.floating())
+                        .border_color(gpui::transparent_black())
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(menu),
                 ),

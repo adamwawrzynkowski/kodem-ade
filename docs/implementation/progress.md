@@ -1070,3 +1070,15 @@ Checked in a temporary headless WebKit program, not kept: snapshot, typing into 
 
 Recorded on 17 October 2026. The user asked for google.com as the page that the browser opens by default. When the pane shows the browser of a task that has no page, it opens `browser::HOME` (`https://www.google.com/`) instead of showing the empty state. A page that the user or an agent opened is kept, and a task whose home page failed to open is not tried again on each frame (`Shell::browser_home`); it shows the error and the empty state. An agent that reads a task's page before anything opened one still gets the "no page is open" answer. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings), `cargo fmt --check` and the debug build command.
 
+### Glass on floating surfaces
+
+Recorded on 17 October 2026. The user liked the glass of the composer and the side panels and asked for the other elements in their screenshots to take that look, with fainter dots and the dithered shadows outside kept: inline code, the button that opens an agent with its state chip, the Settings and Skills & MCP dialogs with their chosen rows and theme cards, the text, approval, mode, reasoning and model menus, and the preview of a sent message.
+
+- `kit::floating_face` is the glass of a menu, dialog or card: five eighths of its tone (`kit::SURFACE_GLASS_FILL`, the composer's share, which moved there from `chat.rs`) over the six-point blur, a hairline edge, the floating light and faint dots along the bottom. It lies beneath the content, so the dots stay at the bottom of a menu that scrolls. `menus.rs`, the dialog in `panels.rs` and the preview in `history.rs` use it. A dialog's compact header, the Settings navigation, a theme card's name and the preview's header take half of their tone (`kit::PANE_SHARE`) without a blur of their own, because a blur over another one breaks the render pass.
+- Floating notices are glass in the same share, and their wash is fainter.
+- The button that opens an agent is glass in the control tone with faint dots along its bottom. In the composer's agent strip, which lies inside the composer's glass, it takes the share without the blur.
+- `dither::row_wash` shades a selected row with faint dots along its bottom edge, as a message has, instead of grain from its leading edge. This changes every chosen row and chosen settings surface.
+- Tinted chips carry faint dots of their tone along their bottom edge.
+- Inline code is a faint fill in a hairline edge with fine dither over its lower half, in place of a plate of dither.
+
+Each glass surface adds one blur of its own region while it is on screen. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. GPU use is not measured, and the look is not checked in the running app under the no-visual-testing agreement.

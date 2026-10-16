@@ -76,8 +76,8 @@ impl CompactScope {
     }
 }
 
-/// The look of a chosen surface as one layer: the accent tint with slight depth, dots that fade
-/// from its leading edge and the accent edge. Add it to a relatively positioned surface with
+/// The look of a chosen surface as one layer: the accent tint with slight depth, faint dots
+/// along its bottom edge and the accent edge. Add it to a relatively positioned surface with
 /// [`kit::Layers::layer`].
 pub(super) fn chosen_layer(tone: Hsla) -> impl kit::Fit {
     move |corners: Corners<Pixels>| {
@@ -343,7 +343,8 @@ impl Shell {
             .h_full()
             .flex_shrink_0()
             .p(px(10.))
-            .bg(t.sidebar)
+            // A share of the panel tone, so that the dialog's glass shows through.
+            .bg(t.sidebar.opacity(kit::PANE_SHARE))
             .flex()
             .flex_col()
             .gap(px(2.))
@@ -462,7 +463,7 @@ impl Shell {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .bg(t.raised)
+                    .bg(t.raised.opacity(kit::PANE_SHARE))
                     .border_t_1()
                     .border_color(t.border)
                     // The footer closes the card, so its corners are the card's inside its edge.
@@ -1144,8 +1145,8 @@ impl Shell {
             .into_any_element()
     }
 
-    /// Returns a row that can be chosen. A chosen row carries the accent tint, dots that fade
-    /// from its leading edge and the accent edge. Add its icon and label as children.
+    /// Returns a row that can be chosen. A chosen row carries the accent tint, faint dots along
+    /// its bottom edge and the accent edge. Add its icon and label as children.
     pub(super) fn choice_row(&self, id: impl Into<ElementId>, chosen: bool) -> Button {
         let t = self.theme;
         self.control(id)

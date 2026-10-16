@@ -342,8 +342,9 @@ impl Shell {
     }
 
     // A floating card. A confirmation is one compact line; an error is a card with its label,
-    // its text and a dismiss button. Both stand a little off the window with the depth of a
-    // raised control and carry a dithered wash of their tone along the leading edge.
+    // its text and a dismiss button. Both are glass that stands a little off the window with the
+    // depth of a raised control and carry a faint dithered wash of their tone along the leading
+    // edge.
     fn notice_card(&self, notice: &Notice, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let tone = notice.kind.tone(t);
@@ -356,18 +357,17 @@ impl Shell {
         };
         let mut light = kit::raised_light(t);
         light.extend(t.floating());
-        let surface = div()
+        let surface = kit::glass(div(), t.raised, kit::SURFACE_GLASS_FILL)
             .id(("notice-card", id as usize))
             .occlude()
             .relative()
             .overflow_hidden()
             .flex()
             .rounded(px(radius))
-            .bg(kit::raised_fill(t.raised))
             .border_1()
             .border_color(tone.opacity(0.4))
             .shadow(light)
-            .layer(kit::shade(tone.opacity(0.22), dither::Edge::Left));
+            .layer(kit::shade(tone.opacity(0.15), dither::Edge::Left));
         let card = if compact {
             surface
                 .items_center()

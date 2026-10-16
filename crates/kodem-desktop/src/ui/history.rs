@@ -241,7 +241,6 @@ impl Shell {
             .flex()
             .flex_col()
             .gap(px(7.))
-            .layer(dither::edge_shade(t.dot, 0.22))
             .child(if sent.is_empty() {
                 line(t.muted, 13.).child(if files == 1 {
                     "1 attachment".to_string()
@@ -285,17 +284,22 @@ impl Shell {
             .max_w_full()
             .flex_shrink_0()
             .child(dither::shadow(t, crate::theme::RADIUS_SURFACE, 4.))
+            .child(kit::floating_face(
+                t.raised,
+                crate::theme::RADIUS_SURFACE,
+                t,
+            ))
             .child(
                 div()
                     .relative()
                     .overflow_hidden()
                     .font_family(crate::theme::sans())
-                    .bg(t.raised)
                     .border_1()
-                    .border_color(t.edge)
+                    .border_color(gpui::transparent_black())
                     .rounded(px(crate::theme::RADIUS_SURFACE))
                     .child(
                         kit::block_header(label, t.accent, t)
+                            .bg(t.header.opacity(kit::PANE_SHARE))
                             .pr(px(10.))
                             .child(figure(sidebar::elapsed(message.created), t.subtle)),
                     )

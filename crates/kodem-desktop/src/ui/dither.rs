@@ -1549,8 +1549,6 @@ pub(super) fn scanner(color: Hsla, radii: Corners<f32>) -> Div {
 
 /// Height of the dots that shade the bottom edge of a surface.
 const EDGE_SHADE: f32 = 16.;
-/// Width of the grain at the leading edge of a selected row.
-const SELECTION_GRAIN: f32 = 64.;
 
 /// Shades the bottom edge of a rounded surface with dots that thin out upward, from `density`.
 ///
@@ -1558,37 +1556,39 @@ const SELECTION_GRAIN: f32 = 64.;
 /// spread behind its text on a tall surface. Add it to a relatively positioned surface with
 /// [`kit::Layers::layer`].
 pub(super) fn edge_shade(color: Hsla, density: f32) -> impl kit::Fit {
-    move |corners: Corners<Pixels>| {
-        div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .h(crate::theme::px(EDGE_SHADE))
-            .max_h_full()
-            .child(
-                Dither::new(DitherField::Fade {
-                    from: Edge::Bottom,
-                    start: density,
-                    end: 0.,
-                })
-                .color(color)
-                .grid(2., 1.)
-                .fitted(
-                    Corners {
-                        bottom_left: corners.bottom_left,
-                        bottom_right: corners.bottom_right,
-                        ..Corners::default()
-                    },
-                    Size::new(true, false),
-                ),
-            )
-            .into_any_element()
-    }
+    move |corners: Corners<Pixels>| edge_shade_layer(color, density, corners).into_any_element()
 }
 
-/// Shades a rounded row: grain at its leading edge when selected, a moving flow while active.
-/// Add it with [`kit::Layers::layer`].
+// The band of `edge_shade` for a surface whose corners inside its border are `corners`.
+fn edge_shade_layer(color: Hsla, density: f32, corners: Corners<Pixels>) -> Div {
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .bottom_0()
+        .h(crate::theme::px(EDGE_SHADE))
+        .max_h_full()
+        .child(
+            Dither::new(DitherField::Fade {
+                from: Edge::Bottom,
+                start: density,
+                end: 0.,
+            })
+            .color(color)
+            .grid(2., 1.)
+            .fitted(
+                Corners {
+                    bottom_left: corners.bottom_left,
+                    bottom_right: corners.bottom_right,
+                    ..Corners::default()
+                },
+                Size::new(true, false),
+            ),
+        )
+}
+
+/// Shades a rounded row: dots along its bottom edge when selected, as a message has, and a
+/// moving flow while active. Add it with [`kit::Layers::layer`].
 pub(super) fn row_wash(color: Hsla, selected: bool, active: bool) -> impl kit::Fit {
     move |corners: Corners<Pixels>| row_wash_layer(color, corners, selected, active)
 }
@@ -1604,33 +1604,7 @@ fn row_wash_layer(
         .absolute()
         .inset_0()
         .when(selected, |layer| {
-            // The grain has a fixed width, so it thins out before the text of a wide row.
-            layer.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left_0()
-                    .w(crate::theme::px(SELECTION_GRAIN))
-                    .max_w_full()
-                    .child(
-                        Dither::new(DitherField::Fade {
-                            from: Edge::Left,
-                            start: 0.62,
-                            end: 0.,
-                        })
-                        .color(color.opacity(0.3))
-                        .grid(2., 1.)
-                        .fitted(
-                            Corners {
-                                top_left: corners.top_left,
-                                bottom_left: corners.bottom_left,
-                                ..Corners::default()
-                            },
-                            Size::new(false, true),
-                        ),
-                    ),
-            )
+            layer.child(edge_shade_layer(color.opacity(0.3), 0.5, corners))
         })
         .when(active, |layer| {
             // The flow fades out toward the left, so only the trailing part of the row holds

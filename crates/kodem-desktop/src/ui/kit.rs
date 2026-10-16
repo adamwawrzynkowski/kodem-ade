@@ -394,9 +394,11 @@ pub(super) fn status_header(label: impl AsRef<str>, count: usize, tone: Hsla, th
         )
 }
 
-/// A compact tinted badge with a mono label, for states, modes and identities.
+/// A compact tinted badge with a mono label, for states, modes and identities. Dots in its
+/// tone shade its bottom edge, as they shade a message.
 pub(super) fn chip(label: impl Into<SharedString>, tone: Hsla) -> Div {
     div()
+        .relative()
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -408,6 +410,7 @@ pub(super) fn chip(label: impl Into<SharedString>, tone: Hsla) -> Div {
         .border_color(tone.opacity(0.36))
         .bg(tint_fill(tone, 0.08))
         .shadow(tint_light(tone))
+        .layer(shade(tone.opacity(0.25), Edge::Bottom))
         .text_color(tone)
         .font_family(crate::theme::mono())
         .text_size(text_px(10.5))
@@ -901,6 +904,15 @@ pub(super) fn tab_indicator(accent: Hsla) -> Div {
 const GLASS_FILL: f32 = 0.25;
 pub(super) const GLASS_BLUR: f32 = 6.;
 
+/// Share of the tone of a glass surface that holds text over the conversation: the composer,
+/// menus, dialogs and floating cards. Half as much shows through as through the side panels, so
+/// the text reads clearly over what lies behind it.
+pub(super) const SURFACE_GLASS_FILL: f32 = 0.625;
+
+/// Share of its tone that a part of a glass surface takes, such as a dialog's header and
+/// navigation, so that the glass shows through it without a blur of its own.
+pub(super) const PANE_SHARE: f32 = 0.5;
+
 /// Gives a surface glass in `tone`: the share `fill` of the tone over a blur of what lies
 /// behind it. GPUI's renderers on macOS (Metal), Linux (wgpu) and Windows (DirectX) all draw the
 /// blur, clipped to the surface's rounded rectangle.
@@ -911,6 +923,22 @@ pub(super) fn glass<E: Styled>(surface: E, tone: Hsla, fill: f32) -> E {
 /// Gives a panel at a side of the window its glass, in the panel tone.
 pub(super) fn panel_glass<E: Styled>(panel: E, theme: Theme) -> E {
     glass(panel, theme.sidebar, GLASS_FILL)
+}
+
+/// The face of a floating menu or dialog: glass in `tone` with corners of `radius` points, a
+/// hairline edge, the floating light and faint dots along its bottom edge. Place it in a
+/// relatively positioned wrapper with the bounds of the surface, after its dithered shadow and
+/// before its content, which then needs no fill of its own. Parts of the content that need a
+/// fill take a share of their tone, so that the glass shows through them without a second blur.
+pub(super) fn floating_face(tone: Hsla, radius: f32, theme: Theme) -> Div {
+    glass(div(), tone, SURFACE_GLASS_FILL)
+        .absolute()
+        .inset_0()
+        .rounded(px(radius))
+        .border_1()
+        .border_color(theme.edge)
+        .shadow(theme.floating())
+        .layer(dither::edge_shade(theme.dot, 0.18))
 }
 
 /// A card surface: raised fill, hairline edge and a dithered shade along its bottom edge.

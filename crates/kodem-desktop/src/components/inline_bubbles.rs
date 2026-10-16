@@ -272,13 +272,32 @@ impl TextLine {
                     origin + point(left, height * row + (height - block_height) / 2.),
                     size(right - left, block_height),
                 );
-                // Inline code is drawn in the interface's own language: a plate of fine
-                // dither instead of a flat fill, square at the corners. The pattern is drawn in
-                // the shader, so a paragraph of many spans stays cheap.
+                // Inline code is drawn in the interface's own language: a plate like a
+                // message, a faint fill in a hairline edge with fine dither along its bottom,
+                // square at the corners. The fill lets the surface beneath show through, and
+                // the pattern is drawn in the shader, so a paragraph of many spans stays cheap.
                 let cell = window.scale_factor();
+                let corners = Corners::all(px(INLINE_RADIUS));
                 window.paint_quad(
-                    fill(bounds, checkerboard(theme.dot.opacity(0.8), cell))
-                        .corner_radii(Corners::all(px(INLINE_RADIUS))),
+                    fill(bounds, theme.dot.opacity(0.3))
+                        .corner_radii(corners)
+                        .border_widths(Edges::all(gpui::px(1.)))
+                        .border_color(theme.dot.opacity(0.6)),
+                );
+                let band = (bounds.size.height * 0.45).round();
+                window.paint_quad(
+                    fill(
+                        Bounds::new(
+                            point(bounds.left(), bounds.bottom() - band),
+                            size(bounds.size.width, band),
+                        ),
+                        checkerboard(theme.dot.opacity(0.45), cell),
+                    )
+                    .corner_radii(Corners {
+                        bottom_left: corners.bottom_left,
+                        bottom_right: corners.bottom_right,
+                        ..Corners::default()
+                    }),
                 );
                 // Only a plate that opens something sits on a dotted rule, so that the rule
                 // says that a click works and a line of plain code spans stays quiet.

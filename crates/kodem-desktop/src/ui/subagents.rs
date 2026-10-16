@@ -97,8 +97,15 @@ impl Shell {
         cx.notify();
     }
 
-    /// Opens the identified descendant using its persistent name, glyph and live status.
-    pub(super) fn agent_link(&self, thread_id: &str, cx: &mut Context<Self>) -> AnyElement {
+    /// Opens the identified descendant using its persistent name, glyph and live status. The
+    /// link is glass; `on_glass` says that it lies on a glass surface already, so that it takes a
+    /// share of its tone without a second blur.
+    pub(super) fn agent_link(
+        &self,
+        thread_id: &str,
+        on_glass: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some((index, agent)) = self.view.as_ref().and_then(|view| {
             view.task
                 .subagents
@@ -111,35 +118,41 @@ impl Shell {
         let id = agent.thread_id.clone();
         let t = self.theme;
         // A raised control rather than a restyled ghost: GPUI takes one hover style per element.
-        self.control((
+        let share = kit::SURFACE_GLASS_FILL;
+        let link = self.control((
             ElementId::from("agent-link"),
             SharedString::from(id.clone()),
-        ))
-        .overflow_hidden()
-        .h(px(28.))
-        .px(px(8.))
-        .bg(kit::raised_fill(t.control))
-        .border_color(t.edge)
-        .shadow(kit::raised_light(t))
-        .text_color(t.muted)
-        .layer(kit::glint(t.dot, dither::Edge::Bottom))
-        .child(icon(glyph(index)).size(px(13.)))
-        .child(agent.name.clone())
-        .hover(move |s| s.bg(kit::raised_fill(t.control_hover)).text_color(t.text))
-        .active(move |s| s.bg(t.control_active).shadow(Vec::new()))
-        .on_press(move |position, cx| fx::ripple(position, t.muted, cx))
-        .child(if agent.state.active() {
-            motion::active_icon("loader", t.accent, true, cx.reduce_motion())
+        ));
+        let link = if on_glass {
+            link.bg(t.control.opacity(share))
         } else {
-            div().into_any_element()
-        })
-        .child(kit::chip(
-            state_label(&agent.state).to_uppercase(),
-            state_tone(&agent.state, t),
-        ))
-        .child(icon("external-link").size(px(11.)).text_color(t.subtle))
-        .on_click(cx.listener(move |s, _, window, cx| s.open_agent(id.clone(), window, cx)))
-        .into_any_element()
+            kit::glass(link, t.control, share)
+        };
+        link.overflow_hidden()
+            .h(px(28.))
+            .px(px(8.))
+            .border_color(t.edge)
+            .shadow(kit::raised_light(t))
+            .text_color(t.muted)
+            .layer(dither::edge_shade(t.dot, 0.18))
+            .layer(kit::glint(t.dot, dither::Edge::Bottom))
+            .child(icon(glyph(index)).size(px(13.)))
+            .child(agent.name.clone())
+            .hover(move |s| s.bg(t.control_hover.opacity(share)).text_color(t.text))
+            .active(move |s| s.bg(t.control_active.opacity(share)).shadow(Vec::new()))
+            .on_press(move |position, cx| fx::ripple(position, t.muted, cx))
+            .child(if agent.state.active() {
+                motion::active_icon("loader", t.accent, true, cx.reduce_motion())
+            } else {
+                div().into_any_element()
+            })
+            .child(kit::chip(
+                state_label(&agent.state).to_uppercase(),
+                state_tone(&agent.state, t),
+            ))
+            .child(icon("external-link").size(px(11.)).text_color(t.subtle))
+            .on_click(cx.listener(move |s, _, window, cx| s.open_agent(id.clone(), window, cx)))
+            .into_any_element()
     }
 
     /// Renders child controls as a connected section of the existing prompt container.
@@ -183,7 +196,7 @@ impl Shell {
                             view.task
                                 .subagents
                                 .iter()
-                                .map(|agent| self.agent_link(&agent.thread_id, cx)),
+                                .map(|agent| self.agent_link(&agent.thread_id, true, cx)),
                         ),
                     ),
             )

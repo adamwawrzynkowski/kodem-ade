@@ -8,8 +8,8 @@ pub(super) const AGENT_ANCHOR: &str = "composer-agent";
 pub(super) const ACCESS_ANCHOR: &str = "composer-access";
 
 impl Shell {
-    // A full-width menu row. A chosen row carries the accent tint, an accent edge, dots that
-    // fade from its leading edge, and a check mark.
+    // A full-width menu row. A chosen row carries the accent tint, an accent edge, faint dots
+    // along its bottom edge, and a check mark.
     fn option_row(&self, id: impl Into<ElementId>, chosen: bool, disabled: bool) -> Button {
         let t = self.theme;
         self.control(id)

@@ -542,7 +542,7 @@ impl Shell {
                 .flex()
                 .items_center()
                 .gap(px(10.))
-                .bg(theme.sidebar)
+                .bg(theme.sidebar.opacity(kit::PANE_SHARE))
                 .border_b_1()
                 .border_color(theme.border)
                 .child(kit::marker(tone))
@@ -565,17 +565,20 @@ impl Shell {
             .flex()
             .flex_col()
             .child(dither::shadow(theme, crate::theme::RADIUS_FLOATING, 7.))
+            .child(kit::floating_face(
+                theme.canvas,
+                crate::theme::RADIUS_FLOATING,
+                theme,
+            ))
             .child(
                 div()
                     .w_full()
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .bg(theme.canvas)
                     .border_1()
-                    .border_color(theme.edge)
+                    .border_color(gpui::transparent_black())
                     .rounded(px(crate::theme::RADIUS_FLOATING))
-                    .shadow(theme.floating())
                     .overflow_hidden()
                     .child(header)
                     .child(content),
