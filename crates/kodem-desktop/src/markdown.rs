@@ -385,15 +385,41 @@ pub fn blocks(text: &str) -> Rc<Vec<Block>> {
     })
 }
 
+/// The Markdown that messages are read with. A draft is read the same way, so that it shows the
+/// code that its message will show.
+const OPTIONS: Options = Options::ENABLE_TABLES
+    .union(Options::ENABLE_STRIKETHROUGH)
+    .union(Options::ENABLE_TASKLISTS)
+    .union(Options::ENABLE_GFM);
+
+/// Returns the inline code of a draft as its message will show it: for each code span on one
+/// line, its whole range with the backticks, and the range of the code between them. A span
+/// counts once its closing backticks are typed.
+pub fn draft_code(text: &str) -> Vec<(Range<usize>, Range<usize>)> {
+    Parser::new_ext(text, OPTIONS)
+        .into_offset_iter()
+        .filter_map(|(event, whole)| {
+            let Event::Code(_) = event else {
+                return None;
+            };
+            let source = text.get(whole.clone())?;
+            let ticks = source.bytes().take_while(|byte| *byte == b'`').count();
+            let closing = source
+                .bytes()
+                .rev()
+                .take_while(|byte| *byte == b'`')
+                .count();
+            if ticks == 0 || ticks != closing || ticks * 2 >= source.len() {
+                return None;
+            }
+            let code = whole.start + ticks..whole.end - ticks;
+            (!text[code.clone()].contains('\n')).then_some((whole, code))
+        })
+        .collect()
+}
+
 fn parse_blocks(text: &str) -> Vec<Block> {
-    let mut events = Parser::new_ext(
-        text,
-        Options::ENABLE_TABLES
-            | Options::ENABLE_STRIKETHROUGH
-            | Options::ENABLE_TASKLISTS
-            | Options::ENABLE_GFM,
-    )
-    .peekable();
+    let mut events = Parser::new_ext(text, OPTIONS).peekable();
     let mut blocks = read_blocks(&mut events, None).blocks;
     promote_titles(&mut blocks);
     blocks

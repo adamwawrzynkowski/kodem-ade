@@ -160,6 +160,8 @@ pub struct TextInput {
     syntax: Option<(String, kodem_core::ThemeId)>,
     colors: Vec<(Range<usize>, [u8; 3])>,
     prose: Option<(Vec<crate::markdown::Span>, crate::theme::Theme)>,
+    /// Shows the inline code of the typed text as its message will, in the plates of this theme.
+    live_code: Option<crate::theme::Theme>,
     streaming: super::streaming_text::StreamingText,
     /// Whether a redraw for the streamed-text reveal is already scheduled.
     reveal_pending: bool,
@@ -204,6 +206,7 @@ impl TextInput {
             syntax: None,
             colors: Vec::new(),
             prose: None,
+            live_code: None,
             streaming: Default::default(),
             reveal_pending: false,
             shaped: Vec::new(),
@@ -218,6 +221,14 @@ impl TextInput {
         let mut input = Self::new(placeholder, cx);
         input.composer = true;
         input
+    }
+    /// Shows each span of the typed text between backticks as inline code while the user types,
+    /// in the code plates of `theme`. The backticks stay in the text and show faint.
+    pub fn set_live_code(&mut self, theme: Option<crate::theme::Theme>) {
+        if self.live_code != theme {
+            self.live_code = theme;
+            self.revision += 1;
+        }
     }
     /// Makes the input hold one line: Return submits it, and pasted line breaks become spaces.
     pub fn set_single_line(&mut self, single_line: bool) {
@@ -1411,8 +1422,13 @@ impl Element for TextElement {
         );
         let height = window.line_height();
         let visible = window.content_mask().bounds;
-        if let Some((_, theme)) = self.input.read(cx).prose.as_ref() {
-            let theme = *theme;
+        let input = self.input.read(cx);
+        let bubble_theme = input
+            .prose
+            .as_ref()
+            .map(|(_, theme)| *theme)
+            .or(input.live_code);
+        if let Some(theme) = bubble_theme {
             let mut y = px(0.);
             for (_, line) in prepaint.lines.iter() {
                 let line_bounds =
@@ -1710,6 +1726,16 @@ fn shape(
         strikethrough: None,
         letter_spacing: None,
     };
+    // A draft's inline code, found again from the text that the shaping is cached for.
+    let live = if input.live_code.is_some()
+        && input.prose.is_none()
+        && !input.content.is_empty()
+        && !input.masked
+    {
+        crate::markdown::draft_code(&input.content)
+    } else {
+        Vec::new()
+    };
     let runs: Vec<TextRun> = if let Some((spans, theme)) = &input.prose {
         let theme = *theme;
         spans
@@ -1747,6 +1773,25 @@ fn shape(
                 styled
             })
             .collect()
+    } else if let Some(theme) = input.live_code.filter(|_| !live.is_empty()) {
+        // The code reads in the code face and its backticks fade, around unstyled text.
+        let mut runs = Vec::new();
+        let mut at = 0;
+        let faint = TextRun {
+            color: theme.subtle,
+            ..run.clone()
+        };
+        let mut code = run.clone();
+        code.font.family = crate::theme::mono().into();
+        for (whole, inner) in &live {
+            push_run(&mut runs, at..whole.start, run.clone());
+            push_run(&mut runs, whole.start..inner.start, faint.clone());
+            push_run(&mut runs, inner.clone(), code.clone());
+            push_run(&mut runs, inner.end..whole.end, faint.clone());
+            at = whole.end;
+        }
+        push_run(&mut runs, at..text.len(), run.clone());
+        runs
     } else if input.colors.is_empty() {
         vec![run.clone()]
     } else {
@@ -1810,6 +1855,7 @@ fn shape(
     // Each bubble with whether a click on it opens a file. Spans that touch share one bubble,
     // which opens something only when all of it does.
     let mut bubbles: Vec<(Range<usize>, bool)> = Vec::new();
+    bubbles.extend(live.iter().map(|(_, code)| (code.clone(), false)));
     if let Some((spans, _)) = &input.prose {
         for span in spans.iter().filter(|span| span.style.is_bubble()) {
             if let Some((last, opens)) = bubbles.last_mut()
@@ -1862,6 +1908,15 @@ fn shape(
             )
         })
         .collect()
+}
+// Appends a run of `style` for `range` of the text, unless the range is empty.
+fn push_run(runs: &mut Vec<TextRun>, range: Range<usize>, style: TextRun) {
+    if !range.is_empty() {
+        runs.push(TextRun {
+            len: range.len(),
+            ..style
+        });
+    }
 }
 // Joins the typed draft and its folded texts into the text of the message.
 fn compose(typed: &str, folded: &[SharedString]) -> String {

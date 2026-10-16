@@ -779,6 +779,9 @@ impl Shell {
             }
         }
         // Long pasted texts are files of the message, after its attachments.
+        // The draft shows its inline code as the message will, in the current theme.
+        self.input
+            .update(cx, |input, _| input.set_live_code(Some(t)));
         let folded: Vec<SharedString> = self.input.read(cx).folded().to_vec();
         if !folded.is_empty() {
             let mut texts = div().flex().flex_wrap().flex_shrink_0().gap_2();
