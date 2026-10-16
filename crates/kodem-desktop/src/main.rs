@@ -3,6 +3,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 mod bayer;
 mod bridge;
+mod browser;
 mod clipboard;
 mod components;
 mod icons;

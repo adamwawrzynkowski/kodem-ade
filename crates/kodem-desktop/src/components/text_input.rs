@@ -2,7 +2,7 @@
 use std::{ops::Range, rc::Rc, time::Instant};
 
 use gpui::{
-    App, Bounds, ClipboardItem, ColorExt, Context, CursorStyle, Div, ElementId,
+    App, Bounds, ClipboardItem, ColorExt, ContentMask, Context, CursorStyle, Div, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable, Font, GlobalElementId,
     Hsla, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     PaintQuad, Pixels, Point, SharedString, Style, TextRun, UTF16Selection, Window, actions, div,
@@ -175,6 +175,9 @@ pub struct TextInput {
     /// document through `RowEdit` events and propagated actions.
     row_edits: bool,
     wrap: bool,
+    /// How far the text of one line that does not wrap is scrolled to the left, so that its
+    /// caret stays in view.
+    scroll_x: Pixels,
     syntax: Option<(String, kodem_core::ThemeId)>,
     colors: Vec<(Range<usize>, [u8; 3])>,
     /// The highlighter's state for `colors`, so streamed code costs the lines it adds.
@@ -224,6 +227,7 @@ impl TextInput {
             delegated_selection: false,
             row_edits: false,
             wrap: true,
+            scroll_x: px(0.),
             syntax: None,
             colors: Vec::new(),
             highlighted: Default::default(),
@@ -507,9 +511,37 @@ impl TextInput {
             self.revision += 1;
         }
     }
-    /// Sets whether text wraps to its available width without changing syntax colors.
+    /// Sets whether text wraps to its available width without changing syntax colors. A
+    /// single-line input that does not wrap scrolls sideways to keep its caret in view.
     pub fn set_wrap(&mut self, wrap: bool) {
         self.wrap = wrap;
+    }
+    // Scrolls a single line that does not wrap so that the caret stays inside `width`, and
+    // returns the distance. An unfocused field shows the start of its text.
+    fn follow_caret(
+        &mut self,
+        lines: &[(usize, super::inline_bubbles::TextLine)],
+        width: Pixels,
+        height: Pixels,
+        focused: bool,
+    ) -> Pixels {
+        let Some((_, line)) = lines.first().filter(|_| focused) else {
+            self.scroll_x = px(0.);
+            return self.scroll_x;
+        };
+        // The caret is two pixels wide and must show at the end of the text too.
+        let room = (width - px(2.)).max(px(0.));
+        let caret = line
+            .position_for_index(self.cursor_offset().min(line.len()), height)
+            .map_or(px(0.), |position| position.x);
+        if caret < self.scroll_x {
+            self.scroll_x = caret;
+        } else if caret > self.scroll_x + room {
+            self.scroll_x = caret - room;
+        }
+        let overflow = (line.size(height).width - room).max(px(0.));
+        self.scroll_x = self.scroll_x.min(overflow).max(px(0.));
+        self.scroll_x
     }
     /// Applies Markdown styles to selectable prose and restores wrapping after a block changes kind.
     pub fn prose(&mut self, spans: &[crate::markdown::Span], theme: crate::theme::Theme) {
@@ -1329,6 +1361,9 @@ struct PrepaintState {
     lines: Rc<Vec<(usize, super::inline_bubbles::TextLine)>>,
     cursor: Option<PaintQuad>,
     selections: Vec<PaintQuad>,
+    /// How far a single line that does not wrap is scrolled to the left, or `None` for text
+    /// that is not clipped to its bounds.
+    scroll: Option<Pixels>,
 }
 impl IntoElement for TextElement {
     type Element = Self;
@@ -1419,6 +1454,15 @@ impl Element for TextElement {
                 window,
             )
         });
+        let focused = self.input.read(cx).focus_handle.is_focused(window);
+        let scroll = self.input.update(cx, |input, _| {
+            (input.single_line && !input.wrap)
+                .then(|| input.follow_caret(&lines, bounds.size.width, height, focused))
+        });
+        let bounds = Bounds::new(
+            point(bounds.left() - scroll.unwrap_or_default(), bounds.top()),
+            bounds.size,
+        );
         let input = self.input.read(cx);
         let mut selections = Vec::new();
         let mut cursor = None;
@@ -1472,6 +1516,7 @@ impl Element for TextElement {
             lines,
             cursor,
             selections,
+            scroll,
         }
     }
     fn paint(
@@ -1494,12 +1539,40 @@ impl Element for TextElement {
                 }
             });
         }
+        let clip = bounds;
+        // The text of a scrolled line starts left of the field, and the field clips it.
+        let bounds = Bounds::new(
+            point(
+                bounds.left() - prepaint.scroll.unwrap_or_default(),
+                bounds.top(),
+            ),
+            bounds.size,
+        );
         let focus = self.input.read(cx).focus_handle.clone();
         window.handle_input(
             &focus,
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
+        if prepaint.scroll.is_some() {
+            window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
+                self.paint_text(bounds, prepaint, window, cx);
+            });
+        } else {
+            self.paint_text(bounds, prepaint, window, cx);
+        }
+    }
+}
+
+impl TextElement {
+    // Paints the selections, the lines and the caret, with the text starting at `bounds`.
+    fn paint_text(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        prepaint: &mut PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         let height = window.line_height();
         let visible = window.content_mask().bounds;
         let input = self.input.read(cx);

@@ -442,7 +442,7 @@ impl Shell {
                 }
             }
             Choice::Diff => {
-                self.show_review = true;
+                self.show_pane(PanePage::Changes);
                 self.settings.show_review = true;
                 self.save_settings();
             }

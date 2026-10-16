@@ -53,10 +53,8 @@ impl Shell {
             };
         let width = if center {
             (self.window_width - leading - self.settings.review_width).max(360.)
-        } else if self.window_width <= 1100. {
-            self.window_width - leading
         } else {
-            self.settings.review_width.min(self.window_width * 0.55)
+            self.side_width()
         };
         let count = self.diff.as_ref().map_or(0, |d| d.files.len());
         let (comparison, label, glyph) = COMPARISONS
@@ -125,7 +123,7 @@ impl Shell {
                         )
                         .child(figure(count.to_string(), t.subtle))
                         .child(div().flex_1())
-                        .child(caps("Changes", t).mr(px(6.))),
+                        .child(self.pane_switch(cx)),
                 )
             });
         // A folder without Git has nothing to compare its files with.

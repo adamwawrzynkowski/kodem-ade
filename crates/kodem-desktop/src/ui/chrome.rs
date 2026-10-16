@@ -340,17 +340,25 @@ impl Shell {
                         })),
                     )
                     .child(
-                        self.icon_button("header-review", "panel-right", "Toggle changes · ⌘D")
+                        self.icon_button("header-review", "panel-right", "Changes or browser")
                             .occlude()
                             .disabled(!enabled)
                             .when(self.show_review && enabled, |b| {
                                 b.bg(t.accent.opacity(0.14)).text_color(t.accent)
                             })
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                s.show_review = !s.show_review;
-                                s.save_settings();
-                                cx.notify();
-                            })),
+                            // An open pane closes; a closed one asks what it shows.
+                            .on_click_with_bounds(cx.listener(
+                                |s, bounds: &Bounds<Pixels>, _, cx| {
+                                    if s.show_review {
+                                        s.show_review = false;
+                                        s.save_settings();
+                                    } else {
+                                        s.menu_anchor = Some(*bounds);
+                                        s.panel = Panel::PaneMenu;
+                                    }
+                                    cx.notify();
+                                },
+                            )),
                     ),
             )
             .when(app_window_buttons(window), |header| {
@@ -448,10 +456,14 @@ impl Render for Shell {
         self.sync_censor();
         fx::begin_frame(cx);
         dither::begin_frame();
+        self.browser_frame = None;
+        // The full-window views cover the pane, so its page hides.
         if let Some(preview) = self.render_image_preview(window, cx) {
+            self.browsers.borrow_mut().end_frame(None);
             return preview;
         }
         if let Some(popup) = self.render_agent_popup(cx) {
+            self.browsers.borrow_mut().end_frame(None);
             return popup;
         }
         if cx.try_global::<Theme>() != Some(&self.theme) {
@@ -488,11 +500,11 @@ impl Render for Shell {
                 cx.notify();
             }))
             .on_action(cx.listener(|s, _: &ToggleReview, _, cx| {
-                s.show_review = !s.show_review;
-                s.save_settings();
-                if !s.show_review && s.panel == Panel::Comparison {
-                    s.panel = Panel::None;
-                }
+                s.toggle_pane(PanePage::Changes);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|s, _: &ToggleBrowser, _, cx| {
+                s.toggle_pane(PanePage::Browser);
                 cx.notify();
             }))
             .on_action(cx.listener(|s, _: &ToggleTerminal, _, cx| {
@@ -688,7 +700,7 @@ impl Render for Shell {
         if narrow_review {
             body = body
                 .child(div().w(px(1.)).flex_shrink_0().h_full().bg(t.border))
-                .child(self.review(cx, false));
+                .child(self.side_pane(window, cx));
         } else if git.is_none()
             && review_open > 0.
             && self.has_checkout()
@@ -696,7 +708,7 @@ impl Render for Shell {
         {
             // The review pane is as wide as `review` makes it; the divider sits before it.
             let width = self.settings.review_width.min(self.window_width * 0.55);
-            let review = self.review(cx, false);
+            let review = self.side_pane(window, cx);
             body = body
                 .child(div().w(px(1.)).flex_shrink_0().h_full().bg(t.border))
                 .child(if review_open < 1. {
@@ -747,10 +759,28 @@ impl Render for Shell {
                 | Panel::SelectionMenu
                 | Panel::Sort
                 | Panel::Comparison
+                | Panel::PaneMenu
         ) {
             root = root.child(self.menu(window, cx));
         } else if self.panel != Panel::None {
             root = root.child(self.panel(window, cx));
+        }
+        // A page is a view of the platform above the window's drawing, so it hides while a
+        // menu or a dialog would lie under it.
+        let shown = self
+            .browser_frame
+            .take()
+            .filter(|_| self.panel == Panel::None);
+        self.browsers.borrow_mut().end_frame(shown.as_deref());
+        // A page keeps the keyboard until the window asks for it, so focus that moves to one of
+        // the window's fields, also by a shortcut, takes it back. A click on the page moves the
+        // focus to the workspace root, which leaves the keyboard with the page.
+        let focused = window.focused(cx);
+        if focused != self.window_focus {
+            if focused.as_ref() != Some(&self.focus) {
+                self.browsers.borrow().release_focus();
+            }
+            self.window_focus = focused;
         }
         root
     }

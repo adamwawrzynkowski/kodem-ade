@@ -41,6 +41,7 @@ mod subagents;
 mod tool_calls;
 mod updates;
 mod usage;
+mod web_pane;
 mod workspaces;
 use crate::icons::icon;
 use crate::{
@@ -71,6 +72,7 @@ actions!(
         NewTask,
         SendPrompt,
         ToggleReview,
+        ToggleBrowser,
         ToggleSidebar,
         ShowSettings,
         Search,
@@ -126,11 +128,21 @@ enum Panel {
     DeleteTask,
     Sort,
     Comparison,
+    /// Chooses what the side pane shows when it opens.
+    PaneMenu,
     Usage,
     Palette,
     Mode,
     WhatsNew,
     Notifications,
+}
+/// What the side pane shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PanePage {
+    /// The changes of the task.
+    Changes,
+    /// The task's browser, which its agents use too.
+    Browser,
 }
 struct ThreadMenu {
     task_id: String,
@@ -209,6 +221,22 @@ pub struct Shell {
     icon_filter: Entity<TextInput>,
     greeting_name: String,
     show_review: bool,
+    /// What the side pane shows while it is open.
+    pane_page: PanePage,
+    /// The pages of the tasks' browsers. Shared with the pane's paint, which places them.
+    browsers: std::rc::Rc<std::cell::RefCell<crate::browser::Browsers>>,
+    /// The address field of the browser pane.
+    browser_address: Entity<TextInput>,
+    /// The task and the address that the address field shows, until the user edits it.
+    browser_address_url: Option<(String, String)>,
+    /// The task whose page the pane shows in the frame being built.
+    browser_frame: Option<String>,
+    /// The tasks whose browser opened its home page, so that a failed load is not tried again
+    /// on each frame.
+    browser_home: HashSet<String>,
+    /// The window's focus in the last frame. A move to another of its elements takes the
+    /// keyboard back from a page.
+    window_focus: Option<FocusHandle>,
     show_terminal: bool,
     terminal: Option<TerminalView>,
     terminal_focus: FocusHandle,
@@ -343,6 +371,13 @@ impl Shell {
             cx.new(|cx| TextInput::composer("Type a command or search threads…", cx));
         let review_filter = cx.new(|cx| TextInput::new("Filter…", cx));
         let icon_filter = cx.new(|cx| TextInput::new("Search icons…", cx));
+        let browser_address = cx.new(|cx| {
+            let mut input = TextInput::new("Address or file path", cx);
+            input.set_single_line(true);
+            // A long address stays on its line and scrolls with the caret.
+            input.set_wrap(false);
+            input
+        });
         let subscriptions = vec![
             cx.observe_window_bounds(window, |s, window, cx| {
                 let placement = window.window_bounds();
@@ -411,7 +446,39 @@ impl Shell {
             cx.observe(&aux, |_, _, cx| cx.notify()),
             cx.observe(&review_filter, |_, _, cx| cx.notify()),
             cx.observe(&icon_filter, |_, _, cx| cx.notify()),
+            cx.subscribe_in(
+                &browser_address,
+                window,
+                |s, _, _: &SubmitInput, window, cx| s.browser_submit(window, cx),
+            ),
         ];
+        // Agents reach the browser through the window's socket; their jobs and the changes of
+        // the pages run on the window's thread, which owns the pages.
+        let (browser_jobs, mut jobs) = futures::channel::mpsc::unbounded();
+        let (browser_events, mut events) = futures::channel::mpsc::unbounded();
+        crate::browser::serve(browser_jobs);
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(job) = jobs.next().await {
+                if this
+                    .update_in(cx, |s, window, cx| s.browser_job(job, window, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some(event) = events.next().await {
+                if this
+                    .update_in(cx, |s, window, cx| s.browser_event(event, window, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
         // Each host reply applies as it arrives, together with any that came with it.
         cx.spawn(async move |this, cx| {
             while let Some(reply) = rx.next().await {
@@ -494,7 +561,8 @@ impl Shell {
                         }
                         if s.host_connected
                             && s.has_checkout()
-                            && (s.show_review || s.reviewing_file)
+                            && ((s.show_review && s.pane_page == PanePage::Changes)
+                                || s.reviewing_file)
                             && !s.historical_diff
                             && s.diff_refresh.due()
                         {
@@ -570,6 +638,15 @@ impl Shell {
             icon_filter,
             greeting_name: user_first_name(),
             show_review: true,
+            pane_page: PanePage::Changes,
+            browsers: std::rc::Rc::new(std::cell::RefCell::new(crate::browser::Browsers::new(
+                browser_events,
+            ))),
+            browser_address,
+            browser_address_url: None,
+            browser_frame: None,
+            browser_home: HashSet::new(),
+            window_focus: None,
             show_terminal: false,
             terminal: None,
             terminal_focus: cx.focus_handle(),
@@ -866,6 +943,10 @@ impl Shell {
             }
             Response::Workspace(workspace) => {
                 self.sidebar_dirty = true;
+                // A deleted task's page closes with it.
+                self.browsers
+                    .borrow_mut()
+                    .retain(|id| workspace.tasks.iter().any(|task| task.id == id));
                 if self.workspace.is_none() {
                     // A new task starts in the project that was chosen last.
                     self.selected_project = workspace.settings.selected_project.clone();
@@ -2275,6 +2356,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-n", NewTask, None),
         KeyBinding::new("secondary-b", ToggleSidebar, None),
         KeyBinding::new("secondary-d", ToggleReview, None),
+        KeyBinding::new("secondary-shift-b", ToggleBrowser, None),
         KeyBinding::new("secondary-,", ShowSettings, None),
         KeyBinding::new("secondary-f", Search, None),
         KeyBinding::new("secondary-k", CommandPalette, None),
@@ -2338,6 +2420,7 @@ pub fn init(cx: &mut App) {
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
                 MenuItem::action("Toggle Changes", ToggleReview),
+                MenuItem::action("Toggle Browser", ToggleBrowser),
                 MenuItem::action("Toggle Terminal", ToggleTerminal),
                 MenuItem::action("Jump to Latest", Latest),
                 MenuItem::separator(),

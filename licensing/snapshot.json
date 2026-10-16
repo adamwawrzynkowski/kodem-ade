@@ -1,6 +1,6 @@
 {
   "inputs": {
-    "Cargo.lock": "4bc1b1cefad3cb0ac7aca65a4be254d801b79c7c03d0d96f4dd8d29cd334d41c",
+    "Cargo.lock": "30212485a508a92441e9982200f2895d3706d34d8ed535016b7475b572145f18",
     "Cargo.toml": "df75771a7cf209a0197cb1eee42573131812ed1cb2764ed576a25a05a999237f",
     "LICENSE": "7de28eeff500ea66eaaa1d950319b5d760bf9a50a2c335427838a4b11bad6c1b",
     "about.toml": "da2721a9cea560519bd9a618e80605826bfe8fa13336a5c9346b27018bd3d671",
@@ -18,12 +18,12 @@
     "assets/licenses/openai-icon-source.txt": "b88a324474f412b43c1805c08516b0d2a9d7986989a797f3bd1e07b5d1a10b35",
     "assets/licenses/simple-icons.txt": "9046848b63a5c92bff14e4accca80bd987e0623b74adf9226ce5198d312b79d5",
     "crates/kodem-core/Cargo.toml": "df54ad1b284f63e884143a0513212180537d4eaf172d81c0dae28284107d6e9c",
-    "crates/kodem-desktop/Cargo.toml": "dd75a5c4103628e02d509bd266dca0c081c181c49d99a9014b01064466139447",
+    "crates/kodem-desktop/Cargo.toml": "13dc69d35d507eaa2656f9128a1f7c1a5b3d90697470d552f0a2c3203a46abcc",
     "crates/kodem-git/Cargo.toml": "b828078a998864c282a918db1af5b3dc8b96b98305c70f48306508373147cce3",
     "crates/kodem-host/Cargo.toml": "148abeb8808da4d5b0158dc6f8c929334775dc36613d23eea56083f734c58b68",
     "crates/kodem-update/Cargo.toml": "91012c5e438e97fd33d09b050f40eed3bc644bb6396f313ae1d101599ad187ac",
     "licensing/README.md": "3bed85358a49108ae18bfc6b1f5b1d4a40799632a3f4b8c72d5ee19d420122c2",
-    "licensing/clarifications.json": "dec88b30659fabbe6ca866705ad71e7ff78e4afdb6b6dc139b3d7adb3b7824a0",
+    "licensing/clarifications.json": "54944978303605e243aa0d797f06f98aade6d51fe56294d9b6ec55eed76fe8f1",
     "rust-toolchain.toml": "559f488c181e0e9e77cf17c29de663977f036ec7ff2e2060585714bf53c52d62",
     "scripts/licenses.py": "48b64c08fd93a61b0ae1930d0b695848dddd74927274999328f7cc690643b1c0",
     "vendor/gpui_ce_macos/Cargo.toml": "0b86e2cf89137a17508c35062f5554a5427b04adc0ba613d25548b3ba8462409",
@@ -31,11 +31,11 @@
     "vendor/gpui_ce_macos/build.rs": "9cbba68fe455aba60cc490d2292fac65007cd323653471e7eb49025102815cd5"
   },
   "outputs": {
-    "assets/licenses/Rust-THIRD-PARTY.txt": "fd49e6e2f036ca869c32f5ea607c6d848146a625e78c0fcb04a07aaae098e2da",
+    "assets/licenses/Rust-THIRD-PARTY.txt": "cfd470539d68fb5a4f33fdbdd28a0fadadb09e0f7b31c8f60bb2f2cbf20cb0e2",
     "assets/licenses/Rust-standard-library.html": "0a65bb747c49c7bb816cbc7188319bd6e4e8d08091c1190b8a3c0971c47968ed",
     "assets/licenses/option-ext-0.2.0-source.tar.gz": "98db8d44c96295b9bfa85a4aacfedd6690c3155123b10b3090e74fea0cab5925"
   },
-  "package_count": 385,
+  "package_count": 393,
   "target": "aarch64-apple-darwin",
   "tool_version": "0.9.2"
 }

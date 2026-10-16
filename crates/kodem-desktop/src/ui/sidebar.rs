@@ -749,7 +749,7 @@ impl Shell {
                     .on_click(cx.listener(move |s, _, _, cx| {
                         cx.stop_propagation();
                         s.select_task(task_id.clone(), cx);
-                        s.show_review = true;
+                        s.show_pane(PanePage::Changes);
                         s.save_settings();
                         if let Some(id) = &snapshot {
                             s.historical_diff = true;

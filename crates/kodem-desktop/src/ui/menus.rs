@@ -211,6 +211,30 @@ impl Shell {
                     );
                 }
             }
+            Panel::PaneMenu => {
+                width = 236.;
+                menu = menu.child(menu_title("Side pane", None, t));
+                for (i, (page, glyph, label, keys)) in [
+                    (PanePage::Changes, "panel-right", "Changes", "⌘D"),
+                    (PanePage::Browser, "globe", "Browser", "⇧⌘B"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    menu = menu.child(
+                        self.menu_row(("pane-page-option", i), glyph, label, false)
+                            .h(px(28.))
+                            .child(div().flex_1())
+                            .child(kit::keycap(keys, t))
+                            .on_click(cx.listener(move |s, _, _, cx| {
+                                s.panel = Panel::None;
+                                s.show_pane(page);
+                                s.save_settings();
+                                cx.notify();
+                            })),
+                    );
+                }
+            }
             Panel::Sort => {
                 width = 210.;
                 menu = menu.child(menu_title("Thread list", None, t));

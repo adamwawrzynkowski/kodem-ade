@@ -158,7 +158,7 @@ impl Shell {
     }
     /// Opens the review pane on the task's changes since its baseline.
     pub(super) fn open_task_changes(&mut self, cx: &mut Context<Self>) {
-        self.show_review = true;
+        self.show_pane(PanePage::Changes);
         self.comparison = if self
             .view
             .as_ref()

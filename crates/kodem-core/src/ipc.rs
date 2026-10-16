@@ -68,6 +68,43 @@ pub fn write_frame<T: serde::Serialize>(stream: &mut UnixStream, value: &T) -> R
     stream.flush()?;
     Ok(())
 }
+/// Tells whether the connected process runs as the same user as this process.
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
+pub fn same_user(stream: &UnixStream) -> bool {
+    use std::os::unix::io::AsRawFd;
+    let (mut uid, mut gid) = (0, 0);
+    let read = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
+    read == 0 && uid == unsafe { libc::geteuid() }
+}
+/// Tells whether the connected process runs as the same user as this process.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub fn same_user(stream: &UnixStream) -> bool {
+    use std::os::unix::io::AsRawFd;
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let read = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&raw mut credentials).cast(),
+            &mut length,
+        )
+    };
+    read == 0 && credentials.uid == unsafe { libc::geteuid() }
+}
+/// Tells whether the connected process runs as the same user as this process.
+///
+/// Windows reports no peer account for a Unix socket. The socket lives in the user's Local
+/// AppData folder, whose access list admits only that user.
+#[cfg(windows)]
+pub fn same_user(_stream: &UnixStream) -> bool {
+    true
+}
 /// The error of a request that found no host listening, so the host never received it.
 #[derive(Debug)]
 pub struct Unreachable;

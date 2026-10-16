@@ -811,7 +811,7 @@ impl Shell {
                             |s, placement, cx| {
                                 s.settings.diff_placement = placement;
                                 if s.reviewing_file {
-                                    s.show_review = true;
+                                    s.show_pane(PanePage::Changes);
                                 }
                                 s.save_settings();
                                 cx.notify();
@@ -1045,6 +1045,7 @@ impl Shell {
             ("Copy diff selection", "⌘ C"),
             ("Toggle sidebar", "⌘ B"),
             ("Toggle changes", "⌘ D"),
+            ("Toggle browser", "⇧ ⌘ B"),
             ("Toggle terminal", "⌃ `"),
             ("Settings", "⌘ ,"),
             ("Close dialog or menu", "Esc"),

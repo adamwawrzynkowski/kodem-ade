@@ -160,7 +160,7 @@ fn run() -> Result<()> {
                 // Framed workers must wait for the complete request and response.
                 stream.set_nonblocking(false)?;
                 // Reject connections from any other local account even if filesystem permissions change.
-                ensure!(same_user(&stream), "Unexpected IPC peer");
+                ensure!(ipc::same_user(&stream), "Unexpected IPC peer");
                 activity = Instant::now();
                 let host = host.clone();
                 let root = root.clone();
@@ -200,41 +200,6 @@ fn run() -> Result<()> {
     }
     let _ = fs::remove_file(&endpoint);
     Ok(())
-}
-/// Tells whether the connected process runs as the same user as the host.
-#[cfg(any(target_os = "macos", target_os = "freebsd"))]
-fn same_user(stream: &ipc::UnixStream) -> bool {
-    use std::os::unix::io::AsRawFd;
-    let (mut uid, mut gid) = (0, 0);
-    let read = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
-    read == 0 && uid == unsafe { libc::geteuid() }
-}
-/// Tells whether the connected process runs as the same user as the host.
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn same_user(stream: &ipc::UnixStream) -> bool {
-    use std::os::unix::io::AsRawFd;
-    let mut credentials = libc::ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
-    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    let read = unsafe {
-        libc::getsockopt(
-            stream.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&raw mut credentials).cast(),
-            &mut length,
-        )
-    };
-    read == 0 && credentials.uid == unsafe { libc::geteuid() }
-}
-/// Windows reports no peer account for a Unix socket. The socket lives in the user's Local
-/// AppData folder, whose access list admits only that user.
-#[cfg(windows)]
-fn same_user(_stream: &ipc::UnixStream) -> bool {
-    true
 }
 /// Longest time a watch request waits for a change before it answers with none.
 const WATCH_WAIT: Duration = Duration::from_secs(10);

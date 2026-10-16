@@ -20,6 +20,7 @@ enum Action {
     Account(Option<String>),
     ToggleSidebar,
     ToggleReview,
+    ToggleBrowser,
     ToggleTerminal,
     ToggleArchived,
     Files,
@@ -426,6 +427,14 @@ impl Shell {
             Action::ToggleReview,
         );
         add(
+            "globe",
+            "Toggle browser",
+            "",
+            "⇧⌘B",
+            "View",
+            Action::ToggleBrowser,
+        );
+        add(
             "square-terminal",
             "Toggle terminal",
             "",
@@ -536,10 +545,8 @@ impl Shell {
                 self.settings.collapsed = !self.settings.collapsed;
                 self.save_settings();
             }
-            Action::ToggleReview => {
-                self.show_review = !self.show_review;
-                self.save_settings();
-            }
+            Action::ToggleReview => self.toggle_pane(PanePage::Changes),
+            Action::ToggleBrowser => self.toggle_pane(PanePage::Browser),
             Action::ToggleTerminal => {
                 self.show_terminal = !self.show_terminal;
                 self.save_settings();
