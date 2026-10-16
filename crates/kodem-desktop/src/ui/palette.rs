@@ -580,10 +580,7 @@ impl Shell {
             Action::Pin(pin) => edit(self, TaskEdit::Pin(pin)),
             Action::Settle(settled) => edit(self, TaskEdit::Settle(settled)),
             Action::Archive(archive) => edit(self, TaskEdit::Archive(archive)),
-            Action::Latest => {
-                self.follow = true;
-                self.chat_scroll.scroll_to_end();
-            }
+            Action::Latest => self.follow_latest(),
         }
         cx.notify();
     }

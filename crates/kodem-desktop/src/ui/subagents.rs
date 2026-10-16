@@ -77,11 +77,14 @@ impl Shell {
             thread_id: thread_id.clone(),
             before: None,
         });
+        // The thread follows its end until the user scrolls away from it.
+        let scroll = ListState::new(0, ListAlignment::Bottom, px(600.));
+        scroll.set_follow_mode(FollowMode::Tail);
         self.agent_popup = Some(AgentPopup {
             thread_id,
             error: None,
             view: None,
-            scroll: ListState::new(0, ListAlignment::Bottom, px(600.)),
+            scroll,
             selection: cx.new(|_| Default::default()),
             focus,
         });
@@ -203,7 +206,8 @@ impl Shell {
         {
             return;
         }
-        let follow = !older && popup.scroll.is_scrolled_to_end().unwrap_or(true);
+        // An update never scrolls the thread. Only a list that follows its end keeps it in view.
+        let follow = !older && popup.scroll.is_following_tail();
         let mut anchor = popup.scroll.logical_scroll_top();
         let history_completed = popup
             .view
@@ -252,9 +256,9 @@ impl Shell {
         }
         if changed {
             popup.scroll.reset(view.messages.len());
-            if follow || history_completed {
-                popup.scroll.scroll_to_end();
-            } else {
+            if history_completed {
+                popup.scroll.set_follow_mode(FollowMode::Tail);
+            } else if !follow {
                 popup.scroll.scroll_to(anchor);
             }
         }

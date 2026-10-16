@@ -559,8 +559,7 @@ impl Render for Shell {
                 cx.notify();
             }))
             .on_action(cx.listener(|s, _: &Latest, _, cx| {
-                s.follow = true;
-                s.chat_scroll.scroll_to_end();
+                s.follow_latest();
                 cx.notify();
             }))
             .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))

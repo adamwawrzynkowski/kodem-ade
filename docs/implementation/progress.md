@@ -831,3 +831,19 @@ Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targe
 ## The meter tab lights as a whole
 
 Recorded on 16 October 2026. The user asked that the hover of the CTX and USE meters fill the whole tab on the composer's top edge. The meters were a small rounded button inside the tab, so only that rectangle lit. Now the tab itself is the meters' control (`usage_meters` returns the `Button`, and `chat.rs` gives it the tab's geometry). Its slanted surface is a layer under the meters, and `paint_meter_tab` lays the `selected` tone over the whole shape, the seam over the composer's edge included, while the pointer is over the tab (`Shell::meter_tab_hovered`, set by `on_hover`), while the usage panel is open and while the tab has keyboard focus (`Shell::meter_tab_focus`). A press no longer darkens the meters. The meters keep their place in the tab. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. The look is not checked on a display under the no-visual-testing agreement.
+
+## The conversation leaves the user's scroll alone
+
+Recorded on 16 October 2026. The user reported that the conversation jumped back to its end while they scrolled up, mostly when a thought or a tool tray changed, and that the jump to the latest message could show without any scrolling. They asked to respect the user's scroll and to move the jump to a better place.
+
+The cause: every transcript update set `follow` from `ListState::is_scrolled_to_end`, then scrolled to the end when it was set. That check answers `None` while any row has no measured height, which is the usual state of a long conversation and of every row just remeasured. `unwrap_or(follow)` then kept an old `true` and pulled the reader back. A row that grew before layout could also read as away from the end, which hid the following and showed the jump.
+
+| Part | Where |
+| --- | --- |
+| Following | `chat_scroll` uses GPUI's `FollowMode::Tail`. The list keeps its end in view during layout while it follows, stops following on any scroll up and resumes when the user scrolls back to the end. Transcript updates no longer scroll it: a following list stays at the end by itself, and any other keeps the same part of the same message at the top. A task that opens, a sent message, the jump and the Latest action call `Shell::follow_latest` |
+| Trays | The trays that open or fold when a turn starts or ends only measure again |
+| Jump | `Shell::latest_wanted` is true while the list does not follow its end. The jump sits centered above the composer. Once something arrives below while the user reads above, it reads "New below" in the accent (`Shell::unseen_below`). The list resumes following during layout, after the frame rendered, so the composer's measuring canvas asks for another frame when `latest_shown` no longer matches |
+| History | A jump to an earlier turn stops the following through `scroll_to` |
+| Agent threads | The subagent thread popup follows its end the same way; it used `is_scrolled_to_end().unwrap_or(true)`, which pulled the reader to the end after each update |
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Scrolling during a running turn is not checked in the running app under the no-visual-testing agreement.

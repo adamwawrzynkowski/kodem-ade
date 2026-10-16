@@ -182,13 +182,12 @@ impl Shell {
         else {
             return;
         };
+        // An older turn stays in view while the agent writes: the jump stops the list from
+        // following its end, and the list resumes when the target lies at the end.
         self.chat_scroll.scroll_to(ListOffset {
             item_ix: self.chat_rows.rows(index..index + 1).start,
             offset_in_item: px(0.),
         });
-        // An older turn stays in view while the agent writes. The list knows that the target
-        // is at the end only when all its rows are measured.
-        self.follow = self.chat_scroll.is_scrolled_to_end().unwrap_or(false);
         cx.notify();
     }
 

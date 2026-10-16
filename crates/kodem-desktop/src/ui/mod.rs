@@ -218,7 +218,11 @@ pub struct Shell {
     /// The rows of `chat_scroll`: a long reply takes several, so the list lays out only its
     /// part in view.
     chat_rows: conversation::ChatRows,
-    follow: bool,
+    /// Whether the jump to the latest message was on screen in the last frame. The list stops
+    /// and resumes following its end during layout, after the frame rendered the button.
+    latest_shown: bool,
+    /// Something arrived below while the user was scrolled away from the end.
+    unseen_below: bool,
     /// Sequence number of the sent message whose history tick is under the pointer.
     history_hover: Option<u64>,
     folded: HashSet<String>,
@@ -540,9 +544,14 @@ impl Shell {
             search_visible: false,
             comparison: Comparison::WorkingTree,
             split: false,
-            chat_scroll: ListState::new(0, ListAlignment::Bottom, px(600.)),
+            chat_scroll: {
+                let list = ListState::new(0, ListAlignment::Bottom, px(600.));
+                list.set_follow_mode(FollowMode::Tail);
+                list
+            },
             chat_rows: Default::default(),
-            follow: true,
+            latest_shown: false,
+            unseen_below: false,
             history_hover: None,
             folded: HashSet::new(),
             unfolded_texts: HashSet::new(),
@@ -1031,9 +1040,12 @@ impl Shell {
                         })
                 });
                 let rows = conversation::ChatRows::new(&view.messages);
+                let opened = self.view.as_ref().is_none_or(|v| v.task.id != view.task.id);
                 if changed {
-                    self.follow =
-                        !older && self.chat_scroll.is_scrolled_to_end().unwrap_or(self.follow);
+                    // The list follows its end by itself until the user scrolls away from it,
+                    // and an update never scrolls it. A task that opens starts at its end;
+                    // earlier messages arrive above the place that the user reads.
+                    let following = !older && (opened || self.chat_scroll.is_following_tail());
                     // The row at the top stays at the top: the same part of the same message.
                     let mut anchor = self.chat_scroll.logical_scroll_top();
                     if let Some(current) = &self.view
@@ -1111,10 +1123,13 @@ impl Shell {
                     } else {
                         self.chat_scroll.reset(rows.count());
                     }
-                    if self.follow {
-                        self.chat_scroll.scroll_to_end();
-                    } else {
+                    if opened {
+                        self.follow_latest();
+                    } else if !following {
                         self.chat_scroll.scroll_to(anchor);
+                        if !older {
+                            self.unseen_below = true;
+                        }
                     }
                 }
                 // The trays that end the transcript open when a turn starts and fold when it
@@ -1126,11 +1141,8 @@ impl Shell {
                     let end = view.messages.len();
                     let row = tool_rows_start(&view.messages, end);
                     if row < end {
-                        let at_end = self.chat_scroll.is_scrolled_to_end().unwrap_or(self.follow);
+                        // A following list keeps its end in view and any other keeps its place.
                         self.chat_scroll.remeasure_items(rows.rows(row..end));
-                        if at_end {
-                            self.chat_scroll.scroll_to_end();
-                        }
                     }
                 }
                 self.chat_rows = rows;
@@ -1236,8 +1248,7 @@ impl Shell {
                         let mut arrival = motion::Arrival::new(pending.origin);
                         arrival.queued = pending.queued;
                         self.send_arrivals.insert(submission_id.clone(), arrival);
-                        self.follow = true;
-                        self.chat_scroll.scroll_to_end();
+                        self.follow_latest();
                     }
                     if self.selected.as_ref() == Some(&task_id)
                         && self.draft_revision == pending.revision
@@ -1454,6 +1465,20 @@ impl Shell {
             }
         }
         cx.notify();
+    }
+    /// Reports whether the jump to the latest message belongs on screen: the user scrolled the
+    /// conversation away from its end.
+    pub(super) fn latest_wanted(&self) -> bool {
+        !self.chat_scroll.is_following_tail()
+            && self
+                .view
+                .as_ref()
+                .is_some_and(|view| !view.messages.is_empty())
+    }
+    /// Scrolls the conversation to its end, which it then follows until the user scrolls away.
+    pub(super) fn follow_latest(&mut self) {
+        self.chat_scroll.set_follow_mode(FollowMode::Tail);
+        self.unseen_below = false;
     }
     fn clear_selected_task(&mut self, cx: &mut Context<Self>) {
         self.new_worktree_override = None;

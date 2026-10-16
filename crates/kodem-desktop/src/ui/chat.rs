@@ -32,6 +32,9 @@ impl Shell {
                     0.
                 },
             ));
+        // The snapshot is taken before the view is borrowed for the rest of the frame.
+        let latest_shown = self.latest_wanted();
+        self.latest_shown = latest_shown;
         if let Some(view) = &self.view {
             let orders = (0..self.chat_rows.count())
                 .filter_map(|row| {
@@ -194,28 +197,39 @@ impl Shell {
                 timeline = timeline.child(dither::fade(t.canvas, 14., false).top_0());
             }
             let bounds_entity = cx.entity();
+            // The jump shows only while the user has scrolled away from the end, centered over
+            // the composer, and in the accent once something arrived below.
+            let latest = latest_shown.then(|| {
+                let unseen = self.unseen_below;
+                let jump = if unseen {
+                    self.tinted("jump-latest", "arrow-down", "New below", t.accent)
+                } else {
+                    self.button("jump-latest", "arrow-down", "Latest")
+                };
+                jump.h(px(24.))
+                    .accessibility_label("Scroll to the latest message")
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.follow_latest();
+                        cx.notify();
+                    }))
+            });
             let floating = div().absolute().bottom_0().w_full().child(
                 div()
                     .relative()
                     .w_full()
                     .flex()
                     .flex_col()
-                    .child(div().relative().h(px(COMPOSER_LEAD)).flex_shrink_0().when(
-                        !self.follow,
-                        |d| {
-                            d.child(
-                                div().absolute().right(px(20.)).top(px(2.)).child(
-                                    self.button("jump-latest", "arrow-down", "Latest")
-                                        .h(px(24.))
-                                        .on_click(cx.listener(|s, _, _, cx| {
-                                            s.follow = true;
-                                            s.chat_scroll.scroll_to_end();
-                                            cx.notify();
-                                        })),
-                                ),
-                            )
-                        },
-                    ))
+                    .child(
+                        div()
+                            .relative()
+                            .h(px(COMPOSER_LEAD))
+                            .flex_shrink_0()
+                            .flex()
+                            .justify_center()
+                            .items_start()
+                            .pt(px(1.))
+                            .children(latest),
+                    )
                     .child(div().w_full().child(self.composer(false, window, cx)))
                     .child(
                         canvas(
@@ -224,6 +238,14 @@ impl Shell {
                                     let height = f32::from(bounds.size.height).ceil();
                                     if (s.composer_height - height).abs() > 0.5 {
                                         s.composer_height = height;
+                                        cx.notify();
+                                    }
+                                    // The list laid out before this point, and its layout
+                                    // resumes following when the user scrolls back to the end.
+                                    if s.chat_scroll.is_following_tail() {
+                                        s.unseen_below = false;
+                                    }
+                                    if s.latest_shown != s.latest_wanted() {
                                         cx.notify();
                                     }
                                 });
