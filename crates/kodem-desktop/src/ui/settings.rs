@@ -77,17 +77,17 @@ impl CompactScope {
 }
 
 /// The look of a chosen surface as one layer: the accent tint with slight depth, dots that fade
-/// from its leading edge and the accent edge. Add it to a relatively positioned surface before
-/// its content.
-pub(super) fn chosen_layer(tone: Hsla, radius: f32) -> Div {
-    div()
-        .absolute()
-        .inset_0()
-        .rounded(px(radius))
-        .bg(kit::tint_fill(tone, 0.1))
-        .shadow(kit::tint_light(tone))
-        .child(dither::row_wash(tone, radius, true, false))
-        .child(kit::selection_edge(tone))
+/// from its leading edge and the accent edge. Add it to a relatively positioned surface with
+/// [`kit::Layers::layer`].
+pub(super) fn chosen_layer(tone: Hsla) -> impl kit::Fit {
+    move |corners: Corners<Pixels>| {
+        kit::round(div().absolute().inset_0(), corners)
+            .bg(kit::tint_fill(tone, 0.1))
+            .shadow(kit::tint_light(tone))
+            .layer(dither::row_wash(tone, true, false))
+            .child(kit::selection_edge(tone))
+            .into_any_element()
+    }
 }
 
 /// The frame of a text field in a dialog or a form: an inset surface with the focus edge. Add
@@ -465,7 +465,9 @@ impl Shell {
                     .bg(t.raised)
                     .border_t_1()
                     .border_color(t.border)
-                    .when(chosen, |footer| footer.child(chosen_layer(t.accent, 0.)))
+                    // The footer closes the card, so its corners are the card's inside its edge.
+                    .rounded_b(px(crate::theme::RADIUS_SURFACE) - gpui::px(1.))
+                    .when(chosen, |footer| footer.layer(chosen_layer(t.accent)))
                     .child(
                         div()
                             .relative()
@@ -1155,9 +1157,7 @@ impl Shell {
             .bg(gpui::transparent_black())
             .text_color(if chosen { t.text } else { t.muted })
             .aria_selected(chosen)
-            .when(chosen, |row| {
-                row.child(chosen_layer(t.accent, crate::theme::RADIUS_CONTROL))
-            })
+            .when(chosen, |row| row.layer(chosen_layer(t.accent)))
             .when(!chosen, |row| {
                 row.hover(move |row| row.bg(t.selected).text_color(t.text))
             })
@@ -1203,8 +1203,7 @@ impl Shell {
                     .text_color(if chosen { t.text } else { t.muted })
                     .aria_selected(chosen)
                     .when(chosen, |cell| {
-                        cell.cursor_default()
-                            .child(chosen_layer(t.accent, crate::theme::RADIUS_SMALL))
+                        cell.cursor_default().layer(chosen_layer(t.accent))
                     })
                     .child(label.into())
                     .when(!chosen, |cell| {

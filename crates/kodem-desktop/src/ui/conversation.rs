@@ -484,7 +484,7 @@ impl Shell {
                 .border_color(t.edge)
                 .rounded(px(crate::theme::MESSAGE_RADIUS))
                 .p(px(crate::theme::MESSAGE_PADDING))
-                .child(dither::edge_shade(t.dot, 0.3, crate::theme::MESSAGE_RADIUS));
+                .layer(dither::edge_shade(t.dot, 0.3));
         } else if message.kind != MessageKind::Assistant && first {
             let (name, glyph, color) = match message.kind {
                 MessageKind::Error => ("Error", "circle-x", t.removed),

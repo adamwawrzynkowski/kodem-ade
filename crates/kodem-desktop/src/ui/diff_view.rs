@@ -768,8 +768,8 @@ fn action_button(
         .on_press(move |position, cx| fx::ripple(position, tone, cx));
     if filled {
         button
-            .child(kit::shade(gpui::black().opacity(0.2), dither::Edge::Bottom))
-            .child(kit::glint(gpui::white().opacity(0.3), dither::Edge::Top))
+            .layer(kit::shade(gpui::black().opacity(0.2), dither::Edge::Bottom))
+            .layer(kit::glint(gpui::white().opacity(0.3), dither::Edge::Top))
             .bg(theme.accent)
             .border_color(theme.accent)
             .text_color(theme.on_accent)
@@ -778,7 +778,7 @@ fn action_button(
             .active(move |s| s.bg(theme.accent.opacity(0.8)))
     } else {
         button
-            .child(kit::glint(theme.dot, dither::Edge::Bottom))
+            .layer(kit::glint(theme.dot, dither::Edge::Bottom))
             .bg(gpui::transparent_black())
             .border_color(gpui::transparent_black())
             .text_color(theme.muted)

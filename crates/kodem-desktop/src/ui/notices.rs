@@ -367,7 +367,7 @@ impl Shell {
             .border_1()
             .border_color(tone.opacity(0.4))
             .shadow(light)
-            .child(kit::shade(tone.opacity(0.22), dither::Edge::Left));
+            .layer(kit::shade(tone.opacity(0.22), dither::Edge::Left));
         let card = if compact {
             surface
                 .items_center()

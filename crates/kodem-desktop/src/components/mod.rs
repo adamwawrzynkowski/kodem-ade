@@ -7,7 +7,7 @@ pub(crate) mod streaming_text;
 pub mod text_document;
 pub mod text_input;
 pub use button::Button;
-use gpui::{Refineable, Role, StyleRefinement, prelude::*};
+use gpui::{AbsoluteLength, Corners, Pixels, Refineable, Role, StyleRefinement, prelude::*};
 pub use input_frame::InputBase;
 
 #[derive(Default)]
@@ -65,4 +65,30 @@ fn resolve_style<'a>(
         style.refine(state);
     }
     style
+}
+
+/// Returns the corners inside the border of an element with this style: each radius less the
+/// wider of the two borders that meet at it. A layer that fills the element inside its border
+/// takes these corners. Radii larger than half a side stay as set; painting clamps them.
+pub(crate) fn inner_corners(style: &StyleRefinement, rem_size: Pixels) -> Corners<Pixels> {
+    let length = |length: Option<AbsoluteLength>| {
+        length.map_or(Pixels::ZERO, |length| length.to_pixels(rem_size))
+    };
+    let radii = &style.corner_radii;
+    let borders = &style.border_widths;
+    let (top, right, bottom, left) = (
+        length(borders.top),
+        length(borders.right),
+        length(borders.bottom),
+        length(borders.left),
+    );
+    let inset = |radius: Option<AbsoluteLength>, first: Pixels, second: Pixels| {
+        (length(radius) - first.max(second)).max(Pixels::ZERO)
+    };
+    Corners {
+        top_left: inset(radii.top_left, top, left),
+        top_right: inset(radii.top_right, top, right),
+        bottom_right: inset(radii.bottom_right, bottom, right),
+        bottom_left: inset(radii.bottom_left, bottom, left),
+    }
 }

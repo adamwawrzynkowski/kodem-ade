@@ -776,7 +776,7 @@ impl Shell {
             .cursor_pointer()
             .when(!selected, |row| row.hover(move |d| d.bg(t.selected)))
             .when(selected || active, |row| {
-                row.child(dither::row_wash(tone, radius, selected, active))
+                row.layer(dither::row_wash(tone, selected, active))
             })
             // The open task carries an edge in its tone, not an outline.
             .when(selected, |row| row.child(kit::selection_edge(tone)))
@@ -959,7 +959,7 @@ fn glyph_tile(glyph: &'static str, tint: Hsla, size: f32, glyph_size: f32) -> An
         .border_1()
         .border_color(glow.opacity(0.3))
         .bg(plate)
-        .child(
+        .layer(
             Dither::new(DitherField::Glow {
                 x: 0.,
                 y: 0.,
@@ -967,10 +967,7 @@ fn glyph_tile(glyph: &'static str, tint: Hsla, size: f32, glyph_size: f32) -> An
                 strength: 0.85,
             })
             .color(glow.opacity(0.45))
-            .grid(1., 1.)
-            // The layer lies inside the one-point edge of the plate.
-            .corner_radius(radius - 1.)
-            .layer(),
+            .grid(1., 1.),
         )
         .child(
             div().relative().child(

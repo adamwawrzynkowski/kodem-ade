@@ -37,16 +37,11 @@ impl Shell {
             .text_color(if chosen { t.text } else { t.muted })
             .when(chosen, |row| {
                 row.bg(t.accent.opacity(0.1))
-                    .child(dither::row_wash(
-                        t.accent,
-                        crate::theme::RADIUS_CONTROL,
-                        true,
-                        false,
-                    ))
+                    .layer(dither::row_wash(t.accent, true, false))
                     .child(kit::selection_edge(t.accent))
             })
             .when(!chosen, |row| {
-                row.child(kit::glint(t.dot, dither::Edge::Bottom))
+                row.layer(kit::glint(t.dot, dither::Edge::Bottom))
                     .hover(move |row| row.bg(t.selected).text_color(t.text))
             })
             .active(move |row| row.bg(t.control_active))
@@ -129,12 +124,7 @@ impl Shell {
                             .overflow_hidden()
                             .when(selected, |b| {
                                 b.bg(t.accent.opacity(0.1))
-                                    .child(dither::row_wash(
-                                        t.accent,
-                                        crate::theme::RADIUS_CONTROL,
-                                        true,
-                                        false,
-                                    ))
+                                    .layer(dither::row_wash(t.accent, true, false))
                                     .child(kit::selection_edge(t.accent))
                             })
                             .when(!selected, |b| {

@@ -27,12 +27,7 @@ impl Shell {
                                 d.overflow_hidden()
                                     .bg(t.accent.opacity(0.1))
                                     .text_color(t.text)
-                                    .child(dither::row_wash(
-                                        t.accent,
-                                        crate::theme::RADIUS_CONTROL,
-                                        true,
-                                        false,
-                                    ))
+                                    .layer(dither::row_wash(t.accent, true, false))
                                     .child(kit::selection_edge(t.accent))
                             })
                             .when(!selected, |d| {

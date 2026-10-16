@@ -148,8 +148,8 @@ fn plate(line: Button, t: Theme, well: bool) -> Button {
         .bg(t.raised)
         .border_color(t.border)
         .shadow(kit::plate_light(t, !well))
-        .child(kit::shade(t.dot.opacity(0.5), dither::Edge::Bottom))
-        .child(kit::glint(t.accent.opacity(0.45), dither::Edge::Bottom))
+        .layer(kit::shade(t.dot.opacity(0.5), dither::Edge::Bottom))
+        .layer(kit::glint(t.accent.opacity(0.45), dither::Edge::Bottom))
         .hover(move |s| s.bg(t.control).text_color(t.text))
 }
 

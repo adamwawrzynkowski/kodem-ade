@@ -1065,6 +1065,7 @@ struct PaintSpec {
     toned: bool,
     hover_only: bool,
     corner_radii: Corners<f32>,
+    spans: Size<bool>,
     /// Whether the field advances with the clock on this frame.
     moving: bool,
     time: f32,
@@ -1117,6 +1118,15 @@ fn paint_grid(bounds: Bounds<Pixels>, spec: &PaintSpec, window: &mut Window, cx:
     if spec.hover_only && !hovered {
         return;
     }
+    // A corner is at most half of a side that the grid shares with its surface, as GPUI rounds a
+    // quad, so a pill or a short control keeps its arc at any size.
+    let limit = match (spec.spans.width, spec.spans.height) {
+        (true, true) => width.min(height) / 2.,
+        (true, false) => width / 2.,
+        (false, true) => height / 2.,
+        (false, false) => f32::INFINITY,
+    };
+    let radii = spec.corner_radii.map(|radius| radius.min(limit));
     let scale = window.scale_factor();
     let snap = |value: f32| (value * scale).round() / scale;
     let columns = (width / cell).floor() as i32;
@@ -1165,7 +1175,7 @@ fn paint_grid(bounds: Bounds<Pixels>, spec: &PaintSpec, window: &mut Window, cx:
             grid,
             (grid.columns, grid.rows),
             None,
-            spec.corner_radii,
+            radii,
             &source,
         );
         return;
@@ -1184,7 +1194,7 @@ fn paint_grid(bounds: Bounds<Pixels>, spec: &PaintSpec, window: &mut Window, cx:
         grid,
         tile,
         Some(content.finish()),
-        spec.corner_radii,
+        radii,
         &source,
     );
 }
@@ -1199,7 +1209,9 @@ pub(super) struct Dither {
     toned: bool,
     animated: bool,
     hover_only: bool,
+    /// In window pixels, at the interface scale.
     corner_radii: Corners<f32>,
+    spans: Size<bool>,
 }
 
 impl Dither {
@@ -1214,6 +1226,7 @@ impl Dither {
             animated: false,
             hover_only: false,
             corner_radii: Corners::default(),
+            spans: Size::default(),
         }
     }
 
@@ -1248,15 +1261,26 @@ impl Dither {
         self
     }
 
-    /// Skips dots outside rounded corners of this radius.
+    /// Skips dots outside rounded corners of this radius, in points. The corners belong to the
+    /// surface that the dots shade, so they follow the interface scale.
     pub(super) fn corner_radius(mut self, radius: f32) -> Self {
-        self.corner_radii = Corners::all(radius);
+        self.corner_radii = Corners::all(radius * crate::theme::ui_scale());
         self
     }
 
-    /// Skips dots outside rounded corners, with one radius for each corner.
+    /// Skips dots outside rounded corners, with one radius in points for each corner.
     pub(super) fn corner_radii(mut self, radii: Corners<f32>) -> Self {
-        self.corner_radii = radii;
+        let scale = crate::theme::ui_scale();
+        self.corner_radii = radii.map(|radius| radius * scale);
+        self
+    }
+
+    /// Skips dots outside the corners of the surface that the grid lies on, as
+    /// [`kit::Layers`] measures them, in window pixels. `spans` names the sides that the grid
+    /// shares with the surface, which bound each corner to half of their length.
+    pub(super) fn fitted(mut self, corners: Corners<Pixels>, spans: Size<bool>) -> Self {
+        self.corner_radii = corners.map(|radius| f32::from(*radius));
+        self.spans = spans;
         self
     }
 
@@ -1268,11 +1292,17 @@ impl Dither {
     }
 }
 
+impl kit::Fit for Dither {
+    fn fit(self, corners: Corners<Pixels>) -> AnyElement {
+        self.fitted(corners, Size::new(true, true))
+            .layer()
+            .into_any_element()
+    }
+}
+
 impl RenderOnce for Dither {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let moving = self.animated && self.field.timed() && !cx.reduce_motion();
-        // The corners belong to the surface that the dots shade, so they follow its scale.
-        let scale = crate::theme::ui_scale();
         let spec = PaintSpec {
             field: self.field,
             color: self.color,
@@ -1280,7 +1310,8 @@ impl RenderOnce for Dither {
             dot: self.dot,
             toned: self.toned,
             hover_only: self.hover_only,
-            corner_radii: self.corner_radii.map(|radius| radius * scale),
+            corner_radii: self.corner_radii,
+            spans: self.spans,
             moving,
             time: if moving { clock_seconds() } else { 0. },
         };
@@ -1476,34 +1507,51 @@ const SELECTION_GRAIN: f32 = 64.;
 /// Shades the bottom edge of a rounded surface with dots that thin out upward, from `density`.
 ///
 /// The band has a fixed height, so the dots stay in the padding of the surface and do not
-/// spread behind its text on a tall surface. Add it to a relatively positioned surface before
-/// its content.
-pub(super) fn edge_shade(color: Hsla, density: f32, radius: f32) -> Div {
-    div()
-        .absolute()
-        .left_0()
-        .right_0()
-        .bottom_0()
-        .h(crate::theme::px(EDGE_SHADE))
-        .max_h_full()
-        .child(
-            Dither::new(DitherField::Fade {
-                from: Edge::Bottom,
-                start: density,
-                end: 0.,
-            })
-            .color(color)
-            .grid(2., 1.)
-            .corner_radii(Corners {
-                bottom_left: radius,
-                bottom_right: radius,
-                ..Corners::default()
-            }),
-        )
+/// spread behind its text on a tall surface. Add it to a relatively positioned surface with
+/// [`kit::Layers::layer`].
+pub(super) fn edge_shade(color: Hsla, density: f32) -> impl kit::Fit {
+    move |corners: Corners<Pixels>| {
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .h(crate::theme::px(EDGE_SHADE))
+            .max_h_full()
+            .child(
+                Dither::new(DitherField::Fade {
+                    from: Edge::Bottom,
+                    start: density,
+                    end: 0.,
+                })
+                .color(color)
+                .grid(2., 1.)
+                .fitted(
+                    Corners {
+                        bottom_left: corners.bottom_left,
+                        bottom_right: corners.bottom_right,
+                        ..Corners::default()
+                    },
+                    Size::new(true, false),
+                ),
+            )
+            .into_any_element()
+    }
 }
 
 /// Shades a rounded row: grain at its leading edge when selected, a moving flow while active.
-pub(super) fn row_wash(color: Hsla, radius: f32, selected: bool, active: bool) -> Div {
+/// Add it with [`kit::Layers::layer`].
+pub(super) fn row_wash(color: Hsla, selected: bool, active: bool) -> impl kit::Fit {
+    move |corners: Corners<Pixels>| row_wash_layer(color, corners, selected, active)
+}
+
+// The layer of `row_wash` for a row whose corners inside its border are `corners`.
+fn row_wash_layer(
+    color: Hsla,
+    corners: Corners<Pixels>,
+    selected: bool,
+    active: bool,
+) -> AnyElement {
     div()
         .absolute()
         .inset_0()
@@ -1525,11 +1573,14 @@ pub(super) fn row_wash(color: Hsla, radius: f32, selected: bool, active: bool) -
                         })
                         .color(color.opacity(0.3))
                         .grid(2., 1.)
-                        .corner_radii(Corners {
-                            top_left: radius,
-                            bottom_left: radius,
-                            ..Corners::default()
-                        }),
+                        .fitted(
+                            Corners {
+                                top_left: corners.top_left,
+                                bottom_left: corners.bottom_left,
+                                ..Corners::default()
+                            },
+                            Size::new(false, true),
+                        ),
                     ),
             )
         })
@@ -1559,8 +1610,17 @@ pub(super) fn row_wash(color: Hsla, radius: f32, selected: bool, active: bool) -
                         )
                         .color(color.opacity(0.5))
                         .grid(2., 1.)
+                        .fitted(
+                            Corners {
+                                top_right: corners.top_right,
+                                bottom_right: corners.bottom_right,
+                                ..Corners::default()
+                            },
+                            Size::new(false, true),
+                        )
                         .animated(),
                     ),
             )
         })
+        .into_any_element()
 }

@@ -327,10 +327,7 @@ impl Shell {
             .flex_col()
             .gap(px(10.))
             .when(is_default, |card| {
-                card.child(settings::chosen_layer(
-                    t.accent,
-                    crate::theme::RADIUS_SURFACE,
-                ))
+                card.layer(settings::chosen_layer(t.accent))
             })
             .child(header);
         if status.signing_in {

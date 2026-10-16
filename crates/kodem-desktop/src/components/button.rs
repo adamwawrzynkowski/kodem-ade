@@ -2,16 +2,17 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Div, ElementId, FocusHandle, InteractiveElement,
+    AnyElement, App, Bounds, ClickEvent, Corners, Div, ElementId, FocusHandle, InteractiveElement,
     Interactivity, IntoElement, MouseButton, ParentElement, Pixels, Point, Refineable as _,
     RenderOnce, Role, SharedString, Stateful, StatefulInteractiveElement, StyleRefinement, Styled,
     Window, canvas, div, prelude::FluentBuilder as _, relative,
 };
 
-use super::{RoleOverride, Selectable, StateStyle, StyledExt as _};
+use super::{RoleOverride, Selectable, StateStyle, StyledExt as _, inner_corners};
 
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type PressHandler = Rc<dyn Fn(Point<Pixels>, &mut App)>;
+type FittedLayer = Box<dyn FnOnce(Corners<Pixels>) -> AnyElement>;
 
 /// An unstyled button that owns interaction, focus, keyboard, and accessibility behavior.
 ///
@@ -25,6 +26,7 @@ pub struct Button {
     semantic_styles: ButtonStyles,
     selected: bool,
     disabled: bool,
+    layers: Vec<FittedLayer>,
     children: Vec<AnyElement>,
     on_click: Option<ClickHandler>,
     on_press: Option<PressHandler>,
@@ -47,6 +49,7 @@ impl Button {
             semantic_styles: ButtonStyles::default(),
             selected: false,
             disabled: false,
+            layers: Vec::new(),
             children: Vec::new(),
             on_click: None,
             on_press: None,
@@ -87,6 +90,15 @@ impl Button {
     /// Defines application-owned styles for the button's semantic states.
     pub fn styles(mut self, build: impl FnOnce(ButtonStyles) -> ButtonStyles) -> Self {
         self.semantic_styles = build(self.semantic_styles);
+        self
+    }
+
+    /// Adds a layer under the content, built for the corners inside the button's border.
+    ///
+    /// The layer is built when the button renders, from its final style, so a radius or a
+    /// border set after this call still shapes it.
+    pub fn fitted(mut self, layer: impl FnOnce(Corners<Pixels>) -> AnyElement + 'static) -> Self {
+        self.layers.push(Box::new(layer));
         self
     }
 
@@ -240,6 +252,7 @@ impl RenderOnce for Button {
         let focus_handle = self.focus_handle(window, cx);
         let disabled = self.disabled;
         let style = self.resolved_style();
+        let corners = inner_corners(&style, window.rem_size());
         let on_click = self.on_click;
         let on_press = self.on_press;
 
@@ -292,6 +305,7 @@ impl RenderOnce for Button {
                     })
                 },
             )
+            .children(self.layers.into_iter().map(|layer| layer(corners)))
             .children(self.children)
             .refine_style(&style)
     }

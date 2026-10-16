@@ -5,8 +5,55 @@ use super::dither::{DitherBar, DottedRule};
 use super::*;
 use dither::{Dither, DitherField, Edge};
 
-/// Static dots that shade one edge of a control surface. Add it before the control's content.
-pub(super) fn shade(color: Hsla, from: Edge) -> Div {
+/// A layer that takes the shape of the surface it covers. [`Layers::layer`] measures the
+/// surface and builds the layer for it.
+pub(super) trait Fit {
+    /// Builds the layer for `corners`, the corners inside the surface's border in window pixels.
+    fn fit(self, corners: Corners<Pixels>) -> AnyElement;
+}
+
+impl<F: FnOnce(Corners<Pixels>) -> AnyElement> Fit for F {
+    fn fit(self, corners: Corners<Pixels>) -> AnyElement {
+        self(corners)
+    }
+}
+
+/// Adds layers that fill a surface inside its border and round as it does, at any radius,
+/// border and size.
+pub(super) trait Layers: Sized {
+    /// Adds `layer` under the surface's content. A [`Button`] builds it from its final style;
+    /// a plain element reads the radius and border set before this call.
+    fn layer(self, layer: impl Fit + 'static) -> Self;
+}
+
+impl Layers for Button {
+    fn layer(self, layer: impl Fit + 'static) -> Self {
+        self.fitted(move |corners| layer.fit(corners))
+    }
+}
+
+impl Layers for Div {
+    fn layer(mut self, layer: impl Fit + 'static) -> Self {
+        let corners = inner_corners(self.style());
+        self.child(layer.fit(corners))
+    }
+}
+
+impl Layers for Stateful<Div> {
+    fn layer(mut self, layer: impl Fit + 'static) -> Self {
+        let corners = inner_corners(self.style());
+        self.child(layer.fit(corners))
+    }
+}
+
+// The corners inside the border of an element as its style sets them so far. Lengths in rems
+// take GPUI's default rem size; the interface sets its lengths in pixels.
+fn inner_corners(style: &StyleRefinement) -> Corners<Pixels> {
+    crate::components::inner_corners(style, gpui::px(16.))
+}
+
+/// Static dots that shade one edge of a control surface. Add it with [`Layers::layer`].
+pub(super) fn shade(color: Hsla, from: Edge) -> Dither {
     Dither::new(DitherField::Fade {
         from,
         start: 0.4,
@@ -14,12 +61,11 @@ pub(super) fn shade(color: Hsla, from: Edge) -> Div {
     })
     .color(color)
     .grid(2., 1.)
-    .corner_radius(crate::theme::RADIUS_CONTROL)
-    .layer()
 }
 
-/// Dots that light one edge of a control only while the pointer is over it.
-pub(super) fn glint(color: Hsla, from: Edge) -> Div {
+/// Dots that light one edge of a control only while the pointer is over it. Add it with
+/// [`Layers::layer`].
+pub(super) fn glint(color: Hsla, from: Edge) -> Dither {
     Dither::new(DitherField::Fade {
         from,
         start: 0.75,
@@ -27,9 +73,7 @@ pub(super) fn glint(color: Hsla, from: Edge) -> Div {
     })
     .color(color)
     .grid(2., 1.)
-    .corner_radius(crate::theme::RADIUS_CONTROL)
     .hover_only()
-    .layer()
 }
 
 /// The group that lights the layers of a glass control under the pointer and on a press. The
@@ -47,25 +91,41 @@ pub(super) enum Pose {
     Pressed,
 }
 
-/// Returns the body of a glass control: two rings around a flat face, with the corners of a
-/// control.
+/// Returns the body of a glass control: two rings around a flat face, with the corners of the
+/// control. Add it with [`Layers::layer`] before the control's content.
 ///
 /// The outer ring is a bezel, light at the top and the bottom and darkest across the middle. The
 /// inner ring catches a bright highlight at the top and the light that the glass bends back at
 /// the bottom. The face carries the dot texture: a sheen that thins out from the top, a shade
-/// along the bottom and more light under the pointer. Add it as the first child of the control,
-/// which must belong to [`GLASS`].
-pub(super) fn glass_body(tone: Hsla) -> Div {
-    let radius = crate::theme::RADIUS_CONTROL;
-    let face_radius = (radius - GLASS_RING * 2.).max(0.);
+/// along the bottom and more light under the pointer. The control must belong to [`GLASS`] and
+/// have a one-point border, which the body covers.
+pub(super) fn glass_body(tone: Hsla) -> impl Fit {
+    move |inner: Corners<Pixels>| glass_layers(tone, inner).into_any_element()
+}
+
+// The rings and the face of a glass control whose corners inside its border are `inner`.
+fn glass_layers(tone: Hsla, inner: Corners<Pixels>) -> Div {
+    // The body also covers the control's one-point edge, which only keyboard focus colors.
+    let edge = gpui::px(1.);
+    let ring_width = crate::theme::px(GLASS_RING);
+    let within = |depth: Pixels| {
+        inner.map(|radius| {
+            if *radius > Pixels::ZERO {
+                (*radius + edge - depth).max(Pixels::ZERO)
+            } else {
+                Pixels::ZERO
+            }
+        })
+    };
+    let face_radius = within(ring_width * 2.);
     let bezel = ring(
-        radius,
+        within(Pixels::ZERO),
         toward(tone, 0., 0.42),
         toward(tone, 1., 0.3),
         toward(tone, 1., 0.1),
     );
     let lens = ring(
-        radius - GLASS_RING,
+        within(ring_width),
         toward(tone, 1., 0.22),
         toward(tone, 1., 0.85),
         toward(tone, 1., 0.5),
@@ -76,7 +136,7 @@ pub(super) fn glass_body(tone: Hsla) -> Div {
         .id("glass-face")
         .absolute()
         .size_full()
-        .rounded(px(face_radius))
+        .map(|face| round(face, face_radius))
         .bg(tone)
         .group_hover(GLASS, move |s| s.bg(toward(tone, 1., 0.1)))
         .group_active(GLASS, move |s| s.bg(toward(tone, 0., 0.12)))
@@ -101,14 +161,12 @@ pub(super) fn glass_body(tone: Hsla) -> Div {
             face_radius,
             true,
         ));
-    // The body also covers the control's one-point edge, which only keyboard focus colors.
-    let edge = gpui::px(-1.);
     div()
         .absolute()
-        .top(edge)
-        .left(edge)
-        .right(edge)
-        .bottom(edge)
+        .top(-edge)
+        .left(-edge)
+        .right(-edge)
+        .bottom(-edge)
         .child(bezel)
         .child(inset(GLASS_RING).child(lens))
         .child(inset(GLASS_RING * 2.).child(face))
@@ -157,45 +215,34 @@ pub(super) fn engraved(glyph: &'static str, tone: Hsla, size: f32) -> Div {
         .child(icon(glyph).size(px(size)).absolute().top_0().left_0())
 }
 
+/// Rounds each corner of an element to its own radius.
+pub(super) fn round<E: Styled>(element: E, corners: Corners<Pixels>) -> E {
+    element
+        .rounded_tl(corners.top_left)
+        .rounded_tr(corners.top_right)
+        .rounded_br(corners.bottom_right)
+        .rounded_bl(corners.bottom_left)
+}
+
 // A rounded layer that fills its parent: `middle` across its center, blending into `top` at its
-// top edge and into `bottom` at its bottom edge. Each half fades to clear over the middle color,
-// so the halves meet without a seam.
-fn ring(radius: f32, middle: Hsla, top: Hsla, bottom: Hsla) -> Div {
+// top edge and into `bottom` at its bottom edge. Each blend fades to clear at the middle, so the
+// two meet without a seam. Both cover the whole layer and take its corners, so the ring keeps
+// its shape at any radius and height.
+fn ring(corners: Corners<Pixels>, middle: Hsla, top: Hsla, bottom: Hsla) -> Div {
     let clear = middle.opacity(0.);
-    let radius = px(radius.max(0.));
-    div()
-        .absolute()
-        .size_full()
-        .rounded(radius)
+    let layer = || round(div().absolute().size_full(), corners);
+    layer()
         .bg(middle)
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .right_0()
-                .h(relative(0.5))
-                .rounded_t(radius)
-                .bg(linear_gradient(
-                    180.,
-                    linear_color_stop(top, 0.),
-                    linear_color_stop(clear, 1.),
-                )),
-        )
-        .child(
-            div()
-                .absolute()
-                .bottom_0()
-                .left_0()
-                .right_0()
-                .h(relative(0.5))
-                .rounded_b(radius)
-                .bg(linear_gradient(
-                    180.,
-                    linear_color_stop(clear, 0.),
-                    linear_color_stop(bottom, 1.),
-                )),
-        )
+        .child(layer().bg(linear_gradient(
+            180.,
+            linear_color_stop(top, 0.),
+            linear_color_stop(clear, 0.5),
+        )))
+        .child(layer().bg(linear_gradient(
+            180.,
+            linear_color_stop(clear, 0.5),
+            linear_color_stop(bottom, 1.),
+        )))
 }
 
 // An absolute layer inset from every edge of its parent by `points`.
@@ -209,7 +256,13 @@ fn inset(points: f32) -> Div {
 }
 
 // Static dots that fade from one edge of a glass face, or dots that light it under the pointer.
-fn face_dots(from: Edge, start: f32, color: Hsla, radius: f32, hover_only: bool) -> Div {
+fn face_dots(
+    from: Edge,
+    start: f32,
+    color: Hsla,
+    corners: Corners<Pixels>,
+    hover_only: bool,
+) -> Div {
     let dots = Dither::new(DitherField::Fade {
         from,
         start,
@@ -218,7 +271,7 @@ fn face_dots(from: Edge, start: f32, color: Hsla, radius: f32, hover_only: bool)
     .color(color)
     .grid(2., 1.)
     .toned()
-    .corner_radius(radius);
+    .fitted(corners, Size::new(true, true));
     if hover_only {
         dots.hover_only().layer()
     } else {
@@ -312,15 +365,14 @@ pub(super) fn marker(tone: Hsla) -> Div {
         .overflow_hidden()
         .border_1()
         .border_color(tone.opacity(0.7))
-        .child(
+        .layer(
             Dither::new(DitherField::Fade {
                 from: Edge::Bottom,
                 start: 1.,
                 end: 0.4,
             })
             .color(tone)
-            .grid(1., 1.)
-            .layer(),
+            .grid(1., 1.),
         )
 }
 
@@ -607,8 +659,7 @@ pub(super) fn icon_tile(glyph: &'static str, tone: Hsla, size: f32, animated: bo
         end: 0.,
     })
     .color(tone.opacity(0.55))
-    .grid(2., 1.)
-    .corner_radius(radius);
+    .grid(2., 1.);
     div()
         .relative()
         .size(px(size))
@@ -622,7 +673,7 @@ pub(super) fn icon_tile(glyph: &'static str, tone: Hsla, size: f32, animated: bo
         .border_color(tone.opacity(0.35))
         .bg(tint_fill(tone, 0.08))
         .shadow(tint_light(tone))
-        .child(if animated { fill.animated() } else { fill }.layer())
+        .layer(if animated { fill.animated() } else { fill })
         .child(
             div()
                 .relative()
@@ -854,11 +905,7 @@ pub(super) fn card(theme: Theme) -> Div {
         .border_1()
         .border_color(theme.border)
         .bg(theme.raised)
-        .child(dither::edge_shade(
-            theme.dot,
-            0.22,
-            crate::theme::RADIUS_SURFACE,
-        ))
+        .layer(dither::edge_shade(theme.dot, 0.22))
 }
 
 /// A content block: an inset surface with a hairline edge for code, output, a diff or a table.

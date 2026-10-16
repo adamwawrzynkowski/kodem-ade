@@ -545,12 +545,7 @@ impl Shell {
                     .cursor_pointer()
                     .when(chosen, |d| {
                         d.bg(t.accent.opacity(0.1))
-                            .child(dither::row_wash(
-                                t.accent,
-                                crate::theme::RADIUS_CONTROL,
-                                true,
-                                false,
-                            ))
+                            .layer(dither::row_wash(t.accent, true, false))
                             .child(kit::selection_edge(t.accent))
                     })
                     .when(!chosen, |d| d.hover(move |d| d.bg(t.selected)))

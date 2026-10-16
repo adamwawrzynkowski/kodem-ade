@@ -21,7 +21,7 @@ use crate::ui::dither::{self, DottedRule};
 use crate::ui::fx;
 use crate::ui::git::motion;
 use crate::ui::git::theme::ActiveTheme;
-use crate::ui::kit;
+use crate::ui::kit::{self, Layers as _};
 
 /// Paint order of menus above other deferred layers.
 const CONTEXT_MENU_PRIORITY: usize = 100;
@@ -416,7 +416,7 @@ impl PopupMenu {
                     .when(open || highlighted, |row| row.bg(t.selected))
                     .hover(move |row| row.bg(t.selected).text_color(t.text))
                     .cursor_pointer()
-                    .child(kit::glint(t.dot, dither::Edge::Bottom))
+                    .layer(kit::glint(t.dot, dither::Edge::Bottom))
                     .children(icon.clone().map(|icon| icon.size(px(13.))))
                     .child(div().flex_1().whitespace_nowrap().child(label.clone()))
                     .child(Icon::new(IconName::ChevronRight).size(px(12.)))
@@ -464,7 +464,7 @@ impl PopupMenu {
                     .when(highlighted && interactive, |row| row.bg(t.selected))
                     .when(interactive, |row| {
                         row.cursor_pointer()
-                            .child(kit::glint(t.dot, dither::Edge::Bottom))
+                            .layer(kit::glint(t.dot, dither::Edge::Bottom))
                             .hover(move |row| row.bg(t.selected).text_color(t.text))
                             .active(move |row| row.bg(t.control_active))
                             .on_mouse_down(MouseButton::Left, move |event, _, cx| {

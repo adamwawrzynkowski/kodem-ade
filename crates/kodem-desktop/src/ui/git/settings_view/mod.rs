@@ -30,6 +30,7 @@ use crate::ui::git::components::mono_font;
 use crate::ui::git::kit::{ActiveTheme as _, InputEvent, InputState, TextareaState, h_flex};
 use crate::ui::git::settings::GitSettings;
 use crate::ui::git::theme::liquid_colors;
+use crate::ui::kit::Layers as _;
 use crate::ui::settings::{self as preferences, GROUP_GAP, SLIDER_COLUMN, chosen_layer, note};
 use crate::ui::{figure, fx};
 
@@ -438,8 +439,7 @@ where
                 .text_color(if chosen { t.text } else { t.muted })
                 .aria_selected(chosen)
                 .when(chosen, |cell| {
-                    cell.cursor_default()
-                        .child(chosen_layer(t.accent, RADIUS_SMALL))
+                    cell.cursor_default().layer(chosen_layer(t.accent))
                 })
                 .child(label.into())
                 .when(!chosen, |cell| {

@@ -119,7 +119,7 @@ impl Shell {
         .border_color(t.edge)
         .shadow(kit::raised_light(t))
         .text_color(t.muted)
-        .child(kit::glint(t.dot, dither::Edge::Bottom))
+        .layer(kit::glint(t.dot, dither::Edge::Bottom))
         .child(icon(glyph(index)).size(px(13.)))
         .child(agent.name.clone())
         .hover(move |s| s.bg(kit::raised_fill(t.control_hover)).text_color(t.text))

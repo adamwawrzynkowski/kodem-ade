@@ -801,3 +801,17 @@ Recorded on 16 October 2026. The user asked that the project chosen on the start
 ## Every stretch of work sits on a plate
 
 Recorded on 16 October 2026. The user reported that some work trays showed without the raised plate and recessed well. A stretch of one tray (one run of calls or one thought) had no parent, so it rendered as a flat line. Now its own summary line is the plate and its calls or its thought text hang in a well under it, so the label does not repeat. `plate` and `flat` in `ui/tool_calls.rs` set a summary line's surface and its only hover style; the parent plate of a longer stretch uses `plate` too. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. The look is not checked on a display under the no-visual-testing agreement.
+
+## Surface layers take the shape of their surface
+
+Recorded on 16 October 2026. The user reported that the corners of the dithered and tinted layers on buttons did not match the buttons, for example on a chosen font card in Settings, and asked for them to fit any shape and size. The layers took a fixed radius (mostly `RADIUS_CONTROL`) and filled the box inside the surface's border, so their corners stood one point inside the border's inner arc, and on a surface of another radius they did not match at all. GPUI clips children to rectangles only.
+
+| Part | Where |
+| --- | --- |
+| Corners | `components::inner_corners` returns each radius less the wider border at that corner. A transparent border still takes layout space, so it counts |
+| Layers | `kit::Layers::layer` adds a `kit::Fit` layer under the content. `Button::fitted` builds it when the button renders, from its final style, so a radius set after the layer still applies; a `Div` or `Stateful<Div>` reads the radius and border set before the call |
+| Dots | `Dither::fitted` takes those corners in window pixels and the sides that the grid shares with its surface; painting bounds each corner to half of those sides, as GPUI does for quads, so pills and short controls keep their arcs. `Dither` is a `Fit` that covers its surface |
+| Fitted pieces | `kit::shade`, `kit::glint`, `kit::glass_body` (rings and face in from the outer corners), `dither::row_wash` (the active flow now also keeps out of the right corners), `dither::edge_shade`, `settings::chosen_layer`, `kit::icon_tile`, `kit::marker`, the sidebar project tile and the Git workspace's `LiquidButton` shade and glint. The theme card footer now rounds its bottom corners to the card's inner corners |
+| Glass rings | Both blends of a ring cover the whole ring with stops at the middle, instead of two half-height quads, so they keep the ring's corners at any height |
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary test passed and was removed: `inner_corners` for a bordered control, a borderless surface, mixed borders on one side, a square bordered box and `rounded_full`. The look is not checked on a display under the no-visual-testing agreement. Other dithered layers with a fixed radius on unbordered surfaces, such as Git workspace panels and loaders, are unchanged.

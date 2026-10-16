@@ -240,7 +240,7 @@ impl Shell {
             .flex()
             .flex_col()
             .gap(px(7.))
-            .child(dither::edge_shade(t.dot, 0.22, 0.))
+            .layer(dither::edge_shade(t.dot, 0.22))
             .child(if sent.is_empty() {
                 line(t.muted, 13.).child(if files == 1 {
                     "1 attachment".to_string()

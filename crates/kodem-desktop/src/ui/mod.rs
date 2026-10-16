@@ -51,6 +51,7 @@ use crate::{
 pub use chrome::Stage;
 use conversation::Conversation;
 use gpui::{prelude::*, *};
+use kit::Layers;
 use kodem_core::{self as core, *};
 use std::{
     collections::{HashMap, HashSet},
@@ -1876,8 +1877,8 @@ impl Shell {
         let label = label.into();
         self.control(id)
             .overflow_hidden()
-            .child(kit::shade(theme.dot.opacity(0.9), dither::Edge::Bottom))
-            .child(kit::glint(theme.accent.opacity(0.5), dither::Edge::Bottom))
+            .layer(kit::shade(theme.dot.opacity(0.9), dither::Edge::Bottom))
+            .layer(kit::glint(theme.accent.opacity(0.5), dither::Edge::Bottom))
             .child(icon(glyph).size(px(13.)))
             .when(!label.is_empty(), |b| b.child(label))
             .bg(kit::raised_fill(theme.control))
@@ -1901,7 +1902,7 @@ impl Shell {
         let label = label.into();
         self.control(id)
             .overflow_hidden()
-            .child(kit::glint(theme.dot, dither::Edge::Bottom))
+            .layer(kit::glint(theme.dot, dither::Edge::Bottom))
             .child(icon(name).size(px(13.)))
             .when(!label.is_empty(), |b| b.child(label))
             .border_color(gpui::transparent_black())
@@ -1957,7 +1958,7 @@ impl Shell {
             .group(kit::GLASS)
             .overflow_hidden()
             .px(px(12.))
-            .child(kit::glass_body(tone))
+            .layer(kit::glass_body(tone))
             .child(kit::engraved(glyph, tone, 13.))
             .when(!label.is_empty(), |b| b.child(label))
             .bg(gpui::transparent_black())
@@ -1981,8 +1982,8 @@ impl Shell {
         let label = label.into();
         self.control(id)
             .overflow_hidden()
-            .child(kit::shade(tone.opacity(0.3), dither::Edge::Bottom))
-            .child(kit::glint(tone.opacity(0.6), dither::Edge::Bottom))
+            .layer(kit::shade(tone.opacity(0.3), dither::Edge::Bottom))
+            .layer(kit::glint(tone.opacity(0.6), dither::Edge::Bottom))
             .child(icon(glyph).size(px(13.)))
             .when(!label.is_empty(), |b| b.child(label))
             .bg(kit::tint_fill(tone, 0.09))

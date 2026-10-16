@@ -15,6 +15,7 @@ use crate::theme::{px, text_px};
 use crate::ui::dither::{Dither, DitherField, Edge};
 use crate::ui::fx;
 use crate::ui::git::theme::ActiveTheme;
+use crate::ui::kit::Layers as _;
 
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
@@ -486,20 +487,18 @@ impl RenderOnce for LiquidButton {
         base.style().refine(&instance_style);
 
         if let Some(shade) = paint.shade {
-            base = base.child(
+            base = base.layer(
                 Dither::new(DitherField::Fade {
                     from: Edge::Bottom,
                     start: 0.4,
                     end: -0.1,
                 })
                 .color(shade)
-                .grid(2.0, 1.0)
-                .corner_radius(radius)
-                .layer(),
+                .grid(2.0, 1.0),
             );
         }
         if let Some((glint, from)) = paint.glint.filter(|_| interactive) {
-            base = base.child(
+            base = base.layer(
                 Dither::new(DitherField::Fade {
                     from,
                     start: 0.75,
@@ -507,9 +506,7 @@ impl RenderOnce for LiquidButton {
                 })
                 .color(glint)
                 .grid(2.0, 1.0)
-                .corner_radius(radius)
-                .hover_only()
-                .layer(),
+                .hover_only(),
             );
         }
 
