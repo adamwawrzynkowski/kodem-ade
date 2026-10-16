@@ -721,6 +721,10 @@ Recorded on 16 October 2026. The user found the arrows of the send mode chip uni
 
 Recorded on 16 October 2026. The user asked for the badge depth on the buttons that open agents and on the other flat buttons. `kit::raised_fill` draws a neutral fill four hundredths lighter at the top and darker at the bottom; `kit::raised_light` adds the theme highlight one point under the top edge, a darker line above the bottom edge and a tight shadow in the theme's shadow color. They apply to `agent_link` in `ui/subagents.rs` (the agent strip above the composer and the agent link in the conversation) and to the neutral `button` builder in `ui/mod.rs`. The `tinted` builder now uses `tint_fill` and `tint_light`. Hover keeps the depth on the hover fill; a press drops the light, so the button sinks flat. Ghost, icon and glass buttons and the buttons of the Git workspace's own kit are unchanged. Checked with `cargo build`, `cargo clippy -D warnings` (no findings) and `cargo fmt --check` on macOS. The look is not checked on a display under the no-visual-testing agreement.
 
+## Agent link crash in debug builds
+
+Recorded on 16 October 2026. The debug app aborted when the composer showed agent links. `agent_link` started from `ghost`, which sets a hover style, and set a second one for its raised fill; GPUI debug-asserts that an element sets its hover style once ("hover style already set"), so release builds were not affected. The link now starts from `control` with the ghost's glint, icon, label and ripple and sets hover and press once. A scan of the button builders (`ghost`, `button`, `icon_button`, `tinted`, `menu_row`, `primary`, `glass`) found no other chain that sets hover twice. Checked with `cargo build`, `cargo clippy -D warnings` and `cargo fmt --check` on macOS.
+
 ## Notices in the top right corner and a notification center
 
 Recorded on 16 October 2026. The user reported that the error card at the bottom of the window covered the message box, and asked for notices to move, to fit the interface better, to animate, and for a notification center beside the settings and archive buttons.

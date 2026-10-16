@@ -107,21 +107,24 @@ impl Shell {
         };
         let id = agent.thread_id.clone();
         let t = self.theme;
-        self.ghost(
-            (
-                ElementId::from("agent-link"),
-                SharedString::from(id.clone()),
-            ),
-            glyph(index),
-            agent.name.clone(),
-        )
+        // A raised control rather than a restyled ghost: GPUI takes one hover style per element.
+        self.control((
+            ElementId::from("agent-link"),
+            SharedString::from(id.clone()),
+        ))
+        .overflow_hidden()
         .h(px(28.))
         .px(px(8.))
         .bg(kit::raised_fill(t.control))
         .border_color(t.edge)
         .shadow(kit::raised_light(t))
+        .text_color(t.muted)
+        .child(kit::glint(t.dot, dither::Edge::Bottom))
+        .child(icon(glyph(index)).size(px(13.)))
+        .child(agent.name.clone())
         .hover(move |s| s.bg(kit::raised_fill(t.control_hover)).text_color(t.text))
         .active(move |s| s.bg(t.control_active).shadow(Vec::new()))
+        .on_press(move |position, cx| fx::ripple(position, t.muted, cx))
         .child(if agent.state.active() {
             motion::active_icon("loader", t.accent, true, cx.reduce_motion())
         } else {
