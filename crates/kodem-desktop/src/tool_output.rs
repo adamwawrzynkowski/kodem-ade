@@ -23,8 +23,10 @@ pub struct ToolView {
     pub diff: Vec<DiffLine>,
 }
 
-/// Tool views kept per generation before the older generation is dropped.
-const CACHED_VIEWS: usize = 512;
+/// Tool views kept per generation before the older generation is dropped. A frame asks for every
+/// row of the stretches in view, so a generation holds a long stretch of work whole; a smaller
+/// one would drop views on every frame and build them again.
+const CACHED_VIEWS: usize = 1024;
 
 // What a cached view was built from. A view is rebuilt when any of it changes.
 #[derive(PartialEq)]

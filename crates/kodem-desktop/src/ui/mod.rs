@@ -234,6 +234,9 @@ pub struct Shell {
     unfolded_texts: HashSet<String>,
     /// Tool runs and thoughts the user opened or folded by hand; the others follow their work.
     tray_choices: HashMap<String, bool>,
+    /// The stretches of tool work that this frame's rows read, by conversation and row. Each is
+    /// built once per frame instead of once per row; a render starts the map again.
+    work_stretches: HashMap<(Conversation, usize), std::rc::Rc<tool_calls::Stretch>>,
     collapsed_changes: HashSet<String>,
     change_tree: Option<change_tree::ChangeTree>,
     text_views: HashMap<String, (Entity<TextInput>, Subscription)>,
@@ -580,6 +583,7 @@ impl Shell {
             folded: HashSet::new(),
             unfolded_texts: HashSet::new(),
             tray_choices: HashMap::new(),
+            work_stretches: HashMap::new(),
             collapsed_changes: HashSet::new(),
             change_tree: None,
             text_views: HashMap::new(),
@@ -1055,16 +1059,38 @@ impl Shell {
                 if let Some(current) = &self.view {
                     merge_transcript(current, &mut view, older);
                 }
+                // Whether each row held at the same place changed, compared once: a long
+                // transcript holds megabytes of text.
+                let edited: Vec<bool> = self
+                    .view
+                    .as_ref()
+                    .map(|current| {
+                        current
+                            .messages
+                            .iter()
+                            .zip(&view.messages)
+                            .map(|(a, b)| {
+                                a.text != b.text
+                                    || a.complete != b.complete
+                                    || a.file_edits != b.file_edits
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let changed = self.view.as_ref().is_none_or(|v| {
                     v.messages.len() != view.messages.len()
-                        || v.messages.iter().zip(&view.messages).any(|(a, b)| {
-                            a.id != b.id
-                                || a.text != b.text
-                                || a.complete != b.complete
-                                || a.file_edits != b.file_edits
-                        })
+                        || v.messages
+                            .iter()
+                            .zip(&view.messages)
+                            .zip(&edited)
+                            .any(|((a, b), edited)| a.id != b.id || *edited)
                 });
-                let rows = conversation::ChatRows::new(&view.messages);
+                let rows = conversation::ChatRows::new(
+                    &view.messages,
+                    self.view
+                        .as_ref()
+                        .map(|current| (current.messages.as_slice(), &self.chat_rows)),
+                );
                 let opened = self.view.as_ref().is_none_or(|v| v.task.id != view.task.id);
                 if changed {
                     // The list follows its end by itself until the user scrolls away from it,
@@ -1097,7 +1123,7 @@ impl Shell {
                         }
                         // The last messages first, so that the rows before each keep their
                         // places while a message gains or loses parts.
-                        for (index, (a, b)) in current
+                        for (index, (_, b)) in current
                             .messages
                             .iter()
                             .zip(&view.messages)
@@ -1106,16 +1132,13 @@ impl Shell {
                         {
                             let old = self.chat_rows.rows(index..index + 1);
                             let new = rows.rows(index..index + 1);
-                            let edited = a.text != b.text
-                                || a.complete != b.complete
-                                || a.file_edits != b.file_edits;
                             if old.len() != new.len() {
                                 let kept = old.len().min(new.len());
                                 self.chat_scroll
                                     .remeasure_items(old.start..old.start + kept);
                                 self.chat_scroll
                                     .splice(old.start + kept..old.end, new.len() - kept);
-                            } else if edited && b.kind != MessageKind::Tool {
+                            } else if edited[index] && b.kind != MessageKind::Tool {
                                 self.chat_scroll.remeasure_items(old);
                             }
                         }
@@ -1129,14 +1152,10 @@ impl Shell {
                             self.chat_scroll
                                 .remeasure_items(rows.rows(row..previous_count + 1));
                         }
-                        for (index, (a, b)) in
+                        for (index, (_, b)) in
                             current.messages.iter().zip(&view.messages).enumerate()
                         {
-                            if b.kind == MessageKind::Tool
-                                && (a.text != b.text
-                                    || a.complete != b.complete
-                                    || a.file_edits != b.file_edits)
-                            {
+                            if b.kind == MessageKind::Tool && edited[index] {
                                 // A tool item can open or fold the parent tray of its
                                 // stretch, which sizes every row of the stretch.
                                 self.chat_scroll.remeasure_items(rows.rows(
@@ -1170,6 +1189,16 @@ impl Shell {
                         self.chat_scroll.remeasure_items(rows.rows(row..end));
                     }
                 }
+                // Drag selection orders the rows as the list does.
+                let orders = (0..rows.count())
+                    .filter_map(|row| {
+                        let (index, part) = rows.locate(row)?;
+                        Some((view.messages.get(index)?.seq, part))
+                    })
+                    .collect();
+                let scroll = self.chat_scroll.clone();
+                self.chat_selection
+                    .update(cx, |doc, _| doc.set_viewport(scroll, orders, px(8.)));
                 self.chat_rows = rows;
                 // A result that arrives while its task is open is read as it arrives.
                 if !view.task.state.active()
@@ -2153,14 +2182,27 @@ fn merge_transcript(current: &TaskView, incoming: &mut TaskView, older: bool) {
             std::mem::take(&mut incoming.messages),
         )
     };
-    let mut messages: std::collections::BTreeMap<_, _> = base
-        .into_iter()
-        .map(|message| (message.seq, message))
-        .collect();
-    for message in news {
-        messages.insert(message.seq, message);
-    }
-    incoming.messages = messages.into_values().collect();
+    incoming.messages = if base.is_sorted_by(|a, b| a.seq < b.seq) {
+        // The usual case: the rows held are in order and the news replace or follow the last
+        // of them, so each finds its place without a map of the whole transcript.
+        let mut messages = base;
+        for message in news {
+            match messages.binary_search_by_key(&message.seq, |held| held.seq) {
+                Ok(index) => messages[index] = message,
+                Err(index) => messages.insert(index, message),
+            }
+        }
+        messages
+    } else {
+        let mut messages: std::collections::BTreeMap<_, _> = base
+            .into_iter()
+            .map(|message| (message.seq, message))
+            .collect();
+        for message in news {
+            messages.insert(message.seq, message);
+        }
+        messages.into_values().collect()
+    };
     if outdated {
         incoming.task = current.task.clone();
         incoming.activities = current.activities.clone();

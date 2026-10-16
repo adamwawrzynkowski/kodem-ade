@@ -1563,31 +1563,86 @@ fn paint_lane_glow(
     list_y: i32,
     window: &mut Window,
 ) {
+    // The Bayer pattern repeats every 8 cells, so rows with the same lanes at the same phase
+    // light the same dots.
+    let phase = (list_y / GLOW_PITCH as i32).rem_euclid(8);
+    let mut key = vec![width.to_bits(), row_h.to_bits(), phase as u32];
+    for (points, color) in lanes {
+        key.push(points.len() as u32);
+        key.extend(points.iter().flat_map(|(x, y)| [x.to_bits(), y.to_bits()]));
+        let (hue, saturation, lightness, alpha) = color.into_components();
+        key.extend([hue.into_inner(), saturation, lightness, alpha].map(f32::to_bits));
+    }
+    let dots = GLOW_DOTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(dots) = cache.get(&key) {
+            return dots.clone();
+        }
+        if cache.len() >= GLOW_CACHE {
+            cache.clear();
+        }
+        let dots = glow_dots(lanes, width, row_h, phase);
+        cache.insert(key, dots.clone());
+        dots
+    });
+    for &(x, y, color) in dots.iter() {
+        let dot = Bounds::new(
+            point(origin.x + px(x - 0.5), origin.y + px(y - 0.5)),
+            size(px(1.), px(1.)),
+        );
+        window.paint_quad(fill(dot, color.opacity(GLOW_ALPHA)));
+    }
+}
+
+/// Rows of glow dots kept before the cache starts again.
+const GLOW_CACHE: usize = 256;
+
+/// The lit dots of one row's glow, in points from the row's origin, with their colors.
+type GlowDots = Rc<[(f32, f32, Hsla)]>;
+
+thread_local! {
+    // The glow dots of the rows painted lately, by their lanes, size and Bayer phase. Scrolling
+    // paints rows of the same shapes again on every frame.
+    static GLOW_DOTS: std::cell::RefCell<std::collections::HashMap<Vec<u32>, GlowDots>> =
+        Default::default();
+}
+
+// Returns the lit dots of a row's glow, in points from the row's origin, with their colors.
+// `phase` is the row's offset in the Bayer pattern, in cells.
+fn glow_dots(lanes: &[(Vec<(f32, f32)>, Hsla)], width: f32, row_h: f32, phase: i32) -> GlowDots {
     let columns = (width / GLOW_PITCH).ceil() as i32;
     let rows = (row_h / GLOW_PITCH).ceil() as i32;
-    let row_offset = list_y / GLOW_PITCH as i32;
-    // Horizontal extent each lane can light, to skip far-away lanes.
-    let reach: Vec<(f32, f32)> = lanes
+    // Extent each lane can light, to skip far-away lanes: a lane lights nothing beyond the
+    // glow's reach from its points.
+    let reach: Vec<((f32, f32), (f32, f32))> = lanes
         .iter()
         .map(|(points, _)| {
-            let (min_x, max_x) = points
-                .iter()
-                .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &(x, _)| {
-                    (min.min(x), max.max(x))
-                });
-            (min_x - GLOW_REACH, max_x + GLOW_REACH)
+            let ((min_x, max_x), (min_y, max_y)) = points.iter().fold(
+                (
+                    (f32::INFINITY, f32::NEG_INFINITY),
+                    (f32::INFINITY, f32::NEG_INFINITY),
+                ),
+                |((min_x, max_x), (min_y, max_y)), &(x, y)| {
+                    ((min_x.min(x), max_x.max(x)), (min_y.min(y), max_y.max(y)))
+                },
+            );
+            (
+                (min_x - GLOW_REACH, max_x + GLOW_REACH),
+                (min_y - GLOW_REACH, max_y + GLOW_REACH),
+            )
         })
         .collect();
+    let mut dots = Vec::new();
     for row in 0..rows {
         let y = (row as f32 + 0.5) * GLOW_PITCH;
         for column in 0..columns {
             let x = (column as f32 + 0.5) * GLOW_PITCH;
             let mut brightest: Option<(f32, Hsla)> = None;
-            for ((points, color), &(min_x, max_x)) in lanes.iter().zip(&reach) {
-                if x < min_x || x > max_x {
+            for ((points, color), &((min_x, max_x), (min_y, max_y))) in lanes.iter().zip(&reach) {
+                if x < min_x || x > max_x || y < min_y || y > max_y {
                     continue;
                 }
-                let intensity = glow_intensity(distance_to_polyline((x, y), points));
+                let intensity = glow_intensity(distance_to_polyline((x, y), points, GLOW_REACH));
                 if intensity > brightest.map_or(0.0, |(best, _)| best) {
                     brightest = Some((intensity, *color));
                 }
@@ -1595,16 +1650,13 @@ fn paint_lane_glow(
             let Some((intensity, color)) = brightest else {
                 continue;
             };
-            if intensity <= cell_threshold(column, row + row_offset) {
+            if intensity <= cell_threshold(column, row + phase) {
                 continue;
             }
-            let dot = Bounds::new(
-                point(origin.x + px(x - 0.5), origin.y + px(y - 0.5)),
-                size(px(1.), px(1.)),
-            );
-            window.paint_quad(fill(dot, color.opacity(GLOW_ALPHA)));
+            dots.push((x, y, color));
         }
     }
+    dots.into()
 }
 
 /// Glow brightness at `distance` from a lane center: none under the
@@ -1617,10 +1669,19 @@ fn glow_intensity(distance: f32) -> f32 {
     GLOW_STRENGTH * falloff * falloff
 }
 
-/// Shortest distance from `target` to the polyline through `points`.
-fn distance_to_polyline(target: (f32, f32), points: &[(f32, f32)]) -> f32 {
+/// Shortest distance from `target` to the polyline through `points`, or infinity when the
+/// polyline lies farther than `reach` from it. Segments whose box lies beyond `reach` are
+/// skipped, as they cannot be nearer.
+fn distance_to_polyline(target: (f32, f32), points: &[(f32, f32)], reach: f32) -> f32 {
     points
         .windows(2)
+        .filter(|segment| {
+            let ((ax, ay), (bx, by)) = (segment[0], segment[1]);
+            target.0 >= ax.min(bx) - reach
+                && target.0 <= ax.max(bx) + reach
+                && target.1 >= ay.min(by) - reach
+                && target.1 <= ay.max(by) + reach
+        })
         .map(|segment| {
             let (ax, ay) = segment[0];
             let (bx, by) = segment[1];

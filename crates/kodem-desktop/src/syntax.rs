@@ -1,12 +1,14 @@
 //! Syntax spans for captured code. Highlighting never changes the source bytes.
+use gpui::SharedString;
 use kodem_core::ThemeId;
 use std::{collections::HashMap, ops::Range, str::FromStr, sync::LazyLock};
 use syntect::{
     easy::HighlightLines,
     highlighting::{
-        Color, ScopeSelectors, StyleModifier, Theme, ThemeItem, ThemeSet, ThemeSettings,
+        Color, HighlightState, ScopeSelectors, StyleModifier, Theme, ThemeItem, ThemeSet,
+        ThemeSettings,
     },
-    parsing::SyntaxSet,
+    parsing::{ParseState, SyntaxSet},
     util::LinesWithEndings,
 };
 static SYNTAX: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
@@ -175,33 +177,84 @@ fn classic(colors: CodeColors) -> Theme {
     }
 }
 
-/// Highlights code using a known file extension or language token, in the code colors of the
-/// workspace theme.
-pub fn spans(text: &str, extension: &str, theme: ThemeId) -> Vec<(Range<usize>, [u8; 3])> {
-    let syntax = SYNTAX
-        .find_syntax_by_token(extension)
-        .unwrap_or_else(|| SYNTAX.find_syntax_plain_text());
-    let Some(theme) = CLASSICS
-        .get(&theme)
-        .or_else(|| THEMES.themes.get(bundled(theme)))
-    else {
-        return Vec::new();
-    };
-    let mut highlighter = HighlightLines::new(syntax, theme);
-    let mut offset = 0;
-    let mut result = Vec::new();
-    for line in LinesWithEndings::from(text) {
-        if let Ok(spans) = highlighter.highlight_line(line, &SYNTAX) {
-            for (style, span) in spans {
-                result.push((
-                    offset..offset + span.len(),
-                    [style.foreground.r, style.foreground.g, style.foreground.b],
-                ));
-                offset += span.len();
-            }
-        } else {
-            offset += line.len();
+/// Syntax spans of code that can grow at its end, as a stream writes it. The highlighter's state
+/// after the last complete line is kept, so a text that only grew costs the lines it adds.
+#[derive(Default)]
+pub struct Highlighted {
+    /// The text, extension and theme of the last highlight.
+    text: SharedString,
+    source: Option<(String, ThemeId)>,
+    /// Bytes of the complete lines of `text`, the number of their spans and the state after them.
+    lines: usize,
+    complete: usize,
+    state: Option<(HighlightState, ParseState)>,
+    spans: Vec<(Range<usize>, [u8; 3])>,
+}
+
+impl Highlighted {
+    /// Highlights code using a known file extension or language token, in the code colors of
+    /// the workspace theme. The complete lines of the last text that this text starts with
+    /// keep their spans.
+    pub fn update(
+        &mut self,
+        text: &SharedString,
+        extension: &str,
+        theme: ThemeId,
+    ) -> Vec<(Range<usize>, [u8; 3])> {
+        let syntax = SYNTAX
+            .find_syntax_by_token(extension)
+            .unwrap_or_else(|| SYNTAX.find_syntax_plain_text());
+        let Some(colors) = CLASSICS
+            .get(&theme)
+            .or_else(|| THEMES.themes.get(bundled(theme)))
+        else {
+            *self = Self::default();
+            return Vec::new();
+        };
+        let resumes = self
+            .source
+            .as_ref()
+            .is_some_and(|(old, old_theme)| old == extension && *old_theme == theme)
+            && text.as_bytes().get(..self.lines) == self.text.as_bytes().get(..self.lines);
+        if !resumes {
+            self.lines = 0;
+            self.complete = 0;
+            self.state = None;
         }
+        self.spans.truncate(self.complete);
+        let mut highlighter = match self.state.take() {
+            Some((highlight, parse)) => HighlightLines::from_state(colors, highlight, parse),
+            None => HighlightLines::new(syntax, colors),
+        };
+        let mut offset = self.lines;
+        for line in LinesWithEndings::from(&text[self.lines..]) {
+            if !line.ends_with('\n') {
+                // The last line is still being written, so the state before it is kept.
+                let (highlight, parse) = highlighter.state();
+                self.state = Some((highlight.clone(), parse.clone()));
+                self.lines = offset;
+                self.complete = self.spans.len();
+                highlighter = HighlightLines::from_state(colors, highlight, parse);
+            }
+            if let Ok(spans) = highlighter.highlight_line(line, &SYNTAX) {
+                for (style, span) in spans {
+                    self.spans.push((
+                        offset..offset + span.len(),
+                        [style.foreground.r, style.foreground.g, style.foreground.b],
+                    ));
+                    offset += span.len();
+                }
+            } else {
+                offset += line.len();
+            }
+        }
+        if self.state.is_none() {
+            self.state = Some(highlighter.state());
+            self.lines = offset;
+            self.complete = self.spans.len();
+        }
+        self.text = text.clone();
+        self.source = Some((extension.to_owned(), theme));
+        self.spans.clone()
     }
-    result
 }

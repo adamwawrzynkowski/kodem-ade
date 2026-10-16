@@ -435,6 +435,9 @@ impl Render for Shell {
         // points of the interface scale.
         self.window_width = f32::from(window.viewport_size().width) / crate::theme::ui_scale();
         backdrop::begin_frame(window, cx);
+        // The transcripts change only between frames, so the stretches of tool work that the
+        // rows read are built again for this one.
+        self.work_stretches.clear();
         self.sync_reveals(cx);
         self.sync_error_notices(cx);
         self.sync_censor();

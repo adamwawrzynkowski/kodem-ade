@@ -40,6 +40,13 @@ impl TextDocument {
         self.bottom_inset = bottom_inset;
     }
 
+    /// Shares the virtual transcript's viewport for drag selection and keeps the order of its
+    /// rows, which [`Self::set_viewport`] set when the rows last changed.
+    pub fn set_scroll(&mut self, scroll: ListState, bottom_inset: Pixels) {
+        self.scroll = Some(scroll);
+        self.bottom_inset = bottom_inset;
+    }
+
     fn extend_at(&mut self, pointer: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(scroll) = &self.scroll else {
             return;

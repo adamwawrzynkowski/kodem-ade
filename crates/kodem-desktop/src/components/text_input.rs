@@ -159,6 +159,8 @@ pub struct TextInput {
     wrap: bool,
     syntax: Option<(String, kodem_core::ThemeId)>,
     colors: Vec<(Range<usize>, [u8; 3])>,
+    /// The highlighter's state for `colors`, so streamed code costs the lines it adds.
+    highlighted: crate::syntax::Highlighted,
     prose: Option<(Vec<crate::markdown::Span>, crate::theme::Theme)>,
     /// Shows the inline code of the typed text as its message will, in the plates of this theme.
     live_code: Option<crate::theme::Theme>,
@@ -205,6 +207,7 @@ impl TextInput {
             wrap: true,
             syntax: None,
             colors: Vec::new(),
+            highlighted: Default::default(),
             prose: None,
             live_code: None,
             streaming: Default::default(),
@@ -434,7 +437,7 @@ impl TextInput {
             self.streaming = Default::default();
         }
         if let Some((extension, theme)) = &self.syntax {
-            self.colors = crate::syntax::spans(&self.content, extension, *theme);
+            self.colors = self.highlighted.update(&self.content, extension, *theme);
         }
         self.revision += 1;
         cx.notify();
@@ -473,7 +476,7 @@ impl TextInput {
             .is_none_or(|(old, old_theme)| old != extension || *old_theme != theme)
         {
             self.syntax = Some((extension.into(), theme));
-            self.colors = crate::syntax::spans(&self.content, extension, theme);
+            self.colors = self.highlighted.update(&self.content, extension, theme);
             self.revision += 1;
         }
     }
@@ -495,6 +498,7 @@ impl TextInput {
         }
         self.syntax = None;
         self.colors.clear();
+        self.highlighted = Default::default();
         self.prose = Some((spans.to_vec(), theme));
         self.revision += 1;
     }

@@ -37,14 +37,9 @@ impl Shell {
         let latest_shown = self.latest_wanted();
         self.latest_shown = latest_shown;
         if let Some(view) = &self.view {
-            let orders = (0..self.chat_rows.count())
-                .filter_map(|row| {
-                    let (index, part) = self.chat_rows.locate(row)?;
-                    Some((view.messages.get(index)?.seq, part))
-                })
-                .collect();
+            // The order of the rows is set when they change, not on every frame.
             self.chat_selection.update(cx, |doc, _| {
-                doc.set_viewport(self.chat_scroll.clone(), orders, px(8.))
+                doc.set_scroll(self.chat_scroll.clone(), px(8.))
             });
             panel = panel.child(self.chat_selection.clone());
             let state = &view.task.state;

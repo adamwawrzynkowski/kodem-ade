@@ -73,8 +73,13 @@ fn work_rows(transcript: &[Message], index: usize) -> Range<usize> {
 }
 
 // Returns the rows of a stretch where a shown tray starts, in order. Under a folded parent only
-// the runs with a failed call are shown.
-fn shown_trays(transcript: &[Message], rows: Range<usize>, failures_only: bool) -> Vec<usize> {
+// the runs with a failed call are shown. `views` holds the view of each row of the stretch.
+fn shown_trays(
+    transcript: &[Message],
+    rows: Range<usize>,
+    views: &[Rc<ToolView>],
+    failures_only: bool,
+) -> Vec<usize> {
     rows.clone()
         .filter(|&row| {
             let message = &transcript[row];
@@ -87,10 +92,24 @@ fn shown_trays(transcript: &[Message], rows: Range<usize>, failures_only: bool) 
             !failures_only
                 || transcript[row..rows.end]
                     .iter()
-                    .take_while(|message| is_call(message))
-                    .any(|message| tool_output::view(message).status == ToolStatus::Failed)
+                    .zip(&views[row - rows.start..])
+                    .take_while(|(message, _)| is_call(message))
+                    .any(|(_, view)| view.status == ToolStatus::Failed)
         })
         .collect()
+}
+
+/// What every row of one stretch of tool work reads. A frame builds it once for the stretch,
+/// so each row in view costs its own tray instead of a pass over the whole stretch.
+pub(super) struct Stretch {
+    rows: Range<usize>,
+    /// The view of each row of the stretch, in order.
+    views: Vec<Rc<ToolView>>,
+    trays: usize,
+    /// A call of the stretch runs in its thread now.
+    running: bool,
+    /// The rows where a shown tray starts under an open parent, then under a folded one.
+    shown: [Vec<usize>; 2],
 }
 
 // Counts the trays of a stretch of tool rows. Each thought is one tray, and so is each run of
@@ -170,14 +189,17 @@ impl Shell {
         index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(transcript) = self.conversation_messages(conversation) else {
+        let Some(stretch) = self.work_stretch(conversation, index) else {
             return div().into_any_element();
         };
-        let rows = work_rows(transcript, index);
-        let Some(first) = transcript.get(rows.start) else {
+        let rows = stretch.rows.clone();
+        let Some(first) = self
+            .conversation_messages(conversation)
+            .and_then(|transcript| transcript.get(rows.start))
+        else {
             return div().into_any_element();
         };
-        if tray_count(&transcript[rows.clone()]) < 2 {
+        if stretch.trays < 2 {
             return match self.work_tray(conversation, index, false, true, cx) {
                 Some(tray) => div()
                     .w_full()
@@ -190,14 +212,11 @@ impl Shell {
             };
         }
         let key = format!("work:{}:{}", first.task_id, first.id);
-        let running = transcript[rows.clone()].iter().any(|message| {
-            tool_output::view(message).status == ToolStatus::Running
-                && self.conversation_message_active(conversation, message)
-        });
+        let running = stretch.running;
         let open = self.tray_open(conversation, &key, rows.end, running);
-        let trays = shown_trays(transcript, rows.clone(), !open);
-        let header = (index == rows.start)
-            .then(|| self.work_header(conversation, rows.clone(), &key, open, running, cx));
+        let trays = &stretch.shown[usize::from(!open)];
+        let header =
+            (index == rows.start).then(|| self.work_header(conversation, &stretch, &key, open, cx));
         let t = self.theme;
         // Each row draws its own slice of the well, so the trays of a stretch read as one
         // recessed list under their parent's plate.
@@ -227,21 +246,20 @@ impl Shell {
     fn work_header(
         &self,
         conversation: &Conversation,
-        rows: Range<usize>,
+        stretch: &Stretch,
         key: &str,
         open: bool,
-        running: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
+        let rows = stretch.rows.clone();
+        let running = stretch.running;
         let messages = self
             .conversation_messages(conversation)
             .and_then(|transcript| transcript.get(rows.clone()))
             .unwrap_or_default();
-        let well = self
-            .conversation_messages(conversation)
-            .is_some_and(|transcript| !shown_trays(transcript, rows.clone(), !open).is_empty());
-        let views: Vec<Rc<ToolView>> = messages.iter().map(tool_output::view).collect();
+        let well = !stretch.shown[usize::from(!open)].is_empty();
+        let views = &stretch.views;
         let (thoughts, calls): (Vec<_>, Vec<_>) = views
             .iter()
             .cloned()
@@ -340,6 +358,7 @@ impl Shell {
         plated: bool,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        let stretch = self.work_stretch(conversation, index)?;
         let transcript = self.conversation_messages(conversation)?;
         let length = transcript[index..]
             .iter()
@@ -348,9 +367,10 @@ impl Shell {
         let messages = &transcript[index..index + length];
         let first = messages.first()?;
         let t = self.theme;
-        let views: Vec<Rc<ToolView>> = messages.iter().map(tool_output::view).collect();
+        let offset = index.checked_sub(stretch.rows.start)?;
+        let views = stretch.views.get(offset..offset + length)?;
         let group_key = format!("tool-group:{}:{}", first.task_id, first.id);
-        let running = messages.iter().zip(&views).rposition(|(message, view)| {
+        let running = messages.iter().zip(views).rposition(|(message, view)| {
             view.status == ToolStatus::Running
                 && self.conversation_message_active(conversation, message)
         });
@@ -362,7 +382,7 @@ impl Shell {
         // the transcript, which is borrowed until here.
         let shown: Vec<(Message, Rc<ToolView>)> = messages
             .iter()
-            .zip(&views)
+            .zip(views)
             .filter(|(_, view)| expanded || view.status == ToolStatus::Failed)
             .map(|(message, view)| (message.clone(), view.clone()))
             .collect();
@@ -370,7 +390,7 @@ impl Shell {
         if failures_only && !any_shown {
             return None;
         }
-        let label = work_label(&views, 0, &edits);
+        let label = work_label(views, 0, &edits);
         let elapsed: u64 = views.iter().filter_map(|view| view.duration_ms).sum();
         let failures = views
             .iter()
@@ -480,6 +500,35 @@ impl Shell {
             });
         }
         Some(group.into_any_element())
+    }
+
+    // Returns the stretch of tool work around row `index`. The rows of a stretch in view read
+    // it on every frame, so a frame builds it once and keeps it for each of its rows.
+    fn work_stretch(&mut self, conversation: &Conversation, index: usize) -> Option<Rc<Stretch>> {
+        if let Some(stretch) = self.work_stretches.get(&(conversation.clone(), index)) {
+            return Some(stretch.clone());
+        }
+        let transcript = self.conversation_messages(conversation)?;
+        let rows = work_rows(transcript, index);
+        let messages = transcript.get(rows.clone())?;
+        let views: Vec<Rc<ToolView>> = messages.iter().map(tool_output::view).collect();
+        let running = messages.iter().zip(&views).any(|(message, view)| {
+            view.status == ToolStatus::Running
+                && self.conversation_message_active(conversation, message)
+        });
+        let stretch = Rc::new(Stretch {
+            trays: tray_count(messages),
+            running,
+            shown: [false, true]
+                .map(|failures_only| shown_trays(transcript, rows.clone(), &views, failures_only)),
+            rows: rows.clone(),
+            views,
+        });
+        for row in rows {
+            self.work_stretches
+                .insert((conversation.clone(), row), stretch.clone());
+        }
+        Some(stretch)
     }
 
     // Reports whether a tray is open. A tray follows its work unless the user set it by hand: it

@@ -574,11 +574,13 @@ impl Store {
             m.text.len() <= 2 * 1024 * 1024,
             "Message exceeds the 2 MiB storage limit"
         );
+        // A streamed row is written again as it grows, so it is serialized once per write.
+        let json = serde_json::to_string(m)?;
         ensure!(
-            serde_json::to_vec(m)?.len() <= 4 * 1024 * 1024,
+            json.len() <= 4 * 1024 * 1024,
             "Message and attached context exceed 4 MiB"
         );
-        self.db.execute("INSERT INTO messages(id,task_id,json) VALUES(?1,?2,?3) ON CONFLICT(task_id,id) DO UPDATE SET json=excluded.json",params![m.id,m.task_id,serde_json::to_string(m)?])?;
+        self.db.execute("INSERT INTO messages(id,task_id,json) VALUES(?1,?2,?3) ON CONFLICT(task_id,id) DO UPDATE SET json=excluded.json",params![m.id,m.task_id,json])?;
         let mut changes = self.changes.borrow_mut();
         changes.rev += 1;
         let rev = changes.rev;

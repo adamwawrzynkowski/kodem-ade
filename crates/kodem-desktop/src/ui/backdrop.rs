@@ -956,19 +956,26 @@ fn snap(value: f32, device: f32) -> f32 {
     (value * device).round() / device
 }
 
-// Returns the density of the drifting streaks at a point, in points of the surface. The large
-// shapes drift and morph into new ones, and a finer detail drifts against them.
-fn streaks(x: f32, y: f32, clock: f32, cover: f32) -> f32 {
+// Returns the density of the drifting streaks at a point, in points of the surface, times the
+// two factors of `gain`. The large shapes drift and morph into new ones, and a finer detail
+// drifts against them. With a `floor`, a density that cannot exceed it with the finest detail
+// returns 0 before the detail is sampled.
+fn streaks(x: f32, y: f32, clock: f32, cover: f32, gain: (f32, f32), floor: Option<f32>) -> f32 {
     let shape = morph(
         x / SHAPE_SCALE.0 + clock * 0.15,
         y / SHAPE_SCALE.1 + clock * 0.04,
         clock * 0.2,
     );
+    let density = |value: f32| smoothstep(0.5 - cover, 0.8 - cover, value) * gain.0 * gain.1;
+    // The detail is at most 1.
+    if floor.is_some_and(|floor| density(0.68 * shape + 0.32) <= floor) {
+        return 0.;
+    }
     let detail = noise(
         x / DETAIL_SCALE.0 - clock * 0.19,
         y / DETAIL_SCALE.1 + clock * 0.05 + 7.1,
     );
-    smoothstep(0.5 - cover, 0.8 - cover, 0.68 * shape + 0.32 * detail)
+    density(0.68 * shape + 0.32 * detail)
 }
 
 // Returns value noise that blends from one field into the next as `z` grows, so shapes grow,
@@ -1201,14 +1208,26 @@ fn light(
     veil: f32,
 ) -> Option<(usize, f32, usize)> {
     let cell = frame.grid.cells[(row * frame.grid.columns + column) as usize];
-    let streak = streaks(place.0, place.1, frame.clock as f32, frame.cover)
-        * frame.strength
-        * (1. - VEIL * veil);
     let touch = frame.rings.iter().fold(Touch::default(), |touch, ring| {
         touch.max(ring.touch(center.0, center.1))
     });
+    // A cell that neither a wave nor the strongest streak could light stays dark without
+    // sampling the noise. The streaks are at most 1 before their gain.
+    let gain = (frame.strength, 1. - VEIL * veil);
+    let waves = touch.edge.0.max(touch.wake.0);
+    if (1. * gain.0 * gain.1).max(waves) <= cell.threshold {
+        return None;
+    }
+    let streak = streaks(
+        place.0,
+        place.1,
+        frame.clock as f32,
+        frame.cover,
+        gain,
+        (waves <= cell.threshold).then_some(cell.threshold),
+    );
     let calm = 1. - WAVE_VEIL * veil;
-    if streak.max(touch.edge.0).max(touch.wake.0) <= cell.threshold {
+    if streak.max(waves) <= cell.threshold {
         return None;
     }
     // The characters of a streak twinkle, each at its own pace.
