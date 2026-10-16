@@ -133,7 +133,7 @@ jobs:
           [[ "${sdk_version%%.*}" -ge 27 ]] || { echo "The release must link against the macOS 27 SDK or newer." >&2; exit 1; }
       - name: Build and package
         run: scripts/build-macos.sh "$KODEM_CHANNEL"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package-macos
           path: target/${{ inputs.channel }}/Kodem-macos-*
@@ -195,7 +195,7 @@ jobs:
       - name: Collect the executables for SignPath
         id: executables
         if: env.KODEM_SIGN_EXTERNALLY == '1'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-executables
           path: target/${{ inputs.channel }}/windows-*/
@@ -222,7 +222,7 @@ jobs:
       - name: Collect the installers for SignPath
         id: installers
         if: env.KODEM_SIGN_EXTERNALLY == '1'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-installers
           path: target/${{ inputs.channel }}/Kodem-windows-*-setup.exe
@@ -245,7 +245,7 @@ jobs:
         run: cp "$(cygpath -u "$RUNNER_TEMP")/signed-installers/"Kodem-windows-*-setup.exe "target/$KODEM_CHANNEL/"
       - name: Write the checksums
         run: scripts/build-windows.sh "$KODEM_CHANNEL" finish
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package-windows
           path: target/${{ inputs.channel }}/Kodem-windows-*
@@ -301,7 +301,7 @@ jobs:
         run: rm -rf "target/$KODEM_CHANNEL"
       - name: Build and package
         run: scripts/build-linux.sh "$KODEM_CHANNEL"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package-linux
           path: target/${{ inputs.channel }}/Kodem-linux-*
