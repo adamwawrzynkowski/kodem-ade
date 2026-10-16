@@ -117,6 +117,7 @@ enum Panel {
     Projects,
     TaskMenu,
     ThreadMenu,
+    SelectionMenu,
     DeleteTask,
     Sort,
     Comparison,
@@ -180,6 +181,8 @@ pub struct Shell {
     /// Bounds of the control that opened the current menu. The menu opens above or below it.
     menu_anchor: Option<Bounds<Pixels>>,
     thread_menu: Option<ThreadMenu>,
+    /// Where the pointer opened the menu of the conversation's text selection.
+    selection_menu: Option<Point<Pixels>>,
     deleting_task: Option<String>,
     error: Option<String>,
     notices: notices::Notices,
@@ -518,6 +521,7 @@ impl Shell {
             menu_anchor: None,
             usage_actions: std::collections::BTreeMap::new(),
             thread_menu: None,
+            selection_menu: None,
             deleting_task: None,
             error: None,
             notices: notices::Notices::default(),

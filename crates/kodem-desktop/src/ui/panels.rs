@@ -39,6 +39,7 @@ impl Shell {
             | Panel::ChatProjects
             | Panel::TaskMenu
             | Panel::ThreadMenu
+            | Panel::SelectionMenu
             | Panel::Sort
             | Panel::Palette
             | Panel::Comparison => "",
@@ -472,6 +473,7 @@ impl Shell {
             | Panel::ChatProjects
             | Panel::TaskMenu
             | Panel::ThreadMenu
+            | Panel::SelectionMenu
             | Panel::Sort
             | Panel::Palette
             | Panel::Comparison => {}

@@ -183,35 +183,47 @@ impl TextDocument {
                 })
             }
             SelectionInput::End => self.dragging = false,
-            SelectionInput::Copy => {
-                let mut selected = Vec::new();
-                let endpoints = self.endpoints();
-                for (index, block) in self.groups.values().flatten().enumerate() {
-                    let text = block.input.read(cx).text();
-                    let range =
-                        endpoints.map_or(0..0, |(a, b)| selection_range(index, text.len(), a, b));
-                    let range =
-                        text.floor_char_boundary(range.start)..text.floor_char_boundary(range.end);
-                    if !range.is_empty() {
-                        selected.push(text[range].to_owned());
-                    }
-                }
-                if !selected.is_empty() {
-                    cx.write_to_clipboard(ClipboardItem::new_string(selected.join("\n")));
-                }
-            }
-            SelectionInput::SelectAll => {
-                self.anchor = self.groups.values().flatten().next().map(|b| Position {
-                    input: b.input.entity_id(),
-                    byte: 0,
-                });
-                self.head = self.groups.values().flatten().last().map(|b| Position {
-                    input: b.input.entity_id(),
-                    byte: b.input.read(cx).text().len(),
-                });
-            }
+            SelectionInput::Copy => self.copy(cx),
+            SelectionInput::SelectAll => self.select_all(cx),
             _ => {}
         }
+        self.sync(cx);
+    }
+
+    /// Returns the selected text of all blocks, one block per line, or `None` without a
+    /// selection.
+    pub fn selected_text(&self, cx: &App) -> Option<String> {
+        let mut selected = Vec::new();
+        let endpoints = self.endpoints()?;
+        for (index, block) in self.groups.values().flatten().enumerate() {
+            let text = block.input.read(cx).text();
+            let range = selection_range(index, text.len(), endpoints.0, endpoints.1);
+            let range = text.floor_char_boundary(range.start)..text.floor_char_boundary(range.end);
+            if !range.is_empty() {
+                selected.push(text[range].to_owned());
+            }
+        }
+        (!selected.is_empty()).then(|| selected.join("\n"))
+    }
+
+    /// Writes the selected text to the clipboard. Without a selection the clipboard keeps its
+    /// content.
+    pub fn copy(&self, cx: &mut App) {
+        if let Some(text) = self.selected_text(cx) {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    /// Selects the text of every registered block.
+    pub fn select_all(&mut self, cx: &mut App) {
+        self.anchor = self.groups.values().flatten().next().map(|b| Position {
+            input: b.input.entity_id(),
+            byte: 0,
+        });
+        self.head = self.groups.values().flatten().last().map(|b| Position {
+            input: b.input.entity_id(),
+            byte: b.input.read(cx).text().len(),
+        });
         self.sync(cx);
     }
 

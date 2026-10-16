@@ -734,6 +734,7 @@ impl Render for Shell {
                 | Panel::ChatProjects
                 | Panel::TaskMenu
                 | Panel::ThreadMenu
+                | Panel::SelectionMenu
                 | Panel::Sort
                 | Panel::Comparison
         ) {

@@ -349,6 +349,37 @@ impl Shell {
                     }
                 }
             }
+            Panel::SelectionMenu => {
+                width = 212.;
+                let selected = self.chat_selection.read(cx).selected_text(cx).is_some();
+                menu = menu
+                    .child(menu_title("Text", None, t))
+                    .child(
+                        self.ghost("selection-copy", "copy", "Copy")
+                            .w_full()
+                            .justify_start()
+                            .child(div().flex_1())
+                            .child(kit::keycap("⌘C", t))
+                            .disabled(!selected)
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.chat_selection.update(cx, |doc, cx| doc.copy(cx));
+                                s.panel = Panel::None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        self.ghost("selection-select-all", "list-checks", "Select all")
+                            .w_full()
+                            .justify_start()
+                            .child(div().flex_1())
+                            .child(kit::keycap("⌘A", t))
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.chat_selection.update(cx, |doc, cx| doc.select_all(cx));
+                                s.panel = Panel::None;
+                                cx.notify();
+                            })),
+                    );
+            }
             Panel::TaskMenu => {
                 width = 236.;
                 if let Some(view) = self.view.clone() {
@@ -450,18 +481,21 @@ impl Shell {
         let viewport = window.viewport_size();
         // Measure content at its natural height. Only the window limits scrolling;
         // percentage caps inside the anchored layout can clip even short menus.
-        let thread_context = (self.panel == Panel::ThreadMenu)
-            .then_some(self.thread_menu.as_ref())
-            .flatten();
+        // A menu that the pointer opened, rather than a control, opens at the pointer.
+        let pointer = match self.panel {
+            Panel::ThreadMenu => self.thread_menu.as_ref().map(|context| context.position),
+            Panel::SelectionMenu => self.selection_menu,
+            _ => None,
+        };
         // A menu opens above its trigger, as the composer's menus do, unless the trigger sits in
         // the upper half of the window. There it opens below, so that it never climbs into the
         // title bar and under the window controls.
         let trigger = self
             .menu_anchor
             .unwrap_or(Bounds::new(point(px(24.), px(120.)), Size::default()));
-        let upward = thread_context.is_none() && trigger.top() > viewport.height / 2.;
-        let (position, anchor, offset) = match thread_context {
-            Some(context) => (context.position, Anchor::TopLeft, px(0.)),
+        let upward = pointer.is_none() && trigger.top() > viewport.height / 2.;
+        let (position, anchor, offset) = match pointer {
+            Some(position) => (position, Anchor::TopLeft, px(0.)),
             None if upward => (trigger.top_right(), Anchor::BottomRight, px(-8.)),
             None => (trigger.bottom_left(), Anchor::TopLeft, px(6.)),
         };

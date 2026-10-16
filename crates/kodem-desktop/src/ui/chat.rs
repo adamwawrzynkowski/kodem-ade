@@ -162,6 +162,17 @@ impl Shell {
                                     .w_full()
                                     .min_w_0()
                                     .h_full()
+                                    // A secondary press over the conversation opens the menu of
+                                    // its text selection at the pointer.
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(|s, event: &MouseDownEvent, _, cx| {
+                                            cx.stop_propagation();
+                                            s.selection_menu = Some(event.position);
+                                            s.panel = Panel::SelectionMenu;
+                                            cx.notify();
+                                        }),
+                                    )
                                     .child(
                                         // The list spans the chat, so the wheel scrolls it
                                         // from the margins too. Each row centers its content
