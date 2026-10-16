@@ -1,6 +1,8 @@
 #!/bin/bash
 # Compiles, packages and verifies Kodem for x86_64 Linux without launching either executable.
-# Build on the oldest distribution you support: the package needs that glibc or newer.
+# Build on the oldest distribution you support: the package needs that glibc or newer. Nightly
+# and Production also write Kodem-linux-x86_64.tar.gz, the archive that installed apps update
+# from, and Kodem-linux-x86_64-setup.run, the installer for a first installation.
 set -euo pipefail
 KODEM_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$KODEM_ROOT"
@@ -56,7 +58,7 @@ package="$work_dir/$package_name"
 mkdir -p "$package/licenses"
 install -m 755 "$executables/kodem" "$package/kodem"
 install -m 755 "$executables/kodem-host" "$package/kodem-host"
-install -m 755 scripts/linux-install.sh "$package/install.sh"
+install -m 755 "$executables/kodem-update" "$package/kodem-update"
 install -m 644 assets/app/AppIcon_1024x1024.png "$package/kodem.png"
 cp LICENSE "$package/LICENSE"
 cp assets/THIRD_PARTY.md "$package/THIRD_PARTY.md"
@@ -85,14 +87,14 @@ Requires: glibc $glibc or newer, libxkbcommon, libxkbcommon-x11, fontconfig, fre
 INFO
 python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$package/release.json"
 # Every shared library must resolve on the build system; the package bundles none.
-for executable in kodem kodem-host; do
+for executable in kodem kodem-host kodem-update; do
     if ldd "$package/$executable" | grep -q 'not found'; then
         ldd "$package/$executable" >&2
         echo "$executable links a library that is not installed." >&2
         exit 1
     fi
 done
-file "$package/kodem" "$package/kodem-host"
+file "$package/kodem" "$package/kodem-host" "$package/kodem-update"
 echo "Requires glibc $glibc or newer."
 # Keep a local package for each channel.
 output="$KODEM_ROOT/target/$channel/$package_name"
@@ -105,29 +107,37 @@ mkdir -p "$(dirname "$output")"
 cp -R -p "$package" "$output"
 echo "BUILD SUCCEEDED: $output"
 echo "Build ID: $build_id"
-echo "Install it for this user with: $output/install.sh"
 if [[ "$channel" != debug ]]; then
     archive="$KODEM_ROOT/target/$channel/Kodem-linux-x86_64.tar.gz"
-    rm -f "$archive" "$archive.sha256" "$archive.asc"
+    installer="$KODEM_ROOT/target/$channel/Kodem-linux-x86_64-setup.run"
+    rm -f "$archive" "$archive.sha256" "$archive.asc" "$installer" "$installer.sha256" "$installer.asc"
     tar -C "$(dirname "$output")" --owner=0 --group=0 --numeric-owner -czf "$archive" "$package_name"
-    (cd "$(dirname "$archive")" && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")
-    signatures=("$archive.sha256")
-    # Linux runs unsigned programs. A detached OpenPGP signature lets users verify the publisher.
-    if [[ -n "${KODEM_GPG_KEY:-}" ]]; then
-        gpg --batch --yes --local-user "$KODEM_GPG_KEY" --armor --detach-sign --output "$archive.asc" "$archive"
-        gpg --batch --verify "$archive.asc" "$archive"
-        signatures+=("$archive.asc")
-    elif [[ "${KODEM_REQUIRE_SIGNING:-0}" == 1 ]]; then
-        echo "KODEM_REQUIRE_SIGNING is set, but KODEM_GPG_KEY names no signing key." >&2
-        exit 1
-    else
-        echo "Not signed: set KODEM_GPG_KEY to publish a detached OpenPGP signature."
-    fi
+    # The installer is a shell script followed by the archive.
+    cat scripts/linux-installer.sh "$archive" > "$installer"
+    chmod 755 "$installer"
+    files=("$archive" "$installer")
+    for file in "$archive" "$installer"; do
+        kodem_write_sha256 "$file"
+        files+=("$file.sha256")
+        # Linux runs unsigned programs. A detached OpenPGP signature lets users verify the publisher.
+        if [[ -n "${KODEM_GPG_KEY:-}" ]]; then
+            gpg --batch --yes --local-user "$KODEM_GPG_KEY" --armor --detach-sign --output "$file.asc" "$file"
+            gpg --batch --verify "$file.asc" "$file"
+            files+=("$file.asc")
+        elif [[ "${KODEM_REQUIRE_SIGNING:-0}" == 1 ]]; then
+            echo "KODEM_REQUIRE_SIGNING is set, but KODEM_GPG_KEY names no signing key." >&2
+            exit 1
+        fi
+    done
+    [[ -n "${KODEM_GPG_KEY:-}" ]] || echo "Not signed: set KODEM_GPG_KEY to publish detached OpenPGP signatures."
     if kodem_release_publishes "$channel"; then
-        kodem_release_publish "$channel" "$archive" "${signatures[@]}"
+        kodem_release_publish "$channel" "${files[@]}"
     else
-        echo "PACKAGED: $archive (the release workflow publishes it)"
+        echo "PACKAGED: $archive and $installer (the release workflow publishes them)"
     fi
+    echo "Install it for this user with: sh $installer"
+else
+    echo "Run it with: $output/kodem"
 fi
 echo "Built and verified: $output"
 echo "The application was not launched."

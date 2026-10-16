@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/kodem-core", "crates/kodem-host", "crates/kodem-desktop", "crates/kodem-git"]
+members = ["crates/kodem-core", "crates/kodem-host", "crates/kodem-desktop", "crates/kodem-git", "crates/kodem-update"]
 resolver = "2"
 
 [workspace.package]

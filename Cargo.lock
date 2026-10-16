@@ -3054,6 +3054,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kodem-update"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "kurbo"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

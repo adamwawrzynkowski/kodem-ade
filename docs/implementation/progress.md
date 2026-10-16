@@ -930,3 +930,7 @@ Recorded on 16 October 2026. The user reported that scrolling stayed laggy every
 Not changed: the glass panels' backdrop blur and the glyph field's frame rate. Each frame of the field draws the whole window again, its glass included, so the field's 25 frames a second at rest are most of the remaining idle work; a lower rate would change its motion.
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. The new build has not been profiled in the running app; the look, scrolling and every region's updates are not checked under the no-visual-testing agreement.
+
+## Installers and the update helper
+
+Recorded on 16 October 2026. Releases carry installers next to the update archives: `Kodem-macos-aarch64.dmg`, `Kodem-windows-<processor>-setup.exe` (NSIS, per user, Start menu and desktop shortcuts, uninstaller) and `Kodem-linux-x86_64-setup.run`. The package folders hold no install scripts. The `kodem-update` helper replaces the three updater scripts: it waits for the desktop to exit through its standard input, ends left-over `kodem-host.exe` processes on Windows, retries every folder move, rolls back and reopens. `scripts/build-windows.sh` runs in steps, so that the release workflow can sign with SignPath between them. See [releases](releases.md#installers-and-the-update-helper) for the design and the checks.

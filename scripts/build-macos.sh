@@ -1,5 +1,7 @@
 #!/bin/bash
-# Compiles, bundles and verifies Kodem without launching either executable.
+# Compiles, bundles and verifies Kodem without launching either executable. Nightly and
+# Production also write Kodem-macos-aarch64.zip, the archive that installed apps update from,
+# and Kodem-macos-aarch64.dmg, the disk image for a first installation.
 set -euo pipefail
 KODEM_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$KODEM_ROOT"
@@ -53,7 +55,8 @@ bundle="$work_dir/$app_name.app"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources/licenses"
 cp "$executables/kodem" "$bundle/Contents/MacOS/kodem"
 cp "$executables/kodem-host" "$bundle/Contents/MacOS/kodem-host"
-chmod 755 "$bundle/Contents/MacOS/kodem" "$bundle/Contents/MacOS/kodem-host"
+cp "$executables/kodem-update" "$bundle/Contents/MacOS/kodem-update"
+chmod 755 "$bundle/Contents/MacOS/kodem" "$bundle/Contents/MacOS/kodem-host" "$bundle/Contents/MacOS/kodem-update"
 cp LICENSE "$bundle/Contents/Resources/LICENSE"
 cp assets/licenses/* "$bundle/Contents/Resources/licenses/"
 cp target/licensing/assets/licenses/* "$bundle/Contents/Resources/licenses/"
@@ -100,11 +103,12 @@ INFO
 # UserNotifications checks the sender's code identity against the requested bundle.
 # An automatically generated helper identifier cannot post for the parent app.
 /usr/bin/codesign --force --sign - --identifier "$bundle_id" "$bundle/Contents/MacOS/kodem-host"
+/usr/bin/codesign --force --sign - "$bundle/Contents/MacOS/kodem-update"
 /usr/bin/codesign --force --sign - "$bundle"
 /usr/bin/codesign --verify --deep --strict "$bundle"
 host_identity=$(/usr/bin/codesign -d --verbose=2 "$bundle/Contents/MacOS/kodem-host" 2>&1 | /usr/bin/sed -n 's/^Identifier=//p')
 [[ "$host_identity" == "$bundle_id" ]] || { echo "Host notification identity does not match $bundle_id" >&2; exit 1; }
-/usr/bin/file "$bundle/Contents/MacOS/kodem" "$bundle/Contents/MacOS/kodem-host"
+/usr/bin/file "$bundle/Contents/MacOS/kodem" "$bundle/Contents/MacOS/kodem-host" "$bundle/Contents/MacOS/kodem-update"
 # Keep a local app bundle for each channel.
 output="$KODEM_ROOT/target/$channel/$app_name.app"
 if [[ -e "$output" ]]; then
@@ -119,14 +123,27 @@ echo "BUILD SUCCEEDED: $output"
 echo "Build ID: $build_id"
 if [[ "$channel" != debug ]]; then
     archive="$KODEM_ROOT/target/$channel/Kodem-macos-aarch64.zip"
-    rm -f "$archive"
-    rm -f "$archive.sha256"
+    disk_image="$KODEM_ROOT/target/$channel/Kodem-macos-aarch64.dmg"
+    rm -f "$archive" "$archive.sha256" "$disk_image" "$disk_image.sha256"
     /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$output" "$archive"
-    (cd "$(dirname "$archive")" && echo "$(kodem_sha256 "$(basename "$archive")")  $(basename "$archive")" > "$(basename "$archive").sha256")
+    # The disk image installs by drag and drop: the app beside a link to Applications.
+    image_root="$work_dir/disk-image"
+    mkdir "$image_root"
+    /usr/bin/ditto "$output" "$image_root/$app_name.app"
+    ln -s /Applications "$image_root/Applications"
+    # hdiutil fails now and then while the system still uses a new volume. Retry a few times.
+    for attempt in 1 2 3; do
+        if /usr/bin/hdiutil create -volname "$app_name" -srcfolder "$image_root" -fs HFS+ -format UDZO -ov "$disk_image" >/dev/null; then break; fi
+        [[ "$attempt" -lt 3 ]] || { echo "hdiutil could not create $disk_image" >&2; exit 1; }
+        sleep 5
+    done
+    /usr/bin/hdiutil verify "$disk_image" >/dev/null
+    kodem_write_sha256 "$archive"
+    kodem_write_sha256 "$disk_image"
     if kodem_release_publishes "$channel"; then
-        kodem_release_publish "$channel" "$archive" "$archive.sha256"
+        kodem_release_publish "$channel" "$archive" "$archive.sha256" "$disk_image" "$disk_image.sha256"
     else
-        echo "PACKAGED: $archive (the release workflow publishes it)"
+        echo "PACKAGED: $archive and $disk_image (the release workflow publishes them)"
     fi
 fi
 echo "Built and verified: $output"

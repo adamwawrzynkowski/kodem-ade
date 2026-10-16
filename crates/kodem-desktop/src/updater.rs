@@ -1,5 +1,6 @@
 //! GitHub channel discovery and verified updates, run outside the UI thread. macOS installs an
-//! app bundle; Windows and Linux replace the folder that holds the executables.
+//! app bundle; Windows and Linux replace the folder that holds the executables. The
+//! `kodem-update` helper of the installed version moves the folders after the desktop exits.
 use anyhow::{Context, Result, bail, ensure};
 use kodem_core::platform;
 use semver::Version;
@@ -593,7 +594,7 @@ fn verify_package(bundle: &Path, channel: Channel, version: &str) -> Result<()> 
             "Update bundle has an unexpected {key}"
         );
     }
-    for executable in ["kodem", "kodem-host"] {
+    for executable in ["kodem", "kodem-host", "kodem-update"] {
         ensure!(
             bundle.join("Contents/MacOS").join(executable).is_file(),
             "Update is missing {executable}"
@@ -615,7 +616,7 @@ fn verify_package(package: &Path, channel: Channel, version: &str) -> Result<()>
     ] {
         ensure!(value == expected, "Update package has an unexpected {key}");
     }
-    for executable in ["kodem", "kodem-host"] {
+    for executable in ["kodem", "kodem-host", "kodem-update"] {
         let path = package.join(platform::executable_name(executable));
         ensure!(path.is_file(), "Update is missing {executable}");
         #[cfg(windows)]
@@ -624,9 +625,10 @@ fn verify_package(package: &Path, channel: Channel, version: &str) -> Result<()>
     Ok(())
 }
 
-/// Requires an update to carry a valid Authenticode signature from the certificate that signed
+/// Requires an update to carry a valid Authenticode signature from the publisher that signed
 /// the running app. An unsigned or locally signed app accepts the download on its GitHub
-/// digest alone.
+/// digest alone. The publisher is the certificate's subject, which stays the same when the
+/// certificate is renewed.
 #[cfg(windows)]
 fn verify_signer(executable: &Path) -> Result<()> {
     let Some(expected) = signer(&std::env::current_exe()?)? else {
@@ -639,7 +641,8 @@ fn verify_signer(executable: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Returns the thumbprint of the certificate behind a valid Authenticode signature.
+/// Returns the subject of the certificate behind a valid Authenticode signature. A valid
+/// signature chains to a certificate authority that Windows trusts.
 #[cfg(windows)]
 fn signer(executable: &Path) -> Result<Option<String>> {
     // The path travels in the environment, so it is never parsed as PowerShell code.
@@ -650,7 +653,7 @@ fn signer(executable: &Path) -> Result<Option<String>> {
             "-NonInteractive",
             "-Command",
             "$s = Get-AuthenticodeSignature -LiteralPath $env:KODEM_SIGNED_FILE; \
-             if ($s.Status -eq 'Valid') { $s.SignerCertificate.Thumbprint }",
+             if ($s.Status -eq 'Valid') { $s.SignerCertificate.Subject }",
         ])
         .env("KODEM_SIGNED_FILE", executable)
         .stdin(Stdio::null())
@@ -659,8 +662,8 @@ fn signer(executable: &Path) -> Result<Option<String>> {
         output.status.success(),
         "Windows could not read the update's signature"
     );
-    let thumbprint = String::from_utf8(output.stdout)?.trim().to_owned();
-    Ok((!thumbprint.is_empty()).then_some(thumbprint))
+    let subject = String::from_utf8(output.stdout)?.trim().to_owned();
+    Ok((!subject.is_empty()).then_some(subject))
 }
 
 fn run(command: &mut Command) -> Result<()> {
@@ -673,88 +676,103 @@ fn run(command: &mut Command) -> Result<()> {
     Ok(())
 }
 
-/// Starts the detached installer and waits for its readiness before allowing desktop exit.
+/// The file with which `kodem-update` marks a stage folder that it finished with. Windows keeps
+/// the running helper and its log in that folder until the helper exits.
+const FINISHED: &str = "finished";
+
+/// Starts the installed version's `kodem-update` helper from the stage folder and waits until
+/// it is ready, before the desktop may exit. The helper waits for that exit by reading its
+/// standard input, which stays open until this process ends.
 pub fn install(prepared: PreparedUpdate) -> Result<()> {
     ensure_unchanged(&prepared.destination)?;
-    let script = prepared.directory.path().join(INSTALLER.0);
-    fs::write(&script, INSTALLER.1)?;
-    let log = File::create(prepared.directory.path().join("install.log"))?;
+    let stage = prepared.directory.path();
+    let name = platform::executable_name("kodem-update");
+    // A helper inside the installed folder would keep Windows from moving that folder.
+    let helper = stage.join(&name);
+    fs::copy(std::env::current_exe()?.with_file_name(&name), &helper).context(
+        "This installation has no update helper. Install Kodem again from its installer.",
+    )?;
+    let log = File::create(stage.join("install.log"))?;
     // The helper must not start in the installed folder, where the app usually starts: Windows
     // refuses to move a folder that a process uses as its working directory.
     let neutral = prepared
         .destination
         .parent()
         .context("Missing application directory")?;
-    let mut helper = platform::detach(
-        installer_command(&script)
+    let mut child = platform::detach(
+        Command::new(&helper)
             .current_dir(neutral)
-            .arg(std::process::id().to_string())
             .arg(&prepared.destination)
             .arg(&prepared.bundle)
-            .arg(prepared.directory.path())
-            .stdin(Stdio::null())
+            .arg(stage)
+            .stdin(Stdio::piped())
             .stdout(Stdio::from(log.try_clone()?))
             .stderr(Stdio::from(log)),
     )
     .spawn()?;
-    let ready = prepared.directory.path().join("ready");
+    let ready = stage.join("ready");
     let until = Instant::now() + Duration::from_secs(10);
     while Instant::now() < until {
         if ready.is_file() {
+            // The pipe closes when this process exits, which is the helper's signal to start.
+            std::mem::forget(child.stdin.take());
             // The helper now owns cleanup and rollback after the parent exits.
             let _ = prepared.directory.keep();
             return Ok(());
         }
-        if helper.try_wait()?.is_some() {
+        if child.try_wait()?.is_some() {
             bail!("Update installer failed to prepare. Retry the download.");
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    let _ = helper.kill();
-    let _ = helper.wait();
+    let _ = child.kill();
+    let _ = child.wait();
     bail!("Update installer did not become ready. Retry the download.")
 }
 
-/// The installer script's file name and contents for this platform.
-#[cfg(target_os = "macos")]
-const INSTALLER: (&str, &str) = (
-    "install.sh",
-    include_str!("../../../scripts/install-update.sh"),
-);
-#[cfg(windows)]
-const INSTALLER: (&str, &str) = (
-    "install.ps1",
-    include_str!("../../../scripts/install-update-windows.ps1"),
-);
-#[cfg(not(any(target_os = "macos", windows)))]
-const INSTALLER: (&str, &str) = (
-    "install.sh",
-    include_str!("../../../scripts/install-update-linux.sh"),
-);
+/// Removes the stage folders that `kodem-update` finished with beside the installed app. A
+/// folder that is still in use stays until a later call.
+pub fn remove_finished_updates() {
+    let channel = Channel::current();
+    if channel == Channel::Debug {
+        return;
+    }
+    let Some(parent) = installed_package(channel)
+        .ok()
+        .and_then(|destination| destination.parent().map(Path::to_path_buf))
+    else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".kodem-update-")
+            && path.join(FINISHED).is_file()
+        {
+            let _ = remove_stage(&path);
+        }
+    }
+}
 
-/// Starts the installer script. Its arguments are passed directly, never interpolated as code.
-fn installer_command(script: &Path) -> Command {
-    #[cfg(windows)]
-    {
-        let mut command = Command::new("powershell.exe");
-        command
-            .args([
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-            ])
-            .arg(script);
-        command
+/// Removes a stage folder, its mark last, so that a folder still in use keeps the mark.
+fn remove_stage(stage: &Path) -> std::io::Result<()> {
+    for entry in fs::read_dir(stage)? {
+        let entry = entry?;
+        if entry.file_name() == FINISHED {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            fs::remove_dir_all(entry.path())?;
+        } else {
+            fs::remove_file(entry.path())?;
+        }
     }
-    #[cfg(not(windows))]
-    {
-        let mut command = Command::new("/bin/bash");
-        command.arg(script);
-        command
-    }
+    fs::remove_dir_all(stage)
 }
 
 /// Refuses to replace an installed app that changed after the download started.

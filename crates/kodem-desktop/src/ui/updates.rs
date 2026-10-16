@@ -12,6 +12,7 @@ impl Shell {
         self.update_state = State::Checking;
         let tx = self.update_tx.clone();
         std::thread::spawn(move || {
+            updater::remove_finished_updates();
             let state = match updater::check() {
                 Ok(Some(release)) => State::Available(release),
                 Ok(None) => State::Idle,

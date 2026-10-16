@@ -187,17 +187,17 @@ kodem_release_wait() {
     done
 }
 
-# Checks the packages that the workflow's builds produced in a folder: every archive of the
-# platforms in the second argument exists, and each checksum file matches its archive. Lists
-# them in release_assets.
+# Checks the packages that the workflow's builds produced in a folder: every update archive and
+# installer of the platforms in the second argument exists, and each checksum file matches its
+# file. Lists them in release_assets.
 kodem_release_verify_assets() {
     local folder=$1 platforms=$2 file expected platform
     release_assets=()
     for platform in $platforms; do
         case "$platform" in
-            macos) expected="Kodem-macos-aarch64.zip" ;;
-            windows) expected="Kodem-windows-x86_64.zip Kodem-windows-aarch64.zip" ;;
-            linux) expected="Kodem-linux-x86_64.tar.gz" ;;
+            macos) expected="Kodem-macos-aarch64.zip Kodem-macos-aarch64.dmg" ;;
+            windows) expected="Kodem-windows-x86_64.zip Kodem-windows-x86_64-setup.exe Kodem-windows-aarch64.zip Kodem-windows-aarch64-setup.exe" ;;
+            linux) expected="Kodem-linux-x86_64.tar.gz Kodem-linux-x86_64-setup.run" ;;
             *) echo "Unknown platform $platform. Use macos, windows and linux." >&2; return 1 ;;
         esac
         for file in $expected; do
@@ -207,7 +207,7 @@ kodem_release_verify_assets() {
     done
     while IFS= read -r file; do
         if [[ "$file" == *.sha256 ]]; then
-            [[ "$(cut -d ' ' -f 1 "$file")" == "$(kodem_sha256 "${file%.sha256}")" ]] || { echo "$(basename "$file") does not match its archive." >&2; return 1; }
+            [[ "$(cut -d ' ' -f 1 "$file")" == "$(kodem_sha256 "${file%.sha256}")" ]] || { echo "$(basename "$file") does not match its file." >&2; return 1; }
         fi
         release_assets+=("$file")
     done < <(find "$folder" -type f | sort)

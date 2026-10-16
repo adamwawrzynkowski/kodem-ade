@@ -77,6 +77,11 @@ kodem_sha256() {
     else /usr/bin/shasum -a 256 "$1" | cut -d ' ' -f 1; fi
 }
 
+# Writes FILE.sha256 next to a file, in the format of sha256sum.
+kodem_write_sha256() {
+    echo "$(kodem_sha256 "$1")  $(basename "$1")" > "$1.sha256"
+}
+
 kodem_dependencies() {
     case "$KODEM_PLATFORM" in
         macos) kodem_dependencies_macos ;;
@@ -167,6 +172,19 @@ kodem_dependencies_windows() {
         fi
     done
     kodem_windows_sdk_tool fxc.exe >/dev/null || { echo "The Windows SDK is missing fxc.exe. Add a Windows 11 SDK in the Visual Studio Installer." >&2; return 1; }
+}
+
+# Prints NSIS's makensis, which writes the Windows installers.
+kodem_makensis() {
+    local candidate
+    for candidate in "$(command -v makensis 2>/dev/null || true)" "$(kodem_program_files_x86)/NSIS/makensis.exe"; do
+        if [[ -n "$candidate" && -f "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    echo "Install NSIS to build the Windows installer: winget install NSIS.NSIS" >&2
+    return 1
 }
 
 # Prints the 32-bit Program Files folder, where Visual Studio and the Windows SDK install.

@@ -2,6 +2,18 @@
 # Compiles, signs, packages and verifies Kodem for Windows on x64 and Arm64 without launching
 # either executable. Run it from Git Bash; the Build *.cmd files at the repository root do that.
 #
+#   build-windows.sh debug|nightly|production [all|compile|package|finish]
+#
+# Steps, all of them by default:
+#   compile  builds each processor's package folder in target/<channel>/windows-<processor>/
+#            and signs its executables.
+#   package  Nightly and Production: writes Kodem-windows-<processor>.zip, the archive that
+#            installed apps update from, and Kodem-windows-<processor>-setup.exe, the installer
+#            for a first installation (NSIS, see scripts/windows-installer.nsi), and signs it.
+#   finish   Nightly and Production: writes the .sha256 files and publishes, unless the release
+#            workflow publishes.
+# The release workflow runs the steps one at a time, so that SignPath signs between them.
+#
 # Processors: KODEM_WINDOWS_ARCH lists x86_64, aarch64 or both. Nightly and Production build
 # both by default, cross-compiling the one that the build computer does not have; Debug builds
 # the build computer's own. Each needs the Visual Studio C++ tools for that processor.
@@ -12,24 +24,36 @@
 #   KODEM_SIGN_CERT_SHA1                 thumbprint of a certificate in the user's store or on a
 #                                        hardware token
 #   KODEM_SIGN_PFX                       a .pfx file, with KODEM_SIGN_PFX_PASSWORD
-# KODEM_SIGN_TIMESTAMP_URL overrides the RFC 3161 timestamp server. Without an identity, the
+# KODEM_SIGN_TIMESTAMP_URL overrides the RFC 3161 timestamp server. KODEM_SIGN_EXTERNALLY=1
+# means that another step signs between the steps of this script, such as SignPath in the release
+# workflow; each step then checks the signatures of the previous one. Without an identity, the
 # executables stay unsigned, and SmartScreen warns on other computers. KODEM_REQUIRE_SIGNING=1
 # refuses to build a release without one.
 set -euo pipefail
 KODEM_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$KODEM_ROOT"
 channel=${1:-debug}
+step=${2:-all}
+usage() {
+    echo "Usage: $0 debug|nightly|production [all|compile|package|finish]" >&2
+    exit 2
+}
 case "$channel" in
     debug) configuration=debug ;;
     nightly|production) configuration=release ;;
-    *) echo "Usage: $0 debug|nightly|production" >&2; exit 2 ;;
+    *) usage ;;
+esac
+case "$step" in
+    all|compile) ;;
+    package|finish) [[ "$channel" != debug ]] || usage ;;
+    *) usage ;;
 esac
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) ;;
     *) echo "Run this build on Windows from Git Bash." >&2; exit 2 ;;
 esac
 # A required signature without an identity would fail only after compiling. Say so first.
-if [[ "$channel" != debug && "${KODEM_REQUIRE_SIGNING:-0}" == 1 \
+if [[ "$channel" != debug && "${KODEM_REQUIRE_SIGNING:-0}" == 1 && "${KODEM_SIGN_EXTERNALLY:-0}" != 1 \
     && -z "${KODEM_SIGN_TRUSTED_SIGNING_METADATA:-}${KODEM_SIGN_CERT_SHA1:-}${KODEM_SIGN_PFX:-}" ]]; then
     echo "KODEM_REQUIRE_SIGNING is set, but no signing identity is configured (see the top of scripts/build-windows.sh)." >&2
     exit 1
@@ -64,8 +88,6 @@ kodem_dependencies
 source "$KODEM_ROOT/scripts/github-release.sh"
 kodem_release_prepare "$channel"
 export KODEM_RELEASE_CHANNEL="$channel" KODEM_APP_VERSION="$release_version" KODEM_RELEASE_PREVIOUS="$release_previous" KODEM_RELEASE_NOTES="$release_notes"
-echo "Compiling $channel $release_version for $architectures from $KODEM_ROOT"
-cargo fmt --all -- --check
 python=$(kodem_python)
 build_date=$(date -u +%Y.%m.%d)
 build_id=$(date -u +%Y%m%dT%H%M%SZ)
@@ -116,13 +138,45 @@ expected = {"x86_64": 0x8664, "aarch64": 0xAA64}[sys.argv[2]]
 sys.exit(0 if data[offset:offset + 4] == b"PE\0\0" and machine == expected else 1)
 PYTHON
 }
+# Signs a file with the configured identity, unless another step signs it. Without either, the
+# file stays unsigned, which KODEM_REQUIRE_SIGNING=1 refuses for a release.
+sign_or_report() {
+    local status=0
+    [[ "${KODEM_SIGN_EXTERNALLY:-0}" != 1 ]] || return 0
+    sign "$1" || status=$?
+    if [[ "$status" == 2 ]]; then
+        if [[ "$channel" != debug && "${KODEM_REQUIRE_SIGNING:-0}" == 1 ]]; then
+            echo "KODEM_REQUIRE_SIGNING is set, but no signing identity is configured." >&2
+            return 1
+        fi
+        echo "Not signed: $1. Windows SmartScreen warns when it runs on another computer."
+        return 0
+    fi
+    [[ "$status" == 0 ]] || return "$status"
+    echo "Signed and verified $1"
+}
+
+# Fails unless a file carries a valid signature, when this release requires signatures.
+check_signature() {
+    [[ "${KODEM_SIGN_EXTERNALLY:-0}" == 1 || "${KODEM_REQUIRE_SIGNING:-0}" == 1 ]] || return 0
+    signtool verify /pa "$(cygpath -w "$1")" >/dev/null || { echo "$1 has no valid signature." >&2; return 1; }
+}
+
+# Prints the version in a package folder's release.json.
+package_version() {
+    sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1/release.json" 2>/dev/null || true
+}
 
 # The Windows editions whose processor each package runs on.
 declare -A requirements=(
     [x86_64]="Windows 10 version 1809 or newer on x64"
     [aarch64]="Windows 10 version 1809 or newer on Arm64, or Windows 11 on Arm"
 )
-for arch in $architectures; do
+
+# Builds one processor's package folder in target/<channel>/windows-<processor>/ and signs its
+# executables.
+compile_step() {
+    local arch=$1 build_target executables package executable output existing_id
     # Pin both the output root and target. Shell/global Cargo overrides must never
     # make packaging read an older executable from another output directory.
     build_target="$arch-pc-windows-msvc"
@@ -137,13 +191,10 @@ for arch in $architectures; do
     executables="$KODEM_ROOT/target/$build_target/$configuration"
     package="$work_dir/$arch/$app_name"
     mkdir -p "$package/licenses"
-    cp "$executables/kodem.exe" "$package/kodem.exe"
-    cp "$executables/kodem-host.exe" "$package/kodem-host.exe"
-    for executable in kodem.exe kodem-host.exe; do
+    for executable in kodem.exe kodem-host.exe kodem-update.exe; do
+        cp "$executables/$executable" "$package/$executable"
         check_machine "$package/$executable" "$arch" || { echo "$executable is not a $arch Windows program." >&2; exit 1; }
     done
-    cp scripts/windows-install.ps1 "$package/install.ps1"
-    cp scripts/windows-install.cmd "$package/Install.cmd"
     cp LICENSE "$package/LICENSE"
     cp assets/THIRD_PARTY.md "$package/THIRD_PARTY.md"
     # The tracked notices describe the macOS dependency graph. This target's notices replace them.
@@ -169,21 +220,9 @@ Target: $build_target
 Requires: ${requirements[$arch]}
 INFO
     "$python" -c 'import json, sys; json.load(open(sys.argv[1]))' "$(cygpath -w "$package/release.json")"
-    signed=1
-    for executable in kodem.exe kodem-host.exe; do
-        status=0
-        sign "$package/$executable" || status=$?
-        if [[ "$status" == 2 ]]; then signed=0; break; fi
-        [[ "$status" == 0 ]] || exit "$status"
-        echo "Signed and verified $arch $executable"
+    for executable in kodem.exe kodem-host.exe kodem-update.exe; do
+        sign_or_report "$package/$executable"
     done
-    if [[ "$signed" == 0 ]]; then
-        if [[ "$channel" != debug && "${KODEM_REQUIRE_SIGNING:-0}" == 1 ]]; then
-            echo "KODEM_REQUIRE_SIGNING is set, but no signing identity is configured." >&2
-            exit 1
-        fi
-        echo "Not signed: Windows SmartScreen will warn when this package runs on another computer."
-    fi
     # Keep a local package for each channel and processor.
     output="$KODEM_ROOT/target/$channel/windows-$arch/$app_name"
     if [[ -e "$output" ]]; then
@@ -194,27 +233,83 @@ INFO
     mkdir -p "$(dirname "$output")"
     cp -R -p "$package" "$output"
     echo "BUILD SUCCEEDED: $output"
-    echo "Install it for this user with: $output/Install.cmd"
-    if [[ "$channel" != debug ]]; then
-        # The name matches updater::asset_name on that processor.
-        archive="$KODEM_ROOT/target/$channel/Kodem-windows-$arch.zip"
-        rm -f "$archive" "$archive.sha256"
-        # Windows' own bsdtar writes the ZIP archive that the updater lists and extracts.
-        windows_tar="$(cygpath -u "$SYSTEMROOT")/System32/tar.exe"
-        (cd "$(dirname "$output")" && "$windows_tar" -a -c -f "$(cygpath -w "$archive")" "$app_name")
-        while IFS= read -r entry; do
-            [[ "$entry" == "$app_name/"* ]] || { echo "Unexpected archive entry: $entry" >&2; exit 1; }
-        done < <("$windows_tar" -t -f "$(cygpath -w "$archive")" | tr -d '\r')
-        (cd "$(dirname "$archive")" && echo "$(kodem_sha256 "$(basename "$archive")")  $(basename "$archive")" > "$(basename "$archive").sha256")
-        if kodem_release_publishes "$channel"; then
-            kodem_release_publish "$channel" "$archive" "$archive.sha256"
-            # The next processor adds its archive to the release that this one published.
-            release_existing=$release_tag
-        else
-            echo "PACKAGED: $archive (the release workflow publishes it)"
-        fi
+}
+
+# Writes one processor's update archive and installer from its package folder, and signs the
+# installer.
+package_step() {
+    local arch=$1 folder archive installer executable windows_tar entry icon makensis
+    folder="$KODEM_ROOT/target/$channel/windows-$arch/$app_name"
+    [[ "$(package_version "$folder")" == "$release_version" ]] || { echo "$folder is not the $release_version package. Run the compile step first." >&2; exit 1; }
+    for executable in kodem.exe kodem-host.exe kodem-update.exe; do
+        check_signature "$folder/$executable"
+    done
+    # The archive's name matches updater::asset_name on that processor.
+    archive="$KODEM_ROOT/target/$channel/Kodem-windows-$arch.zip"
+    installer="$KODEM_ROOT/target/$channel/Kodem-windows-$arch-setup.exe"
+    rm -f "$archive" "$archive.sha256" "$installer" "$installer.sha256"
+    # Windows' own bsdtar writes the ZIP archive that the updater lists and extracts.
+    windows_tar="$(cygpath -u "$SYSTEMROOT")/System32/tar.exe"
+    (cd "$(dirname "$folder")" && "$windows_tar" -a -c -f "$(cygpath -w "$archive")" "$app_name")
+    while IFS= read -r entry; do
+        [[ "$entry" == "$app_name/"* ]] || { echo "Unexpected archive entry: $entry" >&2; exit 1; }
+    done < <("$windows_tar" -t -f "$(cygpath -w "$archive")" | tr -d '\r')
+    # Cargo keeps the icon that crates/kodem-desktop/build.rs makes in that build script's
+    # output folder; the newest one comes from the latest build.
+    icon=$(ls -t "$KODEM_ROOT/target/$arch-pc-windows-msvc/release/build/"kodem-desktop-*/out/kodem.ico 2>/dev/null | head -1 || true)
+    [[ -n "$icon" ]] || { echo "The $arch build left no app icon for the installer." >&2; exit 1; }
+    makensis=$(kodem_makensis)
+    MSYS2_ARG_CONV_EXCL='*' "$makensis" -V2 \
+        "-DAPP_NAME=$app_name" "-DAPP_ID=$app_id" "-DVERSION=$release_version" "-DARCH=$arch" \
+        "-DPACKAGE=$(cygpath -w "$folder")" "-DOUTFILE=$(cygpath -w "$installer")" "-DICON=$(cygpath -w "$icon")" \
+        "$(cygpath -w "$KODEM_ROOT/scripts/windows-installer.nsi")"
+    [[ -f "$installer" ]] || { echo "makensis did not write $installer" >&2; exit 1; }
+    sign_or_report "$installer"
+    echo "PACKAGED: $archive and $installer"
+}
+
+# Writes the checksums of one processor's archive and installer, and publishes them unless the
+# release workflow publishes.
+finish_step() {
+    local arch=$1 archive installer
+    archive="$KODEM_ROOT/target/$channel/Kodem-windows-$arch.zip"
+    installer="$KODEM_ROOT/target/$channel/Kodem-windows-$arch-setup.exe"
+    [[ -f "$archive" && -f "$installer" ]] || { echo "$archive or $installer is missing. Run the package step first." >&2; exit 1; }
+    check_signature "$installer"
+    kodem_write_sha256 "$archive"
+    kodem_write_sha256 "$installer"
+    if kodem_release_publishes "$channel"; then
+        kodem_release_publish "$channel" "$archive" "$archive.sha256" "$installer" "$installer.sha256"
+        # The next processor adds its files to the release that this one published.
+        release_existing=$release_tag
+    else
+        echo "READY: $archive and $installer (the release workflow publishes them)"
     fi
+}
+
+if [[ "$step" == all || "$step" == compile ]]; then
+    echo "Compiling $channel $release_version for $architectures from $KODEM_ROOT"
+    cargo fmt --all -- --check
+fi
+for arch in $architectures; do
+    case "$step" in
+        all)
+            compile_step "$arch"
+            if [[ "$channel" != debug ]]; then
+                package_step "$arch"
+                finish_step "$arch"
+            fi
+            ;;
+        compile) compile_step "$arch" ;;
+        package) package_step "$arch" ;;
+        finish) finish_step "$arch" ;;
+    esac
 done
-echo "Build ID: $build_id"
-echo "Built and verified: $architectures"
+if [[ "$step" == all || "$step" == compile ]]; then
+    echo "Build ID: $build_id"
+fi
+if [[ "$channel" == debug ]]; then
+    echo "Run it from target/debug/windows-<processor>/$app_name/kodem.exe."
+fi
+echo "Finished $step for $architectures"
 echo "The application was not launched."

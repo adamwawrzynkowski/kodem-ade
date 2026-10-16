@@ -1,6 +1,8 @@
 # Releases Kodem for every platform: chooses the version and change list, builds macOS,
 # Windows (x64 and Arm64) and Linux in parallel, and stages one draft release with all of them.
-# Nothing is staged unless every requested build succeeds.
+# Nothing is staged unless every requested build succeeds. Each platform has an update archive,
+# which installed apps download, and an installer for a first installation: a disk image on
+# macOS, a setup program on Windows and a self-extracting script on Linux.
 #
 # Start it with Run workflow here, or with Build Release Nightly / Production on your computer
 # (scripts/release.sh), which follows its progress and then publishes the draft. A ruleset
@@ -8,11 +10,16 @@
 # the Releases page; that creates the tag.
 #
 # Optional configuration in the repository's Actions settings:
-#   Secrets  KODEM_SIGN_PFX_BASE64, KODEM_SIGN_PFX_PASSWORD   Authenticode certificate (.pfx, base64)
-#            KODEM_GPG_PRIVATE_KEY, KODEM_GPG_PASSPHRASE      OpenPGP key for the Linux .asc signature
-#   Variables KODEM_GPG_KEY                                   that key's ID or fingerprint
+#   Secrets  SIGNPATH_API_TOKEN                               SignPath CI user's API token
+#            KODEM_SIGN_PFX_BASE64, KODEM_SIGN_PFX_PASSWORD   Authenticode certificate (.pfx, base64)
+#            KODEM_GPG_PRIVATE_KEY, KODEM_GPG_PASSPHRASE      OpenPGP key for the Linux .asc signatures
+#   Variables SIGNPATH_ORGANIZATION_ID                        turns on signing with SignPath
+#             SIGNPATH_PROJECT_SLUG, SIGNPATH_SIGNING_POLICY_SLUG
+#             KODEM_GPG_KEY                                   that key's ID or fingerprint
 #             KODEM_REQUIRE_SIGNING=1                         refuses unsigned Windows executables
-# Without a signing certificate, Windows executables are unsigned.
+# SignPath signs the Windows executables, then the installers that hold them, with the artifact
+# configurations `executables` and `installers` (.signpath/artifact-configurations/). Otherwise
+# a .pfx certificate signs them. Without either, Windows executables are unsigned.
 name: Release packages
 run-name: Release ${{ inputs.channel }}${{ inputs.request && format(' · {0}', inputs.request) || '' }}
 
@@ -69,15 +76,24 @@ jobs:
         with:
           ref: ${{ inputs.commit || github.sha }}
           persist-credentials: false
-      # When the repository requires signed Windows executables, stop before any build if no
-      # certificate is configured, instead of after an hour of builds.
+      # Stop before any build if Windows signing is required or half configured, instead of
+      # after an hour of builds.
       - name: Check Windows signing
-        if: contains(inputs.platforms, 'windows') && vars.KODEM_REQUIRE_SIGNING == '1'
+        if: contains(inputs.platforms, 'windows') && (vars.KODEM_REQUIRE_SIGNING == '1' || vars.SIGNPATH_ORGANIZATION_ID != '')
         env:
           HAS_CERTIFICATE: ${{ secrets.KODEM_SIGN_PFX_BASE64 != '' }}
+          HAS_SIGNPATH_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
         run: |
-          if [[ "$HAS_CERTIFICATE" != true ]]; then
-              echo "::error::KODEM_REQUIRE_SIGNING is set, but the KODEM_SIGN_PFX_BASE64 secret is missing."
+          if [[ -n "$SIGNPATH_ORGANIZATION_ID" ]]; then
+              if [[ "$HAS_SIGNPATH_TOKEN" != true || -z "$SIGNPATH_PROJECT_SLUG" || -z "$SIGNPATH_SIGNING_POLICY_SLUG" ]]; then
+                  echo "::error::SIGNPATH_ORGANIZATION_ID is set, but the SIGNPATH_API_TOKEN secret or the SIGNPATH_PROJECT_SLUG or SIGNPATH_SIGNING_POLICY_SLUG variable is missing."
+                  exit 1
+              fi
+          elif [[ "$HAS_CERTIFICATE" != true ]]; then
+              echo "::error::KODEM_REQUIRE_SIGNING is set, but neither SignPath nor the KODEM_SIGN_PFX_BASE64 secret is configured."
               exit 1
           fi
       - name: Choose the version and the change list
@@ -112,7 +128,7 @@ jobs:
         run: scripts/build-macos.sh "$KODEM_CHANNEL"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: macos
+          name: package-macos
           path: target/${{ inputs.channel }}/Kodem-macos-*
           if-no-files-found: error
           retention-days: 3
@@ -126,7 +142,11 @@ jobs:
     if: contains(inputs.platforms, 'windows')
     # Visual Studio on this image has the x64 and Arm64 C++ tools and the Windows SDK.
     runs-on: windows-2022
-    timeout-minutes: 240
+    timeout-minutes: 300
+    # SignPath reads this job and downloads the artifacts that it signs.
+    permissions:
+      contents: read
+      actions: read
     defaults:
       run:
         shell: bash
@@ -137,6 +157,8 @@ jobs:
       KODEM_RELEASE_NOTES: ${{ needs.plan.outputs.notes }}
       KODEM_REQUIRE_SIGNING: ${{ vars.KODEM_REQUIRE_SIGNING }}
       KODEM_SIGN_PFX_PASSWORD: ${{ secrets.KODEM_SIGN_PFX_PASSWORD }}
+      # SignPath signs between the steps of scripts/build-windows.sh, which then checks its work.
+      KODEM_SIGN_EXTERNALLY: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' && '1' || '0' }}
       KODEM_WINDOWS_ARCH: x86_64 aarch64
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -157,11 +179,68 @@ jobs:
       # cache prunes files inside them, and the build refuses to replace a bundle it cannot read.
       - name: Remove packages restored by the cache
         run: rm -rf "target/$KODEM_CHANNEL"
-      - name: Build, sign and package
-        run: scripts/build-windows.sh "$KODEM_CHANNEL"
+      - name: Install NSIS
+        run: |
+          source scripts/dependencies.sh
+          kodem_makensis >/dev/null 2>&1 || choco install nsis --yes --no-progress
+      - name: Build and sign the executables
+        run: scripts/build-windows.sh "$KODEM_CHANNEL" compile
+      - name: Collect the executables for SignPath
+        id: executables
+        if: env.KODEM_SIGN_EXTERNALLY == '1'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-executables
+          path: target/${{ inputs.channel }}/windows-*/
+          if-no-files-found: error
+          retention-days: 1
+      # A release signing policy can wait for a person to approve the request.
+      - name: Sign the executables with SignPath
+        if: env.KODEM_SIGN_EXTERNALLY == '1'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: executables
+          github-artifact-id: ${{ steps.executables.outputs.artifact-id }}
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ runner.temp }}/signed-executables
+      - name: Use the signed executables
+        if: env.KODEM_SIGN_EXTERNALLY == '1'
+        run: cp -R "$(cygpath -u "$RUNNER_TEMP")/signed-executables/." "target/$KODEM_CHANNEL/"
+      - name: Package the update archives and the installers
+        run: scripts/build-windows.sh "$KODEM_CHANNEL" package
+      - name: Collect the installers for SignPath
+        id: installers
+        if: env.KODEM_SIGN_EXTERNALLY == '1'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-installers
+          path: target/${{ inputs.channel }}/Kodem-windows-*-setup.exe
+          if-no-files-found: error
+          retention-days: 1
+      - name: Sign the installers with SignPath
+        if: env.KODEM_SIGN_EXTERNALLY == '1'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: installers
+          github-artifact-id: ${{ steps.installers.outputs.artifact-id }}
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ runner.temp }}/signed-installers
+      - name: Use the signed installers
+        if: env.KODEM_SIGN_EXTERNALLY == '1'
+        run: cp "$(cygpath -u "$RUNNER_TEMP")/signed-installers/"Kodem-windows-*-setup.exe "target/$KODEM_CHANNEL/"
+      - name: Write the checksums
+        run: scripts/build-windows.sh "$KODEM_CHANNEL" finish
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: windows
+          name: package-windows
           path: target/${{ inputs.channel }}/Kodem-windows-*
           if-no-files-found: error
           retention-days: 3
@@ -217,7 +296,7 @@ jobs:
         run: scripts/build-linux.sh "$KODEM_CHANNEL"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: linux
+          name: package-linux
           path: target/${{ inputs.channel }}/Kodem-linux-*
           if-no-files-found: error
           retention-days: 3
@@ -246,9 +325,11 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.commit }}
           persist-credentials: false
-      # Outside the checkout, which must stay clean for publication.
+      # Outside the checkout, which must stay clean for publication. Only the packages: the
+      # artifacts that SignPath signed hold earlier, unsigned copies.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          pattern: package-*
           path: ${{ runner.temp }}/packages
       - name: Verify and stage the draft
         env:

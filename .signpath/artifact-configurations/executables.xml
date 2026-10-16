@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath artifact configuration "executables": the package folders of the Windows release
+     job (.github/workflows/release.yml), windows-<processor>/<app name>/. Paste it into the
+     SignPath project with this slug; SignPath keeps its own copy. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file-set>
+      <include path="windows-*/*/kodem.exe" max-matches="unbounded" />
+      <include path="windows-*/*/kodem-host.exe" max-matches="unbounded" />
+      <include path="windows-*/*/kodem-update.exe" max-matches="unbounded" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </pe-file-set>
+  </zip-file>
+</artifact-configuration>
