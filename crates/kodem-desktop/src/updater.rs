@@ -680,8 +680,15 @@ pub fn install(prepared: PreparedUpdate) -> Result<()> {
     let script = prepared.directory.path().join(INSTALLER.0);
     fs::write(&script, INSTALLER.1)?;
     let log = File::create(prepared.directory.path().join("install.log"))?;
+    // The helper must not start in the installed folder, where the app usually starts: Windows
+    // refuses to move a folder that a process uses as its working directory.
+    let neutral = prepared
+        .destination
+        .parent()
+        .context("Missing application directory")?;
     let mut helper = platform::detach(
         installer_command(&script)
+            .current_dir(neutral)
             .arg(std::process::id().to_string())
             .arg(&prepared.destination)
             .arg(&prepared.bundle)

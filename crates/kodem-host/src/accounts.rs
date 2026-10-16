@@ -596,6 +596,11 @@ pub(super) fn open_terminal(script: &Path, manual: &str) -> Result<()> {
         command.args(["/D", "/C"]);
         command
     };
+    // The console starts with Kodem's environment, whose PATH lacks the tools installed since
+    // Kodem started, such as the Git that Claude Code needs to sign in.
+    if let Ok(path) = kodem_core::git::search_path() {
+        command.env("PATH", path);
+    }
     command
         .arg(script)
         .creation_flags(CREATE_NEW_CONSOLE)

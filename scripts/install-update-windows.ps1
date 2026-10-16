@@ -21,12 +21,14 @@ if ($parent -and -not $parent.WaitForExit(120000)) {
     Write-Output 'Desktop did not exit; update was not installed.'
     exit 1
 }
-# Windows refuses to move a folder while one of its programs runs. The host can take a moment
-# to exit after the desktop stops it.
+# Windows refuses to move a folder while one of its programs runs or while a process works in
+# it. The host can take a moment to exit after the desktop stops it. Each move is one rename,
+# which either moves the whole folder or nothing: Move-Item can copy and delete instead, and a
+# copy that fails halfway leaves an app without some of its files.
 $moved = $false
 for ($attempt = 0; $attempt -lt 60 -and -not $moved; $attempt++) {
     try {
-        Move-Item -LiteralPath $Destination -Destination $backup
+        [System.IO.Directory]::Move($Destination, $backup)
         $moved = $true
     } catch {
         Start-Sleep -Seconds 1
@@ -34,17 +36,19 @@ for ($attempt = 0; $attempt -lt 60 -and -not $moved; $attempt++) {
 }
 if (-not $moved) {
     Write-Output 'The installed app is still in use; update was not installed.'
+    # The installed app is untouched, so it opens again as it was.
+    Start-Process -FilePath (Join-Path $Destination 'kodem.exe') -WorkingDirectory $Destination -ErrorAction SilentlyContinue
     exit 1
 }
 try {
-    Move-Item -LiteralPath $Package -Destination $Destination
+    [System.IO.Directory]::Move($Package, $Destination)
     Start-Process -FilePath (Join-Path $Destination 'kodem.exe') -WorkingDirectory $Destination
 } catch {
     Write-Output "Update failed: $_"
     if (Test-Path -LiteralPath $Destination) {
-        Move-Item -LiteralPath $Destination -Destination (Join-Path $Stage 'failed')
+        [System.IO.Directory]::Move($Destination, (Join-Path $Stage 'failed'))
     }
-    Move-Item -LiteralPath $backup -Destination $Destination
+    [System.IO.Directory]::Move($backup, $Destination)
     Start-Process -FilePath (Join-Path $Destination 'kodem.exe') -WorkingDirectory $Destination -ErrorAction SilentlyContinue
     Write-Output "Restored the previous app. Log: $(Join-Path $Stage 'install.log')"
     exit 1

@@ -31,8 +31,15 @@ enum Scope {
 }
 
 impl Account {
-    /// Points a provider CLI at this account's configuration directory, or at its own default.
+    /// Points a provider CLI at this account's configuration directory, or at its own default,
+    /// and gives it the PATH that Kodem gives Git.
     pub fn apply(&self, command: &mut Command) {
+        // The CLI runs Git and other tools of its own. On Windows Claude Code also needs Git
+        // for its shell, and an app that was open while Git was installed has a PATH without
+        // it, so the CLI would not start until Kodem restarts.
+        if let Ok(path) = crate::git::search_path() {
+            command.env("PATH", path);
+        }
         if let Some(variable) = self.provider.home_variable() {
             match &self.home {
                 Some(home) => command.env(variable, home),

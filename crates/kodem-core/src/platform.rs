@@ -257,6 +257,16 @@ pub fn tool_directories() -> Vec<PathBuf> {
     if let Some(app_data) = std::env::var_os("APPDATA") {
         directories.push(PathBuf::from(app_data).join("npm"));
     }
+    // WinGet links the programs of its portable packages here, such as Claude Code's.
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        directories.push(
+            PathBuf::from(local)
+                .join("Microsoft")
+                .join("WinGet")
+                .join("Links"),
+        );
+    }
     #[cfg(not(any(target_os = "macos", windows)))]
     directories.extend(["/usr/local/bin", "/usr/bin"].map(PathBuf::from));
     directories
