@@ -8,6 +8,11 @@ pub(super) const OUTBOX_ANCHOR: &str = "outbox";
 /// the start of a fourth. More messages scroll, so the draft keeps its place.
 const OUTBOX_HEIGHT: f32 = 128.;
 
+// Returns the name of the effect anchor on the tray row of an outgoing message.
+fn outgoing_anchor(id: &str) -> String {
+    format!("outgoing:{id}")
+}
+
 impl Shell {
     /// Tracks only newly added draft context and stops requesting frames once it settles.
     pub(super) fn sync_context_arrivals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -147,6 +152,31 @@ impl Shell {
             backdrop::spark_send(cx);
         }
         cx.notify();
+    }
+
+    /// Steers a queued message into the running turn. The message travels from its row in the
+    /// tray into the conversation, like a message sent from the composer.
+    fn steer_queued(&mut self, task_id: String, id: String, cx: &mut Context<Self>) {
+        if !cx.reduce_motion() {
+            let origin = fx::anchor_bounds(&outgoing_anchor(&id), cx).map(|bounds| bounds.origin);
+            self.send_arrivals.retain(|_, arrival| !arrival.expired());
+            self.send_arrivals
+                .insert(id.clone(), motion::Arrival::new(origin));
+            self.follow_latest();
+        }
+        self.send(core::Request::SteerQueued { task_id, id });
+        cx.notify();
+    }
+
+    /// Reports whether a steered message is on its way into the conversation. It does not stop
+    /// in the tray while its provider takes it, so its send transition plays in the conversation.
+    fn steer_arriving(&self, message: &OutgoingMessage) -> bool {
+        message.state == DeliveryState::Queued
+            && message.expected_turn.is_some()
+            && self
+                .send_arrivals
+                .get(&message.id)
+                .is_some_and(|arrival| !arrival.queued && !arrival.expired())
     }
 
     /// Creates one task of the open workspace and submits its first message after the draft
@@ -626,7 +656,9 @@ impl Shell {
             .outgoing
             .iter()
             .filter(|message| {
-                message.state != DeliveryState::Pending && starting.as_ref() != Some(&message.id)
+                message.state != DeliveryState::Pending
+                    && starting.as_ref() != Some(&message.id)
+                    && !self.steer_arriving(message)
             })
             .cloned()
             .collect();
@@ -701,7 +733,9 @@ impl Shell {
                 DeliveryState::Unknown => ("Delivery unknown", t.warning),
             };
             let mut row = kit::block(t)
+                .relative()
                 .flex_shrink_0()
+                .child(fx::anchor(outgoing_anchor(&id)))
                 .p(px(4.))
                 .flex()
                 .flex_col()
@@ -765,11 +799,12 @@ impl Shell {
                                             || outgoing.expected_turn.is_some(),
                                     )
                                     .on_click(cx.listener(
-                                        move |s, _, _, _| {
-                                            s.send(core::Request::SteerQueued {
-                                                task_id: steer_task.clone(),
-                                                id: steer_id.clone(),
-                                            });
+                                        move |s, _, _, cx| {
+                                            s.steer_queued(
+                                                steer_task.clone(),
+                                                steer_id.clone(),
+                                                cx,
+                                            );
                                         },
                                     )),
                                 )
