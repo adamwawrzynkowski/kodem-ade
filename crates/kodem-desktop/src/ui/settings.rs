@@ -1319,6 +1319,26 @@ impl Shell {
                     })),
             );
         }
+        let mut upcoming = div().flex().gap_2();
+        for (index, candidate) in UpcomingProvider::ALL.into_iter().enumerate() {
+            upcoming = upcoming.child(
+                self.choice_row(("settings-provider-soon", index), false)
+                    .disabled(true)
+                    .flex_1()
+                    .h(px(36.))
+                    .px(px(12.))
+                    .border_color(t.border)
+                    .child(icon(candidate.icon).size(px(13.)))
+                    .child(candidate.label)
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| Hint {
+                            text: candidate.hint(),
+                            theme: t,
+                        })
+                        .into()
+                    }),
+            );
+        }
         let (accounts, signed_in) = self.workspace.as_ref().map_or((0, 0), |workspace| {
             workspace
                 .accounts
@@ -1585,7 +1605,14 @@ impl Shell {
                 "Providers",
                 "Connect a local CLI and choose the defaults for new conversations.",
             ))
-            .child(chooser)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(chooser)
+                    .child(upcoming),
+            )
             .when_some(runtime.error, |d, error| {
                 d.child(error_block("Runtime error", error, t))
             })

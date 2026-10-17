@@ -318,15 +318,56 @@ impl Shell {
             .into_any_element()
     }
 
+    // Builds the row of a provider that Kodem cannot run yet. It shows a hint and takes no click.
+    fn setup_upcoming_provider(&self, index: usize, upcoming: UpcomingProvider) -> AnyElement {
+        let t = self.theme;
+        div()
+            .id(("setup-provider-soon", index))
+            .py(px(10.))
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .opacity(0.6)
+            .hover(|row| row.opacity(1.))
+            .child(kit::icon_tile(upcoming.icon, t.subtle, 32., false))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(div().text_size(text_px(13.)).child(upcoming.label))
+                    .child(kit::chip("COMING SOON", t.subtle)),
+            )
+            .tooltip(move |_, cx| {
+                cx.new(|_| Hint {
+                    text: upcoming.hint(),
+                    theme: t,
+                })
+                .into()
+            })
+            .into_any_element()
+    }
+
     /// Builds the content of the setup dialog: the providers and support tools found on this
     /// computer with installers for the missing ones, the Claude Code features, and the
     /// workspace choices that most users make first.
     pub(super) fn setup_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let mut providers = settings::setting_group("Providers", Some(Provider::ALL.len()), t);
+        let mut providers = settings::setting_group(
+            "Providers",
+            Some(Provider::ALL.len() + UpcomingProvider::ALL.len()),
+            t,
+        );
         for (index, provider) in Provider::ALL.into_iter().enumerate() {
             providers = providers
                 .child(self.setup_provider(index, provider, cx))
+                .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)));
+        }
+        for (index, upcoming) in UpcomingProvider::ALL.into_iter().enumerate() {
+            providers = providers
+                .child(self.setup_upcoming_provider(index, upcoming))
                 .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)));
         }
         providers = providers.child(

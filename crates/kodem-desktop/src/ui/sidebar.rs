@@ -208,7 +208,6 @@ impl Shell {
         .w_full()
         .pt(px(6.))
         .pb_2();
-        let connected = self.host_connected && self.workspace.is_some();
         let settled_open = self.settled_open(cx);
         let settled_header =
             (!self.settled_rows.is_empty()).then(|| self.settled_header(settled_open, cx));
@@ -267,25 +266,23 @@ impl Shell {
                     .child(div().flex_1())
                     .child(self.update_control(false, cx))
                     .child(
-                        div()
-                            .id("host-status")
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .px(px(6.))
-                            .child(kit::marker(if connected { t.added } else { t.subtle }))
-                            .child(caps(if connected { "Host" } else { "Offline" }, t))
-                            .tooltip(move |_, cx| {
-                                cx.new(|_| Hint {
-                                    text: if connected {
-                                        "Local host connected".into()
-                                    } else {
-                                        "Local host unavailable; reconnecting".into()
-                                    },
-                                    theme: t,
+                        // A placeholder for the accounts menu: it shows a hint and takes no click.
+                        div().px(px(4.)).child(
+                            kit::icon_tile("user", t.subtle, 24., false)
+                                .id("accounts-avatar")
+                                .rounded_full()
+                                .hover(move |s| {
+                                    s.border_color(t.accent.opacity(0.5))
+                                        .bg(kit::tint_fill(t.accent, 0.1))
                                 })
-                                .into()
-                            }),
+                                .tooltip(move |_, cx| {
+                                    cx.new(|_| Hint {
+                                        text: "Accounts are coming soon".into(),
+                                        theme: t,
+                                    })
+                                    .into()
+                                }),
+                        ),
                     ),
             );
         panel.into_any_element()

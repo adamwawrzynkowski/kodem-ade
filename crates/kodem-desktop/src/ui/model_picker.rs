@@ -362,6 +362,20 @@ impl Shell {
                         })),
                 );
             }
+            for (index, upcoming) in UpcomingProvider::ALL.into_iter().enumerate() {
+                rail = rail.child(
+                    self.option_row(("model-provider-soon", index), false, true)
+                        .child(icon(upcoming.icon).size(px(13.)))
+                        .child(upcoming.label)
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| Hint {
+                                text: upcoming.hint(),
+                                theme: t,
+                            })
+                            .into()
+                        }),
+                );
+            }
             if let Some(error) = runtime.error {
                 content = content.child(
                     div()

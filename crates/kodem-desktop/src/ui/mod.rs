@@ -2325,6 +2325,36 @@ fn merge_transcript(current: &TaskView, incoming: &mut TaskView, older: bool) {
         incoming.serial = current.serial;
     }
 }
+/// A provider that is shown as a placeholder. Kodem cannot run it yet, so it takes no click.
+#[derive(Clone, Copy)]
+struct UpcomingProvider {
+    label: &'static str,
+    icon: &'static str,
+}
+impl UpcomingProvider {
+    const ALL: [Self; 4] = [
+        Self {
+            label: "OpenCode",
+            icon: "opencode",
+        },
+        Self {
+            label: "Google",
+            icon: "google",
+        },
+        Self {
+            label: "xAI",
+            icon: "xai",
+        },
+        Self {
+            label: "Pi",
+            icon: "pi",
+        },
+    ];
+    /// Returns the hint shown when the pointer is on the placeholder.
+    fn hint(self) -> String {
+        format!("{} Coming Soon", self.label)
+    }
+}
 struct Hint {
     text: String,
     theme: Theme,
