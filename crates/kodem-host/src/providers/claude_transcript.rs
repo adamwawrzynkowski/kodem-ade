@@ -787,7 +787,8 @@ impl Transcript {
         if main {
             self.activity(host, &id, activity_kind(category(name)), &title);
         }
-        if complete && name == "TodoWrite" {
+        // A subagent's todo list is its own; the task shows the main conversation's plan.
+        if complete && main && name == "TodoWrite" {
             self.replace_plan(host, input)?;
         }
         if complete && name == "TaskUpdate" {

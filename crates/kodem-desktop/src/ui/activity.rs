@@ -126,9 +126,10 @@ impl Shell {
             }
         }
         // The strip is the composer's first row unless the subagents strip is above it. The
-        // scanner then follows the inside of the composer's rounded leading corner.
+        // scanner then follows the inside of the composer's rounded leading corner, which the
+        // plan tab squares.
         let scanner_radii = Corners {
-            top_left: if view.task.subagents.is_empty() {
+            top_left: if view.task.subagents.is_empty() && self.shown_plan().is_none() {
                 motion::COMPOSER_RADIUS - 1.
             } else {
                 0.
@@ -178,146 +179,245 @@ impl Shell {
         cx.notify();
     }
 
-    /// Shows the agent's current step list as a progress meter that expands into the steps.
-    pub(super) fn plan_strip(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(view) = self.view.as_ref().filter(|view| !view.task.plan.is_empty()) else {
-            return div().into_any_element();
-        };
-        let t = self.theme;
+    /// Returns the agent's plan while the composer shows it: while the task works, and after
+    /// that while steps are left unfinished. A finished plan of an idle task is history.
+    pub(super) fn shown_plan(&self) -> Option<&[PlanStep]> {
+        let view = self.view.as_ref()?;
         let plan = &view.task.plan;
-        let done = plan
-            .iter()
-            .filter(|step| step.status == PlanStatus::Done)
-            .count();
-        let current = plan
-            .iter()
-            .find(|step| step.status == PlanStatus::Active)
-            .or_else(|| plan.iter().find(|step| step.status == PlanStatus::Pending));
-        let expanded = self.plan_expanded;
-        let mut strip =
-            div().w_full().flex_shrink_0().bg(t.inset).child(
-                self.control("plan-toggle")
-                    .w_full()
-                    .h(px(30.))
-                    .px(px(14.))
-                    .gap(px(8.))
-                    .rounded_none()
-                    .justify_start()
-                    .border_0()
-                    .bg(gpui::transparent_black())
-                    .hover(move |s| s.bg(t.selected))
-                    .accessibility_label(if expanded {
-                        "Collapse plan"
-                    } else {
-                        "Expand plan"
-                    })
-                    // The strip reads as a section header: chevron, label, totals, dotted rule.
-                    .child(
-                        icon(if expanded {
-                            "chevron-down"
-                        } else {
-                            "chevron-right"
+        let unfinished = plan.iter().any(|step| step.status != PlanStatus::Done);
+        (!plan.is_empty() && (view.task.state.active() || unfinished)).then_some(plan.as_slice())
+    }
+
+    /// Shows the agent's plan in one line: totals, a progress meter and the current step. It
+    /// opens every step above it. The caller places the control and paints its surface.
+    pub(super) fn plan_tab(&self, cx: &mut Context<Self>) -> Option<Button> {
+        let plan = self.shown_plan()?;
+        let t = self.theme;
+        let progress = PlanProgress::of(plan);
+        let working = self
+            .view
+            .as_ref()
+            .is_some_and(|view| view.task.state.active());
+        let current = progress.current.map(|index| plan[index].clone());
+        let hint = current.as_ref().map_or_else(
+            || "Every step of the plan is done.".to_owned(),
+            |step| step.text.clone(),
+        );
+        Some(
+            Button::new("plan-tab")
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .min_w_0()
+                .overflow_hidden()
+                .cursor_pointer()
+                .selected(self.panel == Panel::Plan)
+                .accessibility_label("Plan steps")
+                .child(caps("Plan", t))
+                .child(figure(format!("{}/{}", progress.done, plan.len()), t.muted))
+                .child(kit::meter(
+                    Some(progress.fraction()),
+                    progress.tone(t),
+                    30.,
+                    t,
+                ))
+                .when_some(current, |tab, step| {
+                    tab.child(div().w(px(2.)).flex_shrink_0())
+                        .when(step.status == PlanStatus::Active, |tab| {
+                            tab.child(dither::pulse(t.accent, cx.reduce_motion() || !working))
                         })
-                        .size(px(12.))
-                        .text_color(t.subtle),
-                    )
-                    .child(caps("Plan", t).text_color(t.muted))
-                    .child(figure(format!("{done}/{}", plan.len()), t.muted))
-                    .child(div().relative().w(px(72.)).h(px(6.)).flex_shrink_0().child(
-                        dither::DitherBar::meter(
-                            done as f32 / plan.len() as f32,
-                            if done == plan.len() {
-                                t.added
-                            } else {
-                                t.accent
-                            },
-                            t.subtle.opacity(0.55),
-                        ),
-                    ))
+                        .child(
+                            div()
+                                .flex_shrink(1.)
+                                .min_w_0()
+                                .text_ellipsis()
+                                .font_family(crate::theme::sans())
+                                .text_size(text_px(12.))
+                                .text_color(t.muted)
+                                .child(step.text),
+                        )
+                })
+                .tooltip(move |_, cx| {
+                    cx.new(|_| Hint {
+                        text: hint.clone(),
+                        theme: t,
+                    })
+                    .into()
+                })
+                .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
+                    s.panel = Panel::Plan;
+                    s.menu_anchor = Some(*bounds);
+                    cx.notify();
+                })),
+        )
+    }
+
+    /// Lists every step of the agent's plan with its state, for the menu above the plan tab.
+    pub(super) fn plan_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let plan = self
+            .view
+            .as_ref()
+            .map_or(&[][..], |view| view.task.plan.as_slice());
+        let progress = PlanProgress::of(plan);
+        let working = self
+            .view
+            .as_ref()
+            .is_some_and(|view| view.task.state.active());
+        let header = div()
+            .px(px(8.))
+            .pt(px(6.))
+            .pb(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(caps("Plan", t))
+            .child(figure(format!("{}/{}", progress.done, plan.len()), t.muted))
+            .child(kit::meter(
+                Some(progress.fraction()),
+                progress.tone(t),
+                48.,
+                t,
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(8.))
+                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.45))),
+            );
+        if plan.is_empty() {
+            return div()
+                .flex()
+                .flex_col()
+                .child(header)
+                .child(
+                    div()
+                        .px(px(8.))
+                        .pb(px(8.))
+                        .text_size(text_px(12.))
+                        .text_color(t.muted)
+                        .child("The agent has no plan."),
+                )
+                .into_any_element();
+        }
+        // The list scrolls inside its own bound, so a long plan never grows past it.
+        let mut steps = div()
+            .id("plan-steps")
+            .max_h(px(PLAN_LIST_HEIGHT))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(1.));
+        for (index, step) in plan.iter().enumerate() {
+            let current = progress.current == Some(index);
+            let marker = match step.status {
+                PlanStatus::Done => icon("check")
+                    .size(px(12.))
+                    .text_color(t.added)
+                    .into_any_element(),
+                PlanStatus::Active => dither::pulse(t.accent, cx.reduce_motion() || !working),
+                PlanStatus::Pending => div()
+                    .size(px(9.))
+                    .rounded(px(2.))
+                    .border_1()
+                    .border_color(t.subtle)
+                    .into_any_element(),
+            };
+            steps = steps.child(
+                div()
+                    .relative()
+                    .flex()
+                    .items_start()
+                    .gap(px(8.))
+                    .px(px(8.))
+                    .py(px(5.))
+                    .rounded(px(crate::theme::RADIUS_CONTROL))
+                    .text_size(text_px(12.))
+                    .line_height(text_px(17.))
+                    .when(current, |row| {
+                        row.bg(t.accent.opacity(0.08))
+                            .child(kit::selection_edge(t.accent))
+                    })
                     .child(
                         div()
-                            .flex_shrink(1.)
-                            .min_w_0()
-                            .text_ellipsis()
-                            .font_family(crate::theme::sans())
-                            .font_weight(FontWeight::NORMAL)
-                            .text_size(text_px(12.))
-                            .text_color(t.muted)
-                            .child(current.map_or_else(
-                                || "All steps done".to_owned(),
-                                |step| step.text.clone(),
-                            )),
+                            .w(px(18.))
+                            .flex_shrink_0()
+                            .font_family(crate::theme::mono())
+                            .text_size(text_px(11.))
+                            .text_color(t.subtle)
+                            .child(format!("{:02}", index + 1)),
+                    )
+                    .child(
+                        div()
+                            .size(px(17.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(marker),
                     )
                     .child(
                         div()
                             .flex_1()
-                            .min_w(px(8.))
-                            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
-                    )
-                    .on_click(cx.listener(|s, _, _, cx| {
-                        s.plan_expanded = !s.plan_expanded;
-                        cx.notify();
-                    })),
+                            .min_w_0()
+                            .text_color(match step.status {
+                                PlanStatus::Done => t.subtle,
+                                PlanStatus::Active => t.text,
+                                PlanStatus::Pending => t.muted,
+                            })
+                            .when(step.status == PlanStatus::Done, |d| d.line_through())
+                            .child(step.text.clone()),
+                    ),
             );
-        if expanded {
-            let mut steps = div()
-                .id("plan-steps")
-                .max_h(px(180.))
-                .overflow_y_scroll()
-                .px(px(14.))
-                .pb(px(8.))
-                .flex()
-                .flex_col()
-                .gap(px(4.));
-            for step in plan {
-                let (marker, color) = match step.status {
-                    PlanStatus::Done => (
-                        icon("check")
-                            .size(px(12.))
-                            .text_color(t.added)
-                            .into_any_element(),
-                        t.subtle,
-                    ),
-                    PlanStatus::Active => (dither::pulse(t.accent, cx.reduce_motion()), t.text),
-                    PlanStatus::Pending => (
-                        div()
-                            .size(px(8.))
-                            .rounded(px(2.))
-                            .border_1()
-                            .border_color(t.subtle)
-                            .into_any_element(),
-                        t.muted,
-                    ),
-                };
-                steps = steps.child(
-                    div()
-                        .flex()
-                        .items_start()
-                        .gap(px(8.))
-                        .text_size(text_px(12.))
-                        .child(
-                            div()
-                                .size(px(16.))
-                                .flex_shrink_0()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(marker),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_color(color)
-                                .when(step.status == PlanStatus::Done, |d| d.line_through())
-                                .child(step.text.clone()),
-                        ),
-                );
-            }
-            strip = strip.child(steps);
         }
-        strip
-            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
+        div()
+            .flex()
+            .flex_col()
+            .pb(px(2.))
+            .child(header)
+            .child(steps)
             .into_any_element()
+    }
+}
+
+/// Height at which the plan menu's step list stops growing and scrolls.
+const PLAN_LIST_HEIGHT: f32 = 320.;
+
+/// How far the agent is through its plan.
+struct PlanProgress {
+    done: usize,
+    total: usize,
+    /// The step in progress, or else the first one still pending.
+    current: Option<usize>,
+}
+
+impl PlanProgress {
+    fn of(plan: &[PlanStep]) -> Self {
+        let position = |status| plan.iter().position(|step| step.status == status);
+        Self {
+            done: plan
+                .iter()
+                .filter(|step| step.status == PlanStatus::Done)
+                .count(),
+            total: plan.len(),
+            current: position(PlanStatus::Active).or_else(|| position(PlanStatus::Pending)),
+        }
+    }
+
+    fn fraction(&self) -> f32 {
+        if self.total == 0 {
+            0.
+        } else {
+            self.done as f32 / self.total as f32
+        }
+    }
+
+    // The meter turns to the addition tone once every step is done.
+    fn tone(&self, t: Theme) -> Hsla {
+        if self.total > 0 && self.done == self.total {
+            t.added
+        } else {
+            t.accent
+        }
     }
 }

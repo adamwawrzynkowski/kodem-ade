@@ -937,6 +937,8 @@ impl Shell {
                 |v| !v.feedback.is_empty() || !v.attachments.is_empty(),
             );
         let focused = self.input.read(cx).focus_handle(cx).is_focused(window);
+        // A conversation's plan sits in a tab on the composer's leading corner.
+        let plan_tab = if empty { None } else { self.plan_tab(cx) };
         let mut editor = div()
             .id("composer-drop-target")
             .relative()
@@ -951,8 +953,9 @@ impl Shell {
                 s.attach_paths(paths.paths().to_vec(), cx)
             }))
             .rounded(px(motion::COMPOSER_RADIUS))
-            // The meter tab continues this corner upward.
+            // The meter tab continues this corner upward, and the plan tab the other one.
             .rounded_tr(px(0.))
+            .when(plan_tab.is_some(), |editor| editor.rounded_tl(px(0.)))
             // Glass like the side panels, but denser, because the draft is read over the
             // conversation behind it. The meter tab on its edge is the same glass.
             .map(|editor| kit::glass(editor, t.raised, kit::SURFACE_GLASS_FILL))
@@ -967,7 +970,6 @@ impl Shell {
             .when(!empty, |d| {
                 d.child(self.subagents_strip(cx))
                     .child(self.activity_strip(cx))
-                    .child(self.plan_strip(cx))
                     .child(self.question_panel(cx))
                     // The next messages are a row of the composer, right above the draft.
                     .child(self.outgoing_tray(cx))
@@ -1313,8 +1315,9 @@ impl Shell {
                     move |bounds, _, window, _| {
                         let lit =
                             lit || (focus.is_focused(window) && window.last_input_was_keyboard());
-                        paint_meter_tab(
+                        paint_edge_tab(
                             bounds,
+                            TabCorner::Trailing,
                             t.raised,
                             lit.then_some(t.selected),
                             tab_edge,
@@ -1328,6 +1331,48 @@ impl Shell {
                 .size_full()
                 .into_any_element()
             });
+        // The plan tab mirrors the meter tab and takes at most half of the edge, so the two
+        // never meet. Its current step shortens first.
+        let plan_tab = plan_tab.map(|plan| {
+            let lit = self.plan_tab_hovered || self.panel == Panel::Plan;
+            let focus = self.plan_tab_focus.clone();
+            plan.absolute()
+                .left_0()
+                .top(px(1. - METER_TAB_HEIGHT))
+                .h(px(METER_TAB_HEIGHT))
+                .max_w(relative(0.5))
+                .pl(px(12.))
+                .pr(px(METER_TAB_FOOT + METER_TAB_SLANT + 12.))
+                .track_focus(&self.plan_tab_focus)
+                .on_hover(cx.listener(|s, hovered: &bool, _, cx| {
+                    if s.plan_tab_hovered != *hovered {
+                        s.plan_tab_hovered = *hovered;
+                        cx.notify();
+                    }
+                }))
+                .layer(move |_: Corners<Pixels>| {
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _| {
+                            let lit = lit
+                                || (focus.is_focused(window) && window.last_input_was_keyboard());
+                            paint_edge_tab(
+                                bounds,
+                                TabCorner::Leading,
+                                t.raised,
+                                lit.then_some(t.selected),
+                                tab_edge,
+                                window,
+                            )
+                        },
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .into_any_element()
+                })
+        });
         let composer_box = div()
             .relative()
             .mt(px(METER_TAB_HEIGHT - 1.))
@@ -1337,7 +1382,8 @@ impl Shell {
             .occlude()
             .child(dither::shadow(t, motion::COMPOSER_RADIUS, 4.))
             .child(editor)
-            .child(tab);
+            .child(tab)
+            .children(plan_tab);
         wrapper = wrapper.child(match launch {
             // The box widens or narrows to the docked width while it travels there.
             Some((progress, from, width)) => motion::morph(
@@ -1451,12 +1497,22 @@ const METER_TAB_SLANT: f32 = 14.;
 const METER_TAB_FOOT: f32 = 7.;
 const METER_TAB_ROUNDING: f32 = 6.;
 
-// Paints the meter tab: a surface with a slanted leading side and a rounded trailing corner
-// that continues the composer's corner. The slant curves out of the composer's edge at its
-// foot and into the top edge at its head. The bottom side has no edge, because it joins the
-// composer.
-fn paint_meter_tab(
+/// The corner of the composer's top edge that a tab continues.
+#[derive(Clone, Copy)]
+enum TabCorner {
+    /// The plan tab's corner.
+    Leading,
+    /// The meter tab's corner.
+    Trailing,
+}
+
+// Paints a tab on the composer's top edge: a surface with a rounded outer corner that
+// continues the composer's corner, and a slanted inner side. The slant curves out of the
+// composer's edge at its foot and into the top edge at its head. The bottom side has no edge,
+// because it joins the composer. A leading tab is the trailing one mirrored.
+fn paint_edge_tab(
     bounds: Bounds<Pixels>,
+    corner: TabCorner,
     surface: Hsla,
     hover: Option<Hsla>,
     edge: Hsla,
@@ -1466,49 +1522,70 @@ fn paint_meter_tab(
     // The edge runs through pixel centers, which keeps a one-pixel stroke sharp. The stroke
     // stays one window pixel wide at every interface scale.
     let half = gpui::px(0.5);
-    // The foot starts at the tab's leading edge, where the composer's own edge ends.
-    let (left, right) = (bounds.left(), bounds.right() - half);
+    // `inner` is where the foot starts, where the composer's own edge ends, and `outer` is
+    // the rounded side. `toward` moves a point by a distance in the direction of `outer`.
+    let (inner, outer, sign) = match corner {
+        TabCorner::Trailing => (bounds.left(), bounds.right() - half, 1.),
+        TabCorner::Leading => (bounds.right(), bounds.left() + half, -1.),
+    };
+    let toward = |from: Pixels, distance: Pixels| from + distance * sign;
     let (top, bottom) = (bounds.top() + half, bounds.bottom());
-    let foot = point(left + px(METER_TAB_FOOT), bottom);
-    let head = point(foot.x + px(METER_TAB_SLANT), top);
+    let foot = point(toward(inner, px(METER_TAB_FOOT)), bottom);
+    let head = point(toward(foot.x, px(METER_TAB_SLANT)), top);
     // A step of the rounding along the slant.
     let rise = f32::from(bottom - top);
     let slant = f32::from(px(METER_TAB_SLANT));
     let rounding = f32::from(px(METER_TAB_ROUNDING));
     let length = (slant * slant + rise * rise).sqrt();
     let along = point(
-        gpui::px(slant / length * rounding),
+        gpui::px(sign * slant / length * rounding),
         gpui::px(-rise / length * rounding),
     );
     // `base` is where the foot starts: on the composer's edge for the stroke, so that the two
     // lines join, and at the tab's bottom for the fill, so that it covers that edge.
     let outline = |builder: &mut PathBuilder, base: Pixels| {
-        builder.move_to(point(left, base));
+        builder.move_to(point(inner, base));
         builder.curve_to(foot + along, point(foot.x, base));
         builder.line_to(head - along);
-        builder.curve_to(point(head.x + px(METER_TAB_ROUNDING), top), head);
-        builder.line_to(point(right - radius, top));
-        builder.curve_to(point(right, top + radius), point(right, top));
-        builder.line_to(point(right, bottom));
+        builder.curve_to(point(toward(head.x, px(METER_TAB_ROUNDING)), top), head);
+        builder.line_to(point(toward(outer, -radius), top));
+        builder.curve_to(point(outer, top + radius), point(outer, top));
+        builder.line_to(point(outer, bottom));
     };
     // The tab is glass like the composer: the field behind its flat top is blurred, then tinted.
     // A backdrop is a rounded rectangle, and each blur that touches another one breaks the
     // window's render pass, so the slant has no blur of its own and shows its tint only. The blur
     // stops above the composer's edge.
     let seam_top = bottom - gpui::px(1.);
-    window.paint_backdrop_filter(
-        Bounds::from_corners(point(head.x, bounds.top()), point(bounds.right(), seam_top)),
-        Corners {
-            top_right: radius,
-            ..Corners::default()
-        },
-        &[Filter::Blur(px(kit::GLASS_BLUR))],
-    );
+    let (blur, rounded) = match corner {
+        TabCorner::Trailing => (
+            Bounds::from_corners(point(head.x, bounds.top()), point(bounds.right(), seam_top)),
+            Corners {
+                top_right: radius,
+                ..Corners::default()
+            },
+        ),
+        TabCorner::Leading => (
+            Bounds::from_corners(point(bounds.left(), bounds.top()), point(head.x, seam_top)),
+            Corners {
+                top_left: radius,
+                ..Corners::default()
+            },
+        ),
+    };
+    window.paint_backdrop_filter(blur, rounded, &[Filter::Blur(px(kit::GLASS_BLUR))]);
     // The composer's edge runs under the tab's bottom row. A see-through fill would show it as
     // a line across the tab, so that row stays solid in the surface tone and the tab's own
-    // stroke is the only line there. A hover tone lies over the whole surface in the same shape.
+    // stroke is the only line there. The row stops short of the outer stroke. A hover tone lies
+    // over the whole surface in the same shape.
     let seam = Bounds::new(
-        point(bounds.left(), seam_top),
+        point(
+            match corner {
+                TabCorner::Trailing => bounds.left(),
+                TabCorner::Leading => bounds.left() + gpui::px(1.),
+            },
+            seam_top,
+        ),
         size(bounds.size.width - gpui::px(1.), gpui::px(1.)),
     );
     window.paint_quad(fill(seam, surface));

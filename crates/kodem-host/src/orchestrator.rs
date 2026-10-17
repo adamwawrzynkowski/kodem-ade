@@ -341,8 +341,11 @@ pub(crate) fn apply(task: &mut Task, event: &Event) {
             }
             task.active_turn = turn.clone();
             task.state = RunState::Running;
-            // An error belongs to the turn before this one.
+            // An error belongs to the turn before this one, and so does a finished plan.
             task.error = None;
+            if task.plan.iter().all(|step| step.status == PlanStatus::Done) {
+                task.plan.clear();
+            }
             task.updated = *at;
         }
         Event::OutcomeHeld { outcome } => {

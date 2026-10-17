@@ -68,6 +68,10 @@ impl Shell {
                 width = 320.;
                 menu = menu.child(self.usage_panel(cx));
             }
+            Panel::Plan => {
+                width = 380.;
+                menu = menu.child(self.plan_panel(cx));
+            }
             Panel::Notifications => {
                 width = 340.;
                 menu = menu.child(self.notification_center(cx));
@@ -523,13 +527,17 @@ impl Shell {
         };
         // A menu opens above its trigger, as the composer's menus do, unless the trigger sits in
         // the upper half of the window. There it opens below, so that it never climbs into the
-        // title bar and under the window controls.
+        // title bar and under the window controls. Above, it aligns with the trigger's trailing
+        // edge, except the plan's, whose tab sits on the composer's leading corner.
         let trigger = self
             .menu_anchor
             .unwrap_or(Bounds::new(point(px(24.), px(120.)), Size::default()));
         let upward = pointer.is_none() && trigger.top() > viewport.height / 2.;
         let (position, anchor, offset) = match pointer {
             Some(position) => (position, Anchor::TopLeft, px(0.)),
+            None if upward && self.panel == Panel::Plan => {
+                (trigger.origin, Anchor::BottomLeft, px(-8.))
+            }
             None if upward => (trigger.top_right(), Anchor::BottomRight, px(-8.)),
             None => (trigger.bottom_left(), Anchor::TopLeft, px(6.)),
         };

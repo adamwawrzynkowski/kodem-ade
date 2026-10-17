@@ -94,6 +94,16 @@ pub(super) fn initial_runtime() -> RuntimeInfo {
 const CHAT_TOOLS: [&str; 2] = ["WebSearch", "WebFetch"];
 /// Rule that allows every tool of Kodem's own MCP server.
 const KODEM_TOOLS: &str = "mcp__kodem";
+/// The tools that keep the plan Kodem shows. Claude Code 2.1.296 offers them to its newer
+/// models only when the launch names one of them in `--allowedTools` or `--tools`. They change
+/// nothing but the list, so they need no approval either.
+const PLAN_TOOLS: [&str; 5] = [
+    "TodoWrite",
+    "TaskCreate",
+    "TaskUpdate",
+    "TaskList",
+    "TaskGet",
+];
 /// What a review session starts without: the tools that edit files, and the commands that
 /// publish or record changes. A denied rule also overrides a rule of the user that allows it.
 const REVIEW_BLOCKED_TOOLS: [&str; 13] = [
@@ -310,6 +320,7 @@ impl Session {
             TaskKind::Chat => CHAT_TOOLS.to_vec(),
             TaskKind::Coding | TaskKind::Review => Vec::new(),
         };
+        allowed.extend(PLAN_TOOLS);
         // Kodem's own tools start tasks that the user sees and can stop, so they need no
         // approval each time.
         if mcp.is_some() {
@@ -325,7 +336,7 @@ impl Session {
             light: false,
             compact: Some(compact),
             artifacts,
-            instructions: instructions.as_deref(),
+            instructions: Some(&instructions),
             allowed_tools: &allowed,
             // A delegated task that reads its parent's checkout must not change it.
             disallowed_tools: match task.kind {

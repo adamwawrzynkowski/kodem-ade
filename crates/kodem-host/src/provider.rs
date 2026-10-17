@@ -543,11 +543,39 @@ Report the findings as a numbered list, most severe first. Give each finding: it
 const CHAT_RULES: &str = "\
 This is a general conversation in Kodem's Chat workspace. It has no project: the working directory is an empty scratch folder that belongs to this chat alone. Answer questions, explain, compare, brainstorm and write as a helpful assistant. Search the web when an answer depends on current or external information, and name the sources you used. Do not assume that a repository exists, and do not create files unless the user asks for one.";
 
-/// Returns the standing instructions of a task's provider session, which its kind decides.
+/// How a Codex session keeps the plan that Kodem shows beside the composer.
+const CODEX_PLAN_RULES: &str = "\
+Kodem shows your plan to the user beside the prompt and updates it live while you work. Keep it accurate with the update_plan tool. In Plan mode update_plan is not available: propose the plan there instead.
+
+Rules:
+- When the work takes more than one step, write the plan before you start: short steps, in the order you will do them. Skip the plan only for a single quick step, such as a short answer.
+- Mark a step in progress when you start it, and completed as soon as it is done, before you start the next step. Keep only one step in progress. Do not mark several steps completed at the end.
+- When the work changes, change the plan: add, remove or rewrite steps, so that it always shows what you actually do.
+- Before you end your turn, mark every finished step completed. Leave a step pending only when it is not done, and say why.";
+
+/// How a Claude Code session keeps the plan. Its task tools are deferred and their own
+/// description reserves them for complex work, so the rules name how to load them, override
+/// that advice and spell out the order of calls.
+const CLAUDE_PLAN_RULES: &str = "\
+Kodem shows your plan to the user beside the prompt and updates it live while you work. You keep it with the TaskCreate and TaskUpdate tools. They are deferred tools: load them with ToolSearch, query `select:TaskCreate,TaskUpdate`, together with the first other tools you need. If you have TodoWrite instead, use it.
+
+Rules:
+- Every request with two or more steps gets a plan, also a short one, such as a search followed by an answer. This replaces any advice to keep a task list only for complex work. Skip the plan only when one step answers the request.
+- Write the plan before any other work: one TaskCreate call for each step, short, in the order you will do them.
+- Work through the steps in this order of calls: TaskUpdate the step to in_progress, do the step, TaskUpdate it to completed, then the next step. The user watches each step change, so never skip in_progress, and never mark two steps in one go. A step that ends in your reply, such as writing the answer, is in_progress while you write it and completed in your last tool call before the reply.
+- When the work changes, change the plan: add, remove or rewrite steps, so that it always shows what you actually do.
+- Before you end your turn, mark every finished step completed. Leave a step pending only when it is not done, and say why.";
+
+/// Returns the standing instructions of a task's provider session: the plan rules, and the
+/// rules that its kind adds.
 ///
 /// They are given when a provider process starts, so they also hold after a resume.
-pub(crate) fn instructions(task: &Task) -> Option<String> {
-    match task.kind {
+pub(crate) fn instructions(task: &Task) -> String {
+    let plan = match task.provider {
+        Provider::Claude => CLAUDE_PLAN_RULES,
+        Provider::Codex => CODEX_PLAN_RULES,
+    };
+    let rules = match task.kind {
         TaskKind::Coding => None,
         TaskKind::Chat => Some(CHAT_RULES.into()),
         TaskKind::Review => {
@@ -562,6 +590,10 @@ pub(crate) fn instructions(task: &Task) -> Option<String> {
             };
             Some(format!("{REVIEW_RULES}\n\n{scope}\n\n{REVIEW_REPORT}"))
         }
+    };
+    match rules {
+        Some(rules) => format!("{rules}\n\n{plan}"),
+        None => plan.into(),
     }
 }
 

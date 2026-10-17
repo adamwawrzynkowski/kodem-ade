@@ -747,6 +747,7 @@ impl Render for Shell {
             self.panel,
             Panel::Models
                 | Panel::Usage
+                | Panel::Plan
                 | Panel::Notifications
                 | Panel::Reasoning
                 | Panel::Access

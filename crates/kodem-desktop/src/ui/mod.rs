@@ -131,6 +131,8 @@ enum Panel {
     /// Chooses what the side pane shows when it opens.
     PaneMenu,
     Usage,
+    /// The steps of the agent's plan, above the composer's plan tab.
+    Plan,
     Palette,
     Mode,
     WhatsNew,
@@ -291,6 +293,9 @@ pub struct Shell {
     // The pointer is over the meter tab on the composer, which paints its own hover fill.
     meter_tab_hovered: bool,
     meter_tab_focus: FocusHandle,
+    // The same for the plan tab on the composer's other corner.
+    plan_tab_hovered: bool,
+    plan_tab_focus: FocusHandle,
     /// The versions of Git, Git LFS and GitHub CLI that the host read last. Empty until it
     /// answers.
     tools: Vec<ToolVersion>,
@@ -344,7 +349,6 @@ pub struct Shell {
     settings_section: usize,
     effort_slider: Option<(String, Entity<effort_slider::EffortSlider>, Subscription)>,
     image_preview: Option<image_preview::ImagePreview>,
-    plan_expanded: bool,
     palette_input: Entity<TextInput>,
     palette: palette::Palette,
     accounts: accounts::AccountsView,
@@ -692,6 +696,8 @@ impl Shell {
             title_press: false,
             meter_tab_hovered: false,
             meter_tab_focus: cx.focus_handle(),
+            plan_tab_hovered: false,
+            plan_tab_focus: cx.focus_handle(),
             tools: Vec::new(),
             tool_installers: Vec::new(),
             whats_new_due: crate::release_notes::take_unseen(),
@@ -732,7 +738,6 @@ impl Shell {
             settings_section: 0,
             effort_slider: None,
             image_preview: None,
-            plan_expanded: false,
             palette_input,
             palette: Default::default(),
             accounts: Default::default(),

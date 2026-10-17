@@ -77,13 +77,13 @@ fn open(
         let limit = compact_limit(&h, &task)?;
         (task, model, limit)
     };
-    let mut params = json!({"cwd":cwd,"approvalPolicy":task.access.approval_policy(),"approvalsReviewer":task.access.approvals_reviewer(),"sandbox":task.access.sandbox(),"config":{"features.multi_agent":true}});
+    // Codex 0.162 offers `update_plan`, the tool of the plan that Kodem shows, only when a
+    // client turns it on.
+    let mut params = json!({"cwd":cwd,"approvalPolicy":task.access.approval_policy(),"approvalsReviewer":task.access.approvals_reviewer(),"sandbox":task.access.sandbox(),"config":{"features.multi_agent":true,"tools.update_plan.enabled":true}});
     if let Some(limit) = limit {
         params["config"]["model_auto_compact_token_limit"] = json!(limit);
     }
-    if let Some(instructions) = instructions(&task) {
-        params["developerInstructions"] = json!(instructions);
-    }
+    params["developerInstructions"] = json!(instructions(&task));
     // A chat answers from the live web. The search is Codex's own tool, outside the sandbox.
     if task.kind == TaskKind::Chat {
         params["config"]["web_search"] = json!("live");
@@ -589,6 +589,26 @@ fn ingest(host: &Shared, task_id: &str, value: Value, items: &mut Streamed) -> R
                     branch: observed_branch,
                 }),
             )?;
+        }
+        // Each report is the whole plan. A subagent's plan is its own and is not shown.
+        "turn/plan/updated" if child_thread.is_none() => {
+            task.plan = p["plan"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .take(200)
+                .filter_map(|step| {
+                    Some(PlanStep {
+                        text: step["step"].as_str()?.chars().take(2000).collect(),
+                        status: match step["status"].as_str() {
+                            Some("inProgress") => PlanStatus::Active,
+                            Some("completed") => PlanStatus::Done,
+                            _ => PlanStatus::Pending,
+                        },
+                    })
+                })
+                .collect();
+            h.store.save_task(&task)?;
         }
         "serverRequest/resolved" => {
             if let Some(requests) = h.requests.get_mut(task_id) {
