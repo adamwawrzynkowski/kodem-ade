@@ -2,38 +2,96 @@
 use super::*;
 
 impl Shell {
-    /// Builds the saved application accent picker. The first choice is the theme's own accent.
+    /// Builds the saved application accent picker: a glass key for each accent in two even rows,
+    /// under a header that names the chosen one. The first choice is the theme's own accent.
     pub(super) fn accent_choices(&self, cx: &mut Context<Self>) -> AnyElement {
-        let light = self.theme.light;
+        let t = self.theme;
+        let light = t.light;
         let own = Theme::new(self.settings.theme).accent;
+        let chosen = self.settings.accent;
         div()
             .flex()
             .flex_col()
-            .gap(px(8.))
-            .child(kit::section_header("Accent", None, self.theme))
-            .child(div().flex().flex_wrap().gap(px(6.)).children(
-                AccentColor::ALL.into_iter().enumerate().map(|(i, color)| {
-                    let (tone, label) = if color == AccentColor::default() {
-                        (own, "Theme accent")
-                    } else {
-                        (crate::theme::accent_color(color, light), color.label())
-                    };
-                    self.swatch(
-                        ("accent-choice", i),
-                        tone,
-                        label,
-                        self.settings.accent == color,
-                        false,
-                    )
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        s.settings.accent = color;
-                        s.theme = Theme::with_accent(s.settings.theme, color);
-                        s.save_settings();
-                        cx.notify();
-                    }))
-                }),
-            ))
+            .gap(px(12.))
+            .child(
+                kit::section_header("Accent", None, t).child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(kit::marker(t.accent))
+                        .child(caps(accent_label(chosen), t).text_color(t.accent)),
+                ),
+            )
+            .child(
+                div()
+                    .grid()
+                    .grid_cols((AccentColor::ALL.len() / 2) as u16)
+                    .gap(px(8.))
+                    .children(AccentColor::ALL.into_iter().enumerate().map(|(i, color)| {
+                        let tone = if color == AccentColor::default() {
+                            own
+                        } else {
+                            crate::theme::accent_color(color, light)
+                        };
+                        self.accent_key(
+                            ("accent-choice", i),
+                            tone,
+                            accent_label(color),
+                            color == chosen,
+                        )
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            s.settings.accent = color;
+                            s.theme = Theme::with_accent(s.settings.theme, color);
+                            s.save_settings();
+                            cx.notify();
+                        }))
+                    })),
+            )
             .into_any_element()
+    }
+
+    // Returns one glass key of the accent picker. The chosen key glows in its tone and carries
+    // an engraved check; the others glow only under the pointer.
+    fn accent_key(
+        &self,
+        id: impl Into<ElementId>,
+        tone: Hsla,
+        label: &'static str,
+        chosen: bool,
+    ) -> Button {
+        let t = self.theme;
+        Button::new(id)
+            .relative()
+            .group(kit::GLASS)
+            .min_w_0()
+            .h(px(28.))
+            .overflow_hidden()
+            .rounded(px(crate::theme::RADIUS_CONTROL))
+            .border_1()
+            .border_color(gpui::transparent_black())
+            .layer(kit::glass_body(tone))
+            .text_color(t.on_accent)
+            .accessibility_label(label)
+            .aria_selected(chosen)
+            .focus_visible(move |key| key.border_color(t.accent.opacity(0.7)))
+            .tooltip(move |_, cx| {
+                cx.new(|_| Hint {
+                    text: label.into(),
+                    theme: t,
+                })
+                .into()
+            })
+            .when(chosen, |key| {
+                key.shadow(kit::glass_glow(tone, t, kit::Pose::Hover))
+                    .child(kit::engraved("check", tone, 13.))
+            })
+            .when(!chosen, |key| {
+                key.cursor_pointer()
+                    .hover(move |key| key.shadow(kit::glass_glow(tone, t, kit::Pose::Rest)))
+                    .active(move |key| key.shadow(kit::glass_glow(tone, t, kit::Pose::Pressed)))
+                    .on_press(move |position, cx| fx::ripple(position, tone, cx))
+            })
     }
 
     /// Returns a square color choice; `follow` dithers it to mean "use the app accent".
@@ -584,5 +642,15 @@ impl Shell {
             }
         })
         .detach();
+    }
+}
+
+// Returns the name of an accent in the application picker, where the default stands for the
+// theme's own accent.
+fn accent_label(color: AccentColor) -> &'static str {
+    if color == AccentColor::default() {
+        "Theme accent"
+    } else {
+        color.label()
     }
 }
