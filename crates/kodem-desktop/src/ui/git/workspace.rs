@@ -1909,24 +1909,6 @@ fn indicator_target(view: ViewTab, cx: &mut App) -> Option<(f32, f32)> {
     fx::anchor_bounds(view_tab_anchor(view), cx).map(|tab| indicator_span(tab, rail))
 }
 
-/// The indicator edges at `delta` of a slide. The leading edge springs
-/// ahead and overshoots while the trailing edge follows late, so the
-/// indicator stretches like a worm and snaps back on arrival.
-fn tab_slide_span(from: (f32, f32), to: (f32, f32), delta: f32) -> (f32, f32) {
-    let lead = fx::ease_out_back((delta * 1.25).min(1.0));
-    let trail = {
-        let t = ((delta - 0.18) / 0.82).clamp(0.0, 1.0);
-        1.0 - (1.0 - t).powi(3)
-    };
-    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
-    let (left, right) = if to.0 >= from.0 {
-        (lerp(from.0, to.0, trail), lerp(from.1, to.1, lead))
-    } else {
-        (lerp(from.0, to.0, lead), lerp(from.1, to.1, trail))
-    };
-    (left, right.max(left + 4.0))
-}
-
 /// The tab indicator drawn on the rail, sliding from `from` to `to`
 /// when a slide is pending. Edges are in window pixels.
 fn tab_slider(from: Option<(f32, f32)>, to: (f32, f32), sequence: u64, accent: Hsla) -> AnyElement {
@@ -1950,7 +1932,7 @@ fn tab_slider(from: Option<(f32, f32)>, to: (f32, f32), sequence: u64, accent: H
         .with_animation(
             ElementId::NamedInteger("tab-slide".into(), sequence),
             Animation::new(TAB_SLIDE_DURATION),
-            move |layer, delta| layer.child(bar(tab_slide_span(from, to, delta))),
+            move |layer, delta| layer.child(bar(fx::stretch_span(from, to, delta))),
         )
         .into_any_element()
 }

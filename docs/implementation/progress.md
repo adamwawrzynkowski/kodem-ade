@@ -1209,3 +1209,16 @@ Recorded on 19 October 2026. The user asked for a cute pixel avatar for each pro
 - Art (`ui/skater/art.rs`): 12×12 sprites per avatar, shared legs, arms, eyes and a board with four flip faces, painted cell by cell, mirrored, rotated and squeezed, in colors from the project's tint.
 
 Checked with temporary tests that were not kept: the ground profile of the edge and both tabs; ten minutes of simulated frames with work, rest and a scroll away (12 runs with random seeds) reached every mode, kept the deck on the ground and in the lane, and reached the tops of both tabs; a grab, drag and throw left the window and came back; a store with a project saved without an avatar got one on open, kept it over later opens, kept it on a customization without an avatar and changed it on one with an avatar. The sprites were checked as a rendered sheet of the art data, not in the app. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not run: the Linux and Windows lint (the change has no platform code). The character was not checked in the running app, under the no-visual-testing agreement.
+
+### Workspace rail look and motion
+
+Recorded on 19 October 2026. The user asked that the tiles of the workspace rail (Agentic Coding, Chat, Review and Git, with the selection edge and the BETA badge) look better and fit the app, and that they animate when they appear, open and fold.
+
+- The tiles share one builder (`Shell::rail_tile`, `Shell::rail_cell`) with 8-point corners. The open workspace's tile keeps the accent tint and light, and its dots are a radial bloom under the glyph (`DitherField::Glow`) instead of a flat bottom shade. The other tiles take a neutral fill and a hairline edge under the pointer.
+- The selection is a three-point glowing pill on the rail's leading edge, centered on the tile. `RailSlide` keeps the slot of the last frame; `Shell::sync_rail_slide`, called once per render, starts a slide when the slot changes, so a click, a shortcut or a task of another kind all slide the pill. It uses the stretching slide of the Git view tabs, which moved to `fx::stretch_span`.
+- The tile that opens forms out of dither as before, and its glyph springs from 60% to full size. The tile that the selection left lets its tint fade over 280 ms.
+- The attention marker is a round dot with a ring in the rail's tone. It springs in and sends out one fading ring when its state (waits, works, ready) changes. It draws no frames once it has settled.
+- The Git tile's BETA badge is a small mono pill centered under the glyph and hanging from the tile's lower edge: outlined in the accent while Git is closed, filled while it is open, rising into place when that changes.
+- `motion::stagger` drops parts into place one after another. The quick actions that the rail gains once the sidebar has folded, and the Git workspace's repositories, use it.
+
+Reduced motion shows every state at once. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not run: the Linux and Windows lint (the change has no platform code). The look and the motion were not checked in the running app, under the no-visual-testing agreement.

@@ -96,8 +96,30 @@ pub(super) fn reveal<E: IntoElement + Styled + 'static>(
         .into_any_element()
 }
 
-fn ease_out_cubic(progress: f32) -> f32 {
+/// Starts fast and settles into place.
+pub(super) fn ease_out_cubic(progress: f32) -> f32 {
     1. - (1. - progress).powi(3)
+}
+
+/// Brings in a part that a surface just gained: it fades in and drops into place `order` beats
+/// after the first part, so a group of parts arrives in sequence. The part must be relatively
+/// positioned. It plays again when the part leaves and comes back.
+pub(super) fn stagger<E: IntoElement + Styled + 'static>(
+    id: impl Into<ElementId>,
+    element: E,
+    order: usize,
+) -> AnyElement {
+    let delay = order as f32 * 0.04;
+    let span = 0.22;
+    let total = delay + span;
+    element
+        .with_animation(
+            id,
+            Animation::new(Duration::from_secs_f32(total))
+                .with_easing(move |p| ease_out_cubic(((p * total - delay) / span).clamp(0., 1.))),
+            |part, delta| part.top(px(-6. * (1. - delta))).opacity(delta),
+        )
+        .into_any_element()
 }
 
 /// Slides content in by `offset` while a Bayer dissolve in the surface color clears from the top.

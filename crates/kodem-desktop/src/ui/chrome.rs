@@ -451,6 +451,7 @@ impl Render for Shell {
         self.work_stretches.clear();
         self.folds.begin_frame();
         self.sync_reveals(cx);
+        self.sync_rail_slide();
         self.sync_error_notices(cx);
         self.sync_censor();
         fx::begin_frame(cx);

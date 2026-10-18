@@ -7,6 +7,25 @@ use crate::thread_list::Section;
 
 /// Width of the workspace rail, in points.
 pub(super) const RAIL: f32 = 48.;
+/// Side of a workspace tile in the rail, in points.
+const TILE: f32 = 34.;
+/// Space between the workspace tiles, in points.
+const TILE_GAP: f32 = 4.;
+/// Height of the selection pill beside the open workspace's tile, in points.
+const PILL: f32 = 18.;
+/// How long the selection pill takes to slide to another tile.
+const SLIDE: Duration = Duration::from_millis(380);
+
+/// The tile that the rail's selection marks, and the tile that it last slid from.
+#[derive(Default)]
+pub(super) struct RailSlide {
+    /// The slot that the last frame marked, once a frame has drawn the rail.
+    shown: Option<usize>,
+    /// The slot that the selection left last.
+    from: Option<usize>,
+    /// Counts the moves of the selection. Each move plays its animations under a new name.
+    sequence: u64,
+}
 
 /// The unsent draft of a workspace's start screen, kept while another workspace is open.
 #[derive(Default)]
@@ -41,150 +60,224 @@ impl Shell {
             .pt(px(10.))
             .pb(px(8.))
             .gap(px(4.));
-        for mode in TaskKind::ALL {
-            rail = rail.child(self.mode_button(mode, cx));
+        let mut tiles = div()
+            .relative()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(TILE_GAP));
+        for (slot, mode) in TaskKind::ALL.into_iter().enumerate() {
+            tiles = tiles.child(self.mode_button(slot, mode, cx));
         }
-        rail = rail.child(self.git_button(cx));
+        rail = rail.child(
+            tiles
+                .child(self.git_button(TaskKind::ALL.len(), cx))
+                .child(rail_pill(&self.rail_slide, self.rail_slot(), t.accent)),
+        );
         if self.git_open
             && let Some(git) = self.git.clone()
         {
             // The Git workspace's repositories and actions take the rest of the rail.
             return rail
-                .child(
+                .child(motion::stagger("rail-git-rule", rail_rule(t), 0))
+                .child(motion::stagger(
+                    "rail-git",
                     div()
-                        .w(px(22.))
-                        .py(px(4.))
-                        .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
-                )
-                .child(
-                    div()
+                        .relative()
                         .flex_1()
                         .min_h_0()
                         .w_full()
                         .child(git.update(cx, |git, cx| git.render_rail(window, cx))),
-                )
+                    1,
+                ))
                 .into_any_element();
         }
         if self.reveals.sidebar > 0. {
             return rail.into_any_element();
         }
-        rail.child(
-            div()
-                .w(px(22.))
-                .py(px(4.))
-                .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
-        )
-        .child(
-            self.icon_button("rail-new", "edit", self.new_thread_hint())
-                .on_click(cx.listener(|s, _, w, cx| s.new_task(&NewTask, w, cx))),
-        )
-        .child(
-            self.icon_button("rail-search", "search", "Search tasks · ⌘F")
-                .on_click(cx.listener(|s, _, w, cx| s.open_search(w, cx))),
-        )
-        .child(
-            self.icon_button("rail-palette", "command", "Command palette · ⌘K")
-                .on_click(cx.listener(|s, _, w, cx| s.open_palette(w, cx))),
-        )
-        .child(
-            self.icon_button("rail-open", "folder-open", "Open repository · ⌘O")
-                .on_click(cx.listener(|s, _, w, cx| s.open_project(&OpenProject, w, cx))),
-        )
-        .child(div().flex_1())
-        .child(self.update_control(true, cx))
-        .child(self.notification_bell("rail-notifications", cx))
-        .child(
-            self.icon_button("rail-settings", "settings", "Settings · ⌘,")
-                .on_click(cx.listener(|s, _, _, cx| {
-                    s.panel = Panel::Settings;
-                    cx.notify();
-                })),
-        )
-        .into_any_element()
+        // The quick actions arrive one after another once the sidebar has folded away.
+        rail.child(motion::stagger("rail-quick-rule", rail_rule(t), 0))
+            .child(motion::stagger(
+                "rail-quick-new",
+                self.icon_button("rail-new", "edit", self.new_thread_hint())
+                    .on_click(cx.listener(|s, _, w, cx| s.new_task(&NewTask, w, cx))),
+                1,
+            ))
+            .child(motion::stagger(
+                "rail-quick-search",
+                self.icon_button("rail-search", "search", "Search tasks · ⌘F")
+                    .on_click(cx.listener(|s, _, w, cx| s.open_search(w, cx))),
+                2,
+            ))
+            .child(motion::stagger(
+                "rail-quick-palette",
+                self.icon_button("rail-palette", "command", "Command palette · ⌘K")
+                    .on_click(cx.listener(|s, _, w, cx| s.open_palette(w, cx))),
+                3,
+            ))
+            .child(motion::stagger(
+                "rail-quick-open",
+                self.icon_button("rail-open", "folder-open", "Open repository · ⌘O")
+                    .on_click(cx.listener(|s, _, w, cx| s.open_project(&OpenProject, w, cx))),
+                4,
+            ))
+            .child(div().flex_1())
+            .child(self.update_control(true, cx))
+            .child(self.notification_bell("rail-notifications", cx))
+            .child(
+                self.icon_button("rail-settings", "settings", "Settings · ⌘,")
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.panel = Panel::Settings;
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
     }
 
-    // One workspace of the rail: an icon tile that carries the accent while its workspace is
-    // open, an edge on the rail's leading side, and a marker for tasks that want attention.
-    fn mode_button(&self, mode: TaskKind, cx: &mut Context<Self>) -> AnyElement {
+    // One workspace of the rail at `slot`, with a dot for tasks that want attention.
+    fn mode_button(&self, slot: usize, mode: TaskKind, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let chosen = self.mode == mode && !self.git_open;
+        let chosen = self.rail_slot() == slot;
         let attention = self.mode_attention(mode);
         let hint = match &attention {
-            Some((_, note)) => format!("{} · {note} · {}", mode.label(), mode_keys(mode)),
+            Some((_, _, note)) => format!("{} · {note} · {}", mode.label(), mode_keys(mode)),
             None => format!("{} · {}", mode.label(), mode_keys(mode)),
         };
         let tile = self
-            .control(("workspace-mode", mode as usize))
-            .relative()
+            .rail_tile(slot, mode.icon(), mode.label(), hint, chosen)
+            .on_click(cx.listener(move |s, _, _, cx| s.set_mode(mode, cx)));
+        self.rail_cell(slot, tile, chosen)
+            .when_some(attention.filter(|_| !chosen), |cell, (rank, tone, _)| {
+                cell.child(attention_dot(
+                    ElementId::NamedInteger(format!("rail-attention-{slot}").into(), rank),
+                    tone,
+                    t.sidebar,
+                ))
+            })
+            .into_any_element()
+    }
+
+    // The tile of a workspace in the rail at `slot`. The open workspace's tile takes the accent,
+    // lit from below, and its glyph springs into place as it opens. The others stay flat until
+    // the pointer finds them.
+    fn rail_tile(
+        &self,
+        slot: usize,
+        glyph: &'static str,
+        label: &'static str,
+        hint: String,
+        chosen: bool,
+    ) -> Button {
+        let t = self.theme;
+        let tile = self
+            .control(("workspace-tile", slot))
             .overflow_hidden()
-            .size(px(34.))
+            .size(px(TILE))
             .px_0()
             .justify_center()
+            .rounded(px(crate::theme::RADIUS_SURFACE))
             .border_color(gpui::transparent_black())
             .bg(gpui::transparent_black())
             .text_color(t.muted)
-            .accessibility_label(mode.label())
-            .when(chosen, |tile| {
-                tile.bg(kit::tint_fill(t.accent, 0.12))
-                    .shadow(kit::tint_light(t.accent))
-                    .border_color(t.accent.opacity(0.4))
-                    .text_color(t.accent)
-                    .layer(kit::shade(t.accent.opacity(0.6), dither::Edge::Bottom))
-            })
-            .when(!chosen, |tile| {
-                tile.layer(kit::glint(t.dot, dither::Edge::Bottom))
-                    .hover(move |tile| tile.bg(t.selected).text_color(t.text))
-            })
+            .accessibility_label(label)
             .active(move |tile| tile.bg(t.control_active))
             .on_press(move |position, cx| fx::ripple(position, t.accent, cx))
-            .child(icon(mode.icon()).size(px(17.)))
             .tooltip(move |_, cx| {
                 cx.new(|_| Hint {
                     text: hint.clone(),
                     theme: t,
                 })
                 .into()
-            })
-            .on_click(cx.listener(move |s, _, _, cx| s.set_mode(mode, cx)));
+            });
+        if !chosen {
+            return tile
+                .layer(kit::glint(t.dot, dither::Edge::Bottom))
+                .hover(move |tile| {
+                    tile.bg(t.selected)
+                        .border_color(t.border)
+                        .text_color(t.text)
+                })
+                .child(icon(glyph).size(px(17.)));
+        }
+        tile.bg(kit::tint_fill(t.accent, 0.1))
+            .shadow(kit::tint_light(t.accent))
+            .border_color(t.accent.opacity(0.36))
+            .layer(rail_bloom(t.accent))
+            .child(
+                svg()
+                    .path(glyph)
+                    .size(px(17.))
+                    .flex_shrink_0()
+                    .text_color(t.accent)
+                    .with_animation(
+                        ("rail-glyph", slot),
+                        Animation::new(Duration::from_millis(420)),
+                        |glyph, delta| {
+                            let scale = 0.6 + 0.4 * fx::ease_out_back(delta);
+                            glyph.with_transformation(Transformation::scale(size(scale, scale)))
+                        },
+                    ),
+            )
+    }
+
+    // The row of the rail at `slot` that holds a workspace tile. The tile of the workspace that
+    // just opened forms out of dither, and the tile that the selection just left lets its accent
+    // fade away.
+    fn rail_cell(&self, slot: usize, tile: Button, chosen: bool) -> Div {
+        let t = self.theme;
+        let left = !chosen && self.rail_slide.from == Some(slot);
         div()
             .relative()
             .w_full()
-            .h(px(34.))
+            .h(px(TILE))
             .flex()
             .justify_center()
-            .when(chosen, |cell| cell.child(kit::selection_edge(t.accent)))
-            // The tile of the workspace that just opened forms out of dither.
+            .when(left, |cell| {
+                cell.child(rail_afterglow(self.rail_slide.sequence, t.accent))
+            })
             .child(if chosen {
                 motion::dissolve(
-                    ("workspace-chosen", mode as usize),
+                    ("workspace-chosen", slot),
                     tile,
                     t.sidebar,
-                    crate::theme::RADIUS_CONTROL,
+                    crate::theme::RADIUS_SURFACE,
                     0.,
                     2.,
-                    260,
+                    240,
                 )
             } else {
                 tile.into_any_element()
             })
-            .when_some(attention.filter(|_| !chosen), |cell, (tone, _)| {
-                cell.child(
-                    div()
-                        .absolute()
-                        .top(px(3.))
-                        .right(px(8.))
-                        .size(px(6.))
-                        .rounded(px(1.))
-                        .border_1()
-                        .border_color(t.sidebar)
-                        .bg(tone),
-                )
-            })
-            .into_any_element()
     }
 
-    // Returns the tone and wording of the most urgent state among a workspace's tasks.
-    fn mode_attention(&self, mode: TaskKind) -> Option<(Hsla, String)> {
+    // The rail slot of the open workspace: the task workspaces in their order, then Git.
+    fn rail_slot(&self) -> usize {
+        if self.git_open {
+            return TaskKind::ALL.len();
+        }
+        TaskKind::ALL
+            .iter()
+            .position(|mode| *mode == self.mode)
+            .unwrap_or_default()
+    }
+
+    /// Starts the slide of the rail's selection when another workspace opened since the last
+    /// frame. Call it once per render.
+    pub(super) fn sync_rail_slide(&mut self) {
+        let slot = self.rail_slot();
+        let slide = &mut self.rail_slide;
+        if let Some(shown) = slide.shown
+            && shown != slot
+        {
+            slide.from = Some(shown);
+            slide.sequence += 1;
+        }
+        slide.shown = Some(slot);
+    }
+
+    // Returns the most urgent state among a workspace's tasks: its rank, from the most urgent,
+    // its tone and its wording.
+    fn mode_attention(&self, mode: TaskKind) -> Option<(u64, Hsla, String)> {
         let t = self.theme;
         let workspace = self.workspace.as_ref()?;
         let mut counts = [0usize; 3];
@@ -203,6 +296,7 @@ impl Shell {
         let [waiting, working, ready] = counts;
         if waiting > 0 {
             Some((
+                0,
                 t.warning,
                 format!(
                     "{waiting} {} you",
@@ -210,9 +304,9 @@ impl Shell {
                 ),
             ))
         } else if working > 0 {
-            Some((t.accent, format!("{working} working")))
+            Some((1, t.accent, format!("{working} working")))
         } else if ready > 0 {
-            Some((t.added, format!("{ready} ready")))
+            Some((2, t.added, format!("{ready} ready")))
         } else {
             None
         }
@@ -319,64 +413,38 @@ impl Shell {
 }
 
 impl Shell {
-    // The Git workspace's tile in the rail: the branch glyph with a Beta badge on its corner.
-    fn git_button(&self, cx: &mut Context<Self>) -> AnyElement {
+    // The Git workspace's tile in the rail at `slot`: the branch glyph with a Beta tag hanging
+    // from its lower edge.
+    fn git_button(&self, slot: usize, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let chosen = self.git_open;
+        let chosen = self.rail_slot() == slot;
         let tile = self
-            .control("workspace-git")
-            .relative()
-            .overflow_hidden()
-            .size(px(34.))
-            .px_0()
-            .justify_center()
-            .border_color(gpui::transparent_black())
-            .bg(gpui::transparent_black())
-            .text_color(t.muted)
-            .accessibility_label("Git, beta")
-            .when(chosen, |tile| {
-                tile.bg(kit::tint_fill(t.accent, 0.12))
-                    .shadow(kit::tint_light(t.accent))
-                    .border_color(t.accent.opacity(0.4))
-                    .text_color(t.accent)
-                    .layer(kit::shade(t.accent.opacity(0.6), dither::Edge::Bottom))
-            })
-            .when(!chosen, |tile| {
-                tile.layer(kit::glint(t.dot, dither::Edge::Bottom))
-                    .hover(move |tile| tile.bg(t.selected).text_color(t.text))
-            })
-            .active(move |tile| tile.bg(t.control_active))
-            .on_press(move |position, cx| fx::ripple(position, t.accent, cx))
-            .child(icon("git-pull-request").size(px(17.)))
-            .tooltip(move |_, cx| {
-                cx.new(|_| Hint {
-                    text: "Git · Beta · ⌥⌘4".into(),
-                    theme: t,
-                })
-                .into()
-            })
+            .rail_tile(
+                slot,
+                "git-pull-request",
+                "Git, beta",
+                "Git · Beta · ⌥⌘4".into(),
+                chosen,
+            )
             .on_click(cx.listener(|s, _, _, cx| s.open_git(cx)));
-        div()
-            .relative()
-            .w_full()
-            .h(px(34.))
-            .flex()
-            .justify_center()
-            .when(chosen, |cell| cell.child(kit::selection_edge(t.accent)))
-            .child(if chosen {
-                motion::dissolve(
-                    "workspace-git-chosen",
-                    tile,
-                    t.sidebar,
-                    crate::theme::RADIUS_CONTROL,
-                    0.,
-                    2.,
-                    260,
-                )
-            } else {
-                tile.into_any_element()
-            })
-            .child(git_beta_badge(t).absolute().bottom(px(-1.)).right(px(3.)))
+        self.rail_cell(slot, tile, chosen)
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(px(-4.))
+                    .flex()
+                    .justify_center()
+                    .child(
+                        git_beta_badge(t, chosen).relative().with_animation(
+                            ("rail-beta", chosen as usize),
+                            Animation::new(Duration::from_millis(260))
+                                .with_easing(motion::ease_out_cubic),
+                            |tag, delta| tag.top(px(3. * (1. - delta))).opacity(delta),
+                        ),
+                    ),
+            )
             .into_any_element()
     }
 
@@ -487,19 +555,167 @@ impl Shell {
     }
 }
 
-/// Returns the Beta badge of the Git workspace: a tiny accent label in the mono face.
-pub(super) fn git_beta_badge(theme: Theme) -> Div {
+/// Returns the Beta tag of the Git workspace's tile: a small mono pill in the accent, outlined
+/// over the rail and filled while the Git workspace is open.
+pub(super) fn git_beta_badge(theme: Theme, chosen: bool) -> Div {
     div()
-        .px(px(2.))
-        .rounded(px(2.))
-        .bg(theme.accent)
-        .text_color(theme.on_accent)
+        .h(px(10.))
+        .px(px(3.))
+        .flex()
+        .items_center()
+        .rounded(px(3.))
+        .border_1()
+        .border_color(if chosen {
+            theme.accent
+        } else {
+            theme.accent.opacity(0.45)
+        })
+        .bg(if chosen { theme.accent } else { theme.sidebar })
+        .text_color(if chosen {
+            theme.on_accent
+        } else {
+            theme.accent
+        })
         .font_family(crate::theme::mono())
-        .text_size(text_px(6.5))
+        .text_size(text_px(6.))
         .line_height(text_px(8.))
         .font_weight(FontWeight::BOLD)
-        .letter_spacing(text_px(0.3))
+        .letter_spacing(text_px(0.4))
         .child("BETA")
+}
+
+// The dotted rule that parts the workspace tiles from the rest of the rail.
+fn rail_rule(theme: Theme) -> Div {
+    div()
+        .relative()
+        .w(px(22.))
+        .py(px(4.))
+        .child(dither::DottedRule::horizontal(theme.subtle.opacity(0.4)))
+}
+
+// Dots that light the open workspace's tile from below, densest under its glyph.
+fn rail_bloom(tone: Hsla) -> dither::Dither {
+    dither::Dither::new(dither::DitherField::Glow {
+        x: 0.5,
+        y: 1.1,
+        radius: 0.95,
+        strength: 0.75,
+    })
+    .color(tone.opacity(0.55))
+    .grid(2., 1.)
+}
+
+// The top and bottom of the selection pill beside the tile at `slot`, in points from the top
+// of the tiles.
+fn pill_span(slot: usize) -> (f32, f32) {
+    let top = slot as f32 * (TILE + TILE_GAP) + (TILE - PILL) / 2.;
+    (top, top + PILL)
+}
+
+// The glowing selection pill on the rail's leading edge, between `top` and `bottom`.
+fn pill(tone: Hsla, (top, bottom): (f32, f32)) -> Div {
+    div()
+        .absolute()
+        .left_0()
+        .top(px(top))
+        .w(px(3.))
+        .h(px(bottom - top))
+        .rounded_r(px(2.))
+        .bg(tone)
+        .shadow(vec![BoxShadow {
+            inset: false,
+            color: tone.opacity(0.5),
+            offset: point(px(0.), px(0.)),
+            blur_radius: px(6.),
+            spread_radius: px(0.),
+        }])
+}
+
+// The selection pill beside the tile at `slot`. After another workspace opened, it slides there
+// from the tile it left: its leading end springs ahead and its trailing end follows, so it
+// stretches on the way and snaps back on arrival.
+fn rail_pill(slide: &RailSlide, slot: usize, tone: Hsla) -> AnyElement {
+    let to = pill_span(slot);
+    let Some(from) = slide.from.filter(|from| *from != slot).map(pill_span) else {
+        return pill(tone, to).into_any_element();
+    };
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .with_animation(
+            ElementId::NamedInteger("rail-slide".into(), slide.sequence),
+            Animation::new(SLIDE),
+            move |layer, delta| layer.child(pill(tone, fx::stretch_span(from, to, delta))),
+        )
+        .into_any_element()
+}
+
+// The accent of a tile that the selection just left, fading out behind its glyph.
+fn rail_afterglow(sequence: u64, tone: Hsla) -> AnyElement {
+    div()
+        .absolute()
+        .top_0()
+        .left(px((RAIL - TILE) / 2.))
+        .size(px(TILE))
+        .rounded(px(crate::theme::RADIUS_SURFACE))
+        .border_1()
+        .border_color(tone.opacity(0.36))
+        .bg(kit::tint_fill(tone, 0.1))
+        .with_animation(
+            ElementId::NamedInteger("rail-afterglow".into(), sequence),
+            Animation::new(Duration::from_millis(280)).with_easing(motion::ease_out_cubic),
+            |glow, delta| glow.opacity(1. - delta),
+        )
+        .into_any_element()
+}
+
+// Side of a workspace's attention dot, and of the ring that it sends out, in points.
+const DOT: f32 = 7.;
+const DOT_REACH: f32 = 18.;
+
+// A dot on the corner of a tile in the tone of what its workspace's tasks want, cut out of the
+// tile by a ring in the rail's tone. It springs in and sends out one fading ring each time its
+// state changes.
+fn attention_dot(id: ElementId, tone: Hsla, rail: Hsla) -> AnyElement {
+    div()
+        .absolute()
+        .left(px((RAIL + TILE) / 2. - 4. - DOT_REACH / 2.))
+        .top(px(5. - DOT_REACH / 2.))
+        .size(px(DOT_REACH))
+        .with_animation(
+            id,
+            Animation::new(Duration::from_millis(560)),
+            move |spot, delta| {
+                let ring = motion::ease_out_cubic(delta);
+                spot.when(delta < 1., |spot| {
+                    spot.child(
+                        centered_disc(DOT + (DOT_REACH - DOT) * ring)
+                            .border_1()
+                            .border_color(tone.opacity(0.6 * (1. - ring))),
+                    )
+                })
+                .child(
+                    centered_disc(DOT * fx::ease_out_back((delta * 1.8).min(1.)))
+                        .border_1()
+                        .border_color(rail)
+                        .bg(tone),
+                )
+            },
+        )
+        .into_any_element()
+}
+
+// A circle of `side` points in the middle of an attention dot's area.
+fn centered_disc(side: f32) -> Div {
+    let inset = (DOT_REACH - side) / 2.;
+    div()
+        .absolute()
+        .left(px(inset))
+        .top(px(inset))
+        .size(px(side.max(0.)))
+        .rounded_full()
 }
 
 /// Returns a folder in the form that the host records for a project, for comparisons.

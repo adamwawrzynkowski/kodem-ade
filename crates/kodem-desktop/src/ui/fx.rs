@@ -849,6 +849,21 @@ pub(super) fn ease_out_back(t: f32) -> f32 {
     1.0 + (overshoot + 1.0) * t * t * t + overshoot * t * t
 }
 
+/// The edges of a sliding marker at `delta` of its move from the span `from` to the span `to`.
+/// The leading edge springs ahead and overshoots while the trailing edge follows late, so the
+/// marker stretches like a worm and snaps back on arrival.
+pub(super) fn stretch_span(from: (f32, f32), to: (f32, f32), delta: f32) -> (f32, f32) {
+    let lead = ease_out_back((delta * 1.25).min(1.0));
+    let trail = ease_out_cubic(((delta - 0.18) / 0.82).clamp(0.0, 1.0));
+    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+    let (start, end) = if to.0 >= from.0 {
+        (lerp(from.0, to.0, trail), lerp(from.1, to.1, lead))
+    } else {
+        (lerp(from.0, to.0, lead), lerp(from.1, to.1, trail))
+    };
+    (start, end.max(start + 4.0))
+}
+
 fn ease_in_out_sine(t: f32) -> f32 {
     0.5 - 0.5 * (t * std::f32::consts::PI).cos()
 }
