@@ -15,6 +15,12 @@ use std::{
 pub use uds_windows::{UnixListener, UnixStream};
 pub const PROTOCOL: u32 = 39;
 pub const MAX_PACKET: u64 = 32 * 1024 * 1024;
+/// Returns the data directories of every Kodem build on this computer: the release and nightly
+/// builds share one, and Debug has its own.
+pub fn install_dirs() -> Result<Vec<PathBuf>> {
+    let home = platform::data_home()?;
+    Ok(vec![home.join("Kodem"), home.join("Kodem Debug")])
+}
 /// Resolves the data directory, isolating Debug's host and store unless explicitly overridden.
 pub fn data_dir() -> Result<PathBuf> {
     if let Some(path) = env::var_os("KODEM_DATA_DIR") {

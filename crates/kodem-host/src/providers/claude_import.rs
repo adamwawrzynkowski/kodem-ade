@@ -23,6 +23,11 @@ const GENERATED: [&str; 4] = [
     "<task-notification>",
 ];
 
+/// The entry point that Claude Code records for a session in print mode, which is how Kodem
+/// runs it. Claude Code's own terminal, desktop and IDE apps and the apps built on its SDK
+/// record other entry points.
+const PRINT_MODE: &str = "sdk-cli";
+
 // Calls `each` with every line of a stored file.
 fn lines(path: &Path, mut each: impl FnMut(&[u8]) -> Result<()>) -> Result<()> {
     let mut reader = BufReader::new(fs::File::open(path)?);
@@ -114,9 +119,9 @@ fn modified(path: &Path) -> Result<u64> {
         .map_or(0, |elapsed| elapsed.as_millis() as u64))
 }
 
-// Reads a conversation's folder, times, title and opening prompt. A conversation without a
-// prompt of the user, such as one that only listed commands, gives `None`. With `model`, every
-// entry is read to find the model of the latest answer.
+// Reads a conversation's folder, times, title and opening prompt, and whether Kodem ran it. A
+// conversation without a prompt of the user, such as one that only listed commands, gives
+// `None`. With `model`, every entry is read to find the model of the latest answer.
 fn summary(path: &Path, session: &str, model: bool) -> Result<Option<Stored>> {
     let mut cwd = None;
     let mut created = None;
@@ -124,6 +129,7 @@ fn summary(path: &Path, session: &str, model: bool) -> Result<Option<Stored>> {
     let mut named = None;
     let mut generated = None;
     let mut latest = None;
+    let mut entrypoint = None;
     lines(path, |line| {
         let started = cwd.is_some() && created.is_some() && opening.is_some();
         if started && !model && line.len() > SHORT_LINE {
@@ -160,6 +166,9 @@ fn summary(path: &Path, session: &str, model: bool) -> Result<Option<Stored>> {
         if created.is_none() {
             created = milliseconds(&entry);
         }
+        if entrypoint.is_none() {
+            entrypoint = text("entrypoint");
+        }
         if opening.is_none() {
             opening = prompt(&entry);
         }
@@ -176,6 +185,7 @@ fn summary(path: &Path, session: &str, model: bool) -> Result<Option<Stored>> {
         created: created.unwrap_or(updated),
         updated,
         model: latest,
+        kodem: entrypoint.as_deref() == Some(PRINT_MODE),
     }))
 }
 

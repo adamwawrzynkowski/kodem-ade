@@ -150,6 +150,10 @@ fn installed_runtime() -> Result<Runtime> {
         ))
 }
 
+/// The name that Kodem gives Codex for itself. Codex stores it as the `originator` of each
+/// thread that Kodem starts.
+pub const CLIENT_NAME: &str = "kodem_ade";
+
 /// Returns the folder where the build commands install Codex packages for Kodem.
 pub fn runtimes_dir() -> Result<PathBuf> {
     #[cfg(windows)]
@@ -320,7 +324,7 @@ impl Codex {
             replies: HashMap::new(),
             config: Value::Null,
         };
-        this.call("initialize",json!({"clientInfo":{"name":"kodem_ade","title":"Kodem ADE","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}),&mut event)?;
+        this.call("initialize",json!({"clientInfo":{"name":CLIENT_NAME,"title":"Kodem ADE","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}),&mut event)?;
         this.write(&json!({"method":"initialized"}))?;
         this.config =
             this.call("config/read", json!({"includeLayers":false}), &mut event)?["config"].clone();

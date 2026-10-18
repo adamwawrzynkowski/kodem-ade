@@ -1,10 +1,12 @@
-//! Finds the conversations that Claude Code and Codex stored outside Kodem, and imports them as
-//! tasks that continue those conversations.
+//! Finds the conversations that Claude Code, Codex and OpenCode stored for other apps, and
+//! imports them as tasks that continue those conversations. Conversations that Kodem started
+//! are not listed: the ones that a provider marks as Kodem's, and the ones that the task of any
+//! Kodem build on this computer holds.
 use crate::{Shared, accounts, new_task, provider};
 use anyhow::{Context, Result, ensure};
-use kodem_core::{git, platform, *};
+use kodem_core::{git, ipc, platform, storage, *};
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
 };
 
@@ -18,6 +20,8 @@ pub(crate) struct Stored {
     pub(crate) updated: u64,
     /// The model of the conversation's latest turn, when the provider recorded it.
     pub(crate) model: Option<String>,
+    /// The provider recorded that Kodem started the conversation.
+    pub(crate) kodem: bool,
 }
 
 /// Longest title of an imported conversation, in characters.
@@ -104,7 +108,28 @@ impl Folders {
     }
 }
 
-/// Lists the stored conversations of every Claude Code and Codex account.
+// Returns the conversations that the tasks of every Kodem build on this computer hold: this
+// host's store, and the stores of the other builds, which each keep their own.
+fn held(tasks: &[Task], root: &Path) -> BTreeSet<(Provider, String)> {
+    let mut held: BTreeSet<(Provider, String)> = tasks
+        .iter()
+        .filter_map(|task| Some((task.provider, task.provider_thread.clone()?)))
+        .collect();
+    let own = folder_key(root);
+    for install in ipc::install_dirs().unwrap_or_default() {
+        if folder_key(&install) == own {
+            continue;
+        }
+        // A store that cannot be read hides nothing; its threads are then listed.
+        if let Ok(threads) = storage::provider_threads(&install) {
+            held.extend(threads);
+        }
+    }
+    held
+}
+
+/// Lists the stored conversations of every Claude Code, Codex and OpenCode account that Kodem
+/// did not start.
 pub(crate) fn discover(host: &Shared) -> Result<ExternalThreads> {
     let (projects, tasks, accounts, root) = {
         let h = host.lock().unwrap();
@@ -116,6 +141,7 @@ pub(crate) fn discover(host: &Shared) -> Result<ExternalThreads> {
         )
     };
     let mut folders = Folders::new(&projects, &root);
+    let held = held(&tasks, &root);
     let mut found = ExternalThreads::default();
     for account in accounts {
         let stored = match provider::stored_threads(account.provider, &account) {
@@ -130,19 +156,15 @@ pub(crate) fn discover(host: &Shared) -> Result<ExternalThreads> {
             }
         };
         for thread in stored {
+            if thread.kodem || held.contains(&(account.provider, thread.thread.clone())) {
+                continue;
+            }
             let Some(project_id) = folders.project(&thread.cwd) else {
                 if !folders.own(&thread.cwd) {
                     found.elsewhere += 1;
                 }
                 continue;
             };
-            let task_id = tasks
-                .iter()
-                .find(|task| {
-                    task.provider == account.provider
-                        && task.provider_thread.as_deref() == Some(&thread.thread)
-                })
-                .map(|task| task.id.clone());
             found.threads.push(ExternalThread {
                 provider: account.provider,
                 account: account.id.clone(),
@@ -152,7 +174,6 @@ pub(crate) fn discover(host: &Shared) -> Result<ExternalThreads> {
                 cwd: thread.cwd,
                 created: thread.created,
                 updated: thread.updated,
-                task_id,
             });
         }
     }
@@ -208,6 +229,10 @@ pub(crate) fn import(
 ) -> Result<Task> {
     let account = accounts::resolve(&host.lock().unwrap(), provider, Some(account))?;
     let stored = provider::stored_thread(provider, &account, thread)?;
+    ensure!(
+        !stored.kodem,
+        "Kodem started this conversation, so it is not imported. Its task is in the Kodem build that ran it."
+    );
     let project = {
         let h = host.lock().unwrap();
         let projects = h.store.projects()?;
@@ -250,11 +275,8 @@ pub(crate) fn import(
     {
         let h = host.lock().unwrap();
         ensure!(
-            !h.store
-                .tasks()?
-                .iter()
-                .any(|known| known.provider == provider
-                    && known.provider_thread == task.provider_thread),
+            !held(&h.store.tasks()?, h.store.root())
+                .contains(&(provider, task.provider_thread.clone().unwrap_or_default())),
             "This conversation is already in Kodem"
         );
         h.store.save_task(&task)?;

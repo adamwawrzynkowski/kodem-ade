@@ -515,7 +515,7 @@ impl Shell {
             Panel::DeleteTask => Some(("trash-2", "Removes this task's local conversation")),
             Panel::ImportThreads => Some((
                 "arrow-down-to-line",
-                "Conversations of Claude Code and Codex in your projects",
+                "Conversations of Claude Code, Codex and OpenCode in your projects",
             )),
             _ => None,
         };

@@ -1,7 +1,7 @@
 //! One host-owned SQLite connection with immutable snapshot blobs.
 use crate::{model::*, platform};
 use anyhow::{Context, Result, ensure};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::{
     cell::RefCell,
@@ -58,6 +58,38 @@ pub struct Commit<'a> {
     /// Publishes the final answer that was held until the whole agent tree settled.
     pub release_completion: bool,
 }
+/// Lists the provider conversations that the tasks of the Kodem store in `root` hold. The store
+/// is read without changes, so another running build of Kodem keeps it. A missing store holds
+/// none.
+pub fn provider_threads(root: &Path) -> Result<Vec<(Provider, String)>> {
+    let path = root.join("workspace.sqlite");
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let db = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    db.busy_timeout(std::time::Duration::from_secs(2))?;
+    let mut statement = db.prepare(
+        "SELECT json_extract(json, '$.provider'), json_extract(json, '$.provider_thread') \
+         FROM tasks WHERE json_extract(json, '$.provider_thread') IS NOT NULL",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut threads = Vec::new();
+    for row in rows {
+        let (provider, thread) = row?;
+        // Records from before the provider choice belong to Codex.
+        let provider = provider
+            .and_then(|provider| serde_json::from_value(serde_json::Value::String(provider)).ok())
+            .unwrap_or_default();
+        threads.push((provider, thread));
+    }
+    Ok(threads)
+}
+
 impl Store {
     /// Opens the local store, migrates its schema, and restricts access to the user.
     pub fn open(root: &Path) -> Result<Self> {

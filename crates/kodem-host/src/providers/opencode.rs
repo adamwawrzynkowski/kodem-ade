@@ -1352,8 +1352,10 @@ impl Owner<'_> {
                 stored.clone()
             }
             (None, None) => {
+                // The tag tells Kodem's import that Kodem started this session.
                 let mut body = json!({"location":{"directory":task.cwd},
-                    "permissions":rules(task),"agent":agent_of(task)});
+                    "permissions":rules(task),"agent":agent_of(task),
+                    "metadata":{"kodem":{"task":task.id}}});
                 if let Some(model) = &model {
                     body["model"] = model.clone();
                 }

@@ -30,6 +30,7 @@ fn stored(thread: &Value) -> Option<Stored> {
             .as_u64()
             .map_or(created, |seconds| seconds * 1000),
         model: thread["model"].as_str().map(str::to_owned),
+        kodem: thread["originator"] == kodem_core::providers::codex::CLIENT_NAME,
     })
 }
 

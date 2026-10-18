@@ -6,6 +6,8 @@ use super::*;
 use crate::imports::{Stored, title};
 use kodem_core::now;
 
+/// Titles that OpenCode 1 gave sessions before naming them; sessions that it migrated keep them.
+const UNTITLED: [&str; 2] = ["New session - ", "Child session - "];
 /// Most sessions that a listing reads.
 const LISTING_LIMIT: usize = 5000;
 /// A conversation that changed more recently may still be written by OpenCode.
@@ -46,7 +48,8 @@ fn stored(client: &Client, session: &Value) -> Result<Option<Stored>> {
     let named = session["title"]
         .as_str()
         .map(str::trim)
-        .filter(|name| !name.is_empty());
+        .filter(|name| !name.is_empty())
+        .filter(|name| !UNTITLED.iter().any(|untitled| name.starts_with(untitled)));
     let name = match named {
         Some(name) => name.to_owned(),
         None => match opening(client, id)? {
@@ -62,6 +65,7 @@ fn stored(client: &Client, session: &Value) -> Result<Option<Stored>> {
         created: session["time"]["created"].as_u64().unwrap_or(updated),
         updated,
         model: model(session),
+        kodem: !session["metadata"]["kodem"].is_null(),
     }))
 }
 

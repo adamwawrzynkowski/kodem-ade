@@ -2173,7 +2173,8 @@ pub enum TaskEdit {
         effort: Option<String>,
     },
 }
-/// A conversation that Claude Code or Codex stored on this computer in the folder of a project.
+/// A conversation that Claude Code, Codex or OpenCode stored on this computer for another app,
+/// in the folder of a project.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalThread {
     pub provider: Provider,
@@ -2187,8 +2188,6 @@ pub struct ExternalThread {
     /// Wall-clock milliseconds of the first and the last change of the conversation.
     pub created: u64,
     pub updated: u64,
-    /// The task that already holds this conversation.
-    pub task_id: Option<String>,
 }
 impl ExternalThread {
     /// Returns an identity that is unique among the conversations of all providers.
