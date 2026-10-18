@@ -1,6 +1,7 @@
 //! Small native animations shared by activity indicators and panel entrances.
 use super::*;
 use crate::components::streaming_text::reveal_opacity;
+use std::{cell::Cell, rc::Rc};
 
 pub(super) const COMPOSER_RADIUS: f32 = 8.;
 
@@ -789,4 +790,152 @@ fn arrival_gleam(progress: f32) -> impl IntoElement {
     )
     .absolute()
     .inset_0()
+}
+
+/// How long a tray of the work trail takes to open or fold.
+pub(super) const FOLD: Duration = Duration::from_millis(240);
+
+/// The foldable parts of the work trail that the last frame drew, and those that this frame
+/// draws. A part that changes between open and folded from one frame to the next animates the
+/// change, so a click and a tray that follows its work both slide. A part that no frame drew
+/// shows its state at once, unless it is new content that grows into place.
+#[derive(Default)]
+pub(super) struct Folds {
+    drawn: HashMap<String, FoldSlot>,
+    drawing: HashMap<String, FoldSlot>,
+}
+
+struct FoldSlot {
+    open: bool,
+    /// When the running change started, and how far open the part was then.
+    change: Option<(std::time::Instant, f32)>,
+    /// The height of the open content, as the last frame laid it out.
+    height: Rc<Cell<Option<Pixels>>>,
+}
+
+impl FoldSlot {
+    fn openness(&self, now: std::time::Instant) -> f32 {
+        let target = if self.open { 1. } else { 0. };
+        let Some((started, from)) = self.change else {
+            return target;
+        };
+        let progress = (now.duration_since(started).as_secs_f32() / FOLD.as_secs_f32()).min(1.);
+        from + (target - from) * ease_out_cubic(progress)
+    }
+}
+
+/// How far one foldable part is open in this frame, from 0, folded, to 1, open.
+pub(super) struct Fold {
+    pub openness: f32,
+    open: bool,
+    /// A change is running. Its first frame is still at the openness that it leaves from.
+    moving: bool,
+    height: Rc<Cell<Option<Pixels>>>,
+}
+
+impl Fold {
+    /// Reports whether the part's content shows in this frame: it is open, opening or folding.
+    pub(super) fn shown(&self) -> bool {
+        self.open || self.openness > 0.
+    }
+}
+
+impl Folds {
+    /// Starts a frame: the parts that the last frame drew become the ones to compare with.
+    pub(super) fn begin_frame(&mut self) {
+        self.drawn = std::mem::take(&mut self.drawing);
+    }
+
+    /// Returns how far the part `key` is open in this frame, where `open` is its state. A
+    /// `fresh` part that the last frame did not draw grows open from folded. With `reduce`,
+    /// every part takes its state at once.
+    pub(super) fn slot(&mut self, key: &str, open: bool, fresh: bool, reduce: bool) -> Fold {
+        let now = std::time::Instant::now();
+        let mut slot = self
+            .drawing
+            .remove(key)
+            .or_else(|| self.drawn.remove(key))
+            .unwrap_or_else(|| FoldSlot {
+                open,
+                change: (fresh && open && !reduce).then_some((now, 0.)),
+                height: Rc::default(),
+            });
+        if slot.open != open {
+            let from = slot.openness(now);
+            slot.open = open;
+            slot.change = (!reduce).then_some((now, from));
+        }
+        if reduce
+            || slot
+                .change
+                .is_some_and(|(started, _)| now.duration_since(started) >= FOLD)
+        {
+            slot.change = None;
+        }
+        let fold = Fold {
+            openness: slot.openness(now),
+            open,
+            moving: slot.change.is_some(),
+            height: slot.height.clone(),
+        };
+        self.drawing.insert(key.to_owned(), slot);
+        fold
+    }
+}
+
+/// Shows foldable content at the share of its height that `fold` is open. The content keeps
+/// its own layout, which is measured on every frame, so a later fold knows the height to leave
+/// from. While it moves, the content fades and drifts with the clip, and a Bayer dissolve in
+/// `color`, the opaque surface behind it, clears from it. Content over the backdrop takes no
+/// dissolve, which would cover the backdrop's art.
+pub(super) fn fold(content: impl IntoElement, fold: &Fold, color: Option<Hsla>) -> AnyElement {
+    let height = fold.height.clone();
+    let measured = div()
+        .relative()
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .child(content)
+        .child(
+            canvas(
+                move |bounds, _, _| height.set(Some(bounds.size.height)),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        );
+    if !fold.moving && fold.openness >= 1. {
+        return measured.into_any_element();
+    }
+    let openness = fold.openness.max(0.);
+    // Before the first measure the clip stays shut; the next frame knows the height.
+    let shown = fold.height.get().map_or(px(0.), |height| height * openness);
+    div()
+        .relative()
+        .w_full()
+        .min_w_0()
+        .h(shown)
+        .overflow_hidden()
+        .child(
+            measured
+                .top(px(-6. * (1. - openness)))
+                .opacity(reveal_opacity(openness)),
+        )
+        .when_some(color, |clip, color| {
+            clip.child(
+                dither::Dither::new(dither::DitherField::Dissolve(openness))
+                    .color(color)
+                    .grid(3., 3.)
+                    .layer(),
+            )
+        })
+        .child(
+            canvas(
+                |_, _, _| {},
+                |_, _, window, _| window.request_animation_frame(),
+            )
+            .absolute()
+            .size(px(1.)),
+        )
+        .into_any_element()
 }

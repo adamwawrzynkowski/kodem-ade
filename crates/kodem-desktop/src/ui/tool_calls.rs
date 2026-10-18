@@ -15,6 +15,23 @@ use std::{ops::Range, rc::Rc};
 /// Lines of an edit shown before the rest is folded behind a control.
 const DIFF_PREVIEW_LINES: usize = 40;
 
+/// How recently a row or a call must have started for its first frame to grow it into place.
+const FRESH_MS: u64 = 700;
+
+/// The kinds of work that the tally of a stretch counts, in the order that it shows them.
+const TALLY: [ToolCategory; 10] = [
+    ToolCategory::Command,
+    ToolCategory::Read,
+    ToolCategory::Edit,
+    ToolCategory::Search,
+    ToolCategory::Fetch,
+    ToolCategory::Agent,
+    ToolCategory::Mcp,
+    ToolCategory::Plan,
+    ToolCategory::Other,
+    ToolCategory::Thinking,
+];
+
 fn glyph(category: ToolCategory) -> &'static str {
     match category {
         ToolCategory::Command => "square-terminal",
@@ -56,6 +73,11 @@ fn is_thought(message: &Message) -> bool {
 
 fn is_call(message: &Message) -> bool {
     message.kind == MessageKind::Tool && !is_thought(message)
+}
+
+// Reports whether a message started so recently that it grows into place when it first shows.
+fn fresh(message: &Message) -> bool {
+    now().saturating_sub(message.created) < FRESH_MS
 }
 
 // Returns the stretch of tool rows around `index`: the thoughts and the runs of calls that
@@ -167,7 +189,7 @@ fn plate(line: Button, t: Theme, well: bool) -> Button {
         .bg(t.raised)
         .border_color(t.border)
         .shadow(kit::plate_light(t, !well))
-        .layer(kit::shade(t.dot.opacity(0.5), dither::Edge::Bottom))
+        .layer(kit::shade(t.dot.opacity(0.3), dither::Edge::Bottom))
         .layer(kit::glint(t.accent.opacity(0.45), dither::Edge::Bottom))
         .hover(move |s| s.bg(t.control).text_color(t.text))
 }
@@ -179,10 +201,109 @@ fn flat(line: Button, t: Theme) -> Button {
         .hover(move |s| s.bg(t.selected).text_color(t.text))
 }
 
+// The summary line of a tray or of a stretch: one line that opens or folds what hangs under it.
+fn summary_line(line: Button) -> Button {
+    line.w_full()
+        .h_auto()
+        .min_h(px(28.))
+        .py(px(4.))
+        .px(px(6.))
+        .gap(px(8.))
+        .justify_start()
+}
+
+// A chevron that turns from pointing right, folded, to pointing down, open, as `openness` goes
+// from 0 to 1.
+fn chevron(openness: f32, color: Hsla) -> Svg {
+    svg()
+        .path("chevron-right")
+        .size(px(12.))
+        .flex_shrink_0()
+        .text_color(color)
+        .with_transformation(Transformation::rotate(radians(
+            std::f32::consts::FRAC_PI_2 * openness.clamp(0., 1.),
+        )))
+}
+
+// The name of a tray in sentence case. It shrinks to an ellipsis before the line wraps.
+fn tray_label(text: impl IntoElement, color: Hsla) -> Div {
+    div()
+        .flex_shrink(1.)
+        .min_w_0()
+        .text_ellipsis()
+        .font_family(crate::theme::sans())
+        .font_weight(FontWeight::MEDIUM)
+        .text_size(text_px(12.5))
+        .text_color(color)
+        .child(text)
+}
+
+// A mono caps label that a highlight sweeps across while its work runs.
+fn caps_gleam(text: &str, t: Theme, reduce_motion: bool) -> Div {
+    div()
+        .flex_shrink_0()
+        .font_family(crate::theme::mono())
+        .text_size(text_px(10.5))
+        .font_weight(FontWeight::MEDIUM)
+        .letter_spacing(text_px(crate::theme::LABEL_TRACKING))
+        .line_height(text_px(14.))
+        .child(motion::gleam(text.to_uppercase(), t, reduce_motion))
+}
+
+// Sentence-case text that a highlight sweeps across while its work runs, such as the call that a
+// run is making now.
+fn live_text(text: impl Into<SharedString>, t: Theme, reduce_motion: bool) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .font_family(crate::theme::sans())
+        .font_weight(FontWeight::NORMAL)
+        .text_size(text_px(12.))
+        .child(motion::gleam(text, t, reduce_motion))
+}
+
+// Hangs the calls or the text of a tray from a dotted rail under the tray's chevron. The rows
+// on the rail start under the tray's glyph.
+fn rail(content: Div, t: Theme) -> Div {
+    content.relative().pl(px(20.)).pt(px(2.)).pb(px(4.)).child(
+        div()
+            .absolute()
+            .left(px(11.))
+            .top(px(2.))
+            .bottom(px(6.))
+            .w(px(1.))
+            .child(dither::DottedRule::vertical(t.subtle.opacity(0.35))),
+    )
+}
+
+// The tally of a stretch: the glyph of each kind of work that it did and how many times.
+fn tally(views: &[Rc<ToolView>], t: Theme) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(10.))
+        .children(TALLY.iter().filter_map(|&category| {
+            let count = views
+                .iter()
+                .filter(|view| view.category == category)
+                .count();
+            (count > 0).then(|| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .child(icon(glyph(category)).size(px(12.)).text_color(t.subtle))
+                    .child(figure(count.to_string(), t.muted))
+            })
+        }))
+}
+
 impl Shell {
     /// Renders the tray of one transcript row of tool work: the run of calls that starts at the
     /// row, or the thought of the row. The first row of a stretch of several trays also carries
-    /// the parent tray of the stretch, and a folded parent hides the rows under it.
+    /// the parent tray of the stretch, and a folded parent hides the rows under it. A row of new
+    /// work grows into place the first time it shows.
     pub(super) fn tool_calls(
         &mut self,
         conversation: &Conversation,
@@ -193,72 +314,123 @@ impl Shell {
             return div().into_any_element();
         };
         let rows = stretch.rows.clone();
-        let Some(first) = self
+        let Some((first_key, row_key, row_fresh)) = self
             .conversation_messages(conversation)
-            .and_then(|transcript| transcript.get(rows.start))
+            .and_then(|transcript| {
+                let first = transcript.get(rows.start)?;
+                let row = transcript.get(index)?;
+                Some((
+                    format!("{}:{}", first.task_id, first.id),
+                    format!("{}:{}", row.task_id, row.id),
+                    fresh(row),
+                ))
+            })
         else {
             return div().into_any_element();
         };
-        if stretch.trays < 2 {
-            return match self.work_tray(conversation, index, false, true, cx) {
-                Some(tray) => div()
-                    .w_full()
-                    .min_w_0()
-                    .px_5()
-                    .py(px(4.))
-                    .child(tray)
-                    .into_any_element(),
-                None => div().into_any_element(),
-            };
-        }
-        let key = format!("work:{}:{}", first.task_id, first.id);
-        let running = stretch.running;
-        let open = self.tray_open(conversation, &key, rows.end, running);
-        let trays = &stretch.shown[usize::from(!open)];
-        let header =
-            (index == rows.start).then(|| self.work_header(conversation, &stretch, &key, open, cx));
+        let row = if stretch.trays < 2 {
+            self.work_tray(conversation, index, false, true, cx)
+                .map(|tray| {
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .px_5()
+                        .py(px(4.))
+                        .child(tray)
+                        .into_any_element()
+                })
+        } else {
+            self.work_stretch_row(conversation, &stretch, index, &first_key, cx)
+        };
+        let Some(row) = row else {
+            return div().into_any_element();
+        };
+        let enter = self.folds.slot(
+            &format!("enter-row:{row_key}"),
+            true,
+            row_fresh,
+            cx.reduce_motion(),
+        );
+        motion::fold(row, &enter, None)
+    }
+
+    // One row of a stretch of several trays: the parent's plate on the first row of the
+    // stretch, and the slice of the well that holds the row's tray. Each row folds its own slice,
+    // so the slices of a folding parent close together.
+    fn work_stretch_row(
+        &mut self,
+        conversation: &Conversation,
+        stretch: &Stretch,
+        index: usize,
+        first_key: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let rows = stretch.rows.clone();
+        let key = format!("work:{first_key}");
+        let open = self.tray_open(conversation, &key, rows.end, stretch.running);
+        let fold = self
+            .folds
+            .slot(&format!("{key}@{index}"), open, false, cx.reduce_motion());
+        // A folding parent keeps its trays until they have closed.
+        let shown = fold.shown();
+        let trays = &stretch.shown[usize::from(!shown)];
+        let header = (index == rows.start)
+            .then(|| self.work_header(conversation, stretch, &key, open, fold.openness, cx));
         let t = self.theme;
         // Each row draws its own slice of the well, so the trays of a stretch read as one
         // recessed list under their parent's plate.
         let (first_tray, last_tray) = (trays.first() == Some(&index), trays.last() == Some(&index));
         let tray = self
-            .work_tray(conversation, index, !open, false, cx)
-            .map(|tray| kit::well(t, first_tray, last_tray).child(tray));
+            .work_tray(conversation, index, !shown, false, cx)
+            .map(|tray| {
+                let slice = kit::well(t, first_tray, last_tray).child(tray);
+                if shown {
+                    motion::fold(slice, &fold, None)
+                } else {
+                    slice.into_any_element()
+                }
+            });
         if header.is_none() && tray.is_none() {
-            return div().into_any_element();
+            return None;
         }
         // The stretch ends after its last tray, or after its plate when nothing is under it.
         let ends = last_tray || (header.is_some() && trays.is_empty());
-        div()
-            .w_full()
-            .min_w_0()
-            .px_5()
-            .when(header.is_some(), |row| row.pt(px(4.)))
-            .when(ends, |row| row.pb(px(4.)))
-            .children(header)
-            .children(tray)
-            .into_any_element()
+        Some(
+            div()
+                .w_full()
+                .min_w_0()
+                .px_5()
+                .when(header.is_some(), |row| row.pt(px(4.)))
+                .when(ends, |row| row.pb(px(4.)))
+                .children(header)
+                .children(tray)
+                .into_any_element(),
+        )
     }
 
-    // The parent tray of a stretch of work: what all of its runs and thoughts did, in one line,
-    // on a raised plate. While trays hang below it in a recessed well, the plate squares its
-    // bottom corners onto the well.
+    // The parent tray of a stretch of work: a caps title, the tally of what its runs and
+    // thoughts did, then a dotted rule to its time, on a raised plate. While trays hang below it
+    // in a recessed well, the plate squares its bottom corners onto the well.
+    // `openness` is how far the trays under the plate are open in this frame.
     fn work_header(
         &self,
         conversation: &Conversation,
         stretch: &Stretch,
         key: &str,
         open: bool,
+        openness: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
         let rows = stretch.rows.clone();
         let running = stretch.running;
+        let reduce = cx.reduce_motion();
         let messages = self
             .conversation_messages(conversation)
             .and_then(|transcript| transcript.get(rows.clone()))
             .unwrap_or_default();
-        let well = !stretch.shown[usize::from(!open)].is_empty();
+        // The plate keeps its square corners on the well until the trays have folded.
+        let well = !stretch.shown[usize::from(!open && openness <= 0.)].is_empty();
         let views = &stretch.views;
         let (thoughts, calls): (Vec<_>, Vec<_>) = views
             .iter()
@@ -274,13 +446,9 @@ impl Shell {
         let toggle_conversation = conversation.clone();
         let toggle_key = key.to_owned();
         self.control(SharedString::from(key.to_owned()))
-            .w_full()
-            .h_auto()
-            .min_h(px(28.))
-            .py(px(4.))
-            .px(px(6.))
-            .gap(px(8.))
-            .justify_start()
+            .map(summary_line)
+            .min_h(px(30.))
+            .px(px(8.))
             .flex_wrap()
             .map(|line| plate(line, t, well))
             .text_color(t.muted)
@@ -288,31 +456,27 @@ impl Shell {
                 "{} {label}",
                 if open { "Collapse" } else { "Expand" },
             ))
-            .child(
-                icon(if open {
-                    "chevron-down"
-                } else {
-                    "chevron-right"
-                })
-                .size(px(12.))
-                .text_color(t.muted),
-            )
-            // The parent is brighter than the trays under it, which use the muted label.
-            .child(caps(&label, t).text_color(t.text))
+            .child(chevron(openness, t.muted))
+            .when(running, |button| {
+                button.child(dither::pulse(t.accent, reduce))
+            })
+            .child(if running {
+                caps_gleam("Working", t, reduce)
+            } else {
+                caps("Worked", t).text_color(t.text)
+            })
+            .child(tally(views, t))
             .when_some(edits.lines.filter(|_| edits.files > 0), |button, lines| {
                 button.child(kit::diffstat(lines.added, lines.removed, t))
             })
             .when(failures > 0, |button| {
                 button.child(kit::chip(format!("{failures} FAILED"), t.removed))
             })
-            .when(running, |button| {
-                button.child(dither::pulse(t.accent, cx.reduce_motion()))
-            })
             .child(
                 div()
                     .flex_1()
                     .min_w(px(8.))
-                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.3))),
             )
             .when(!running && elapsed >= 1000, |button| {
                 button.child(figure(tool_output::duration(elapsed), t.subtle))
@@ -349,7 +513,7 @@ impl Shell {
         self.tool_run(conversation, index, failures_only, plated, cx)
     }
 
-    // One run of calls: its summary line and its individually expandable calls.
+    // One run of calls: its summary line and its individually expandable calls on a rail.
     fn tool_run(
         &mut self,
         conversation: &Conversation,
@@ -359,31 +523,46 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let stretch = self.work_stretch(conversation, index)?;
-        let transcript = self.conversation_messages(conversation)?;
-        let length = transcript[index..]
-            .iter()
-            .take_while(|message| is_call(message))
-            .count();
-        let messages = &transcript[index..index + length];
-        let first = messages.first()?;
         let t = self.theme;
-        let offset = index.checked_sub(stretch.rows.start)?;
-        let views = stretch.views.get(offset..offset + length)?;
-        let group_key = format!("tool-group:{}:{}", first.task_id, first.id);
-        let running = messages.iter().zip(views).rposition(|(message, view)| {
-            view.status == ToolStatus::Running
-                && self.conversation_message_active(conversation, message)
-        });
+        let reduce = cx.reduce_motion();
+        let (length, group_key, first_id, running) = {
+            let transcript = self.conversation_messages(conversation)?;
+            let length = transcript[index..]
+                .iter()
+                .take_while(|message| is_call(message))
+                .count();
+            let messages = &transcript[index..index + length];
+            let first = messages.first()?;
+            let offset = index.checked_sub(stretch.rows.start)?;
+            let views = stretch.views.get(offset..offset + length)?;
+            let running = messages.iter().zip(views).rposition(|(message, view)| {
+                view.status == ToolStatus::Running
+                    && self.conversation_message_active(conversation, message)
+            });
+            (
+                length,
+                format!("tool-group:{}:{}", first.task_id, first.id),
+                first.id.clone(),
+                running,
+            )
+        };
+        let offset = index - stretch.rows.start;
+        let views = &stretch.views[offset..offset + length];
         // The run opens only itself: its calls stay one line each until they are clicked.
         let expanded = !failures_only
             && self.tray_open(conversation, &group_key, index + length, running.is_some());
+        let fold = (!failures_only).then(|| self.folds.slot(&group_key, expanded, false, reduce));
+        // A folding run keeps its calls until they have closed.
+        let unfolded = fold.as_ref().is_some_and(motion::Fold::shown);
+        let transcript = self.conversation_messages(conversation)?;
+        let messages = &transcript[index..index + length];
         let edits = tool_output::edit_summary(messages);
         // A folded run still shows what went wrong. Only the calls on screen are copied out of
         // the transcript, which is borrowed until here.
         let shown: Vec<(Message, Rc<ToolView>)> = messages
             .iter()
             .zip(views)
-            .filter(|(_, view)| expanded || view.status == ToolStatus::Failed)
+            .filter(|(_, view)| unfolded || view.status == ToolStatus::Failed)
             .map(|(message, view)| (message.clone(), view.clone()))
             .collect();
         let any_shown = !shown.is_empty();
@@ -396,19 +575,19 @@ impl Shell {
             .iter()
             .filter(|view| view.status == ToolStatus::Failed)
             .count();
+        // A run of one kind of call takes that kind's glyph.
+        let run_glyph = match views.first() {
+            Some(first) if views.iter().all(|view| view.category == first.category) => {
+                glyph(first.category)
+            }
+            _ => "list-ordered",
+        };
         let accessible_label = format!("{} {label}", if expanded { "Collapse" } else { "Expand" },);
         let group_conversation = conversation.clone();
         let toggle_key = group_key.clone();
-        let mut summary = self
+        let summary = self
             .control(SharedString::from(group_key.clone()))
-            .w_full()
-            .h_auto()
-            .min_h(px(28.))
-            .py(px(4.))
-            .px(px(6.))
-            .gap(px(8.))
-            .justify_start()
-            .flex_wrap()
+            .map(summary_line)
             .map(|line| {
                 if plated {
                     plate(line, t, any_shown)
@@ -418,35 +597,42 @@ impl Shell {
             })
             .text_color(t.muted)
             .accessibility_label(accessible_label)
-            .child(
-                icon(if expanded {
-                    "chevron-down"
-                } else {
-                    "chevron-right"
-                })
-                .size(px(12.))
-                .text_color(if plated { t.muted } else { t.subtle }),
-            )
-            // The run reads as a section header: a mono label, its totals, then a dotted rule.
-            // A plate is brighter than the lines in a well.
-            .child(caps(&label, t).text_color(if plated { t.text } else { t.muted }))
+            .child(chevron(
+                fold.as_ref().map_or(0., |fold| fold.openness),
+                if plated { t.muted } else { t.subtle },
+            ))
+            .child(if running.is_some() {
+                dither::pulse(t.accent, reduce)
+            } else {
+                icon(run_glyph)
+                    .size(px(13.))
+                    .text_color(if failures > 0 { t.removed } else { t.subtle })
+                    .into_any_element()
+            })
+            .child(tray_label(label, if plated { t.text } else { t.muted }))
             .when_some(edits.lines.filter(|_| edits.files > 0), |button, lines| {
                 button.child(kit::diffstat(lines.added, lines.removed, t))
             })
             .when(failures > 0, |button| {
                 button.child(kit::chip(format!("{failures} FAILED"), t.removed))
             })
-            .when(running.is_none(), |button| {
-                button
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(8.))
-                            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+            // A running run names the call that it makes now where its time will be.
+            .child(match running {
+                Some(position) => {
+                    let view = &views[position];
+                    let title = view.title.lines().next().unwrap_or_default();
+                    live_text(
+                        format!("{} {title}", verb(view.category))
+                            .trim_end()
+                            .to_owned(),
+                        t,
+                        reduce,
                     )
-                    .when(elapsed >= 1000, |button| {
-                        button.child(figure(tool_output::duration(elapsed), t.subtle))
-                    })
+                }
+                None => div().flex_1().min_w(px(8.)),
+            })
+            .when(running.is_none() && elapsed >= 1000, |button| {
+                button.child(figure(tool_output::duration(elapsed), t.subtle))
             })
             .on_click(cx.listener(move |s, _, _, cx| {
                 s.set_tray(
@@ -457,46 +643,41 @@ impl Shell {
                     cx,
                 )
             }));
-        if let Some(position) = running {
-            let view = &views[position];
-            summary = summary
-                .child(dither::pulse(t.accent, cx.reduce_motion()))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_ellipsis()
-                        .text_color(t.subtle)
-                        .child(format!("{} {}", verb(view.category), view.title)),
-                );
-        }
         // Under a folded parent the run has no line of its own, and the rail of the parent
         // already leads its failed calls.
         let mut group = div()
             .w_full()
             .min_w_0()
             .when(!failures_only, |group| group.child(summary));
-        let mut calls = div()
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .when(!failures_only, |calls| {
-                calls
-                    .ml(px(11.))
-                    .pl(px(11.))
-                    .pt(px(2.))
-                    .pb(px(4.))
-                    .border_l_1()
-                    .border_color(t.border)
-            });
+        let mut calls = div().flex().flex_col().gap(px(1.));
+        if !failures_only {
+            calls = rail(calls, t);
+        }
         for (message, view) in &shown {
-            calls = calls.child(self.tool_call(conversation, message, view, index, cx));
+            let call = self.tool_call(conversation, message, view, index, cx);
+            // A call that joins the run grows into place. The run's first call comes with the
+            // run's own row.
+            calls = calls.child(if message.id == first_id {
+                call
+            } else {
+                let enter = self.folds.slot(
+                    &format!("enter-call:{}:{}", message.task_id, message.id),
+                    true,
+                    fresh(message),
+                    reduce,
+                );
+                motion::fold(call, &enter, Some(t.inset))
+            });
         }
         if any_shown {
-            group = group.child(if plated {
+            let body = if plated {
                 kit::well(t, true, true).child(calls).into_any_element()
             } else {
                 calls.into_any_element()
+            };
+            group = group.child(match &fold {
+                Some(fold) if unfolded => motion::fold(body, fold, (!plated).then_some(t.inset)),
+                _ => body,
             });
         }
         Some(group.into_any_element())
@@ -555,11 +736,35 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.tray_choices.insert(key.to_owned(), open);
-        self.remeasure_messages(conversation, rows);
+        self.remeasure_messages(conversation, rows.clone());
+        self.remeasure_after_fold(conversation, rows, cx);
         cx.notify();
     }
 
-    // One thought: its first sentence while folded, its text while open.
+    // Measures `rows` again once a fold that starts now has ended. The list keeps the height
+    // that it last measured for a row out of view, which may be one from the middle of the fold.
+    fn remeasure_after_fold(
+        &self,
+        conversation: &Conversation,
+        rows: Range<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        if cx.reduce_motion() {
+            return;
+        }
+        let conversation = conversation.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(motion::FOLD).await;
+            this.update(cx, |s, cx| {
+                s.remeasure_messages(&conversation, rows);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    // One thought: its first sentence while folded, its text on a rail while open.
     fn thought_tray(
         &mut self,
         conversation: &Conversation,
@@ -569,13 +774,15 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
+        let reduce = cx.reduce_motion();
         let view = tool_output::view(message);
         let message_key = format!("{}:{}", message.task_id, message.id);
         let key = format!("thought:{message_key}");
         let active = view.status == ToolStatus::Running
             && self.conversation_message_active(conversation, message);
         let expanded = self.tray_open(conversation, &key, index + 1, active);
-        let open_text = expanded && !view.output.is_empty();
+        let fold = self.folds.slot(&key, expanded, false, reduce);
+        let open_text = fold.shown() && !view.output.is_empty();
         let title: String = view
             .title
             .lines()
@@ -584,18 +791,12 @@ impl Shell {
             .chars()
             .take(200)
             .collect();
-        let label = if active { "Thinking" } else { "Thought" };
+        let label_color = if plated { t.text } else { t.muted };
         let tray_conversation = conversation.clone();
         let toggle_key = key.clone();
         let header = self
             .control(SharedString::from(key))
-            .w_full()
-            .h_auto()
-            .min_h(px(28.))
-            .py(px(4.))
-            .px(px(6.))
-            .gap(px(8.))
-            .justify_start()
+            .map(summary_line)
             .map(|line| {
                 if plated {
                     plate(line, t, open_text)
@@ -608,24 +809,26 @@ impl Shell {
                 "{} thought: {title}",
                 if expanded { "Collapse" } else { "Expand" },
             ))
-            .child(
-                icon(if expanded {
-                    "chevron-down"
-                } else {
-                    "chevron-right"
-                })
-                .size(px(12.))
-                .text_color(if plated { t.muted } else { t.subtle }),
-            )
+            .child(chevron(
+                fold.openness,
+                if plated { t.muted } else { t.subtle },
+            ))
             .child(if active {
-                dither::pulse(t.accent, cx.reduce_motion())
+                dither::pulse(t.accent, reduce)
             } else {
                 icon(glyph(ToolCategory::Thinking))
                     .size(px(13.))
                     .text_color(t.subtle)
                     .into_any_element()
             })
-            .child(caps(label, t).text_color(if plated { t.text } else { t.muted }))
+            .child(
+                if active {
+                    tray_label(motion::gleam("Thinking", t, reduce), label_color)
+                } else {
+                    tray_label("Thought", label_color)
+                }
+                .flex_shrink_0(),
+            )
             // The open tray shows the whole thought, so its header does not repeat the start.
             .when(!expanded, |header| {
                 header.child(
@@ -636,16 +839,12 @@ impl Shell {
                         .font_family(crate::theme::sans())
                         .font_weight(FontWeight::NORMAL)
                         .text_size(text_px(12.))
+                        .text_color(t.subtle)
                         .italic()
                         .child(title),
                 )
             })
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(8.))
-                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
-            )
+            .child(div().flex_1().min_w(px(8.)))
             .when_some(view.duration_ms.filter(|ms| *ms >= 1000), |header, ms| {
                 header.child(figure(tool_output::duration(ms), t.subtle))
             })
@@ -660,26 +859,25 @@ impl Shell {
             }));
         let mut tray = div().w_full().min_w_0().child(header);
         if open_text {
-            let text = div()
-                .ml(px(11.))
-                .pl(px(17.))
-                .pt(px(2.))
-                .pb(px(6.))
-                .border_l_1()
-                .border_color(t.border)
-                .text_size(text_px(12.))
-                .text_color(t.muted)
-                .child(self.message_blocks(
-                    &format!("tool-thought:{message_key}"),
-                    &crate::markdown::blocks(&view.output),
-                    self.message_arriving(conversation, message),
-                    cx,
-                ));
-            tray = tray.child(if plated {
+            let text = rail(div(), t).child(
+                div()
+                    .px(px(6.))
+                    .pb(px(2.))
+                    .text_size(text_px(12.))
+                    .text_color(t.muted)
+                    .child(self.message_blocks(
+                        &format!("tool-thought:{message_key}"),
+                        &crate::markdown::blocks(&view.output),
+                        self.message_arriving(conversation, message),
+                        cx,
+                    )),
+            );
+            let body = if plated {
                 kit::well(t, true, true).child(text).into_any_element()
             } else {
                 text.into_any_element()
-            });
+            };
+            tray = tray.child(motion::fold(body, &fold, (!plated).then_some(t.inset)));
         }
         tray.into_any_element()
     }
@@ -695,6 +893,7 @@ impl Shell {
             self.folded.insert(key.to_owned());
         }
         self.remeasure_messages(conversation, index..index + 1);
+        self.remeasure_after_fold(conversation, index..index + 1, cx);
         cx.notify();
     }
 
@@ -707,11 +906,14 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
+        let reduce = cx.reduce_motion();
         let message_key = format!("{}:{}", message.task_id, message.id);
         let key = format!("tool-detail:{message_key}");
         let expanded = self.folded.contains(&key);
+        let fold = self.folds.slot(&key, expanded, false, reduce);
         let active = view.status == ToolStatus::Running
             && self.conversation_message_active(conversation, message);
+        // A running call shows its pulse and its moving title, so only an ended call has a chip.
         let (status, color) = match view.status {
             ToolStatus::Failed => (
                 view.exit
@@ -719,9 +921,8 @@ impl Shell {
                 t.removed,
             ),
             ToolStatus::Declined => ("DECLINED".to_owned(), t.warning),
-            ToolStatus::Running if active => ("RUNNING".to_owned(), t.accent),
-            ToolStatus::Running => ("STOPPED".to_owned(), t.subtle),
-            ToolStatus::Completed => (String::new(), t.muted),
+            ToolStatus::Running if !active => ("STOPPED".to_owned(), t.subtle),
+            ToolStatus::Running | ToolStatus::Completed => (String::new(), t.muted),
         };
         let edit_lines = message
             .file_edits
@@ -759,6 +960,7 @@ impl Shell {
             .bg(gpui::transparent_black())
             .border_color(gpui::transparent_black())
             .text_color(t.muted)
+            .when(fold.shown(), |row| row.bg(t.selected.opacity(0.5)))
             .hover(move |s| s.bg(t.selected).text_color(t.text))
             .accessibility_label(format!(
                 "{} {}: {title}",
@@ -766,7 +968,7 @@ impl Shell {
                 verb(view.category)
             ))
             .child(if active {
-                dither::pulse(t.accent, cx.reduce_motion())
+                dither::pulse(t.accent, reduce)
             } else {
                 icon(glyph(view.category))
                     .size(px(13.))
@@ -777,7 +979,8 @@ impl Shell {
                     })
                     .into_any_element()
             })
-            .child(caps(verb(view.category), t))
+            // The verbs share one width, so the titles of a run start in one column.
+            .child(caps(verb(view.category), t).min_w(px(48.)))
             .child(
                 div()
                     .flex_shrink_0()
@@ -788,7 +991,15 @@ impl Shell {
                     .when(literal, |d| {
                         d.font_family(crate::theme::mono()).text_size(text_px(11.5))
                     })
-                    .child(title.clone()),
+                    .map(|d| {
+                        if !active {
+                            d.child(title.clone())
+                        } else if title.is_empty() {
+                            d.child(motion::gleam("Starting…", t, reduce))
+                        } else {
+                            d.child(motion::gleam(title.clone(), t, reduce))
+                        }
+                    }),
             )
             .child(
                 div()
@@ -811,8 +1022,8 @@ impl Shell {
             .on_click(cx.listener(move |s, _, _, cx| {
                 s.toggle_tool_detail(&detail_conversation, &toggle_key, group_index, cx)
             }));
-        let mut card = div().w_full().min_w_0().flex().flex_col().child(row);
-        if !expanded {
+        let card = div().w_full().min_w_0().flex().flex_col().child(row);
+        if !fold.shown() {
             return card.into_any_element();
         }
         let mut details = div()
@@ -918,8 +1129,8 @@ impl Shell {
                 })),
             ),
         );
-        card = card.child(details);
-        card.into_any_element()
+        card.child(motion::fold(details, &fold, Some(t.inset)))
+            .into_any_element()
     }
 
     // The changed lines of one edit, colored by side, with the rest folded after a preview.

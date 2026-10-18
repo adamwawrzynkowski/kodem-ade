@@ -278,6 +278,8 @@ pub struct Shell {
     /// The stretches of tool work that this frame's rows read, by conversation and row. Each is
     /// built once per frame instead of once per row; a render starts the map again.
     work_stretches: HashMap<(Conversation, usize), std::rc::Rc<tool_calls::Stretch>>,
+    /// The trays, runs and calls of the work trail that open, fold or grow into place.
+    folds: motion::Folds,
     collapsed_changes: HashSet<String>,
     change_tree: Option<change_tree::ChangeTree>,
     text_views: HashMap<String, (Entity<TextInput>, Subscription)>,
@@ -697,6 +699,7 @@ impl Shell {
             unfolded_texts: HashSet::new(),
             tray_choices: HashMap::new(),
             work_stretches: HashMap::new(),
+            folds: motion::Folds::default(),
             collapsed_changes: HashSet::new(),
             change_tree: None,
             text_views: HashMap::new(),

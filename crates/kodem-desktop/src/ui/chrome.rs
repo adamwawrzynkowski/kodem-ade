@@ -451,6 +451,7 @@ impl Render for Shell {
         // The transcripts change only between frames, so the stretches of tool work that the
         // rows read are built again for this one.
         self.work_stretches.clear();
+        self.folds.begin_frame();
         self.sync_reveals(cx);
         self.sync_error_notices(cx);
         self.sync_censor();
