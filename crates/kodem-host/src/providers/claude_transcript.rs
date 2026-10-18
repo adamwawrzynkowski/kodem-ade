@@ -369,6 +369,8 @@ pub(super) struct Transcript {
     pub(super) model: Option<String>,
     /// A background agent reported during this turn, so the CLI may continue on its own.
     pub(super) agent_reported: bool,
+    /// Time of the stored entry that a replay applies; live events take the current time.
+    clock: Option<u64>,
 }
 
 impl Transcript {
@@ -397,7 +399,18 @@ impl Transcript {
             usage: None,
             model: None,
             agent_reported: false,
+            clock: None,
         }
+    }
+
+    /// Dates the next events at `time`, the wall-clock milliseconds of a stored entry.
+    pub(super) fn at(&mut self, time: u64) {
+        self.clock = Some(time);
+    }
+
+    // Returns the time of the event that is applied now.
+    fn time(&self) -> u64 {
+        self.clock.unwrap_or_else(now)
     }
 
     /// Returns the checkout roots used to shorten paths in summaries and prompts.
@@ -423,7 +436,7 @@ impl Transcript {
             tool: None,
             text: String::new(),
             complete: false,
-            created: now(),
+            created: self.time(),
         }
     }
 
@@ -755,11 +768,12 @@ impl Transcript {
                 category: category(name),
                 ..ToolCall::default()
             });
+            let started = self.time();
             self.tools.insert(
                 tool_use_id.to_owned(),
                 Running {
                     message,
-                    started: now(),
+                    started,
                     main,
                     input: Value::Null,
                 },
@@ -892,7 +906,7 @@ impl Transcript {
             } else {
                 ToolStatus::Completed
             };
-            tool.duration_ms = Some(now().saturating_sub(running.started));
+            tool.duration_ms = Some(self.time().saturating_sub(running.started));
             if tool.category == ToolCategory::Command && failed && !refused {
                 tool.exit = output
                     .strip_prefix("Exit code ")
@@ -1070,6 +1084,7 @@ impl Transcript {
         state: RunState,
         report: Option<&str>,
     ) -> Result<()> {
+        let time = self.time();
         if let Some(running) = self.background.get_mut(agent) {
             let message = &mut running.message;
             if let Some(tool) = &mut message.tool {
@@ -1078,7 +1093,7 @@ impl Transcript {
                 } else {
                     ToolStatus::Failed
                 };
-                tool.duration_ms = Some(now().saturating_sub(running.started));
+                tool.duration_ms = Some(time.saturating_sub(running.started));
             }
             if let Some(report) = report {
                 message.text.clear();
@@ -1175,6 +1190,17 @@ impl Transcript {
         }
         self.finished.clear();
         self.agent_reported = false;
+        Ok(())
+    }
+
+    /// Ends a replayed conversation. Its open items close, and agents that did not report an
+    /// outcome count as finished, because the stored conversation holds all that they did.
+    pub(super) fn conclude(&mut self, host: &Shared) -> Result<()> {
+        self.finish(host)?;
+        let agents: Vec<String> = self.known.iter().cloned().collect();
+        for agent in agents {
+            self.agent_finished(host, &agent, RunState::Completed, None)?;
+        }
         Ok(())
     }
 

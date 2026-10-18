@@ -308,7 +308,8 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, UnboundedR
                 // Account operations and catalog discovery do not depend on task mutations.
                 // Provider latency must not block Send, Stop, or conversation polling. Listing
                 // review targets and starting a review can wait for GitHub and a fetch. Reading
-                // and saving an edited file must not wait behind a capture of the changes.
+                // and saving an edited file must not wait behind a capture of the changes. Listing
+                // and importing stored conversations read whole conversations.
                 if matches!(
                     request,
                     Request::ComposerCatalog { .. }
@@ -321,6 +322,8 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, UnboundedR
                         | Request::CreateReview { .. }
                         | Request::InspectTools
                         | Request::InstallTool { .. }
+                        | Request::ExternalThreads
+                        | Request::ImportThread { .. }
                 ) {
                     let root = root.clone();
                     let replies = replies.clone();

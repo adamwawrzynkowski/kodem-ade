@@ -3,6 +3,7 @@ mod accounts;
 mod attachments;
 mod awake;
 mod delegation;
+mod imports;
 mod mcp;
 mod notifications;
 mod orchestrator;
@@ -133,6 +134,10 @@ fn run() -> Result<()> {
             (
                 Provider::Claude,
                 provider::initial_runtime(Provider::Claude),
+            ),
+            (
+                Provider::OpenCode,
+                provider::initial_runtime(Provider::OpenCode),
             ),
         ]),
         accounts: BTreeMap::new(),
@@ -717,6 +722,15 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             host.lock().unwrap().store.save_task(&task)?;
             Ok(Response::Created(task))
         }
+        Request::ExternalThreads => Ok(Response::ExternalThreads(imports::discover(host)?)),
+        Request::ImportThread {
+            provider,
+            account,
+            thread,
+        } => {
+            let task = imports::import(host, provider, &account, &thread)?;
+            Ok(Response::Imported { thread, task })
+        }
         Request::UndoTurn { task_id } => {
             provider::undo_turn(host, &task_id)?;
             Ok(Response::Ok)
@@ -797,11 +811,12 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                         !t.state.active() && t.active_turn.is_none(),
                         "Change the account after this turn finishes"
                     );
-                    // Codex keeps thread history in per-account state, so a started thread cannot
-                    // continue under another identity.
+                    // Codex and OpenCode keep thread history in per-account state, so a started
+                    // thread cannot continue under another identity.
                     ensure!(
-                        t.provider != Provider::Codex || t.provider_thread.is_none(),
-                        "Codex cannot continue a started conversation under another account. Start a new task with that account."
+                        !t.provider.account_bound() || t.provider_thread.is_none(),
+                        "{} cannot continue a started conversation under another account. Start a new task with that account.",
+                        t.provider.label()
                     );
                     accounts::resolve(&h, t.provider, account.as_deref())?;
                     // Both providers' terms forbid getting around usage limits. Carrying one

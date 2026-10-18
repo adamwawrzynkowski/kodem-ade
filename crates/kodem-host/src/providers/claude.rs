@@ -3,6 +3,8 @@
 //! One long-lived `claude` process per task owns the conversation. Its account, working
 //! directory, conversation and automatic compaction rule are fixed at start; model, effort and
 //! permission mode follow the task through control requests between turns.
+#[path = "claude_import.rs"]
+mod import;
 #[path = "claude_transcript.rs"]
 mod transcript;
 #[path = "claude_transport.rs"]
@@ -14,6 +16,7 @@ use crate::{
 };
 use anyhow::{Context, Result, bail, ensure};
 use base64::Engine;
+pub(super) use import::{import_history, stored_thread, stored_threads};
 use kodem_core::{providers::claude::message_uuid, *};
 use serde_json::{Value, json};
 use std::{
@@ -2022,23 +2025,33 @@ pub(super) fn generate_title(account: &Account, input: &str) -> Result<String> {
     Ok(title)
 }
 
+// Reports an identity that the CLI could have given a conversation or an agent, which is also
+// safe as a file name.
+fn valid_session(session: &str) -> bool {
+    !session.is_empty()
+        && session
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
 // The CLI stores one transcript per conversation under a directory named after the checkout.
-fn stored_transcript(account: &Account, session: &str) -> Result<PathBuf> {
+fn session_file(account: &Account, session: &str) -> Result<Option<PathBuf>> {
     ensure!(
-        !session.is_empty()
-            && session
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+        valid_session(session),
         "The stored Claude Code session identity is not valid"
     );
     let projects = config_home(account)?.join("projects");
-    std::fs::read_dir(&projects)
+    Ok(std::fs::read_dir(&projects)
         .ok()
         .into_iter()
         .flatten()
         .flatten()
         .map(|entry| entry.path().join(format!("{session}.jsonl")))
-        .find(|path| path.is_file())
+        .find(|path| path.is_file()))
+}
+
+fn stored_transcript(account: &Account, session: &str) -> Result<PathBuf> {
+    session_file(account, session)?
         .context("The Claude Code session transcript is not available under this account. Delivery remains unknown; no text was resent.")
 }
 

@@ -2,7 +2,7 @@
 //! terminal window the user watches, so that password prompts and progress stay visible.
 //!
 //! Each installer uses the tool's official source: Claude Code's install script, Codex's release
-//! package from GitHub, Apple's Command Line Tools or Homebrew on macOS, winget on Windows, and
+//! package from GitHub, OpenCode's install script (its npm package on Windows), Apple's Command Line Tools or Homebrew on macOS, winget on Windows, and
 //! the distribution's package manager on Linux.
 use crate::accounts;
 use anyhow::Result;
@@ -47,7 +47,7 @@ fn version(tool: Tool, path: Option<&OsStr>) -> Option<String> {
         Tool::Git => ("git", &["--version"]),
         Tool::GitLfs => ("git", &["lfs", "version"]),
         Tool::GitHub => ("gh", &["--version"]),
-        Tool::Claude | Tool::Codex => return None,
+        Tool::Claude | Tool::Codex | Tool::OpenCode => return None,
     };
     if program == "git" && !apple_git_ready(path) {
         return None;
@@ -151,6 +151,13 @@ fn steps(tool: Tool) -> Result<Vec<String>> {
         Tool::Claude => vec![
             "script=$(mktemp)".into(),
             "curl -fsSL https://claude.ai/install.sh -o \"$script\"".into(),
+            "bash \"$script\"".into(),
+            "rm -f \"$script\"".into(),
+        ],
+        // The script installs into ~/.opencode/bin, where Kodem looks for the CLI.
+        Tool::OpenCode => vec![
+            "script=$(mktemp)".into(),
+            "curl -fsSL https://opencode.ai/install -o \"$script\"".into(),
             "bash \"$script\"".into(),
             "rm -f \"$script\"".into(),
         ],
@@ -284,6 +291,12 @@ fn steps(tool: Tool) -> Result<Vec<String>> {
     };
     Ok(match tool {
         Tool::Claude => vec!["Invoke-RestMethod https://claude.ai/install.ps1 | Invoke-Expression".into()],
+        // OpenCode's install script is for macOS and Linux. Its npm package installs
+        // `opencode.cmd` into the npm folder, where Kodem looks for the CLI.
+        Tool::OpenCode => vec![
+            "if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw 'npm is missing. Install Node.js from https://nodejs.org first.' }".into(),
+            "Invoke-Step npm @('install', '--global', 'opencode-ai')".into(),
+        ],
         Tool::Codex => {
             let target = format!("{}-{CODEX_SYSTEM}", std::env::consts::ARCH);
             vec![

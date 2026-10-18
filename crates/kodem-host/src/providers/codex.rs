@@ -2,8 +2,11 @@
 use super::*;
 use kodem_core::providers::codex::Codex;
 use std::{cell::RefCell, rc::Rc};
+#[path = "codex_import.rs"]
+mod import;
 #[path = "codex_subagents.rs"]
 mod subagents;
+pub(crate) use import::{import_history, stored_thread, stored_threads};
 
 /// A limit no context reaches, for a task whose rule turns automatic compaction off.
 const NO_COMPACT_LIMIT: u64 = 1_000_000_000_000;

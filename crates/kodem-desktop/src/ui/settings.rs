@@ -844,6 +844,20 @@ impl Shell {
                         ),
                     ),
             )
+            .child(
+                setting_group("Import", None, t).child(
+                    self.setting_row(
+                        "Threads from Claude Code and Codex",
+                        "Import conversations that ran in the folders of your projects. Each one keeps its history and continues the same conversation.",
+                        self.button("open-thread-import", "arrow-down-to-line", "Import threads…")
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.open_thread_import();
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    ),
+                ),
+            )
             .into_any_element()
     }
 

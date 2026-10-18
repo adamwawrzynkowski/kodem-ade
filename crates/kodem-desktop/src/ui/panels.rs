@@ -31,6 +31,7 @@ impl Shell {
             Panel::Check => "Run a project check",
             Panel::Rename => "Rename task",
             Panel::DeleteTask => "Delete thread?",
+            Panel::ImportThreads => "Import threads",
             Panel::None
             | Panel::Usage
             | Panel::Plan
@@ -444,6 +445,9 @@ impl Shell {
                         ),
                     );
             }
+            Panel::ImportThreads => {
+                content = content.child(self.thread_import(cx));
+            }
             Panel::Rename => {
                 content = content
                     .child(kit::section_header("Title", None, theme))
@@ -489,7 +493,7 @@ impl Shell {
         }
         let width = if self.panel == Panel::Files {
             1000.
-        } else if self.panel == Panel::Settings {
+        } else if matches!(self.panel, Panel::Settings | Panel::ImportThreads) {
             780.
         } else {
             600.
@@ -509,6 +513,10 @@ impl Shell {
             )),
             Panel::Rename => Some(("pencil", "A manual title replaces the generated one")),
             Panel::DeleteTask => Some(("trash-2", "Removes this task's local conversation")),
+            Panel::ImportThreads => Some((
+                "arrow-down-to-line",
+                "Conversations of Claude Code and Codex in your projects",
+            )),
             _ => None,
         };
         let close = self

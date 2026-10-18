@@ -17,7 +17,8 @@ pub(super) fn start(host: Shared, task_id: &str) -> Result<()> {
     let (task, account, fallback, input) = {
         let h = host.lock().unwrap();
         let task = h.store.task(task_id)?;
-        if !task.title_pending {
+        // OpenCode names its conversations itself; its session owner names one it did not.
+        if !task.title_pending || task.provider == Provider::OpenCode {
             return Ok(());
         }
         let Some(message) = h.store.outgoing(task_id)?.into_iter().next() else {

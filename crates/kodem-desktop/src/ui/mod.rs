@@ -38,6 +38,7 @@ mod settings;
 mod sidebar;
 mod slash;
 mod subagents;
+mod thread_import;
 mod tool_calls;
 mod updates;
 mod usage;
@@ -59,7 +60,7 @@ use gpui::{prelude::*, *};
 use kit::Layers;
 use kodem_core::{self as core, *};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     sync::mpsc,
     time::Duration,
@@ -137,6 +138,8 @@ enum Panel {
     Mode,
     WhatsNew,
     Notifications,
+    /// Imports the conversations of Claude Code and Codex.
+    ImportThreads,
 }
 /// What the side pane shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,6 +185,8 @@ pub struct Shell {
     /// First message of a task that is being created with a prompt the composer does not hold.
     launch_draft: Option<String>,
     review: code_review::ReviewSetup,
+    /// The import dialog's threads, choice and progress, which outlive the dialog.
+    thread_import: thread_import::ThreadImport,
     review_filter: Entity<TextInput>,
     view: Option<TaskView>,
     agent_popup: Option<subagents::AgentPopup>,
@@ -610,6 +615,7 @@ impl Shell {
             mode_drafts: HashMap::new(),
             launch_draft: None,
             review: Default::default(),
+            thread_import: Default::default(),
             review_filter,
             view: None,
             agent_popup: None,
@@ -785,6 +791,21 @@ impl Shell {
             };
             let account = account.unwrap_or_else(|| DEFAULT_ACCOUNT.into());
             self.apply_usage_reply(provider, account, reply.result, cx);
+            return;
+        }
+        // The import dialog reports its own failures, in the row of each thread.
+        if matches!(reply.request, core::Request::ExternalThreads) {
+            self.receive_external_threads(reply.result);
+            cx.notify();
+            return;
+        }
+        if let core::Request::ImportThread {
+            provider, thread, ..
+        } = &reply.request
+        {
+            let key = ExternalThread::key_of(*provider, thread);
+            self.receive_imported_thread(key, reply.result);
+            cx.notify();
             return;
         }
         if let core::Request::ImportAttachments { task_id, .. } = &reply.request
@@ -1479,6 +1500,8 @@ impl Shell {
             Response::Watched(_) => {}
             // Answers to the tools that a provider agent calls. The desktop never asks for them.
             Response::Agents(_) | Response::Delegated(_) => {}
+            // The import dialog takes these answers before the others.
+            Response::ExternalThreads(_) | Response::Imported { .. } => {}
             Response::Ok => match reply.request {
                 core::Request::CompactTask { .. } => {
                     let tone = self.theme.info;
