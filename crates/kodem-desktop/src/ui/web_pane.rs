@@ -2,10 +2,18 @@ use super::*;
 use crate::browser::{Event, HOME, Job, Target};
 use kodem_core::browser::BrowserHistory;
 
+// The pages that the side pane offers: the page, its icon, its name and its shortcut.
+const PANE_PAGES: [(PanePage, &str, &str, &str); 2] = [
+    (PanePage::Changes, "panel-right", "Changes", "⌘D"),
+    (PanePage::Browser, "globe", "Browser", "⇧⌘B"),
+];
+
 impl Shell {
-    /// Builds the side pane, which shows the changes of the task or its browser.
+    /// Builds the side pane, which shows the choice of its pages, the changes of the task or its
+    /// browser.
     pub(super) fn side_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         match self.pane_page {
+            PanePage::Picker => self.pane_picker(cx),
             PanePage::Changes => self.review(cx, false),
             PanePage::Browser => self.web_pane(window, cx),
         }
@@ -28,22 +36,61 @@ impl Shell {
         }
     }
 
-    /// Returns the switch between the pages of the side pane.
-    pub(super) fn pane_switch(&self, cx: &mut Context<Self>) -> AnyElement {
-        self.segmented(
-            "pane-page",
-            [
-                (PanePage::Changes, "Changes"),
-                (PanePage::Browser, "Browser"),
-            ],
-            &self.pane_page,
-            |s, page, cx| {
-                s.show_pane(page);
-                s.save_settings();
-                cx.notify();
-            },
-            cx,
-        )
+    // Builds the choice of what the side pane shows: one raised row for each page, with the
+    // shortcut that opens it.
+    fn pane_picker(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let mut rows = div().w_full().max_w(px(360.)).flex().flex_col().gap(px(6.));
+        for (i, (page, glyph, label, keys)) in PANE_PAGES.into_iter().enumerate() {
+            rows = rows.child(
+                self.button(("pane-page-option", i), glyph, label)
+                    .w_full()
+                    .h(px(34.))
+                    .px(px(12.))
+                    .gap(px(10.))
+                    .justify_start()
+                    .text_size(text_px(12.))
+                    .child(div().flex_1())
+                    .child(kit::keycap(keys, t))
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        s.show_pane(page);
+                        s.save_settings();
+                        cx.notify();
+                    })),
+            );
+        }
+        let header = div()
+            .h(px(36.))
+            .flex_shrink_0()
+            .px(px(12.))
+            .flex()
+            .items_center()
+            .border_b_1()
+            .border_color(t.border)
+            .child(kit::section_header("Side pane", None, t));
+        div()
+            .relative()
+            .id("side-picker")
+            .w(px(self.side_width()))
+            .h_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .map(|panel| kit::panel_glass(panel, t))
+            .overflow_hidden()
+            .child(header)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .p(px(24.))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .child(rows),
+            )
+            .into_any_element()
     }
 
     /// Opens the side pane on a page.
@@ -271,8 +318,7 @@ impl Shell {
                             s.browsers.borrow().inspect(task_id);
                         }
                     })),
-            )
-            .child(div().ml(px(4.)).child(self.pane_switch(cx)));
+            );
         let body = match (&task_id, open) {
             _ if let Some(reason) = unavailable => kit::empty_state(
                 "No browser here",

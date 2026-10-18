@@ -340,25 +340,23 @@ impl Shell {
                         })),
                     )
                     .child(
-                        self.icon_button("header-review", "panel-right", "Changes or browser")
+                        self.icon_button("header-review", "panel-right", "Side pane")
                             .occlude()
                             .disabled(!enabled)
                             .when(self.show_review && enabled, |b| {
                                 b.bg(t.accent.opacity(0.14)).text_color(t.accent)
                             })
-                            // An open pane closes; a closed one asks what it shows.
-                            .on_click_with_bounds(cx.listener(
-                                |s, bounds: &Bounds<Pixels>, _, cx| {
-                                    if s.show_review {
-                                        s.show_review = false;
-                                        s.save_settings();
-                                    } else {
-                                        s.menu_anchor = Some(*bounds);
-                                        s.panel = Panel::PaneMenu;
-                                    }
-                                    cx.notify();
-                                },
-                            )),
+                            // An open pane closes; a closed one opens on the choice of what it
+                            // shows.
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                if s.show_review {
+                                    s.show_review = false;
+                                } else {
+                                    s.show_pane(PanePage::Picker);
+                                }
+                                s.save_settings();
+                                cx.notify();
+                            })),
                     ),
             )
             .when(app_window_buttons(window), |header| {
@@ -762,7 +760,6 @@ impl Render for Shell {
                 | Panel::SelectionMenu
                 | Panel::Sort
                 | Panel::Comparison
-                | Panel::PaneMenu
         ) {
             root = root.child(self.menu(window, cx));
         } else if self.panel != Panel::None {

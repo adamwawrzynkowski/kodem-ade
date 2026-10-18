@@ -121,9 +121,7 @@ impl Shell {
                                 },
                             )),
                         )
-                        .child(figure(count.to_string(), t.subtle))
-                        .child(div().flex_1())
-                        .child(self.pane_switch(cx)),
+                        .child(figure(count.to_string(), t.subtle)),
                 )
             });
         // A folder without Git has nothing to compare its files with.

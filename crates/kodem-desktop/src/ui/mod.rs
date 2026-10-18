@@ -130,8 +130,6 @@ enum Panel {
     DeleteTask,
     Sort,
     Comparison,
-    /// Chooses what the side pane shows when it opens.
-    PaneMenu,
     Usage,
     /// The steps of the agent's plan, above the composer's plan tab.
     Plan,
@@ -145,6 +143,8 @@ enum Panel {
 /// What the side pane shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PanePage {
+    /// The choice of what the pane shows, which it offers when the user opens it.
+    Picker,
     /// The changes of the task.
     Changes,
     /// The task's browser, which its agents use too.

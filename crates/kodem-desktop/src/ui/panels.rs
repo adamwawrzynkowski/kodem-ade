@@ -48,8 +48,7 @@ impl Shell {
             | Panel::SelectionMenu
             | Panel::Sort
             | Panel::Palette
-            | Panel::Comparison
-            | Panel::PaneMenu => "",
+            | Panel::Comparison => "",
         };
         let mut content = div()
             .id("panel-body")
@@ -488,8 +487,7 @@ impl Shell {
             | Panel::SelectionMenu
             | Panel::Sort
             | Panel::Palette
-            | Panel::Comparison
-            | Panel::PaneMenu => {}
+            | Panel::Comparison => {}
         }
         let width = if self.panel == Panel::Files {
             1000.
