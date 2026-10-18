@@ -324,7 +324,7 @@ pub struct Shell {
     draft_revision: u64,
     observed_draft: String,
     importing_tasks: HashMap<String, usize>,
-    pending_attachments: Vec<AttachmentSource>,
+    pending_attachments: Vec<composition::PendingAttachment>,
     clipboard_images: HashMap<std::path::PathBuf, tempfile::TempPath>,
     pasting_images: usize,
     diff_view: Option<Entity<diff_view::DiffView>>,
@@ -1137,8 +1137,11 @@ impl Shell {
                     });
                 }
                 if from_composer && !self.pending_attachments.is_empty() {
-                    let paths = std::mem::take(&mut self.pending_attachments);
-                    self.import_attachments(task.id.clone(), paths);
+                    let sources = std::mem::take(&mut self.pending_attachments)
+                        .into_iter()
+                        .map(|pending| pending.source)
+                        .collect();
+                    self.import_attachments(task.id.clone(), sources);
                 }
                 if submit {
                     self.auto_submit_task = Some(task.id.clone());

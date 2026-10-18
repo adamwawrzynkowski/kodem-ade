@@ -81,12 +81,7 @@ pub(super) fn import(root: &Path, sources: Vec<AttachmentSource>) -> Result<Vec<
             ensure!(total <= BATCH_LIMIT, "Attachment batch exceeds 128 MiB");
             let kind = if let Some(source) = skill {
                 AttachmentKind::Skill { source }
-            } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n")
-                || bytes.starts_with(&[0xff, 0xd8, 0xff])
-                || bytes.starts_with(b"GIF87a")
-                || bytes.starts_with(b"GIF89a")
-                || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
-            {
+            } else if AttachmentKind::is_image_header(&bytes) {
                 AttachmentKind::Image
             } else {
                 AttachmentKind::File

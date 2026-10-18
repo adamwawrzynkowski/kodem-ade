@@ -1,7 +1,39 @@
 use super::*;
+use chrono::Timelike;
 
 /// Name of the effect anchor on the composer card, where chips for sent work start.
 pub(super) const COMPOSER_ANCHOR: &str = "composer";
+
+// The part of the local day that a start screen greets.
+#[derive(Clone, Copy)]
+enum DayPart {
+    Morning,
+    Afternoon,
+    Evening,
+    Night,
+}
+
+impl DayPart {
+    // Returns the part of the day at the local time now.
+    fn now() -> Self {
+        match chrono::Local::now().hour() {
+            5..12 => Self::Morning,
+            12..17 => Self::Afternoon,
+            17..22 => Self::Evening,
+            _ => Self::Night,
+        }
+    }
+
+    // Returns the greeting that leads a start screen.
+    fn greeting(self) -> &'static str {
+        match self {
+            Self::Morning => "Good morning",
+            Self::Afternoon => "Good afternoon",
+            Self::Evening => "Good evening",
+            Self::Night => "Still up",
+        }
+    }
+}
 
 impl Shell {
     /// Builds the conversation with a measured floating composer and a clear review viewport.
@@ -592,19 +624,31 @@ impl Shell {
         )
     }
 
-    // The heading of a start screen: a greeting, then what the workspace starts. Agentic Coding
-    // and Review name the project the work happens in, as a control that changes it.
+    // The heading of a start screen: a greeting, then what the workspace starts, both in words
+    // for the time of day. Agentic Coding and Review name the project the work happens in, as a
+    // control that changes it.
     fn empty_chat_greeting(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
+        let part = DayPart::now();
+        let greeting = format!("{}, {}", part.greeting(), self.greeting_name);
         let (label, lead, tail) = match self.mode {
-            TaskKind::Coding => (
-                format!("Hello, {}", self.greeting_name),
-                "What should we build in",
-                "?",
-            ),
+            TaskKind::Coding => {
+                let (lead, tail) = match part {
+                    DayPart::Morning => ("What should we start in", "?"),
+                    DayPart::Afternoon => ("What should we build in", "?"),
+                    DayPart::Evening => ("What should we finish in", "tonight?"),
+                    DayPart::Night => ("What should we fix in", "before bed?"),
+                };
+                (greeting, lead, tail)
+            }
             TaskKind::Chat => (
-                format!("Hello, {}", self.greeting_name),
-                "What is on your mind?",
+                greeting,
+                match part {
+                    DayPart::Morning => "What is on your mind this morning?",
+                    DayPart::Afternoon => "What is on your mind?",
+                    DayPart::Evening => "What is on your mind this evening?",
+                    DayPart::Night => "What is keeping you up?",
+                },
                 "",
             ),
             TaskKind::Review => (
@@ -618,13 +662,26 @@ impl Shell {
                 .composer_project()
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "a project".into());
+            // A raised tinted plate: lit along its top, deeper along its bottom, dotted where
+            // its light fades. It sinks into the heading while pressed.
             self.control("greeting-project")
                 .h_auto()
-                .px(px(5.))
-                .py(px(1.))
-                .border_color(t.accent.opacity(0.35))
-                .bg(t.accent_bg)
-                .hover(move |b| b.bg(t.accent.opacity(0.22)))
+                .pl(px(10.))
+                .pr(px(8.))
+                .py(px(2.))
+                .gap(px(8.))
+                .overflow_hidden()
+                .layer(kit::shade(t.accent.opacity(0.3), dither::Edge::Bottom))
+                .layer(kit::glint(t.accent.opacity(0.55), dither::Edge::Bottom))
+                .border_color(t.accent.opacity(0.45))
+                .bg(kit::tint_fill(t.accent, 0.14))
+                .shadow(kit::tint_light(t.accent))
+                .hover(move |b| {
+                    b.bg(kit::tint_fill(t.accent, 0.22))
+                        .border_color(t.accent.opacity(0.7))
+                })
+                .active(move |b| b.bg(t.accent.opacity(0.1)).shadow(kit::recessed_light(t)))
+                .on_press(move |position, cx| fx::ripple(position, t.accent, cx))
                 .font_family(crate::theme::sans())
                 .text_size(text_px(24.))
                 .line_height(relative(1.25))
@@ -635,7 +692,7 @@ impl Shell {
                 .text_color(t.accent)
                 .accessibility_label("Choose project")
                 .child(name)
-                .child(icon("chevrons-up-down").size(px(16.)))
+                .child(kit::engraved("chevrons-up-down", t.accent, 16.))
                 .on_click_with_bounds(cx.listener(|s, bounds: &Bounds<Pixels>, _, cx| {
                     if !s.creating_task {
                         s.menu_anchor = Some(*bounds);
@@ -873,71 +930,58 @@ impl Shell {
             }
             let mut files = div().flex().flex_wrap().flex_shrink_0().gap_2();
             for attachment in &task.attachments {
+                let task_id = task.id.clone();
+                let id = attachment.id.clone();
                 files = files.child(motion::context_reveal(
-                    self.attachment_card(attachment, Some(&task.id), cx),
+                    self.attachment_card(attachment, cx).child(
+                        self.icon_button(
+                            (
+                                ElementId::from("remove-attachment"),
+                                SharedString::from(id.clone()),
+                            ),
+                            "close",
+                            "Remove attachment",
+                        )
+                        .size(px(20.))
+                        .on_click(cx.listener(move |s, _, _, _| {
+                            s.send(core::Request::RemoveAttachment {
+                                task_id: task_id.clone(),
+                                id: id.clone(),
+                            });
+                        })),
+                    ),
                     self.context_arrivals.get(&attachment.id).copied().flatten(),
                     cx.reduce_motion(),
                 ));
             }
             attachments = attachments.child(files);
         } else {
-            for (index, source) in self.pending_attachments.iter().enumerate() {
-                let skill = matches!(source, AttachmentSource::Skill(_));
-                let path = source.path();
-                attachments = attachments.child(motion::context_reveal(
-                    kit::block(t)
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap_2()
-                        .pl(px(8.))
-                        .pr(px(2.))
-                        .py(px(2.))
-                        .child(
-                            icon(if skill { "code" } else { "paperclip" })
-                                .size(px(13.))
-                                .text_color(t.accent),
+            // A new task's attachments are not imported yet, but their cards already show what
+            // the conversation will: the preview of an image, the size of a file.
+            let mut files = div().flex().flex_wrap().flex_shrink_0().gap_2();
+            for (index, pending) in self.pending_attachments.iter().enumerate() {
+                files = files.child(motion::context_reveal(
+                    self.attachment_card(&pending.card, cx).child(
+                        self.icon_button(
+                            ("remove-pending-file", index),
+                            "close",
+                            "Remove attachment",
                         )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_ellipsis()
-                                .font_family(crate::theme::mono())
-                                .text_size(text_px(11.))
-                                .child(
-                                    (if skill {
-                                        path.parent().and_then(|p| p.file_name())
-                                    } else {
-                                        path.file_name()
-                                    })
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .into_owned(),
-                                ),
-                        )
-                        .child(
-                            self.icon_button(
-                                ("remove-pending-file", index),
-                                "close",
-                                "Remove attachment",
-                            )
-                            .on_click(cx.listener(
-                                move |s, _, _, cx| {
-                                    let source = s.pending_attachments.remove(index);
-                                    s.clipboard_images.remove(source.path());
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        .when(skill, |d| d.child(kit::chip("SKILL", t.info))),
+                        .size(px(20.))
+                        .on_click(cx.listener(move |s, _, _, cx| {
+                            let pending = s.pending_attachments.remove(index);
+                            s.clipboard_images.remove(pending.source.path());
+                            cx.notify();
+                        })),
+                    ),
                     self.context_arrivals
-                        .get(&format!("pending:{source:?}"))
+                        .get(&pending.card.id)
                         .copied()
                         .flatten(),
                     cx.reduce_motion(),
                 ));
             }
+            attachments = attachments.child(files);
         }
         // Long pasted texts are files of the message, after its attachments.
         // The draft shows its inline code as the message will, in the current theme.

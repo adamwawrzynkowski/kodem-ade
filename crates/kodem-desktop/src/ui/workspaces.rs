@@ -31,7 +31,7 @@ pub(super) struct RailSlide {
 #[derive(Default)]
 pub(super) struct StartDraft {
     text: String,
-    attachments: Vec<AttachmentSource>,
+    attachments: Vec<composition::PendingAttachment>,
 }
 
 /// Returns the keys that open a workspace.

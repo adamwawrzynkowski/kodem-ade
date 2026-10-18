@@ -1,6 +1,6 @@
 //! Composer intent, attachment cards, captured context, and the host-owned outgoing tray.
 use super::*;
-use std::path::PathBuf;
+use std::{fs, io::Read, path::PathBuf};
 
 /// Name of the effect anchor on the queue tray, where chips for queued messages land.
 pub(super) const OUTBOX_ANCHOR: &str = "outbox";
@@ -11,6 +11,56 @@ const OUTBOX_HEIGHT: f32 = 128.;
 // Returns the name of the effect anchor on the tray row of an outgoing message.
 fn outgoing_anchor(id: &str) -> String {
     format!("outgoing:{id}")
+}
+
+/// A file, folder or skill chosen on a start screen before its task exists. The host imports it
+/// when the task is created; until then its card describes the source where it is.
+pub(super) struct PendingAttachment {
+    pub(super) source: AttachmentSource,
+    pub(super) card: Attachment,
+}
+
+impl PendingAttachment {
+    /// Reads what the card of `source` shows: its name, size and whether it is a folder or an
+    /// image. A file that cannot be read shows as a file; the import reports the error.
+    pub(super) fn new(source: AttachmentSource) -> Self {
+        let path = source.path().to_path_buf();
+        let meta = fs::metadata(&path).ok();
+        let file = meta.as_ref().is_some_and(fs::Metadata::is_file);
+        let kind = match &source {
+            AttachmentSource::Skill(skill) => AttachmentKind::Skill {
+                source: skill.clone(),
+            },
+            AttachmentSource::File(_) if meta.as_ref().is_some_and(fs::Metadata::is_dir) => {
+                AttachmentKind::Folder
+            }
+            AttachmentSource::File(_) if file && is_image_file(&path) => AttachmentKind::Image,
+            AttachmentSource::File(_) => AttachmentKind::File,
+        };
+        let card = Attachment {
+            id: format!("pending:{source:?}"),
+            name: path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            bytes: meta.filter(|_| file).map_or(0, |meta| meta.len()),
+            path,
+            kind,
+        };
+        Self { source, card }
+    }
+}
+
+// Reports whether the file at `path` starts with the header of an image the host imports as one.
+fn is_image_file(path: &std::path::Path) -> bool {
+    let mut header = Vec::with_capacity(AttachmentKind::IMAGE_HEADER_LEN);
+    fs::File::open(path)
+        .and_then(|file| {
+            file.take(AttachmentKind::IMAGE_HEADER_LEN as u64)
+                .read_to_end(&mut header)
+        })
+        .is_ok_and(|_| AttachmentKind::is_image_header(&header))
 }
 
 impl Shell {
@@ -24,7 +74,7 @@ impl Shell {
             keys.extend(
                 self.pending_attachments
                     .iter()
-                    .map(|source| format!("pending:{source:?}")),
+                    .map(|pending| pending.card.id.clone()),
             );
         }
         let initial = self.context_task != self.selected;
@@ -310,8 +360,9 @@ impl Shell {
             self.import_attachments(task_id, sources);
         } else {
             for source in sources {
-                if !self.pending_attachments.contains(&source) {
-                    self.pending_attachments.push(source);
+                if !self.pending_attachments.iter().any(|p| p.source == source) {
+                    self.pending_attachments
+                        .push(PendingAttachment::new(source));
                 }
             }
         }
@@ -362,13 +413,9 @@ impl Shell {
         .detach();
     }
 
-    /// Renders a stable imported file, image or folder, with an optional draft removal action.
-    pub(super) fn attachment_card(
-        &self,
-        attachment: &Attachment,
-        task_id: Option<&str>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    /// Renders a file, image or folder card; an image shows its preview, which opens on click.
+    /// The caller appends a removal action where the attachment can still leave the draft.
+    pub(super) fn attachment_card(&self, attachment: &Attachment, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let skill_name = match &attachment.kind {
             AttachmentKind::Skill { source } => source
@@ -452,28 +499,7 @@ impl Shell {
                     t,
                 )),
         );
-        if let Some(task_id) = task_id {
-            let task_id = task_id.to_owned();
-            let id = attachment.id.clone();
-            card = card.child(
-                self.icon_button(
-                    (
-                        ElementId::from("remove-attachment"),
-                        SharedString::from(id.clone()),
-                    ),
-                    "close",
-                    "Remove attachment",
-                )
-                .size(px(20.))
-                .on_click(cx.listener(move |s, _, _, _| {
-                    s.send(core::Request::RemoveAttachment {
-                        task_id: task_id.clone(),
-                        id: id.clone(),
-                    });
-                })),
-            );
-        }
-        card.into_any_element()
+        card
     }
 
     /// Shows a long message of the user as a file. The file unfolds below its card to show the
@@ -899,7 +925,7 @@ impl Shell {
                             .child(text),
                     );
                 for attachment in &outgoing.attachments {
-                    row = row.child(self.attachment_card(attachment, None, cx));
+                    row = row.child(self.attachment_card(attachment, cx));
                 }
                 for feedback in &outgoing.feedback {
                     row = row.child(self.context_card(feedback, None, cx));

@@ -1959,6 +1959,19 @@ pub enum AttachmentKind {
     Folder,
     Skill { source: PathBuf },
 }
+impl AttachmentKind {
+    /// Returns the number of leading bytes that `is_image_header` needs to recognize an image.
+    pub const IMAGE_HEADER_LEN: usize = 12;
+
+    /// Reports whether the first bytes of a file start a PNG, JPEG, GIF or WebP image.
+    pub fn is_image_header(bytes: &[u8]) -> bool {
+        bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+            || bytes.starts_with(&[0xff, 0xd8, 0xff])
+            || bytes.starts_with(b"GIF87a")
+            || bytes.starts_with(b"GIF89a")
+            || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"))
+    }
+}
 /// Distinguishes a file or folder upload from an explicit skill invocation before importing it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum AttachmentSource {

@@ -552,7 +552,7 @@ impl Shell {
                 .gap_2()
                 .when(!user, |files| files.mb_2());
             for attachment in &message.attachments {
-                files = files.child(self.attachment_card(attachment, None, cx));
+                files = files.child(self.attachment_card(attachment, cx));
             }
             block = block.child(files);
         }
