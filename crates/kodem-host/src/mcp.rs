@@ -181,9 +181,10 @@ fn tools() -> Value {
     tools
 }
 
-/// Tells whether this platform's Kodem window has a browser that agents can use.
+/// Tells whether this platform's Kodem window has a browser that agents can use. A Linux window
+/// without an X11 display answers the tools with the reason that it shows no pages.
 pub(crate) fn browser_available() -> bool {
-    cfg!(target_os = "macos")
+    cfg!(any(target_os = "macos", windows, target_os = "linux"))
 }
 
 // The schema of the element that a browser tool acts on: a ref of the last snapshot, or a CSS

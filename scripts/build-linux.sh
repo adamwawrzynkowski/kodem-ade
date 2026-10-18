@@ -83,7 +83,7 @@ Configuration: $channel
 Version: $release_version
 Date: $build_date
 Target: $build_target
-Requires: glibc $glibc or newer, libxkbcommon, libxkbcommon-x11, fontconfig, freetype, and Vulkan or OpenGL drivers
+Requires: glibc $glibc or newer, libxkbcommon, libxkbcommon-x11, fontconfig, freetype, GTK 3, WebKitGTK 4.1, and Vulkan or OpenGL drivers
 INFO
 python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$package/release.json"
 # Every shared library must resolve on the build system; the package bundles none.

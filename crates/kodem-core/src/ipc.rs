@@ -14,6 +14,9 @@ use std::{
 #[cfg(windows)]
 pub use uds_windows::{UnixListener, UnixStream};
 pub const PROTOCOL: u32 = 39;
+/// Where a Linux window that runs through XWayland keeps the session's Wayland display, which
+/// the host and the programs that it starts take back.
+pub const WAYLAND_DISPLAY: &str = "KODEM_WAYLAND_DISPLAY";
 pub const MAX_PACKET: u64 = 32 * 1024 * 1024;
 /// Returns the data directories of every Kodem build on this computer: the release and nightly
 /// builds share one, and Debug has its own.
@@ -199,9 +202,15 @@ fn connect_with_host(root: &Path, host: &Path) -> Result<()> {
                 child.try_wait().is_ok_and(|status| status.is_some())
             })
         {
+            let mut command = Command::new(host);
+            if let Some(display) = env::var_os(WAYLAND_DISPLAY) {
+                command
+                    .env("WAYLAND_DISPLAY", display)
+                    .env_remove(WAYLAND_DISPLAY);
+            }
             child = Some(
                 platform::detach(
-                    Command::new(host)
+                    command
                         .env("KODEM_DATA_DIR", root)
                         .stdin(Stdio::null())
                         .stdout(Stdio::from(log.try_clone()?))

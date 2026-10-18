@@ -2,17 +2,18 @@
 //! agents of that task share: the user sees what an agent opens, and an agent reads and acts on
 //! what the user sees.
 //!
-//! The page is the platform's web view placed over the pane. Only macOS has it for now: GPUI
-//! draws its Windows content above child windows, and WebKitGTK needs a GTK loop that GPUI on
-//! Linux does not run. Elsewhere the pane says so, and the MCP server lists no browser tools.
-#[cfg(target_os = "macos")]
+//! The page is the platform's web view placed over the pane: WebKit on macOS, WebView2 on
+//! Windows and WebKitGTK on Linux, where it needs an X11 display (XWayland on Wayland).
 mod engine;
-#[cfg(not(target_os = "macos"))]
-#[path = "unsupported.rs"]
-mod engine;
+#[cfg_attr(target_os = "macos", path = "macos.rs")]
+#[cfg_attr(windows, path = "windows.rs")]
+#[cfg_attr(not(any(target_os = "macos", windows)), path = "linux.rs")]
+mod native;
 mod server;
 
 pub use engine::Browsers;
+#[cfg(not(any(target_os = "macos", windows)))]
+pub use native::{prefer_x11, pump};
 pub use server::serve;
 
 use kodem_core::browser::{BrowserCommand, BrowserReply};
@@ -28,8 +29,6 @@ pub const HOME: &str = "https://www.google.com/";
 pub const LOAD_LIMIT: Duration = Duration::from_secs(15);
 
 /// A browser command of an agent, waiting for the window to run it.
-// Only the macOS engine runs the command; elsewhere a job is answered with why it cannot run.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub struct Job {
     pub task_id: String,
     pub command: BrowserCommand,
@@ -39,8 +38,6 @@ pub struct Job {
 }
 
 /// What the window did with a job.
-// Only the macOS engine has pages that load.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub enum Outcome {
     /// The reply, and the page to wait for before sending it when the command may navigate.
     Done {
@@ -90,8 +87,6 @@ pub struct Page {
 }
 
 /// A change of a page that the window shows.
-// Only the macOS engine has pages that change.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub enum Event {
     /// The address, the title or the load state of a page changed.
     Changed,
@@ -99,8 +94,9 @@ pub enum Event {
     Opened(String),
     /// The page asked for a new window; the task's page opens the address instead.
     NewWindow(String, String),
-    /// The user clicked a page, which now takes the keyboard.
-    Focused,
+    /// The page of a task may have taken the keyboard: the user clicked it, or it took the
+    /// keyboard in another way.
+    Focused(String),
     /// A task's page measured the width that its content needs and the width of its view, in
     /// CSS pixels. `fresh` marks the first measure of a document.
     Fit {
@@ -134,6 +130,12 @@ impl Target {
             .starts_with("file://")
             .then(|| decode(&text["file://".len()..]))
         {
+            // A Windows address names the drive after a slash, as in file:///C:/index.html.
+            #[cfg(windows)]
+            let path = match path.strip_prefix('/') {
+                Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_owned(),
+                _ => path,
+            };
             return Self::file(PathBuf::from(path), folder);
         }
         if ["http://", "https://", "about:", "data:"]
@@ -202,6 +204,36 @@ impl Target {
             Self::File { path, .. } => format!("file://{}", path.display()),
         }
     }
+}
+
+/// Returns the address of a local file, with the characters that an address cannot hold
+/// escaped.
+// macOS's WebKit opens a file by its path.
+#[cfg(not(target_os = "macos"))]
+fn file_url(path: &Path) -> String {
+    use std::fmt::Write as _;
+    let text = path.to_string_lossy();
+    // A canonical Windows path starts with `\\?\`, or `\\?\UNC\` for a share.
+    let text = match text.strip_prefix(r"\\?\UNC\") {
+        Some(share) => format!(r"\\{share}"),
+        None => text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned(),
+    }
+    .replace('\\', "/");
+    let mut url = String::from(if text.starts_with("//") {
+        "file:"
+    } else if text.starts_with('/') {
+        "file://"
+    } else {
+        "file:///"
+    });
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"/-_.~:".contains(&byte) {
+            url.push(char::from(byte));
+        } else {
+            let _ = write!(url, "%{byte:02X}");
+        }
+    }
+    url
 }
 
 // Decodes the percent escapes of a file address.

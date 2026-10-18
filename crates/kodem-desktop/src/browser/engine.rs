@@ -1,54 +1,31 @@
-//! The macOS browser: a WebKit view for each task, placed over the side pane of the window.
+//! The browser: a web view of the platform for each task, placed over the side pane of the
+//! window. What differs between macOS's WebKit, Windows's WebView2 and Linux's WebKitGTK lies in
+//! `native`: how a page joins the window, its messages, file pages, screenshots and the keyboard.
 //!
-//! Each page lies in a host view of its own, a subview of GPUI's view that the pane places over
-//! itself, so the page draws above GPUI and only while the pane shows it. A docked Web Inspector
-//! shares the host with the page: WebKit splits and restores the page's superview, which must
-//! therefore be the pane and not the whole window. Commands of the page script reply over a WebKit message handler of Kodem's own, with the
-//! nonce of the command; native commands, such as a screenshot, reply from their completion
-//! handlers. wry's own channel drops the messages of `file:` pages, whose address its request
-//! type cannot hold.
-use super::{Event, Job, Outcome, Page, Status, Target};
+//! Commands of the page script reply over a message handler of Kodem's own, with the nonce of the
+//! command; native commands, such as a screenshot, reply from their completion handlers. wry's own
+//! channel drops the messages of `file:` pages, whose address its request type cannot hold.
+use super::{Event, Job, Outcome, Page, Status, Target, native};
 use base64::Engine as _;
-use block2::RcBlock;
 use futures::channel::mpsc::UnboundedSender;
 use gpui::{Bounds, Pixels, Window};
 use kodem_core::browser::{BrowserCommand, BrowserHistory, BrowserReply};
-use objc2::{
-    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
-    rc::Retained,
-    runtime::{NSObject, ProtocolObject},
-};
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSView};
-use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
-use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use objc2_foundation::{
-    NSDictionary, NSError, NSNumber, NSObjectProtocol, NSString, NSURL, ns_string,
-};
-use objc2_web_kit::{
-    WKScriptMessage, WKScriptMessageHandler, WKSnapshotConfiguration, WKUserContentController,
-};
 use serde_json::Value;
 use std::{
     collections::{HashMap, hash_map::Entry},
+    io::Cursor,
     path::Path,
-    ptr::NonNull,
     sync::{Arc, Mutex, mpsc},
     time::Instant,
 };
-use wry::{
-    NewWindowResponse, PageLoadEvent, Rect, WebView, WebViewBuilder, WebViewExtMacOS,
-    dpi::{LogicalPosition, LogicalSize},
-    raw_window_handle::{
-        AppKitWindowHandle, HandleError, HasWindowHandle, RawWindowHandle, WindowHandle,
-    },
-};
+use wry::{NewWindowResponse, PageLoadEvent, WebView};
 
 /// The page script, which runs before the scripts of each page.
 const AGENT: &str = include_str!("agent.js");
+/// The script that reports the user's clicks in each frame of a page.
+const FOCUS: &str = include_str!("focus.js");
 /// The value that a command script ends with once it has started.
 const STARTED: &str = "\"kodem:started\"";
-/// The size of a page that the pane has not shown yet, in points.
-const DEFAULT_SIZE: (f64, f64) = (1024., 768.);
 /// The smallest zoom that fits a wide page into the pane.
 const MIN_ZOOM: f64 = 0.3;
 
@@ -61,60 +38,72 @@ struct Pending {
 
 type PendingMap = Arc<Mutex<HashMap<String, Pending>>>;
 
-/// The commands that wait for the replies of a page, and where its clicks are reported.
-struct RepliesIvars {
+/// Where the messages of one page go: the commands that wait for their replies, and the
+/// window's events.
+#[derive(Clone)]
+pub(super) struct Inbox {
     task_id: String,
     pending: PendingMap,
     events: UnboundedSender<Event>,
 }
 
-define_class!(
-    // SAFETY: NSObject has no subclassing requirements, and the handler does not implement Drop.
-    #[unsafe(super(NSObject))]
-    #[thread_kind = MainThreadOnly]
-    #[name = "KodemBrowserReplies"]
-    #[ivars = RepliesIvars]
-    /// Receives the replies of the page script.
-    struct Replies;
+/// A message of a page that is about the keyboard.
+pub(super) enum Signal {
+    /// The user pressed the page.
+    Clicked,
+    /// The page took the keyboard, by a click or otherwise.
+    Focused,
+}
 
-    unsafe impl NSObjectProtocol for Replies {}
-
-    unsafe impl WKScriptMessageHandler for Replies {
-        #[unsafe(method(userContentController:didReceiveScriptMessage:))]
-        fn did_receive(&self, _controller: &WKUserContentController, message: &WKScriptMessage) {
-            // SAFETY: WebKit passes a valid message on the main thread.
-            let body = unsafe { message.body() };
-            if let Ok(body) = body.downcast::<NSString>() {
-                receive(self.ivars(), &body.to_string());
-            }
+impl Inbox {
+    /// Hands a reply of the page script to the command that waits for it, or applies a measure
+    /// of the page. Returns a message about the keyboard for the platform to judge.
+    pub(super) fn receive(&self, body: &str) -> Option<Signal> {
+        let message = serde_json::from_str::<Value>(body).ok()?;
+        match message["focus"].as_str() {
+            Some("click") => return Some(Signal::Clicked),
+            Some("focus") => return Some(Signal::Focused),
+            _ => {}
         }
+        if let (Some(width), Some(viewport)) =
+            (message["fit"].as_f64(), message["viewport"].as_f64())
+        {
+            let _ = self.events.unbounded_send(Event::Fit {
+                task_id: self.task_id.clone(),
+                width,
+                viewport,
+                fresh: message["fresh"].as_bool() == Some(true),
+            });
+            return None;
+        }
+        let entry = message["nonce"]
+            .as_str()
+            .and_then(|nonce| self.pending.lock().ok()?.remove(nonce))?;
+        let text = message["text"].as_str().unwrap_or_default().to_owned();
+        let outcome = if message["ok"].as_bool() == Some(true) {
+            Outcome::Done {
+                reply: BrowserReply::Text(text),
+                settle: entry.settle,
+            }
+        } else {
+            Outcome::error(text)
+        };
+        let _ = entry.reply.send(outcome);
+        None
     }
-);
 
-impl Replies {
-    // Creates the handler of one page.
-    fn new(
-        task_id: String,
-        pending: PendingMap,
-        events: UnboundedSender<Event>,
-        mtm: MainThreadMarker,
-    ) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(RepliesIvars {
-            task_id,
-            pending,
-            events,
-        });
-        // SAFETY: NSObject's init is the designated initializer.
-        unsafe { msg_send![super(this), init] }
+    /// Tells the window that the page may have the keyboard.
+    pub(super) fn focused(&self) {
+        let _ = self
+            .events
+            .unbounded_send(Event::Focused(self.task_id.clone()));
     }
 }
 
 struct Tab {
     view: WebView,
-    /// The view that holds the page and a docked Web Inspector, placed over the pane.
-    host: Retained<NSView>,
-    /// GPUI's view, which holds the host and takes the keyboard back from the page.
-    window_view: Retained<NSView>,
+    /// What the platform needs to place the page over the pane.
+    host: native::Host,
     status: Arc<Mutex<Status>>,
     visible: bool,
     /// The width in CSS pixels that the content of the present page needs, once it was found
@@ -128,7 +117,7 @@ impl Tab {
     // Zooms the page out until its content fits the width of the pane, and no further than
     // its own size.
     fn fit(&mut self) {
-        let pane = self.host.frame().size.width;
+        let pane = self.host.width();
         let zoom = self
             .content_width
             .filter(|_| pane > 0.)
@@ -137,30 +126,6 @@ impl Tab {
             let _ = self.view.zoom(zoom);
             self.zoom = zoom;
         }
-    }
-
-    // Gives the keyboard to GPUI's view, away from the page and its Web Inspector.
-    fn release_focus(&self) {
-        if let Some(window) = self.host.window() {
-            window.makeFirstResponder(Some(&self.window_view));
-        }
-    }
-}
-
-impl Drop for Tab {
-    fn drop(&mut self) {
-        self.host.removeFromSuperview();
-    }
-}
-
-/// A host view as the window handle that wry takes for the parent of a page.
-struct HostHandle<'a>(&'a NSView);
-
-impl HasWindowHandle for HostHandle<'_> {
-    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        let handle = AppKitWindowHandle::new(NonNull::from(self.0).cast());
-        // SAFETY: The host outlives the handle, which wry uses only while it builds the page.
-        Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::AppKit(handle)) })
     }
 }
 
@@ -173,12 +138,11 @@ pub struct Browsers {
     shown: Option<String>,
     /// Where the pane showed a page last, which a new page takes until the pane shows it.
     bounds: Option<Bounds<Pixels>>,
+    /// What the pages of the window share on this platform.
+    context: native::Context,
 }
 
 impl Browsers {
-    /// Tells whether this platform has the browser.
-    pub const SUPPORTED: bool = true;
-
     /// Creates the browser, which reports page changes to `events`.
     pub fn new(events: UnboundedSender<Event>) -> Self {
         Self {
@@ -187,7 +151,13 @@ impl Browsers {
             events,
             shown: None,
             bounds: None,
+            context: native::Context::new(),
         }
+    }
+
+    /// Returns why this computer cannot show pages, if it cannot.
+    pub fn unavailable(&self) -> Option<&'static str> {
+        self.context.unavailable()
     }
 
     /// Returns the page of a task, if it has one.
@@ -214,7 +184,7 @@ impl Browsers {
         self.history(task_id, action).map(|_| ())
     }
 
-    /// Opens Web Inspector for the page of a task.
+    /// Opens the developer tools for the page of a task.
     pub fn inspect(&self, task_id: &str) {
         if let Some(tab) = self.tabs.get(task_id) {
             tab.view.open_devtools();
@@ -278,8 +248,9 @@ impl Browsers {
     }
 
     /// Places the page of a task over `bounds` of the window, when the pane shows it this
-    /// frame. Called while the pane paints.
-    pub fn place(&mut self, task_id: &str, bounds: Bounds<Pixels>) {
+    /// frame. `scale` is the number of device pixels per pixel of the window. Called while the
+    /// pane paints.
+    pub fn place(&mut self, task_id: &str, bounds: Bounds<Pixels>, scale: f32) {
         self.bounds = Some(bounds);
         if self.shown.as_deref() != Some(task_id) {
             return;
@@ -287,15 +258,11 @@ impl Browsers {
         let Some(tab) = self.tabs.get_mut(task_id) else {
             return;
         };
-        // Compared with the host's own frame, so that a frame that changed outside the pane
-        // returns to the pane.
-        let frame = frame(&tab.window_view, bounds);
-        if tab.host.frame() != frame {
-            tab.host.setFrame(frame);
+        if tab.host.place(&tab.view, bounds, scale) {
             tab.fit();
         }
         if !tab.visible {
-            tab.host.setHidden(false);
+            tab.host.show(&tab.view);
             tab.visible = true;
         }
     }
@@ -307,8 +274,8 @@ impl Browsers {
         for (task_id, tab) in &mut self.tabs {
             if tab.visible && shown != Some(task_id.as_str()) {
                 // A hidden page would keep the keyboard from the window.
-                tab.release_focus();
-                tab.host.setHidden(true);
+                native::release_focus(&tab.view, &tab.host);
+                tab.host.hide(&tab.view);
                 tab.visible = false;
             }
         }
@@ -317,8 +284,15 @@ impl Browsers {
     /// Gives the keyboard back to the window after a click outside the page.
     pub fn release_focus(&self) {
         if let Some(tab) = self.tabs.values().find(|tab| tab.visible) {
-            tab.release_focus();
+            native::release_focus(&tab.view, &tab.host);
         }
+    }
+
+    /// Tells whether the page of a task is on screen and has the keyboard.
+    pub fn has_focus(&self, task_id: &str) -> bool {
+        self.tabs
+            .get(task_id)
+            .is_some_and(|tab| tab.visible && native::has_focus(&tab.view, &tab.host))
     }
 
     /// Fits a task's page into the pane after it measured its content. A content wider than
@@ -349,15 +323,19 @@ impl Browsers {
         target: &Target,
         window: &Window,
     ) -> Result<Arc<Mutex<Status>>, String> {
+        if let Some(reason) = self.context.unavailable() {
+            return Err(reason.into());
+        }
         let tab = match self.tabs.entry(task_id.to_owned()) {
             Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => entry.insert(create(
-                task_id,
-                window,
-                &self.pending,
-                &self.events,
-                self.bounds,
-            )?),
+            Entry::Vacant(entry) => {
+                let inbox = Inbox {
+                    task_id: task_id.to_owned(),
+                    pending: self.pending.clone(),
+                    events: self.events.clone(),
+                };
+                entry.insert(create(inbox, &mut self.context, window, self.bounds)?)
+            }
         };
         // The load events report a failed load with nothing, so the page counts as loading
         // from the request on, and a page that never loads stops counting after a while.
@@ -367,16 +345,7 @@ impl Browsers {
         }
         match target {
             Target::Web(url) => tab.view.load_url(url).map_err(|error| error.to_string())?,
-            Target::File { path, access } => {
-                let file = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
-                let folder = NSURL::fileURLWithPath(&NSString::from_str(&access.to_string_lossy()));
-                // SAFETY: Both are file URLs, and the view lives on the main thread.
-                unsafe {
-                    tab.view
-                        .webview()
-                        .loadFileURL_allowingReadAccessToURL(&file, &folder);
-                }
-            }
+            Target::File { path, access } => native::load_file(&tab.view, path, access)?,
         }
         let _ = self.events.unbounded_send(Event::Changed);
         Ok(tab.status.clone())
@@ -392,16 +361,13 @@ impl Browsers {
             .tabs
             .get(task_id)
             .ok_or("No page is open in this task's browser.")?;
-        let view = tab.view.webview();
-        // SAFETY: The view lives on the main thread.
-        let navigation = unsafe {
-            match action {
-                BrowserHistory::Back => view.goBack(),
-                BrowserHistory::Forward => view.goForward(),
-                BrowserHistory::Reload => view.reload(),
-            }
+        let view = &tab.view;
+        let possible = match action {
+            BrowserHistory::Back => view.can_go_back(),
+            BrowserHistory::Forward => view.can_go_forward(),
+            BrowserHistory::Reload => Ok(true),
         };
-        if navigation.is_none() {
+        if !possible.unwrap_or(false) {
             return Err(match action {
                 BrowserHistory::Back => "There is no page to go back to.",
                 BrowserHistory::Forward => "There is no page to go forward to.",
@@ -409,6 +375,12 @@ impl Browsers {
             }
             .into());
         }
+        match action {
+            BrowserHistory::Back => view.go_back(),
+            BrowserHistory::Forward => view.go_forward(),
+            BrowserHistory::Reload => view.reload(),
+        }
+        .map_err(|error| error.to_string())?;
         if let Ok(mut status) = tab.status.lock() {
             status.loading = Some(Instant::now());
         }
@@ -479,48 +451,31 @@ impl Browsers {
     }
 }
 
-// Creates the page of a task as a hidden subview of the window's view.
+// Creates the hidden page of a task, which reports its messages to `inbox`.
 fn create(
-    task_id: &str,
+    inbox: Inbox,
+    context: &mut native::Context,
     window: &Window,
-    pending: &PendingMap,
-    events: &UnboundedSender<Event>,
     bounds: Option<Bounds<Pixels>>,
 ) -> Result<Tab, String> {
-    let mtm = MainThreadMarker::new().ok_or("The browser runs off the main thread.")?;
     let status = Arc::new(Mutex::new(Status::default()));
-    let loads = (
-        status.clone(),
-        events.clone(),
-        task_id.to_owned(),
-        pending.clone(),
-    );
-    let titles = (status.clone(), events.clone());
-    let windows = (events.clone(), task_id.to_owned());
-    let window_view = window_view(window)?;
-    let frame = bounds.map_or(
-        CGRect::new(
-            CGPoint::new(0., 0.),
-            CGSize::new(DEFAULT_SIZE.0, DEFAULT_SIZE.1),
-        ),
-        |bounds| frame(&window_view, bounds),
-    );
-    let host = NSView::initWithFrame(NSView::alloc(mtm), frame);
-    host.setHidden(true);
-    window_view.addSubview(&host);
-    let view = WebViewBuilder::new()
+    let loads = (status.clone(), inbox.clone());
+    let titles = (status.clone(), inbox.events.clone());
+    let windows = inbox.clone();
+    let builder = native::builder(context)
         .with_initialization_script_for_main_only(AGENT, true)
+        .with_initialization_script_for_main_only(FOCUS, false)
         .with_on_page_load_handler(move |event, url| {
-            let (status, events, task_id, pending) = &loads;
+            let (status, inbox) = &loads;
             let started = matches!(event, PageLoadEvent::Started);
             if let Ok(mut status) = status.lock() {
                 status.loading = started.then(Instant::now);
                 status.url = url;
             }
             if started {
-                abandon(pending, task_id);
+                abandon(&inbox.pending, &inbox.task_id);
             }
-            let _ = events.unbounded_send(Event::Changed);
+            let _ = inbox.events.unbounded_send(Event::Changed);
         })
         .with_document_title_changed_handler(move |title| {
             let (status, events) = &titles;
@@ -530,77 +485,24 @@ fn create(
             let _ = events.unbounded_send(Event::Changed);
         })
         .with_new_window_req_handler(move |url, _| {
-            let (events, task_id) = &windows;
-            let _ = events.unbounded_send(Event::NewWindow(task_id.clone(), url));
+            let _ = windows
+                .events
+                .unbounded_send(Event::NewWindow(windows.task_id.clone(), url));
             NewWindowResponse::Deny
         })
         .with_devtools(true)
         .with_accept_first_mouse(true)
-        .with_bounds(Rect {
-            position: LogicalPosition::new(0., 0.).into(),
-            size: LogicalSize::new(frame.size.width, frame.size.height).into(),
-        })
-        .build_as_child(&HostHandle(&host))
-        .map_err(|error| {
-            host.removeFromSuperview();
-            format!("Kodem could not create the browser: {error}")
-        })?;
-    // The page fills its host and follows its size, except while WebKit docks the inspector.
-    view.webview().setAutoresizingMask(
-        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
-    );
-    let replies = Replies::new(task_id.to_owned(), pending.clone(), events.clone(), mtm);
-    // SAFETY: The controller keeps the handler until the page is gone; both are on the main
-    // thread.
-    unsafe {
-        view.manager()
-            .addScriptMessageHandler_name(ProtocolObject::from_ref(&*replies), ns_string!("kodem"));
-    }
+        // The page takes the keyboard when the user clicks it, not when it opens.
+        .with_focused(false);
+    let (view, host) = native::create(builder, window, bounds, inbox)?;
     Ok(Tab {
         view,
         host,
-        window_view,
         status,
         visible: false,
         content_width: None,
         zoom: 1.,
     })
-}
-
-// Hands a reply of the page script to the command that waits for it, or reports a click.
-fn receive(ivars: &RepliesIvars, body: &str) {
-    let Ok(message) = serde_json::from_str::<Value>(body) else {
-        return;
-    };
-    if message["focus"].as_bool() == Some(true) {
-        let _ = ivars.events.unbounded_send(Event::Focused);
-        return;
-    }
-    if let (Some(width), Some(viewport)) = (message["fit"].as_f64(), message["viewport"].as_f64()) {
-        let _ = ivars.events.unbounded_send(Event::Fit {
-            task_id: ivars.task_id.clone(),
-            width,
-            viewport,
-            fresh: message["fresh"].as_bool() == Some(true),
-        });
-        return;
-    }
-    let Some(entry) = message["nonce"]
-        .as_str()
-        .and_then(|nonce| ivars.pending.lock().ok()?.remove(nonce))
-    else {
-        return;
-    };
-    let text = message["text"].as_str().unwrap_or_default().to_owned();
-    let outcome = if message["ok"].as_bool() == Some(true) {
-        Outcome::Done {
-            reply: BrowserReply::Text(text),
-            settle: entry.settle,
-        }
-    } else {
-        Outcome::error(text)
-    };
-    let _ = entry.reply.send(outcome);
 }
 
 // Ends the commands of a task's page script when the page navigates, because the page that
@@ -619,97 +521,59 @@ fn abandon(pending: &PendingMap, task_id: &str) {
     }
 }
 
-// Captures the visible part of a page at one pixel per point.
+// Captures the visible part of a task's page.
 fn screenshot(tab: &Tab, reply: mpsc::Sender<Outcome>) {
-    let Some(mtm) = MainThreadMarker::new() else {
-        let _ = reply.send(Outcome::error("The browser runs off the main thread."));
-        return;
-    };
-    let view = tab.view.webview();
     let url = tab
         .status
         .lock()
         .map(|status| status.url.clone())
         .unwrap_or_default();
-    let hidden = tab.host.isHidden();
-    // The agent's cursor would cover the page. WebKit runs the script before it draws the
-    // snapshot, which waits for the next screen update.
+    // The agent's cursor would cover the page. The engines run the script before they draw
+    // the capture.
     let _ = tab
         .view
         .evaluate_script("window.__kodem && window.__kodem.conceal();");
-    // SAFETY: The configuration and the view are used on the main thread.
-    let configuration = unsafe { WKSnapshotConfiguration::new(mtm) };
-    let scale = view
-        .window()
-        .map_or(1., |window| window.backingScaleFactor());
-    // SAFETY: The width is a number, as the property requires.
-    unsafe {
-        configuration.setSnapshotWidth(Some(&NSNumber::new_f64(view.bounds().size.width / scale)));
-        configuration.setAfterScreenUpdates(true);
-    }
-    let handler = RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
-        // SAFETY: WebKit passes an image or an error, each valid for the call.
-        let (image, error) = unsafe { (image.as_ref(), error.as_ref()) };
-        let outcome = match image.and_then(png) {
-            Some((data, width, height)) => Outcome::reply(BrowserReply::Image {
-                png: base64::engine::general_purpose::STANDARD.encode(data),
+    let hint = if tab.visible {
+        ""
+    } else {
+        " The task's browser pane is not on screen; open the task in Kodem and try again."
+    };
+    native::screenshot(&tab.view, &tab.host, move |capture| {
+        let outcome = match capture {
+            Ok((png, width, height)) => Outcome::reply(BrowserReply::Image {
+                png: base64::engine::general_purpose::STANDARD.encode(png),
                 text: format!("Screenshot of {url}, {width}×{height} pixels."),
             }),
-            None => {
-                let reason = error
-                    .map(|error| format!(": {}", error.localizedDescription()))
-                    .unwrap_or_default();
-                let hint = if hidden {
-                    " The task's browser pane is not on screen; open the task in Kodem and try again."
-                } else {
-                    ""
-                };
+            Err(reason) => {
                 Outcome::error(format!("Kodem could not capture the page{reason}.{hint}"))
             }
         };
         let _ = reply.send(outcome);
     });
-    // SAFETY: The handler lives until WebKit calls it, which it does on the main thread.
-    unsafe {
-        view.takeSnapshotWithConfiguration_completionHandler(Some(&configuration), &handler);
-    }
 }
 
-// Encodes an image as PNG, with its size in pixels.
-fn png(image: &NSImage) -> Option<(Vec<u8>, isize, isize)> {
-    let tiff = image.TIFFRepresentation()?;
-    let bitmap = NSBitmapImageRep::imageRepWithData(&tiff)?;
-    // SAFETY: Empty properties are valid for PNG.
-    let data = unsafe {
-        bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
-    }?;
-    Some((data.to_vec(), bitmap.pixelsWide(), bitmap.pixelsHigh()))
-}
-
-// Returns GPUI's view, which holds the pages of the window.
-fn window_view(window: &Window) -> Result<Retained<NSView>, String> {
-    // GPUI's own `window_handle` names the window in GPUI; this one is the platform's.
-    let handle = HasWindowHandle::window_handle(window)
-        .map_err(|error| format!("Kodem could not reach its window: {error}"))?;
-    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
-        return Err("Kodem's window is not an AppKit window.".into());
-    };
-    // SAFETY: GPUI's handle points to its live view, which is used on the main thread.
-    unsafe { Retained::retain(handle.ns_view.as_ptr().cast::<NSView>()) }
-        .ok_or_else(|| "Kodem's window has no view.".into())
-}
-
-// Returns the frame in GPUI's view that covers `bounds` of the window, in points.
-fn frame(window_view: &NSView, bounds: Bounds<Pixels>) -> CGRect {
-    let x = f64::from(f32::from(bounds.origin.x));
-    let top = f64::from(f32::from(bounds.origin.y));
-    let width = f64::from(f32::from(bounds.size.width));
-    let height = f64::from(f32::from(bounds.size.height));
-    // GPUI measures from the top; an unflipped AppKit view measures from the bottom.
-    let y = if window_view.isFlipped() {
-        top
+/// Encodes a capture as PNG at one pixel per pixel of the window, with its size. `rgba` holds
+/// `width` × `height` device pixels, `scale` device pixels per pixel of the window.
+// macOS's WebKit captures at the window's own pixels.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub(super) fn encode(
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+    scale: f64,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    let image = image::RgbaImage::from_raw(width, height, rgba)
+        .ok_or(": the capture has the wrong size")?;
+    let image = if scale > 1. {
+        let width = ((f64::from(width) / scale).round() as u32).max(1);
+        let height = ((f64::from(height) / scale).round() as u32).max(1);
+        image::imageops::resize(&image, width, height, image::imageops::FilterType::Triangle)
     } else {
-        window_view.bounds().size.height - top - height
+        image
     };
-    CGRect::new(CGPoint::new(x, y), CGSize::new(width, height))
+    let mut png = Vec::new();
+    image
+        .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|error| format!(": {error}"))?;
+    Ok((png, image.width(), image.height()))
 }

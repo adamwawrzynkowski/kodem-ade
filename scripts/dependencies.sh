@@ -123,7 +123,8 @@ kodem_dependencies_macos() {
     command -v git >/dev/null || { echo "Git is missing after the Apple tools installation." >&2; return 1; }
 }
 
-# Checks the compiler and development libraries that GPUI links on Linux. Package managers
+# Checks the compiler and development libraries that GPUI and the browser's WebKitGTK link on
+# Linux. Package managers
 # need root, so the build names the packages instead of installing them.
 kodem_dependencies_linux() {
     [[ "$(uname -m)" == x86_64 ]] || { echo "This release targets x86_64 Linux. Another architecture has not been validated." >&2; return 1; }
@@ -134,15 +135,15 @@ kodem_dependencies_linux() {
     done
     if command -v pkg-config >/dev/null; then
         local library
-        for library in xkbcommon xkbcommon-x11 fontconfig freetype2 xcb; do
+        for library in xkbcommon xkbcommon-x11 fontconfig freetype2 xcb gtk+-3.0 webkit2gtk-4.1; do
             pkg-config --exists "$library" || missing+=("$library (development files)")
         done
     fi
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo "Missing build prerequisites: ${missing[*]}" >&2
-        echo "Debian or Ubuntu: sudo apt install build-essential binutils curl git pkg-config python3 libxkbcommon-dev libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev libxcb1-dev libwayland-dev libvulkan1" >&2
-        echo "Fedora: sudo dnf install gcc gcc-c++ curl git pkgconf-pkg-config python3 libxkbcommon-devel libxkbcommon-x11-devel fontconfig-devel freetype-devel libxcb-devel wayland-devel vulkan-loader" >&2
-        echo "Arch: sudo pacman -S --needed base-devel curl git pkgconf python libxkbcommon libxkbcommon-x11 fontconfig freetype2 libxcb wayland vulkan-icd-loader" >&2
+        echo "Debian or Ubuntu: sudo apt install build-essential binutils curl git pkg-config python3 libxkbcommon-dev libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev libxcb1-dev libwayland-dev libvulkan1 libgtk-3-dev libwebkit2gtk-4.1-dev" >&2
+        echo "Fedora: sudo dnf install gcc gcc-c++ curl git pkgconf-pkg-config python3 libxkbcommon-devel libxkbcommon-x11-devel fontconfig-devel freetype-devel libxcb-devel wayland-devel vulkan-loader gtk3-devel webkit2gtk4.1-devel" >&2
+        echo "Arch: sudo pacman -S --needed base-devel curl git pkgconf python libxkbcommon libxkbcommon-x11 fontconfig freetype2 libxcb wayland vulkan-icd-loader gtk3 webkit2gtk-4.1" >&2
         return 1
     fi
 }

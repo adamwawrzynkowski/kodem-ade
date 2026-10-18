@@ -1,25 +1,15 @@
 // The page script of Kodem's browser. It runs before the scripts of each page and serves the
 // browser tools of agents: an outline of the page with refs to its elements, actions on those
-// elements, and the console messages of the page. Replies go back over WebKit's `kodem` message
-// handler, with the nonce of the command, so a page cannot answer a command that it did not
-// receive.
+// elements, and the console messages of the page. Replies go back over Kodem's `kodem` message
+// handler of WebKit, or WebView2's channel on Windows, with the nonce of the command, so a page
+// cannot answer a command that it did not receive.
 (() => {
-  if (window.__kodem) {
+  // WebView2 runs the script in frames too, which serve no commands.
+  if (window.__kodem || window !== window.top) {
     return;
   }
   // Taken before the page's scripts run, so that they cannot replace it.
-  const channel = window.webkit.messageHandlers.kodem;
-  // The window moves its own focus away from its text fields when the user clicks the page, so
-  // that the page receives the editing shortcuts.
-  addEventListener(
-    "pointerdown",
-    (event) => {
-      if (event.isTrusted) {
-        channel.postMessage(JSON.stringify({ focus: true }));
-      }
-    },
-    true,
-  );
+  const channel = window.webkit?.messageHandlers?.kodem ?? window.chrome.webview;
   const LOG_LIMIT = 300;
   const LINE_LIMIT = 1200;
   const TEXT_LIMIT = 60000;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::browser::{Browsers, Event, HOME, Job, Target};
+use crate::browser::{Event, HOME, Job, Target};
 use kodem_core::browser::BrowserHistory;
 
 impl Shell {
@@ -104,8 +104,14 @@ impl Shell {
                     self.report_error(error, cx);
                 }
             }
-            // The window's text fields give up the editing shortcuts to the page.
-            Event::Focused => window.focus(&self.focus, cx),
+            // The window's text fields give up the keyboard and the editing shortcuts to the
+            // page, once the page has the keyboard indeed: a late message must not take a field's
+            // focus after the user clicked back into the window.
+            Event::Focused(task_id) => {
+                if self.browsers.borrow().has_focus(&task_id) {
+                    window.focus(&self.focus, cx);
+                }
+            }
             Event::Fit {
                 task_id,
                 width,
@@ -167,8 +173,9 @@ impl Shell {
         let task_id = self.selected.clone();
         // A task's browser opens the home page the first time that the pane shows it without a
         // page. A page that the user or an agent opened stays.
+        let unavailable = self.browsers.borrow().unavailable();
         if let Some(id) = &task_id
-            && Browsers::SUPPORTED
+            && unavailable.is_none()
             && self.browsers.borrow().page(id).is_none()
             && self.browser_home.insert(id.clone())
         {
@@ -267,9 +274,9 @@ impl Shell {
             )
             .child(div().ml(px(4.)).child(self.pane_switch(cx)));
         let body = match (&task_id, open) {
-            _ if !Browsers::SUPPORTED => kit::empty_state(
-                "No browser here yet",
-                "Kodem's browser works on macOS for now.",
+            _ if let Some(reason) = unavailable => kit::empty_state(
+                "No browser here",
+                reason,
                 dither::DitherField::Glow {
                     x: 0.5,
                     y: 0.55,
@@ -295,7 +302,11 @@ impl Shell {
                         canvas(
                             |_, _, _| {},
                             move |bounds, _, window, _| {
-                                browsers.borrow_mut().place(&task_id, bounds);
+                                browsers.borrow_mut().place(
+                                    &task_id,
+                                    bounds,
+                                    window.scale_factor(),
+                                );
                                 // A press anywhere in the window takes the keyboard back from
                                 // the page. The listener is the window's own, so a layer that
                                 // occludes the press, such as the composer, does not hide it.

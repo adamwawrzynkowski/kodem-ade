@@ -20,6 +20,9 @@ mod window_state;
 use gpui::{prelude::*, *};
 use std::borrow::Cow;
 fn main() {
+    // Linux's browser needs the window on X11, which a Wayland session offers through XWayland.
+    #[cfg(not(any(target_os = "macos", windows)))]
+    browser::prefer_x11();
     // macOS can ask this process how to present a host-sent alert while Kodem is active.
     #[cfg(target_os = "macos")]
     let _notification_presentation =

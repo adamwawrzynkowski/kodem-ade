@@ -13,6 +13,7 @@ path = "src/main.rs"
 kodem-core = { path = "../kodem-core" }
 kodem-git = { path = "../kodem-git" }
 anyhow.workspace = true
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 futures = "0.3"
 serde.workspace = true
@@ -32,13 +33,24 @@ uuid.workspace = true
 embed-resource = "3"
 image = { version = "0.25", default-features = false, features = ["png", "ico"] }
 
+# The browser of the side pane: the platform's web view inside the window.
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+wry = { version = "=0.57.0", default-features = false, features = ["devtools"] }
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows = { version = "0.62", features = ["Win32_System_Com", "Win32_UI_Shell"] }
+
+# Linux's browser is WebKitGTK, which wry places inside an X11 window.
+[target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
+wry = { version = "=0.57.0", default-features = false, features = ["devtools", "os-webview", "x11"] }
+gtk = "0.18"
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "NSSound", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSResponder", "NSView", "NSWindow"] }
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSData", "NSDictionary", "NSError", "NSString", "NSURL", "NSValue"] }
-# The browser of the side pane: WebKit's view inside the window.
-wry = { version = "=0.57.0", default-features = false, features = ["devtools"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSBundle", "NSData", "NSDictionary", "NSError", "NSProcessInfo", "NSString", "NSURL", "NSValue"] }
 objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKNavigation", "WKSnapshotConfiguration", "WKScriptMessage", "WKScriptMessageHandler", "WKUserContentController"] }
 objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
 block2 = "0.6"
-base64 = "0.22"

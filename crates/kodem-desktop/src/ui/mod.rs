@@ -488,6 +488,18 @@ impl Shell {
             }
         })
         .detach();
+        // GPUI does not run GTK's loop, which Linux's pages need to draw, load and answer, so
+        // its waiting events run here, often enough for smooth scrolling.
+        #[cfg(not(any(target_os = "macos", windows)))]
+        cx.spawn(async move |this, cx| {
+            while this.upgrade().is_some() {
+                cx.background_executor()
+                    .timer(Duration::from_millis(8))
+                    .await;
+                crate::browser::pump();
+            }
+        })
+        .detach();
         // Each host reply applies as it arrives, together with any that came with it.
         cx.spawn(async move |this, cx| {
             while let Some(reply) = rx.next().await {
