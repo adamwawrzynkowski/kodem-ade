@@ -287,7 +287,7 @@ pub(super) fn toward(mut color: Hsla, target: f32, amount: f32) -> Hsla {
 }
 
 /// Returns the light of a raised plate: a highlight inside its top edge and, while nothing is
-/// attached below it, a tight contact shadow.
+/// attached below it, a darker line inside its bottom edge and a tight contact shadow.
 pub(super) fn plate_light(theme: Theme, grounded: bool) -> Vec<BoxShadow> {
     let mut light = vec![BoxShadow {
         inset: true,
@@ -297,15 +297,46 @@ pub(super) fn plate_light(theme: Theme, grounded: bool) -> Vec<BoxShadow> {
         spread_radius: px(0.),
     }];
     if grounded {
-        light.push(BoxShadow {
-            inset: false,
-            color: theme.shadow,
-            offset: point(px(0.), px(1.)),
-            blur_radius: px(2.),
-            spread_radius: px(0.),
-        });
+        light.extend([
+            BoxShadow {
+                inset: true,
+                color: gpui::black().opacity(if theme.light { 0.03 } else { 0.18 }),
+                offset: point(px(0.), px(-1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+            },
+            BoxShadow {
+                inset: false,
+                color: theme.shadow,
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(2.),
+                spread_radius: px(0.),
+            },
+        ]);
     }
     light
+}
+
+/// Returns the light of a recessed surface, such as a field, a content block or a pressed
+/// control: a soft shadow that the edge above casts inside it and a faint highlight on the lip
+/// below it.
+pub(super) fn recessed_light(theme: Theme) -> Vec<BoxShadow> {
+    vec![
+        BoxShadow {
+            inset: true,
+            color: gpui::black().opacity(if theme.light { 0.07 } else { 0.32 }),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(3.),
+            spread_radius: px(0.),
+        },
+        BoxShadow {
+            inset: false,
+            color: theme.highlight.opacity(if theme.light { 0.8 } else { 1. }),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(0.),
+            spread_radius: px(0.),
+        },
+    ]
 }
 
 /// One slice of a recessed well under a raised plate. Consecutive rows draw consecutive slices,
@@ -445,13 +476,13 @@ pub(super) fn tint_light(tone: Hsla) -> Vec<BoxShadow> {
         spread_radius: px(0.),
     };
     vec![
-        line(toward(tone, 1., 0.5).opacity(0.3), 2.),
-        line(toward(tone, 0., 0.5).opacity(0.24), -2.),
+        line(toward(tone, 1., 0.5).opacity(0.38), 2.),
+        line(toward(tone, 0., 0.5).opacity(0.3), -2.),
         BoxShadow {
             inset: false,
-            color: toward(tone, 0., 0.7).opacity(0.32),
+            color: toward(tone, 0., 0.7).opacity(0.36),
             offset: point(px(0.), px(1.)),
-            blur_radius: px(1.5),
+            blur_radius: px(2.),
             spread_radius: px(0.),
         },
     ]
@@ -462,8 +493,8 @@ pub(super) fn tint_light(tone: Hsla) -> Vec<BoxShadow> {
 pub(super) fn raised_fill(fill: Hsla) -> Background {
     linear_gradient(
         180.,
-        linear_color_stop(toward(fill, 1., 0.04), 0.),
-        linear_color_stop(toward(fill, 0., 0.04), 1.),
+        linear_color_stop(toward(fill, 1., 0.07), 0.),
+        linear_color_stop(toward(fill, 0., 0.07), 1.),
     )
 }
 
@@ -481,7 +512,7 @@ pub(super) fn raised_light(theme: Theme) -> Vec<BoxShadow> {
     vec![
         line(theme.highlight, 2.),
         line(
-            gpui::black().opacity(if theme.light { 0.05 } else { 0.22 }),
+            gpui::black().opacity(if theme.light { 0.06 } else { 0.28 }),
             -2.,
         ),
         BoxShadow {
@@ -946,7 +977,8 @@ pub(super) fn floating_face(tone: Hsla, radius: f32, theme: Theme) -> Div {
         .layer(dither::edge_shade(theme.dot, 0.18))
 }
 
-/// A card surface: raised fill, hairline edge and a dithered shade along its bottom edge.
+/// A card surface: raised fill, hairline edge, the light of a grounded plate and a dithered
+/// shade along its bottom edge.
 pub(super) fn card(theme: Theme) -> Div {
     div()
         .relative()
@@ -955,10 +987,12 @@ pub(super) fn card(theme: Theme) -> Div {
         .border_1()
         .border_color(theme.border)
         .bg(theme.raised)
+        .shadow(plate_light(theme, true))
         .layer(dither::edge_shade(theme.dot, 0.22))
 }
 
-/// A content block: an inset surface with a hairline edge for code, output, a diff or a table.
+/// A content block: a recessed inset surface with a hairline edge for code, output, a diff or a
+/// table.
 pub(super) fn block(theme: Theme) -> Div {
     div()
         .w_full()
@@ -967,6 +1001,7 @@ pub(super) fn block(theme: Theme) -> Div {
         .border_1()
         .border_color(theme.border)
         .bg(theme.inset)
+        .shadow(recessed_light(theme))
         .overflow_hidden()
 }
 

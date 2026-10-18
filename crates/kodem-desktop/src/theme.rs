@@ -487,7 +487,7 @@ impl Theme {
             warning: c(palette.warning),
             info: c(palette.info),
             selected: black(0.06),
-            shadow: black(0.07),
+            shadow: black(0.1),
             ink: black(0.3),
             dot: black(0.2),
             highlight: white(0.85),
@@ -503,10 +503,10 @@ impl Theme {
                 added_bg: added.opacity(0.11),
                 removed_bg: removed.opacity(0.11),
                 selected: white(0.07),
-                shadow: black(0.3),
+                shadow: black(0.4),
                 ink: black(0.72),
                 dot: white(0.22),
-                highlight: white(0.045),
+                highlight: white(0.06),
                 ..surfaces
             }
         }
@@ -521,13 +521,22 @@ impl Theme {
         }
         theme
     }
-    /// Returns a tight ambient shadow for floating menus and dialogs, paired with a dither shadow.
+    /// Returns the light of a floating menu or dialog, paired with a dither shadow: a highlight
+    /// inside its top edge, a darker line inside its bottom edge and a tight contact shadow.
     pub fn floating(self) -> Vec<BoxShadow> {
+        let rim = gpui::black().opacity(if self.light { 0.05 } else { 0.25 });
         vec![
             BoxShadow {
                 inset: true,
                 color: self.highlight,
                 offset: point(px(0.), px(1.)),
+                blur_radius: px(0.),
+                spread_radius: px(0.),
+            },
+            BoxShadow {
+                inset: true,
+                color: rim,
+                offset: point(px(0.), px(-1.)),
                 blur_radius: px(0.),
                 spread_radius: px(0.),
             },

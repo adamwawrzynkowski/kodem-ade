@@ -506,6 +506,7 @@ impl Shell {
                 .flex_col()
                 .gap_2()
                 .bg(t.raised)
+                .shadow(kit::plate_light(t, true))
                 .border_1()
                 .border_color(t.edge)
                 .rounded(px(crate::theme::MESSAGE_RADIUS))

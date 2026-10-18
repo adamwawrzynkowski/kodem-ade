@@ -342,8 +342,10 @@ impl Shell {
                         }
                         table = table.child(line);
                     }
+                    // A prose table sits on the page and is not recessed into it.
                     kit::block(t)
                         .bg(gpui::transparent_black())
+                        .shadow(Vec::new())
                         .child(
                             div()
                                 .id(SharedString::from(format!("table:{key}")))

@@ -90,8 +90,8 @@ pub(super) fn chosen_layer(tone: Hsla) -> impl kit::Fit {
     }
 }
 
-/// The frame of a text field in a dialog or a form: an inset surface with the focus edge. Add
-/// the input as a child that fills the width.
+/// The frame of a text field in a dialog or a form: a recessed inset surface with the focus
+/// edge. Add the input as a child that fills the width.
 pub(super) fn input_frame(theme: Theme) -> Div {
     div()
         .relative()
@@ -102,6 +102,7 @@ pub(super) fn input_frame(theme: Theme) -> Div {
         .gap(px(8.))
         .rounded(px(crate::theme::RADIUS_CONTROL))
         .bg(theme.inset)
+        .shadow(kit::recessed_light(theme))
         .border_1()
         .border_color(theme.accent.opacity(0.5))
 }

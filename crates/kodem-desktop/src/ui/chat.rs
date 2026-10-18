@@ -959,6 +959,8 @@ impl Shell {
             // Glass like the side panels, but denser, because the draft is read over the
             // conversation behind it. The meter tab on its edge is the same glass.
             .map(|editor| kit::glass(editor, t.raised, kit::SURFACE_GLASS_FILL))
+            // Lit along its top edge, like the floating surfaces it stands with.
+            .shadow(kit::plate_light(t, false))
             .border_1()
             .border_color(if focused {
                 t.accent.opacity(0.6)

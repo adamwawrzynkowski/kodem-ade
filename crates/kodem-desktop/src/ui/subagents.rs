@@ -139,7 +139,10 @@ impl Shell {
             .child(icon(glyph(index)).size(px(13.)))
             .child(agent.name.clone())
             .hover(move |s| s.bg(t.control_hover.opacity(share)).text_color(t.text))
-            .active(move |s| s.bg(t.control_active.opacity(share)).shadow(Vec::new()))
+            .active(move |s| {
+                s.bg(t.control_active.opacity(share))
+                    .shadow(kit::recessed_light(t))
+            })
             .on_press(move |position, cx| fx::ripple(position, t.muted, cx))
             .child(if agent.state.active() {
                 motion::active_icon("loader", t.accent, true, cx.reduce_motion())

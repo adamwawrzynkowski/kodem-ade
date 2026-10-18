@@ -695,7 +695,7 @@ fn paint_shadow(
             let qx = (sx - width / 2.).abs() - (width / 2. - radius);
             let qy = (sy - height / 2.).abs() - (height / 2. - radius);
             let outside = qx.max(0.).hypot(qy.max(0.)) + qx.max(qy).min(0.) - radius;
-            let cast = 0.62 * (1. - smoothstep(0., spread, outside));
+            let cast = 0.72 * (1. - smoothstep(0., spread, outside));
             (cast > threshold(cell_x as i64, cell_y as i64)).then_some(ink)
         };
         let mut content = digest(ink, &[width, height, radius, depth]);

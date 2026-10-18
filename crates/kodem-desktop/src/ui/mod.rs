@@ -2129,8 +2129,12 @@ impl Shell {
                 s.bg(kit::raised_fill(theme.control_hover))
                     .border_color(theme.accent.opacity(0.5))
             })
-            // A pressed button sinks flat: its light goes out.
-            .active(move |s| s.bg(theme.control_active).shadow(Vec::new()))
+            // A pressed button sinks into the surface: its light goes out and the edge above
+            // casts a shadow into it.
+            .active(move |s| {
+                s.bg(theme.control_active)
+                    .shadow(kit::recessed_light(theme))
+            })
             .on_press(move |position, cx| fx::ripple(position, theme.text, cx))
     }
     /// Returns a button with no surface until the pointer is over it.
@@ -2150,8 +2154,15 @@ impl Shell {
             .border_color(gpui::transparent_black())
             .bg(gpui::transparent_black())
             .text_color(theme.muted)
-            .hover(move |s| s.bg(theme.selected).text_color(theme.text))
-            .active(move |s| s.bg(theme.control_active))
+            .hover(move |s| {
+                s.bg(theme.selected)
+                    .text_color(theme.text)
+                    .shadow(kit::plate_light(theme, false))
+            })
+            .active(move |s| {
+                s.bg(theme.control_active)
+                    .shadow(kit::recessed_light(theme))
+            })
             .on_press(move |position, cx| fx::ripple(position, theme.muted, cx))
     }
     /// Returns a square ghost button with a tooltip and an accessible name.
@@ -2221,6 +2232,7 @@ impl Shell {
         label: impl Into<SharedString>,
         tone: Hsla,
     ) -> Button {
+        let theme = self.theme;
         let label = label.into();
         self.control(id)
             .overflow_hidden()
@@ -2236,7 +2248,7 @@ impl Shell {
                 s.bg(kit::tint_fill(tone, 0.16))
                     .border_color(tone.opacity(0.7))
             })
-            .active(move |s| s.bg(tone.opacity(0.22)).shadow(Vec::new()))
+            .active(move |s| s.bg(tone.opacity(0.22)).shadow(kit::recessed_light(theme)))
             .on_press(move |position, cx| fx::ripple(position, tone, cx))
     }
 }
