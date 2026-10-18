@@ -348,6 +348,11 @@ pub struct Shell {
     launch: Option<motion::Launch>,
     /// Rows of the thread feed that open because their tasks were just created.
     entering_tasks: HashMap<String, motion::Entrance>,
+    feed_slide: sidebar::FeedSlide,
+    group_folds: HashMap<String, sidebar::GroupFold>,
+    settled_fold: Option<sidebar::GroupFold>,
+    /// How far each row of a folding project group is open in this frame, by task.
+    fold_rows: HashMap<String, f32>,
     composer_height: f32,
     /// Height below the floating composer's box, at rest: its hints and its margin, in window
     /// pixels. The conversation ends at the box, so it passes behind the box's glass only.
@@ -754,6 +759,10 @@ impl Shell {
             auto_submit_task: None,
             launch: None,
             entering_tasks: HashMap::new(),
+            feed_slide: sidebar::FeedSlide::default(),
+            group_folds: HashMap::new(),
+            settled_fold: None,
+            fold_rows: HashMap::new(),
             composer_height: 170.,
             composer_tail: 0.,
             composer_spring: motion::ComposerSpring::default(),
@@ -2162,12 +2171,21 @@ impl Shell {
         name: &'static str,
         label: impl Into<SharedString>,
     ) -> Button {
+        self.ghost_icon(id, icon(name).size(px(13.)), label)
+    }
+    /// Returns a ghost button that leads with `glyph`, an icon that the caller has shaped.
+    fn ghost_icon(
+        &self,
+        id: impl Into<ElementId>,
+        glyph: crate::icons::Icon,
+        label: impl Into<SharedString>,
+    ) -> Button {
         let theme = self.theme;
         let label = label.into();
         self.control(id)
             .overflow_hidden()
             .layer(kit::glint(theme.dot, dither::Edge::Bottom))
-            .child(icon(name).size(px(13.)))
+            .child(glyph)
             .when(!label.is_empty(), |b| b.child(label))
             .border_color(gpui::transparent_black())
             .bg(gpui::transparent_black())

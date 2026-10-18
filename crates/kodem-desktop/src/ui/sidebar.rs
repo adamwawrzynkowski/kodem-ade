@@ -1,6 +1,7 @@
 use super::*;
 use crate::thread_list::{Row, Section};
 use dither::{Dither, DitherField};
+use std::time::Instant;
 
 /// Returns the effect anchor name of one thread row.
 pub(super) fn thread_anchor(task_id: &str) -> SharedString {
@@ -11,25 +12,162 @@ pub(super) fn thread_anchor(task_id: &str) -> SharedString {
 const TASK_TILE: f32 = 30.;
 /// Size of a glyph in that tile.
 const TASK_TILE_GLYPH: f32 = 18.;
+/// The effect anchor of the sidebar, which places the sliding selection edge.
+const SIDEBAR_ANCHOR: &str = "sidebar-panel";
+/// How long the selection edge of the feed takes to slide to another row.
+const SELECT_SLIDE: Duration = Duration::from_millis(380);
+/// How long one row takes to fold or unfold.
+const FOLD_ROW: Duration = Duration::from_millis(260);
+/// How long each row of a fold waits after the row above it.
+const FOLD_STEP: Duration = Duration::from_millis(35);
+/// Rows after this many share the last wait, so a long group folds as quickly as a short one.
+const FOLD_STAGGER: usize = 8;
+
+/// The slide of the feed's selection edge from the row that was open to the row that opened.
+#[derive(Default)]
+pub(super) struct FeedSlide {
+    /// The task that the last frame marked.
+    shown: Option<String>,
+    /// The task that the selection left and its edge as `(left, top, bottom)`, in window pixels
+    /// from the sidebar's corner.
+    from: Option<(String, (f32, f32, f32))>,
+    started: Option<Instant>,
+}
+
+impl FeedSlide {
+    // How far the running slide has come, from 0 to 1. A slide that has arrived returns none.
+    fn progress(&self) -> Option<f32> {
+        let progress = self.started?.elapsed().as_secs_f32() / SELECT_SLIDE.as_secs_f32();
+        (progress < 1.).then_some(progress)
+    }
+
+    // The task that the running slide left.
+    fn left(&self) -> Option<&str> {
+        self.progress()?;
+        self.from.as_ref().map(|(id, _)| id.as_str())
+    }
+}
+
+/// A project group or the settled list on its way between folded and open. Its rows move one
+/// after another from the top.
+#[derive(Clone, Copy)]
+pub(super) struct GroupFold {
+    started: Instant,
+    opening: bool,
+    rows: usize,
+}
+
+impl GroupFold {
+    /// Starts a fold of `rows` rows toward open, or toward folded.
+    pub(super) fn new(opening: bool, rows: usize) -> Self {
+        Self {
+            started: Instant::now(),
+            opening,
+            rows,
+        }
+    }
+
+    // How far the row at `order` from the top of the group has moved, from 0 to 1.
+    fn progress(&self, order: usize) -> f32 {
+        let wait = FOLD_STEP * order.min(FOLD_STAGGER) as u32;
+        let elapsed = self.started.elapsed().saturating_sub(wait);
+        (elapsed.as_secs_f32() / FOLD_ROW.as_secs_f32()).min(1.)
+    }
+
+    // How far the row at `order` from the top of the group is open, from 0 to 1.
+    fn openness(&self, order: usize) -> f32 {
+        let progress = self.progress(order);
+        if self.opening {
+            progress
+        } else {
+            1. - progress
+        }
+    }
+
+    // How far the group's chevron has turned toward open, from 0 to 1.
+    fn chevron(&self) -> f32 {
+        let turned = motion::ease_out_cubic(self.progress(0));
+        if self.opening { turned } else { 1. - turned }
+    }
+
+    // Reports whether every row of the group has arrived.
+    fn done(&self) -> bool {
+        let last = self.rows.saturating_sub(1).min(FOLD_STAGGER) as u32;
+        self.started.elapsed() >= FOLD_STEP * last + FOLD_ROW
+    }
+}
+
+// A chevron that turns from pointing right, folded, to pointing down, open, as `openness` goes
+// from 0 to 1.
+fn fold_chevron(openness: f32, size: f32) -> crate::icons::Icon {
+    icon("chevron-right")
+        .size(px(size))
+        .rotate(std::f32::consts::FRAC_PI_2 * openness.clamp(0., 1.))
+}
+
+// The selection edge of a task's row as `(left, top, bottom)`, in window pixels from the
+// sidebar's corner, where the last frame painted it.
+fn edge_span(task_id: &str, cx: &mut App) -> Option<(f32, f32, f32)> {
+    let panel = fx::anchor_bounds(SIDEBAR_ANCHOR, cx)?;
+    let row = fx::anchor_bounds(&thread_anchor(task_id), cx)?;
+    let inset = 4. * crate::theme::ui_scale();
+    Some((
+        f32::from(row.left() - panel.left()),
+        f32::from(row.top() - panel.top()) + inset,
+        f32::from(row.bottom() - panel.top()) - inset,
+    ))
+}
+
+// The tone of a task's row while it is open: amber while it waits for input, red while it is
+// blocked, and the accent otherwise.
+fn selection_tone(task: &core::Task, theme: Theme) -> Hsla {
+    if task.needs_input() {
+        theme.warning
+    } else if task.is_blocked() {
+        theme.removed
+    } else {
+        theme.accent
+    }
+}
 
 impl Shell {
     /// Builds the attention-first thread feed with status, branch and saved review metadata.
     pub(super) fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
+        self.settle_folds();
         self.sync_feed(cx);
-        // The list measures a row once, so a row that opens is measured again on each frame,
-        // and once more on the frame it is done.
-        if !self.entering_tasks.is_empty() {
+        // The list measures a row once, so a row that opens or folds is measured again on each
+        // frame, and once more on the frame it is done.
+        self.fold_rows.clear();
+        if !self.entering_tasks.is_empty() || !self.group_folds.is_empty() {
+            let mut group = None;
+            let mut order = 0;
             for (index, row) in self.sidebar_rows.iter().enumerate() {
-                if row
-                    .task_id()
-                    .is_some_and(|id| self.entering_tasks.contains_key(id))
-                {
+                let id = match row {
+                    Row::Project { id, .. } => {
+                        group = self.group_folds.get(id);
+                        order = 0;
+                        continue;
+                    }
+                    Row::Task { id, .. } => id,
+                    _ => {
+                        group = None;
+                        continue;
+                    }
+                };
+                let folding = group.map(|fold| fold.openness(order));
+                order += 1;
+                if let Some(openness) = folding {
+                    self.fold_rows.insert(id.clone(), openness);
+                }
+                if folding.is_some() || self.entering_tasks.contains_key(id) {
                     self.sidebar_scroll.remeasure_items(index..index + 1);
                 }
             }
             self.entering_tasks.retain(|_, entrance| !entrance.done());
+            self.group_folds.retain(|_, fold| !fold.done());
         }
+        self.sync_feed_slide(cx);
         // A closed sidebar draws nothing; the workspace rail holds its quick actions. While it
         // slides, the full sidebar is drawn and clipped.
         if self.reveals.sidebar <= 0. {
@@ -138,6 +276,7 @@ impl Shell {
             .flex_col()
             .overflow_hidden()
             .text_size(text_px(12.))
+            .child(fx::anchor(SIDEBAR_ANCHOR))
             .child(
                 div()
                     .px(px(10.))
@@ -285,8 +424,136 @@ impl Shell {
                         ),
                     ),
             );
-        panel.into_any_element()
+        let moving = self.feed_slide.progress().is_some()
+            || !self.group_folds.is_empty()
+            || self.settled_fold.is_some();
+        panel
+            .children(self.slide_edge(cx))
+            // Rows out of view still finish their folds.
+            .when(moving, |panel| panel.child(motion::next_frame()))
+            .into_any_element()
     }
+
+    // Starts the slide of the selection edge when another task of the feed opened since the
+    // last frame, from the edge of the row that the last frame marked.
+    fn sync_feed_slide(&mut self, cx: &mut Context<Self>) {
+        if self.feed_slide.shown == self.selected {
+            return;
+        }
+        let left = std::mem::replace(&mut self.feed_slide.shown, self.selected.clone());
+        self.feed_slide.from = None;
+        self.feed_slide.started = None;
+        let (Some(left), Some(opened)) = (left, self.selected.as_deref()) else {
+            return;
+        };
+        if cx.reduce_motion() || self.reveals.sidebar < 1. {
+            return;
+        }
+        // A task of another workspace or one that the feed hides has no row to slide between.
+        let listed = |id: &str| {
+            self.sidebar_rows
+                .iter()
+                .chain(&self.settled_rows)
+                .any(|row| row.task_id() == Some(id))
+        };
+        if !listed(&left) || !listed(opened) {
+            return;
+        }
+        if let Some(edge) = edge_span(&left, cx) {
+            self.feed_slide.from = Some((left, edge));
+            self.feed_slide.started = Some(Instant::now());
+        }
+    }
+
+    // The selection edge on its way to the row that opened. Its leading end springs ahead and
+    // its trailing end follows, as the rail's selection does. The row draws its own edge once
+    // the slide has arrived.
+    fn slide_edge(&self, cx: &mut App) -> Option<AnyElement> {
+        let progress = self.feed_slide.progress()?;
+        let (_, from) = self.feed_slide.from.as_ref()?;
+        let selected = self.selected.as_deref()?;
+        let task = self
+            .workspace
+            .as_ref()?
+            .tasks
+            .iter()
+            .find(|task| task.id == selected)?;
+        let to = edge_span(selected, cx)?;
+        let (top, bottom) = fx::stretch_span((from.1, from.2), (to.1, to.2), progress);
+        Some(
+            div()
+                .absolute()
+                .left(gpui::px(from.0 + (to.0 - from.0) * progress))
+                .top(gpui::px(top))
+                .w(px(2.))
+                .h(gpui::px(bottom - top))
+                .rounded(px(1.))
+                .bg(selection_tone(task, self.theme))
+                .into_any_element(),
+        )
+    }
+
+    // Ends the folds that have arrived. A project group or the settled list that folded leaves
+    // the feed now.
+    fn settle_folds(&mut self) {
+        let folded: Vec<String> = self
+            .group_folds
+            .iter()
+            .filter(|(_, fold)| !fold.opening && fold.done())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in folded {
+            self.group_folds.remove(&id);
+            self.settings.collapsed_projects.insert(id);
+            self.sidebar_dirty = true;
+            self.save_settings();
+        }
+        if let Some(fold) = self.settled_fold.filter(|fold| fold.done()) {
+            self.settled_collapsed = !fold.opening;
+            self.settled_fold = None;
+        }
+    }
+
+    // Folds or unfolds a project group of `rows` tasks. Its rows move one after another; a
+    // group that folds leaves the feed when its last row has folded.
+    fn toggle_project_group(&mut self, id: String, rows: usize, cx: &mut Context<Self>) {
+        let animate = !cx.reduce_motion() && self.search.read(cx).text().is_empty();
+        let folding = self.group_folds.get(&id).is_some_and(|fold| !fold.opening);
+        if folding {
+            self.group_folds.insert(id, GroupFold::new(true, rows));
+        } else if self.settings.collapsed_projects.remove(&id) {
+            if animate {
+                self.group_folds.insert(id, GroupFold::new(true, rows));
+            }
+            self.sidebar_dirty = true;
+            self.save_settings();
+        } else if animate {
+            self.group_folds.insert(id, GroupFold::new(false, rows));
+        } else {
+            self.settings.collapsed_projects.insert(id);
+            self.sidebar_dirty = true;
+            self.save_settings();
+        }
+        cx.notify();
+    }
+
+    // Folds or unfolds the settled tasks, one row after another.
+    fn toggle_settled(&mut self, cx: &mut Context<Self>) {
+        let rows = self.settled_rows.len();
+        let animate = !cx.reduce_motion() && self.search.read(cx).text().is_empty();
+        let folding = self.settled_fold.is_some_and(|fold| !fold.opening);
+        if folding || self.settled_collapsed {
+            self.settled_collapsed = false;
+            self.settled_fold = animate.then(|| GroupFold::new(true, rows));
+        } else if animate {
+            self.settled_fold = Some(GroupFold::new(false, rows));
+        } else {
+            self.settled_collapsed = true;
+            self.settled_fold = None;
+        }
+        cx.notify();
+    }
+
     // Rebuilds the rows of the open workspace's feed after its tasks, filter or order changed.
     // The scroll position stays on the row it was on.
     fn sync_feed(&mut self, cx: &mut Context<Self>) {
@@ -427,19 +694,19 @@ impl Shell {
                 else {
                     return div().into_any_element();
                 };
-                let collapsed = self.settings.collapsed_projects.contains(id)
+                let fold = self.group_folds.get(id);
+                let collapsed = (self.settings.collapsed_projects.contains(id)
+                    || fold.is_some_and(|fold| !fold.opening))
                     && self.search.read(cx).text().is_empty();
+                let openness = fold.map_or(if collapsed { 0. } else { 1. }, GroupFold::chevron);
                 let id = id.clone();
+                let rows = *count;
                 div()
                     .pt(px(8.))
                     .child(
-                        self.ghost(
+                        self.ghost_icon(
                             SharedString::from(format!("project-group:{id}")),
-                            if collapsed {
-                                "chevron-right"
-                            } else {
-                                "chevron-down"
-                            },
+                            fold_chevron(openness, 13.),
                             "",
                         )
                         .w_full()
@@ -466,12 +733,7 @@ impl Shell {
                                 .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
                         )
                         .on_click(cx.listener(move |s, _, _, cx| {
-                            if !s.settings.collapsed_projects.remove(&id) {
-                                s.settings.collapsed_projects.insert(id.clone());
-                            }
-                            s.sidebar_dirty = true;
-                            s.save_settings();
-                            cx.notify();
+                            s.toggle_project_group(id.clone(), rows, cx)
                         })),
                     )
                     .into_any_element()
@@ -497,11 +759,17 @@ impl Shell {
         let row = div()
             .pb(px(2.))
             .child(self.task_card(task, project, settled, cx));
-        match self.entering_tasks.get(&task.id) {
-            Some(entrance) if !cx.reduce_motion() => {
-                motion::row_enter(row, entrance.progress(), self.theme.sidebar)
-            }
-            _ => row.into_any_element(),
+        if cx.reduce_motion() {
+            return row.into_any_element();
+        }
+        // A row of a project group that folds or unfolds moves with the group.
+        let openness = match self.entering_tasks.get(&task.id) {
+            Some(entrance) => Some(entrance.progress()),
+            None => self.fold_rows.get(&task.id).copied(),
+        };
+        match openness {
+            Some(openness) => motion::row_enter(row, openness, self.theme.sidebar),
+            None => row.into_any_element(),
         }
     }
     // A search unfolds the settled tasks, so that its matches among them show.
@@ -530,14 +798,11 @@ impl Shell {
                     } else {
                         "Expand settled tasks"
                     })
-                    .child(
-                        icon(if open {
-                            "chevron-down"
-                        } else {
-                            "chevron-right"
-                        })
-                        .size(px(12.)),
-                    )
+                    .child(fold_chevron(
+                        self.settled_fold
+                            .map_or(if open { 1. } else { 0. }, |fold| fold.chevron()),
+                        12.,
+                    ))
                     .child(caps("Settled", t))
                     .child(figure(self.settled_rows.len().to_string(), t.subtle))
                     .child(
@@ -545,10 +810,7 @@ impl Shell {
                             .flex_1()
                             .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
                     )
-                    .on_click(cx.listener(|s, _, _, cx| {
-                        s.settled_collapsed = !s.settled_collapsed;
-                        cx.notify();
-                    })),
+                    .on_click(cx.listener(|s, _, _, cx| s.toggle_settled(cx))),
             )
             .into_any_element()
     }
@@ -567,6 +829,11 @@ impl Shell {
                                     s.task_row(*index, *project, true, cx)
                                 }
                                 _ => div().into_any_element(),
+                            };
+                            // The rows of a uniform list keep their height, so they drop in.
+                            let row = match s.settled_fold.filter(|_| !cx.reduce_motion()) {
+                                Some(fold) => motion::drop_in(row, fold.openness(index)),
+                                None => row,
                             };
                             div().w_full().px(px(6.)).child(row)
                         })
@@ -763,13 +1030,13 @@ impl Shell {
                     }),
             );
         }
-        let tone = if needs_input {
-            t.warning
-        } else if blocked {
-            t.removed
-        } else {
-            t.accent
-        };
+        let tone = selection_tone(task, t);
+        // While the selection edge slides, the row that opened takes its tint as the edge comes,
+        // and the row that it left lets its tint fade.
+        let slide = self.feed_slide.progress().map(motion::ease_out_cubic);
+        let arriving = slide.filter(|_| selected);
+        let leaving = slide.filter(|_| !selected && self.feed_slide.left() == Some(id.as_str()));
+        let tint = arriving.unwrap_or(1.);
         div()
             .id((ElementId::from("task"), SharedString::from(id.clone())))
             .relative()
@@ -783,14 +1050,24 @@ impl Shell {
             .rounded(px(radius))
             .border_1()
             .border_color(gpui::transparent_black())
-            .when(selected, |row| row.bg(tone.opacity(0.1)))
+            .when(selected, |row| row.bg(tone.opacity(0.1 * tint)))
             .cursor_pointer()
             .when(!selected, |row| row.hover(move |d| d.bg(t.selected)))
+            .when_some(leaving, |row, leaving| {
+                row.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .bg(tone.opacity(0.1 * (1. - leaving))),
+                )
+            })
             .when(selected || active, |row| {
-                row.layer(dither::row_wash(tone, selected, active))
+                row.layer(dither::row_wash(tone.opacity(tint), selected, active))
             })
             // The open task carries an edge in its tone, not an outline.
-            .when(selected, |row| row.child(kit::selection_edge(tone)))
+            .when(selected && arriving.is_none(), |row| {
+                row.child(kit::selection_edge(tone))
+            })
             .child(fx::anchor(thread_anchor(&id)))
             .child(div().relative().flex_shrink_0().child(tile))
             .child(

@@ -101,6 +101,32 @@ pub(super) fn ease_out_cubic(progress: f32) -> f32 {
     1. - (1. - progress).powi(3)
 }
 
+/// An invisible element that asks for another frame, for motion that a view steps itself.
+pub(super) fn next_frame() -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        |_, _, window, _| window.request_animation_frame(),
+    )
+    .absolute()
+    .size(px(1.))
+}
+
+/// Shows a part at `openness` of its way in, from 0, hidden a little above its place, to 1, in
+/// place. Its layout keeps its full size, so it suits rows of a uniform list.
+pub(super) fn drop_in(element: impl IntoElement, openness: f32) -> AnyElement {
+    if openness >= 1. {
+        return element.into_any_element();
+    }
+    let eased = ease_out_cubic(openness);
+    div()
+        .relative()
+        .top(px(-6. * (1. - eased)))
+        .opacity(eased)
+        .child(element)
+        .child(next_frame())
+        .into_any_element()
+}
+
 /// Brings in a part that a surface just gained: it fades in and drops into place `order` beats
 /// after the first part, so a group of parts arrives in sequence. The part must be relatively
 /// positioned. It plays again when the part leaves and comes back.

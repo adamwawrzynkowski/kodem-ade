@@ -147,6 +147,14 @@ impl AssetSource for Assets {
 pub struct Icon {
     name: &'static str,
     style: StyleRefinement,
+    rotation: f32,
+}
+impl Icon {
+    /// Turns the icon about its center by `angle`, in radians, clockwise.
+    pub fn rotate(mut self, angle: f32) -> Self {
+        self.rotation = angle;
+        self
+    }
 }
 impl Styled for Icon {
     fn style(&mut self) -> &mut StyleRefinement {
@@ -157,6 +165,9 @@ impl RenderOnce for Icon {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
         let mut image = svg().path(self.name).text_color(window.text_style().color);
         image.style().refine(&self.style);
+        if self.rotation != 0. {
+            image = image.with_transformation(Transformation::rotate(radians(self.rotation)));
+        }
         image
     }
 }
@@ -165,6 +176,7 @@ pub fn icon(name: &'static str) -> Icon {
     Icon {
         name,
         style: StyleRefinement::default(),
+        rotation: 0.,
     }
     .size(px(16.))
     .flex_shrink_0()

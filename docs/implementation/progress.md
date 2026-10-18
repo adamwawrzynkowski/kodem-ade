@@ -1222,3 +1222,14 @@ Recorded on 19 October 2026. The user asked that the tiles of the workspace rail
 - `motion::stagger` drops parts into place one after another. The quick actions that the rail gains once the sidebar has folded, and the Git workspace's repositories, use it.
 
 Reduced motion shows every state at once. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not run: the Linux and Windows lint (the change has no platform code). The look and the motion were not checked in the running app, under the no-visual-testing agreement.
+
+### Thread feed selection and fold motion
+
+Recorded on 19 October 2026. The user asked that the thread feed in the sidebar get the motion of the workspace rail.
+
+- Selection: `FeedSlide` keeps the task that the last frame marked; `Shell::sync_feed_slide` starts a slide when another task of the feed opens, from the edge of the row that was open, read from its `fx` anchor relative to a new anchor on the sidebar. `Shell::slide_edge` draws the edge over the sidebar on its way, with `fx::stretch_span`, toward the new row's anchor of the last frame, so it follows a scroll. The new row draws its own edge when the slide arrives; until then its tint and dots grow with the slide, and the row that was left fades its tint. A selection that changes workspace, or whose rows were not painted on the last frame, does not slide.
+- Folds: `GroupFold` times a project group or the settled list between folded and open. Rows move one after another from the top, 35 ms apart up to the eighth row, each in 260 ms. Rows of a project group use `motion::row_enter` (grow, slide, dissolve), forward to open and backward to fold; the group joins `Settings.collapsed_projects` only when its last row has folded (`Shell::settle_folds`). The feed measures those rows again on each frame, as it does for new rows. The settled list is a uniform list whose rows keep their height, so they use the new `motion::drop_in`. A click during a fold turns it around.
+- Chevrons turn with the fold. `Icon::rotate` turns an icon about its center, and `Shell::ghost_icon` builds a ghost button around a shaped icon.
+- `motion::next_frame` keeps frames coming while a slide or a fold runs, so rows out of view still finish.
+
+A search, which shows every group open, and reduced motion fold at once and do not slide. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not run: the Linux and Windows lint (the change has no platform code). The look and the motion were not checked in the running app, under the no-visual-testing agreement.
