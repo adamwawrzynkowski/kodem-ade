@@ -338,7 +338,7 @@ impl Shell {
         }
         if self.panel == Panel::Models {
             let mut rail = div()
-                .w(px(150.))
+                .w(px(168.))
                 .flex_shrink_0()
                 .flex()
                 .flex_col()

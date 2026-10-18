@@ -1129,7 +1129,7 @@ Recorded on 18 October 2026. The user asked for OpenCode support with the featur
 - The driver, the transcript, reconciliation, the catalog, resources, the composer catalog and the import are in `providers/opencode*.rs`; [providers.md](providers.md) has the feature list and the evidence. Kodem's MCP tools accept `opencode` as a provider.
 - OpenCode updated itself from 1.18.35 to 2.0.32 during the work. A probe server that was started by hand without `OPENCODE_DISABLE_AUTOUPDATE` is the likely cause. OpenCode 2 replaced the HTTP API, so the driver was rewritten for it and refuses 1.x. Kodem's servers now also set `update: disable`.
 - `kodem-host opencode-guard` runs each server and stops it when the host ends, because a test showed that a killed host left `opencode serve` running.
-- The desktop marks OpenCode with a BETA chip in the provider rows of Settings, the model picker, the setup dialog and the accounts tabs, and no longer lists it as coming soon. The provider row of Settings puts the sign-in state under the name, so three providers fit in one row. The model picker's provider column is 150 px wide.
+- The desktop marks OpenCode with a BETA chip in the provider rows of Settings, the model picker, the setup dialog and the accounts tabs, and no longer lists it as coming soon. The provider row of Settings puts the sign-in state under the name, so three providers fit in one row. The model picker's provider column is 168 px wide, so the BETA chip fits beside "OpenCode".
 - Settings → Workspace → Import threads lists and imports OpenCode sessions too. An imported question shows the user's answer.
 
 Not available with OpenCode 2: the plan tab, because OpenCode 2 has no plan tool, and usage limits.
