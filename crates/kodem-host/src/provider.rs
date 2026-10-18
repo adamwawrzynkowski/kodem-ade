@@ -569,8 +569,12 @@ Rules:
 - When the work changes, change the plan: add, remove or rewrite steps, so that it always shows what you actually do.
 - Before you end your turn, mark every finished step completed. Leave a step pending only when it is not done, and say why.";
 
-/// Returns the standing instructions of a task's provider session: the plan rules, and the
-/// rules that its kind adds.
+/// Which browser a session uses when the user asks for browser work, where Kodem has one.
+const BROWSER_RULES: &str = "\
+When the user asks you to test, check, preview or debug something in a browser, use Kodem's browser: the `browser_*` tools of the `kodem` MCP server. It is the browser in the side pane of the Kodem window, which the user sees. Use another browser, browser automation tool or method only when the user names it.";
+
+/// Returns the standing instructions of a task's provider session: the plan rules, the rules
+/// that its kind adds, and which browser to use when the session has Kodem's tools.
 ///
 /// They are given when a provider process starts, so they also hold after a resume.
 pub(crate) fn instructions(task: &Task) -> String {
@@ -596,11 +600,17 @@ pub(crate) fn instructions(task: &Task) -> String {
             Some(format!("{REVIEW_RULES}\n\n{scope}\n\n{REVIEW_REPORT}"))
         }
     };
-    match (rules, plan) {
-        (Some(rules), Some(plan)) => format!("{rules}\n\n{plan}"),
-        (Some(rules), None) => rules,
-        (None, plan) => plan.unwrap_or_default().into(),
-    }
+    // A task that another task delegated has no Kodem tools.
+    let delegated = task
+        .lineage
+        .as_ref()
+        .is_some_and(|lineage| lineage.delegated);
+    let browser = (!delegated && crate::mcp::browser_available()).then_some(BROWSER_RULES);
+    [rules.as_deref(), plan, browser]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// Returns the options owned by this task rather than another provider's defaults.

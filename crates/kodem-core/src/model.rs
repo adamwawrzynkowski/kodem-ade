@@ -1225,6 +1225,18 @@ pub struct PlanStep {
     #[serde(default)]
     pub status: PlanStatus,
 }
+/// Name under which a provider lists Kodem's own MCP server and prefixes its tools.
+pub const MCP_SERVER: &str = "kodem";
+/// The decision that switches a Codex task to AI auto-approve and lets the Kodem tool run.
+pub const SWITCH_TO_AUTO_REVIEW: &str = "autoReview";
+/// What a Kodem tool approval tells the user about the approval setting.
+const KODEM_TOOL_REASON: &str = "Under Workspace access, Codex asks for approval before each call of Kodem's browser and agent tools. Switch this task to AI auto-approve to let them run without asking, or allow this call once.";
+/// Reports a Codex request that asks the user to approve one call of a Kodem tool.
+pub fn is_kodem_tool_approval(method: &str, params: &serde_json::Value) -> bool {
+    method == "mcpServer/elicitation/request"
+        && params["serverName"] == MCP_SERVER
+        && params["_meta"]["codex_approval_kind"] == "mcp_tool_call"
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InputRequest {
     pub id: serde_json::Value,
@@ -1235,15 +1247,27 @@ pub struct InputRequest {
 impl InputRequest {
     /// Reports a request to approve an action or a plan, as opposed to questions to answer.
     pub fn is_approval(&self) -> bool {
-        self.method.ends_with("requestApproval")
+        self.method.ends_with("requestApproval") || self.is_kodem_tool_approval()
+    }
+    /// Reports a request to approve one call of a Kodem tool, such as the browser.
+    pub fn is_kodem_tool_approval(&self) -> bool {
+        is_kodem_tool_approval(&self.method, &self.params)
     }
     /// Returns the provider conversation that asked, which is a subagent's when it is not the
     /// main one. A request that names none belongs to the main conversation.
     pub fn conversation(&self) -> Option<&str> {
         self.params["threadId"].as_str()
     }
-    /// Returns the decisions that the provider listed for an approval, in its order.
+    /// Returns the decisions that the provider listed for an approval, in its order. A Kodem
+    /// tool approval offers the switch to AI auto-approve first.
     pub fn offered_decisions(&self) -> Option<Vec<String>> {
+        if self.is_kodem_tool_approval() {
+            return Some(vec![
+                SWITCH_TO_AUTO_REVIEW.into(),
+                "accept".into(),
+                "decline".into(),
+            ]);
+        }
         self.params["availableDecisions"]
             .as_array()
             .map(|decisions| {
@@ -1265,15 +1289,27 @@ impl InputRequest {
     }
     /// Returns why the provider asks.
     pub fn reason(&self) -> Option<&str> {
+        if self.is_kodem_tool_approval() {
+            return Some(KODEM_TOOL_REASON);
+        }
         self.params["reason"].as_str()
     }
     /// Returns the command that an approval is about.
     pub fn command(&self) -> Option<&str> {
         self.params["command"].as_str()
     }
-    /// Returns the name of the tool that an approval is about.
+    /// Returns the name of the tool that an approval is about. Codex names a Kodem tool only in
+    /// its question: `Allow the kodem MCP server to run tool "browser_open"?`.
     pub fn tool(&self) -> Option<&str> {
+        if self.is_kodem_tool_approval() {
+            return self.params["message"].as_str()?.split('"').nth(1);
+        }
         self.params["tool"].as_str()
+    }
+    /// Returns the arguments of the Kodem tool call that an approval is about, as JSON text.
+    pub fn tool_arguments(&self) -> Option<String> {
+        self.is_kodem_tool_approval()
+            .then(|| self.params["_meta"]["tool_params"].to_string())
     }
     /// Returns the text of a plan that is up for review. It can be empty.
     pub fn plan(&self) -> Option<&str> {

@@ -489,6 +489,7 @@ impl Shell {
             for (choice, decision) in decisions.into_iter().enumerate() {
                 let request = request.clone();
                 let label = match decision.as_str() {
+                    core::SWITCH_TO_AUTO_REVIEW => "Switch to AI auto-approve",
                     "accept" => "Allow once",
                     "acceptForSession" => "Allow for session",
                     "decline" => "Decline",

@@ -116,6 +116,25 @@ fn open(
     Ok((codex, thread, limit))
 }
 
+// Saves AI auto-approve as the access of a task and as the approval rule of its model, as the
+// access menu does. Codex keeps the rule of a running turn, so it applies from the next turn.
+fn switch_to_auto_review(host: &Shared, task_id: &str) -> Result<()> {
+    let h = host.lock().unwrap();
+    let mut task = h.store.task(task_id)?;
+    task.access = AccessMode::AutoReview;
+    let rule = AgentPreferences {
+        model: effective_model(&h, &task),
+        ..preferences(&task)
+    };
+    // Only a coding task's options become the options of the next new task.
+    if task.kind == TaskKind::Coding {
+        h.store.save_task_preferences(&task, preferences(&task))?;
+    } else {
+        h.store.save_task(&task)?;
+    }
+    h.store.remember_access(&rule)
+}
+
 // Asks Codex to summarize the thread for the compaction recorded on the host. Codex runs it as
 // a turn of its own, which `ingest` ends without completing a user turn.
 fn compact(
@@ -221,6 +240,15 @@ pub(crate) fn run(host: Shared, task_id: &str, controls: mpsc::Receiver<Control>
                     };
                     let answer = (request.method == "item/tool/requestUserInput")
                         .then(|| crate::answer_text(&request, &response));
+                    let response = if request.is_kodem_tool_approval() {
+                        if response["decision"] == SWITCH_TO_AUTO_REVIEW {
+                            switch_to_auto_review(&host, task_id)?;
+                            codex.approve_kodem_tools(request.params["turnId"].as_str());
+                        }
+                        kodem_core::providers::codex::kodem_tool_answer(&response)
+                    } else {
+                        response
+                    };
                     codex.answer(id.clone(), response)?;
                     let mut h = host.lock().unwrap();
                     if let Some(requests) = h.requests.get_mut(task_id) {

@@ -1474,7 +1474,14 @@ fn validate_answer(request: &InputRequest, response: &Value) -> Result<()> {
             .as_str()
             .context("Choose an approval decision")?;
         ensure!(
-            ["accept", "acceptForSession", "decline", "cancel"].contains(&decision),
+            [
+                "accept",
+                "acceptForSession",
+                "decline",
+                "cancel",
+                SWITCH_TO_AUTO_REVIEW
+            ]
+            .contains(&decision),
             "Unsupported approval decision"
         );
         if let Some(available) = request.offered_decisions() {

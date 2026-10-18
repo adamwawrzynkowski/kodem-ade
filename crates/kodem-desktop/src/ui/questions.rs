@@ -30,6 +30,7 @@ const FEEDBACK: &str = "decline-feedback";
 
 fn decision_label(decision: &str) -> &str {
     match decision {
+        core::SWITCH_TO_AUTO_REVIEW => "Switch to AI auto-approve",
         "accept" => "Allow once",
         "acceptForSession" => "Allow for session",
         "decline" => "Decline",
@@ -127,6 +128,8 @@ impl Shell {
                 kit::block_header(
                     if plan.is_some() {
                         "Plan ready for review"
+                    } else if request.is_kodem_tool_approval() {
+                        "Approval setting needed"
                     } else {
                         "Permission requested"
                     },
@@ -175,12 +178,17 @@ impl Shell {
                     .child(
                         request
                             .command()
-                            .unwrap_or("File changes; inspect the matching item in the transcript.")
-                            .to_owned(),
+                            .map(str::to_owned)
+                            .or_else(|| request.tool_arguments())
+                            .unwrap_or_else(|| {
+                                "File changes; inspect the matching item in the transcript.".into()
+                            }),
                     ),
             );
         }
-        let can_decline = decisions.iter().any(|decision| decision == "decline");
+        // Codex takes no message with a declined Kodem tool call.
+        let can_decline = decisions.iter().any(|decision| decision == "decline")
+            && !request.is_kodem_tool_approval();
         let feedback_key = (request_key.clone(), FEEDBACK.to_owned());
         if can_decline {
             let input = self
@@ -221,6 +229,8 @@ impl Shell {
                 .to_owned();
             let id = SharedString::from(format!("decision:{request_key}:{decision}"));
             let button = match decision.as_str() {
+                core::SWITCH_TO_AUTO_REVIEW => self.primary(id, "shield", label),
+                "accept" if request.is_kodem_tool_approval() => self.button(id, "check", label),
                 "accept" => self.primary(id, "check", label),
                 "acceptForSession" => self.button(id, "shield", label),
                 "cancel" => self.tinted(id, "stop", label, t.removed),

@@ -49,6 +49,9 @@ pub struct Codex {
     next_id: u64,
     replies: HashMap<u64, Value>,
     config: Value,
+    /// The turn in which the user switched to AI auto-approve. Codex keeps the approval rule
+    /// of a running turn, so its later Kodem tool calls are approved here without asking again.
+    approved_turn: Option<String>,
 }
 #[derive(Default)]
 struct TitleOutput {
@@ -323,6 +326,7 @@ impl Codex {
             next_id: 1,
             replies: HashMap::new(),
             config: Value::Null,
+            approved_turn: None,
         };
         this.call("initialize",json!({"clientInfo":{"name":CLIENT_NAME,"title":"Kodem ADE","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}),&mut event)?;
         this.write(&json!({"method":"initialized"}))?;
@@ -396,6 +400,17 @@ impl Codex {
                                 | "item/tool/requestUserInput"
                         ) {
                             event(value);
+                        } else if is_kodem_tool_approval(method, &value["params"]) {
+                            if self.approved_turn.is_some()
+                                && value["params"]["turnId"].as_str()
+                                    == self.approved_turn.as_deref()
+                            {
+                                let answer =
+                                    kodem_tool_answer(&json!({"decision":SWITCH_TO_AUTO_REVIEW}));
+                                self.write(&json!({"id":value["id"],"result":answer}))?;
+                            } else {
+                                event(value);
+                            }
                         } else {
                             self.write(&json!({"id":value["id"],"error":{"code":-32601,"message":format!("Kodem does not support {method}")}}))?;
                         }
@@ -415,6 +430,23 @@ impl Codex {
     /// Sends the user's explicit answer using the provider's original request ID.
     pub fn answer(&mut self, id: Value, response: Value) -> Result<()> {
         self.write(&json!({"id":id,"result":response}))
+    }
+    /// Approves the later Kodem tool calls of a turn in which the user switched to AI
+    /// auto-approve.
+    pub fn approve_kodem_tools(&mut self, turn: Option<&str>) {
+        self.approved_turn = turn.map(str::to_owned);
+    }
+}
+
+/// Returns Codex's answer to a Kodem tool approval for the user's decision. The switch to AI
+/// auto-approve also approves the tool for the rest of the session.
+pub fn kodem_tool_answer(response: &Value) -> Value {
+    match response["decision"].as_str() {
+        Some(SWITCH_TO_AUTO_REVIEW) => {
+            json!({"action":"accept","content":{},"_meta":{"persist":"session"}})
+        }
+        Some("accept") => json!({"action":"accept","content":{}}),
+        _ => json!({"action":"decline"}),
     }
 }
 impl Drop for Codex {
