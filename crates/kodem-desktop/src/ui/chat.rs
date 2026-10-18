@@ -278,7 +278,9 @@ impl Shell {
             let latest = latest_shown.then(|| {
                 let unseen = self.unseen_below;
                 let jump = if unseen {
+                    // The tint is faint, so the conversation behind it is blurred like glass.
                     self.tinted("jump-latest", "arrow-down", "New below", t.accent)
+                        .backdrop_blur(px(kit::GLASS_BLUR))
                 } else {
                     self.button("jump-latest", "arrow-down", "Latest")
                 };
@@ -1587,6 +1589,9 @@ const METER_TAB_SLANT: f32 = 14.;
 /// from each corner of the slant its rounding starts.
 const METER_TAB_FOOT: f32 = 7.;
 const METER_TAB_ROUNDING: f32 = 6.;
+/// Radius of the circle whose edge blurs along a tab's slant. Across the slant's length the edge
+/// strays from a straight line by under a tenth of a point.
+const METER_TAB_SLANT_BLUR_RADIUS: f32 = 2048.;
 
 /// The corner of the composer's top edge that a tab continues.
 #[derive(Clone, Copy)]
@@ -1643,28 +1648,68 @@ fn paint_edge_tab(
         builder.curve_to(point(outer, top + radius), point(outer, top));
         builder.line_to(point(outer, bottom));
     };
-    // The tab is glass like the composer: the field behind its flat top is blurred, then tinted.
-    // A backdrop is a rounded rectangle, and each blur that touches another one breaks the
-    // window's render pass, so the slant has no blur of its own and shows its tint only. The blur
-    // stops above the composer's edge.
+    // The tab is glass like the composer: the field behind it is blurred, then tinted. A backdrop
+    // is a rounded rectangle, so two of them cover the tab. The first is a circle so large that
+    // its edge runs straight along the slant, clipped to the tab short of its outer corner. The
+    // second is a column at the outer side whose rounded corner continues the composer's. Each
+    // blur adds a pass, so the tab keeps to these two. The blur stops above the composer's edge.
     let seam_top = bottom - gpui::px(1.);
-    let (blur, rounded) = match corner {
+    let filters = [Filter::Blur(px(kit::GLASS_BLUR))];
+    let circle = px(METER_TAB_SLANT_BLUR_RADIUS);
+    // The circle's center lies inside the tab, square to the slant's middle, so that its edge
+    // touches the slant there.
+    let middle = point((foot.x + head.x) / 2., (foot.y + head.y) / 2.);
+    let center = point(
+        middle.x + circle * (sign * rise / length),
+        middle.y + circle * (slant / length),
+    );
+    let disc = Bounds::new(
+        point(center.x - circle, center.y - circle),
+        size(circle * 2., circle * 2.),
+    );
+    let column = radius * 2.;
+    let (slant_clip, slant_corners, outer_blur, outer_corners) = match corner {
         TabCorner::Trailing => (
-            Bounds::from_corners(point(head.x, bounds.top()), point(bounds.right(), seam_top)),
+            Bounds::from_corners(
+                point(bounds.left(), bounds.top()),
+                point(bounds.right() - column, seam_top),
+            ),
+            Corners {
+                top_left: circle,
+                ..Corners::default()
+            },
+            Bounds::from_corners(
+                point(bounds.right() - column, bounds.top()),
+                point(bounds.right(), seam_top),
+            ),
             Corners {
                 top_right: radius,
                 ..Corners::default()
             },
         ),
         TabCorner::Leading => (
-            Bounds::from_corners(point(bounds.left(), bounds.top()), point(head.x, seam_top)),
+            Bounds::from_corners(
+                point(bounds.left() + column, bounds.top()),
+                point(bounds.right(), seam_top),
+            ),
+            Corners {
+                top_right: circle,
+                ..Corners::default()
+            },
+            Bounds::from_corners(
+                point(bounds.left(), bounds.top()),
+                point(bounds.left() + column, seam_top),
+            ),
             Corners {
                 top_left: radius,
                 ..Corners::default()
             },
         ),
     };
-    window.paint_backdrop_filter(blur, rounded, &[Filter::Blur(px(kit::GLASS_BLUR))]);
+    window.with_content_mask(Some(ContentMask { bounds: slant_clip }), |window| {
+        window.paint_backdrop_filter(disc, slant_corners, &filters);
+    });
+    window.paint_backdrop_filter(outer_blur, outer_corners, &filters);
     // The composer's edge runs under the tab's bottom row. A see-through fill would show it as
     // a line across the tab, so that row stays solid in the surface tone and the tab's own
     // stroke is the only line there. The row stops short of the outer stroke. A hover tone lies
