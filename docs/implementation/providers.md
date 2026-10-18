@@ -2,7 +2,7 @@
 
 The host binds every conversation to a provider before starting its owner. Old task records and saved preferences default to Codex. A task can change its provider between turns, while no message is queued. The conversation of the earlier provider cannot move, so the task leaves it: the next message starts a conversation with the new provider and carries the earlier messages of the user and the replies as context. The transcript shows the change as a transfer row that names both agents. [Phase 7](progress.md) records the rules.
 
-The providers are Codex and Claude Code. The Devin integration was removed on 12 October 2026; the store moves its old tasks aside when it opens.
+The providers are Codex, Claude Code and OpenCode. OpenCode support is in beta, and the desktop marks it so. The Devin integration was removed on 12 October 2026; the store moves its old tasks aside when it opens.
 
 ## Caller and ownership
 
@@ -170,6 +170,37 @@ With short turns on the cheapest models (Haiku 5.5 and GPT-6-Luna) in scratch di
 Not covered: a compaction that either CLI starts by itself in the middle of a long turn at a threshold of 30 percent or more, because filling a context costs too much. The Claude Code percentage is read from the installed CLI's code: the limit is the smaller of that share of the window and the window less 13,000 tokens. Whether Codex applies a limit above its own default was not checked, so with the rule off Codex may still compact near a full context. A turn with the default models (Opus 5.5, GPT-6.1-Sol) was not run.
 
 The installed Codex schema also confirmed reasoning options and image modalities, including the schema default for omitted modalities.
+
+## OpenCode (beta)
+
+`providers/opencode.rs` drives `opencode serve` over the HTTP API of OpenCode 2 (`/api`) and its event stream (`/api/event`); `opencode_transcript.rs` maps events and stored messages to transcript items, and `opencode_import.rs` reads stored sessions. `kodem-core/src/providers/opencode.rs` owns the process, the loopback requests and the stream. OpenCode 1.x serves another API; Kodem refuses it and asks for `opencode upgrade`.
+
+One server per task owner holds the conversation, an OpenCode session. The server runs under `kodem-host opencode-guard`, which stops it when the host's end of its standard input closes, because `opencode serve` does not stop when its parent ends. Every request carries a random password of that server. `OPENCODE_CONFIG_CONTENT` adds `update: disable`, `compaction.auto: false` when the task's rule is off, and the `kodem` MCP server. Changing the account or the compaction rule starts a new server for the same session. The model, the reasoning variant (OpenCode's model variants), the agent and the approval rules are set on the session between turns. The standing instructions of the task's kind are a session instruction entry named `kodem`.
+
+| Feature | OpenCode |
+| --- | --- |
+| Delivery proof | The prompt's `metadata.kodem` holds the submission identity; reconciliation finds it in the stored messages. |
+| Steering | `delivery: steer` while a run works. A steered prompt that arrives after the run ended starts another run, which stays part of the turn. |
+| Turn end | `session.execution.succeeded`, `failed` or `interrupted` of the task's session. |
+| Approvals | Modes `ask`, `edits`, `plan` (OpenCode's plan agent) and `allow` as rules for `edit`, `shell` and `external_directory`. Reviews and tasks that read the parent's checkout deny edits and the commands that a review blocks. `permission.asked` → `opencode/requestApproval`: once, always (OpenCode's suggested pattern), reject with the user's reason, or reject and stop. |
+| Questions | Forms (`form.created`) → `opencode/requestUserInput`; the answer maps labels back to option values. |
+| Plan | Not available: OpenCode 2 has no plan tool, so Kodem sends no plan rules. |
+| Subagents | Child sessions; `subagent` calls link them, and each has its own transcript. |
+| Compaction | `POST /compact` and OpenCode's own; the summary's token count becomes the context occupancy. |
+| Images | PNG, JPEG, GIF and WebP as data URIs. |
+| Slash commands | OpenCode's `/api/command` list; a prompt that starts with one runs `POST /command`. |
+| Titles | `session.renamed`, else the first prompt line 30 seconds after the first turn. |
+| Usage | Context from each step's tokens, cost from the session. No usage limits or credits. |
+| Accounts | `XDG_DATA_HOME` selects OpenCode's data folder (credentials and sessions); a started conversation stays on its account. "Signed in" means that a provider offers a model. |
+| Import | `/api/session?parentID=null` for every project; the stored messages and the child sessions replay through the same transcript code. |
+
+OpenCode loads the commands and skills of a folder when it first opens that folder, and a listing before that is empty, so a reader asks for `/api/location` first.
+
+## OpenCode evidence
+
+Checked on 18 October 2026 against OpenCode 2.0.32 with free OpenCode models, through a host on a scratch data folder: the catalog (12 models, variants, windows, the folder's default model), account status, commands, skills, agents and instruction files; a turn with an edit approval and its patch, a command approval, a question, a subagent with its own transcript, a title and context usage; a second turn on the same session; steering; Stop during a command and a turn after it; a manual compaction (20,768 → 269 tokens) and a turn after it; a declined command with the user's reason; Plan mode, which asked before a command and changed no file; a host killed with `SIGKILL` during a turn, after which its server stopped within 4 seconds and reconciliation restored the stored output as Interrupted; an import with a question and a subagent, a refused second import, and a resumed turn of the imported session. The scratch sessions were deleted from OpenCode afterwards.
+
+Not covered: image input, a slash command, a second account, a compaction that OpenCode starts by itself, a provider that needs a sign-in, `aarch64` Windows, and the desktop in the running app.
 
 ## Verification
 

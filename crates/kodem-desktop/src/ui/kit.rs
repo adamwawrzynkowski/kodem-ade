@@ -418,6 +418,11 @@ pub(super) fn chip(label: impl Into<SharedString>, tone: Hsla) -> Div {
         .child(label.into())
 }
 
+/// The mark of a provider whose support in Kodem is in beta.
+pub(super) fn beta_chip(theme: Theme) -> Div {
+    chip("BETA", theme.warning)
+}
+
 /// Returns the fill of a tinted surface with slight depth: the tint a little stronger at the top
 /// than at the bottom, as if lit from above. `strength` is the mean alpha of the tint.
 pub(super) fn tint_fill(tone: Hsla, strength: f32) -> Background {

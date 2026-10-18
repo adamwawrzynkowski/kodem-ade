@@ -65,6 +65,18 @@ fn main() {
         };
         std::process::exit(code);
     }
+    // An OpenCode server runs under this executable, which stops it when the host ends.
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == kodem_core::providers::opencode::GUARD)
+    {
+        let code =
+            kodem_core::providers::opencode::guard(&arguments[1..]).unwrap_or_else(|error| {
+                eprintln!("Kodem OpenCode guard: {error:#}");
+                1
+            });
+        std::process::exit(code);
+    }
     // Notification Center calls its delegate on the main dispatch queue. The main thread
     // serves that queue, so the host can answer how to present an alert while Kodem is active.
     #[cfg(target_os = "macos")]

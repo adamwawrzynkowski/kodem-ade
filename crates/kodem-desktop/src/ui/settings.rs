@@ -1313,15 +1313,31 @@ impl Shell {
                     .px(px(12.))
                     .border_color(t.border)
                     .child(icon(candidate.icon()).size(px(13.)))
-                    .child(candidate.label())
-                    .child(div().flex_1())
+                    // Three providers share the row, so the state goes under the name.
                     .child(
                         div()
                             .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .child(kit::marker(if connected { t.added } else { t.subtle }))
-                            .child(caps(if connected { "Signed in" } else { "Offline" }, t)),
+                            .flex_col()
+                            .gap(px(3.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(candidate.label())
+                                    .when(candidate.beta(), |name| name.child(kit::beta_chip(t))),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(kit::marker(if connected { t.added } else { t.subtle }))
+                                    .child(caps(
+                                        if connected { "Signed in" } else { "Offline" },
+                                        t,
+                                    )),
+                            ),
                     )
                     .on_click(cx.listener(move |s, _, _, cx| {
                         s.settings_provider = candidate;
@@ -1959,5 +1975,6 @@ pub(super) fn install_guide(provider: Provider) -> Option<(&'static str, &'stati
             "https://code.claude.com/docs/en/overview",
         )),
         Provider::Codex => None,
+        Provider::OpenCode => Some(("OpenCode installation guide", "https://opencode.ai/docs/")),
     }
 }

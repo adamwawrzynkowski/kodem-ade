@@ -42,9 +42,14 @@ impl Account {
         }
         if let Some(variable) = self.provider.home_variable() {
             match &self.home {
-                Some(home) => command.env(variable, home),
-                None => command.env_remove(variable),
-            };
+                Some(home) => {
+                    command.env(variable, home);
+                }
+                None if self.provider.clears_home() => {
+                    command.env_remove(variable);
+                }
+                None => {}
+            }
         }
         for variable in self.overrides() {
             command.env_remove(variable);
@@ -65,6 +70,7 @@ impl Account {
     pub fn cleared_variables(&self) -> Vec<&'static str> {
         let mut variables: Vec<&'static str> = self.overrides().collect();
         if self.home.is_none()
+            && self.provider.clears_home()
             && let Some(variable) = self.provider.home_variable()
         {
             variables.push(variable);

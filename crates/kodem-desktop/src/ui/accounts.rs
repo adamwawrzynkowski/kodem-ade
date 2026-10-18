@@ -50,6 +50,7 @@ impl Shell {
         let company = match provider {
             Provider::Claude => "Anthropic",
             Provider::Codex => "OpenAI",
+            Provider::OpenCode => "A provider that you connect to OpenCode",
         };
         kit::block(t)
             .child(kit::block_header("Provider terms", t.warning, t))
@@ -111,6 +112,7 @@ impl Shell {
                     .when(!chosen, |cell| cell.hover(move |cell| cell.bg(t.selected)))
                     .child(icon(candidate.icon()).size(px(13.)))
                     .child(candidate.label())
+                    .when(candidate.beta(), |cell| cell.child(kit::beta_chip(t)))
                     .child(figure(count.to_string(), t.subtle))
                     .when(chosen, |cell| cell.child(kit::tab_indicator(t.accent)))
                     .on_click(cx.listener(move |s, _, _, cx| {

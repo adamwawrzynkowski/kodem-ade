@@ -12,6 +12,7 @@ use uuid::Uuid;
 pub enum Tool {
     Claude,
     Codex,
+    OpenCode,
     Git,
     GitLfs,
     GitHub,
@@ -24,6 +25,7 @@ impl Tool {
         match self {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
+            Self::OpenCode => "OpenCode",
             Self::Git => "Git",
             Self::GitLfs => "Git LFS",
             Self::GitHub => "GitHub CLI",
@@ -34,6 +36,7 @@ impl Tool {
         match provider {
             Provider::Claude => Self::Claude,
             Provider::Codex => Self::Codex,
+            Provider::OpenCode => Self::OpenCode,
         }
     }
 }
@@ -50,14 +53,16 @@ pub enum Provider {
     #[default]
     Codex,
     Claude,
+    OpenCode,
 }
 impl Provider {
-    pub const ALL: [Self; 2] = [Self::Claude, Self::Codex];
+    pub const ALL: [Self; 3] = [Self::Claude, Self::Codex, Self::OpenCode];
     /// Returns the integration's display name.
     pub fn label(self) -> &'static str {
         match self {
             Self::Codex => "Codex",
             Self::Claude => "Claude Code",
+            Self::OpenCode => "OpenCode",
         }
     }
     /// Returns the bundled provider logo asset.
@@ -65,13 +70,19 @@ impl Provider {
         match self {
             Self::Codex => "openai",
             Self::Claude => "claude",
+            Self::OpenCode => "opencode",
         }
+    }
+    /// Reports an integration that is new and may still change, which the interface marks.
+    pub fn beta(self) -> bool {
+        self == Self::OpenCode
     }
     /// Returns the CLI command used to authenticate this integration.
     pub fn login_command(self) -> &'static str {
         match self {
             Self::Codex => "codex login",
             Self::Claude => "claude auth login",
+            Self::OpenCode => "opencode auth login",
         }
     }
     /// Returns the CLI command that removes this integration's saved sign-in.
@@ -79,14 +90,29 @@ impl Provider {
         match self {
             Self::Codex => "codex logout",
             Self::Claude => "claude auth logout",
+            Self::OpenCode => "opencode auth logout",
         }
     }
     /// Returns the environment variable that moves the CLI to another configuration directory.
+    ///
+    /// OpenCode keeps its credentials and conversations in the data directory of the XDG base
+    /// directories, so an added account moves only that one and shares the configuration.
     pub fn home_variable(self) -> Option<&'static str> {
         match self {
             Self::Codex => Some("CODEX_HOME"),
             Self::Claude => Some("CLAUDE_CONFIG_DIR"),
+            Self::OpenCode => Some("XDG_DATA_HOME"),
         }
+    }
+    /// Reports whether the default account clears `home_variable`. A general variable, as
+    /// `XDG_DATA_HOME` is, stays as the user set it, so the CLI finds what it finds in a terminal.
+    pub fn clears_home(self) -> bool {
+        self != Self::OpenCode
+    }
+    /// Reports an integration that keeps conversations in the state of one account, so a
+    /// started conversation cannot continue under another account.
+    pub fn account_bound(self) -> bool {
+        matches!(self, Self::Codex | Self::OpenCode)
     }
 }
 
@@ -2147,6 +2173,43 @@ pub enum TaskEdit {
         effort: Option<String>,
     },
 }
+/// A conversation that Claude Code or Codex stored on this computer in the folder of a project.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalThread {
+    pub provider: Provider,
+    /// Account whose configuration directory holds the conversation.
+    pub account: String,
+    /// The provider's identity of the conversation, which a task continues.
+    pub thread: String,
+    pub title: String,
+    pub project_id: String,
+    pub cwd: PathBuf,
+    /// Wall-clock milliseconds of the first and the last change of the conversation.
+    pub created: u64,
+    pub updated: u64,
+    /// The task that already holds this conversation.
+    pub task_id: Option<String>,
+}
+impl ExternalThread {
+    /// Returns an identity that is unique among the conversations of all providers.
+    pub fn key(&self) -> String {
+        Self::key_of(self.provider, &self.thread)
+    }
+    /// Returns the identity that `key` gives the conversation `thread` of `provider`.
+    pub fn key_of(provider: Provider, thread: &str) -> String {
+        format!("{}:{thread}", provider.icon())
+    }
+}
+/// The stored conversations that `Request::ExternalThreads` found.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ExternalThreads {
+    /// Conversations in the folders of projects, the most recently changed first.
+    pub threads: Vec<ExternalThread>,
+    /// Number of conversations in folders that are not projects, which cannot be imported.
+    pub elsewhere: usize,
+    /// Why an account could not be read. The conversations of other accounts are still listed.
+    pub errors: Vec<String>,
+}
 /// What opening a project does with a folder that is not the root of a Git repository.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MissingRepository {
@@ -2470,6 +2533,16 @@ pub enum Request {
     ForkTask {
         task_id: String,
     },
+    /// Lists the conversations that Claude Code and Codex stored for the folders of projects.
+    /// Answers with `Response::ExternalThreads`.
+    ExternalThreads,
+    /// Creates a task in the project of a stored conversation, with the conversation's history,
+    /// that continues the conversation. Answers with `Response::Imported`.
+    ImportThread {
+        provider: Provider,
+        account: String,
+        thread: String,
+    },
     /// Waits until the task differs from what `after` describes, then answers with the change.
     ///
     /// Without a cursor the answer is immediate. With one, an unchanged task is answered after
@@ -2513,6 +2586,12 @@ pub enum Response {
     NoRepository(PathBuf),
     Account(Account),
     Created(Task),
+    ExternalThreads(ExternalThreads),
+    /// The task that holds the imported conversation `thread`.
+    Imported {
+        thread: String,
+        task: Task,
+    },
     ReviewTargets(ReviewTargets),
     Diff(DiffSnapshot),
     EditableFile(EditableFile),

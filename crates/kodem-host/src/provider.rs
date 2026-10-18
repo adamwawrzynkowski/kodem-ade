@@ -569,26 +569,16 @@ Rules:
 - When the work changes, change the plan: add, remove or rewrite steps, so that it always shows what you actually do.
 - Before you end your turn, mark every finished step completed. Leave a step pending only when it is not done, and say why.";
 
-/// How an OpenCode session keeps the plan, with its todo tool.
-const OPENCODE_PLAN_RULES: &str = "\
-Kodem shows your plan to the user beside the prompt and updates it live while you work. Keep it accurate with the todowrite tool.
-
-Rules:
-- Every request with two or more steps gets a plan, also a short one, such as a search followed by an answer. Skip the plan only when one step answers the request.
-- Write the plan before any other work: short steps, in the order you will do them.
-- Mark a step in_progress when you start it, and completed as soon as it is done, before you start the next step. Keep only one step in_progress. Do not mark several steps completed at the end.
-- When the work changes, change the plan: add, remove or rewrite steps, so that it always shows what you actually do.
-- Before you end your turn, mark every finished step completed. Leave a step pending only when it is not done, and say why.";
-
 /// Returns the standing instructions of a task's provider session: the plan rules, and the
 /// rules that its kind adds.
 ///
 /// They are given when a provider process starts, so they also hold after a resume.
 pub(crate) fn instructions(task: &Task) -> String {
     let plan = match task.provider {
-        Provider::Claude => CLAUDE_PLAN_RULES,
-        Provider::Codex => CODEX_PLAN_RULES,
-        Provider::OpenCode => OPENCODE_PLAN_RULES,
+        Provider::Claude => Some(CLAUDE_PLAN_RULES),
+        Provider::Codex => Some(CODEX_PLAN_RULES),
+        // OpenCode 2 has no tool that keeps a plan.
+        Provider::OpenCode => None,
     };
     let rules = match task.kind {
         TaskKind::Coding => None,
@@ -606,9 +596,10 @@ pub(crate) fn instructions(task: &Task) -> String {
             Some(format!("{REVIEW_RULES}\n\n{scope}\n\n{REVIEW_REPORT}"))
         }
     };
-    match rules {
-        Some(rules) => format!("{rules}\n\n{plan}"),
-        None => plan.into(),
+    match (rules, plan) {
+        (Some(rules), Some(plan)) => format!("{rules}\n\n{plan}"),
+        (Some(rules), None) => rules,
+        (None, plan) => plan.unwrap_or_default().into(),
     }
 }
 

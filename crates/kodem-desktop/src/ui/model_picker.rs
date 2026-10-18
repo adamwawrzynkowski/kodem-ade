@@ -338,7 +338,7 @@ impl Shell {
         }
         if self.panel == Panel::Models {
             let mut rail = div()
-                .w(px(132.))
+                .w(px(150.))
                 .flex_shrink_0()
                 .flex()
                 .flex_col()
@@ -357,6 +357,7 @@ impl Shell {
                     self.option_row(("model-provider", index), chosen, disabled)
                         .child(icon(provider.icon()).size(px(13.)))
                         .child(provider.label())
+                        .when(provider.beta(), |row| row.child(kit::beta_chip(t)))
                         .on_click(cx.listener(move |s, _, _, cx| {
                             s.choose_provider(provider, cx);
                         })),
@@ -508,9 +509,12 @@ impl Shell {
                     .text_size(text_px(11.))
                     .text_color(t.subtle)
                     .child(if limited {
-                        "This task's account reached its usage limit. Moving the conversation to another account would get around the limit, which the provider's terms do not allow. Wait for the reset."
+                        "This task's account reached its usage limit. Moving the conversation to another account would get around the limit, which the provider's terms do not allow. Wait for the reset.".to_owned()
                     } else {
-                        "Codex keeps a started conversation on its account. Start a new task to use another one."
+                        format!(
+                            "{} keeps a started conversation on its account. Start a new task to use another one.",
+                            provider.label()
+                        )
                     }),
             );
         }
@@ -795,10 +799,10 @@ impl Shell {
 
     /// Reports a task whose provider cannot continue its conversation under another account.
     ///
-    /// Codex keeps thread history in state that belongs to one configuration directory.
+    /// Codex and OpenCode keep thread history in state that belongs to one account's folder.
     pub(super) fn account_locked(&self) -> bool {
         self.view.as_ref().is_some_and(|view| {
-            view.task.provider == Provider::Codex && view.task.provider_thread.is_some()
+            view.task.provider.account_bound() && view.task.provider_thread.is_some()
         })
     }
 

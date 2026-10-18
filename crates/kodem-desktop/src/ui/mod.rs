@@ -2355,11 +2355,7 @@ struct UpcomingProvider {
     icon: &'static str,
 }
 impl UpcomingProvider {
-    const ALL: [Self; 4] = [
-        Self {
-            label: "OpenCode",
-            icon: "opencode",
-        },
+    const ALL: [Self; 3] = [
         Self {
             label: "Google",
             icon: "google",

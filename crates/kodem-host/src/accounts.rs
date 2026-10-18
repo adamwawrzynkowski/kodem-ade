@@ -228,6 +228,11 @@ fn standard_home(provider: Provider) -> Result<PathBuf> {
     Ok(match provider {
         Provider::Claude => home.join(".claude"),
         Provider::Codex => home.join(".codex"),
+        // OpenCode's data directory, which holds its credentials and conversations.
+        Provider::OpenCode => match std::env::var_os("XDG_DATA_HOME") {
+            Some(data) if !data.is_empty() => PathBuf::from(data),
+            _ => home.join(".local").join("share"),
+        },
     })
 }
 
@@ -240,6 +245,8 @@ fn link_shared(provider: Provider, home: &Path) -> Result<()> {
     let names: &[&str] = match provider {
         Provider::Claude => &SHARED_CLAUDE,
         Provider::Codex => &SHARED_CODEX,
+        // OpenCode reads its configuration from another directory, which every account shares.
+        Provider::OpenCode => &[],
     };
     for name in names {
         let from = source.join(name);
