@@ -1508,7 +1508,7 @@ impl Default for CompactRule {
     fn default() -> Self {
         Self {
             enabled: true,
-            threshold: 80,
+            threshold: 60,
         }
     }
 }

@@ -1135,3 +1135,7 @@ Recorded on 18 October 2026. The user asked for OpenCode support with the featur
 Not available with OpenCode 2: the plan tab, because OpenCode 2 has no plan tool, and usage limits.
 
 Checked with a temporary IPC client and scratch hosts, not kept, as [providers.md](providers.md) lists. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings), `cargo fmt --check`, the debug build command, and `cargo clippy --workspace --all-targets -D warnings` for `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc` through zig (no findings). The look of the BETA chips and the provider rows was not checked in the running app, under the no-visual-testing agreement.
+
+### Default compaction threshold
+
+Recorded on 18 October 2026. The user asked for a default compaction threshold of 60% for all providers. `CompactRule::default()` now has a threshold of 60 instead of 80. The settings store keeps the rule that it saved, so the new default applies where no rule is saved yet, such as a new installation; a saved rule, and the rules of providers and models, do not change. Checked with a locked macOS `cargo build` and `cargo fmt --check`.
