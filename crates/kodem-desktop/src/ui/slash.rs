@@ -128,7 +128,8 @@ pub(super) struct SlashPicker {
     closing: Option<Instant>,
 }
 impl SlashPicker {
-    fn open(&self) -> bool {
+    /// Reports whether the menu shows and is not closing.
+    pub(super) fn open(&self) -> bool {
         self.opened.is_some() && self.closing.is_none()
     }
 }

@@ -45,6 +45,28 @@ impl Shell {
             let state = &view.task.state;
             let center_diff =
                 self.reviewing_file && self.settings.diff_placement == DiffPlacement::Conversation;
+            if self.settings.skater && !center_diff {
+                let (avatar, tone) = self.task_project().map_or_else(
+                    || (SkaterAvatar::default(), t.accent),
+                    |project| {
+                        (
+                            project.avatar.unwrap_or_default(),
+                            sidebar::project_tint(project, t),
+                        )
+                    },
+                );
+                skater::cue(
+                    skater::Cue {
+                        key: view.task.id.clone().into(),
+                        avatar,
+                        tone,
+                        working: view.task.state.active(),
+                        following: !latest_shown,
+                        covered: self.panel != Panel::None || self.slash.open(),
+                    },
+                    cx,
+                );
+            }
             if !center_diff {
                 panel = panel.child(self.chat_header(view, cx));
             }
@@ -141,6 +163,12 @@ impl Shell {
                     );
                 } else {
                     let entity = cx.entity();
+                    let skater_room = if self.settings.skater && !center_diff {
+                        skater::ROOM
+                    } else {
+                        0.
+                    };
+                    let list_end = gpui::px(cover) + px(8. + skater_room);
                     timeline = timeline.child(
                         div()
                             .w_full()
@@ -192,8 +220,9 @@ impl Shell {
                                         .w_full()
                                         .min_w_0()
                                         .h_full()
-                                        // At its end the last message rests above the box.
-                                        .pb(gpui::px(cover) + px(8.)),
+                                        // At its end the last message rests above the box,
+                                        // and above the lane of the composer's skater.
+                                        .pb(list_end),
                                     )
                                     // The history rail and its preview lie over the list,
                                     // above the box.
@@ -1298,6 +1327,13 @@ impl Shell {
         let focus = self.meter_tab_focus.clone();
         let tab = self
             .usage_meters(cx)
+            .when(!empty, |tab| {
+                tab.child(skater::ground(skater::Part::Ledge {
+                    leading: false,
+                    foot: px(METER_TAB_FOOT),
+                    slant: px(METER_TAB_SLANT),
+                }))
+            })
             .absolute()
             .right_0()
             .top(px(1. - METER_TAB_HEIGHT))
@@ -1345,6 +1381,11 @@ impl Shell {
                 .max_w(relative(0.5))
                 .pl(px(12.))
                 .pr(px(METER_TAB_FOOT + METER_TAB_SLANT + 12.))
+                .child(skater::ground(skater::Part::Ledge {
+                    leading: true,
+                    foot: px(METER_TAB_FOOT),
+                    slant: px(METER_TAB_SLANT),
+                }))
                 .track_focus(&self.plan_tab_focus)
                 .on_hover(cx.listener(|s, hovered: &bool, _, cx| {
                     if s.plan_tab_hovered != *hovered {
@@ -1385,7 +1426,11 @@ impl Shell {
             .child(dither::shadow(t, motion::COMPOSER_RADIUS, 4.))
             .child(editor)
             .child(tab)
-            .children(plan_tab);
+            .children(plan_tab)
+            // A conversation's composer is the ground that its skater rides on.
+            .when(!empty, |composer| {
+                composer.child(skater::ground(skater::Part::Edge))
+            });
         wrapper = wrapper.child(match launch {
             // The box widens or narrows to the docked width while it travels there.
             Some((progress, from, width)) => motion::morph(

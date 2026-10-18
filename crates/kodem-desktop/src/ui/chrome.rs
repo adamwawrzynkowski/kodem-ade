@@ -456,6 +456,7 @@ impl Render for Shell {
         self.sync_error_notices(cx);
         self.sync_censor();
         fx::begin_frame(cx);
+        skater::begin_frame(cx);
         dither::begin_frame();
         self.browser_frame = None;
         // The full-window views cover the pane, so its page hides.
@@ -968,22 +969,25 @@ impl Shell {
     }
 }
 
-/// The window root: the chat background, the workspace above it, and the effect layer on top.
+/// The window root: the chat background, the workspace above it, the composer's skater, and the
+/// effect layer on top.
 ///
 /// The workspace is a cached view. A frame that only advances an effect or the background
 /// reuses the workspace's last paint instead of rendering it again.
 pub struct Stage {
     backdrop: Entity<backdrop::Backdrop>,
     shell: Entity<Shell>,
+    skater: Entity<skater::SkaterLayer>,
     fx: Entity<fx::FxLayer>,
 }
 
 impl Stage {
-    /// Creates the workspace and the effect layer of one window.
+    /// Creates the workspace, the composer's skater and the effect layer of one window.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
             backdrop: cx.new(backdrop::Backdrop::new),
             shell: cx.new(|cx| Shell::new(window, cx)),
+            skater: cx.new(skater::SkaterLayer::new),
             fx: cx.new(fx::FxLayer::new),
         }
     }
@@ -1008,6 +1012,8 @@ impl Render for Stage {
                 ),
             )
             .child(AnyView::from(self.shell.clone()).cached(StyleRefinement::default().size_full()))
+            // The composer's skater moves on its own frames, under dialogs and effects.
+            .child(self.skater.clone())
             // Dialogs and toasts of the Git workspace, which Preferences can open as well.
             .child(super::git::kit::overlays(window, cx))
             .child(self.fx.clone())

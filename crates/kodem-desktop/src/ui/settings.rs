@@ -45,6 +45,10 @@ const ARTIFACTS_DETAIL: &str = "Claude Code keeps Artifacts off in sessions that
 const AWAKE_LABEL: &str = "Keep the computer awake";
 /// What the switch that keeps the computer awake does.
 const AWAKE_DETAIL: &str = "While an agent works, the computer does not go to sleep on its own, also with the window closed. The display can still turn off. Closing the lid still puts a laptop to sleep.";
+/// Name of the switch that shows the skater on the composer.
+const SKATER_LABEL: &str = "Composer skater";
+/// What the skater switch shows.
+const SKATER_DETAIL: &str = "A pixel avatar of the project skates on the composer while its agent works and waits there while it rests. Scroll up and it falls off. Drag it to throw it. Choose the avatar in the project's settings.";
 
 // One place where a compaction rule is stored: the shared rule, a provider or one of its models.
 #[derive(Clone)]
@@ -727,7 +731,21 @@ impl Shell {
                             },
                             cx,
                         ),
-                    )),
+                    ))
+                    .child(
+                        self.setting_row(
+                            SKATER_LABEL,
+                            SKATER_DETAIL,
+                            controls::Switch::new("skater", self.settings.skater)
+                                .label(SKATER_LABEL)
+                                .on_click(cx.listener(|s, enabled: &bool, _, cx| {
+                                    s.settings.skater = *enabled;
+                                    s.save_settings();
+                                    cx.notify();
+                                }))
+                                .into_any_element(),
+                        ),
+                    ),
             )
             .into_any_element()
     }

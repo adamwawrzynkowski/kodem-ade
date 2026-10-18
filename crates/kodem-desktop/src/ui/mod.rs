@@ -36,6 +36,7 @@ mod questions;
 mod review;
 mod settings;
 mod sidebar;
+mod skater;
 mod slash;
 mod subagents;
 mod thread_import;

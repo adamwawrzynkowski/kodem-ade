@@ -512,6 +512,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             name,
             color,
             icon,
+            avatar,
             commands,
         } => {
             let previous = host
@@ -540,6 +541,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 &name,
                 color,
                 saved_icon,
+                avatar,
                 commands,
             );
             if result.is_err()

@@ -380,6 +380,7 @@ impl Shell {
                 })),
             );
         }
+        let avatars = self.avatar_picker(&project, cx);
         let icons = self.icon_picker(&project, cx);
         let commands = self.command_editor(&project, cx);
         div()
@@ -406,6 +407,18 @@ impl Shell {
                     .child(kit::section_header("Accent", None, t)),
             )
             .child(colors)
+            .child(
+                div()
+                    .mt(px(6.))
+                    .child(kit::section_header("Avatar", None, t)),
+            )
+            .child(
+                div()
+                    .text_size(text_px(12.))
+                    .text_color(t.muted)
+                    .child("Skates on the composer of this project's tasks, in its accent."),
+            )
+            .child(avatars)
             .child(div().mt(px(6.)).child(kit::section_header("Icon", None, t)))
             .child(
                 div()
@@ -490,6 +503,7 @@ impl Shell {
                                         name: s.aux.read(cx).text(),
                                         color: project.color,
                                         icon: project.icon.clone(),
+                                        avatar: project.avatar,
                                         commands: s.edited_commands(project, cx),
                                     });
                                 }
@@ -498,6 +512,53 @@ impl Shell {
             )
             .into_any_element()
     }
+    // Returns a choice for each skater avatar, drawn in the project's tint.
+    fn avatar_picker(&self, project: &Project, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let tint = sidebar::project_tint(project, t);
+        let chosen = project.avatar.unwrap_or_default();
+        div()
+            .flex()
+            .flex_wrap()
+            .gap(px(4.))
+            .children(
+                SkaterAvatar::ALL
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, avatar)| {
+                        let label = avatar.label();
+                        let picked = avatar == chosen;
+                        self.control(("project-avatar", i))
+                            .size(px(40.))
+                            .p(px(5.))
+                            .border_color(gpui::transparent_black())
+                            .bg(gpui::transparent_black())
+                            .aria_selected(picked)
+                            .accessibility_label(label)
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| Hint {
+                                    text: label.into(),
+                                    theme: t,
+                                })
+                                .into()
+                            })
+                            .child(skater::portrait(avatar, tint))
+                            .when(picked, |cell| {
+                                cell.bg(tint.opacity(0.12)).border_color(tint.opacity(0.6))
+                            })
+                            .when(!picked, |cell| cell.hover(move |cell| cell.bg(t.selected)))
+                            .on_press(move |position, cx| fx::ripple(position, tint, cx))
+                            .on_click(cx.listener(move |s, _, _, cx| {
+                                if let Some(project) = &mut s.editing_project {
+                                    project.avatar = Some(avatar);
+                                }
+                                cx.notify();
+                            }))
+                    }),
+            )
+            .into_any_element()
+    }
+
     // Returns the built-in icons that match the filter, in their groups, in a list that scrolls
     // inside the dialog so that the actions under it stay in view.
     fn icon_picker(&self, project: &Project, cx: &mut Context<Self>) -> AnyElement {

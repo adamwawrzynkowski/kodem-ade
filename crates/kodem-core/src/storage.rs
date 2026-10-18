@@ -126,6 +126,7 @@ impl Store {
         db.execute_batch("CREATE TABLE IF NOT EXISTS agent_message_order(transcript TEXT NOT NULL, id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(transcript,id)); CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, ordinal INTEGER NOT NULL, json TEXT NOT NULL, UNIQUE(task_id,ordinal)); COMMIT;")?;
         retire_removed_providers(&db)?;
         repair_settings_collections(&db)?;
+        assign_project_avatars(&db)?;
         platform::restrict(&root.join("workspace.sqlite"), 0o600)?;
         Ok(Self {
             db,
@@ -244,6 +245,7 @@ impl Store {
         name: &str,
         color: Option<u32>,
         icon: ProjectIcon,
+        avatar: Option<SkaterAvatar>,
         commands: Vec<ProjectCommand>,
     ) -> Result<()> {
         ensure!(
@@ -287,6 +289,10 @@ impl Store {
         project.name = name.trim().into();
         project.color = color;
         project.icon = icon;
+        // A project keeps its avatar when the request names none.
+        if avatar.is_some() {
+            project.avatar = avatar;
+        }
         project.commands = commands;
         self.save_project(&project)
     }
@@ -351,6 +357,7 @@ impl Store {
             pinned: false,
             color: None,
             icon: ProjectIcon::default(),
+            avatar: Some(SkaterAvatar::random()),
             removed: false,
             defaults: None,
             commands: Vec::new(),
@@ -1158,6 +1165,30 @@ impl Store {
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
+}
+
+// Gives each project saved before avatars existed a random one, so its skater stays the same
+// from then on.
+fn assign_project_avatars(db: &Connection) -> Result<()> {
+    let mut missing = Vec::new();
+    {
+        let mut statement = db.prepare("SELECT json FROM projects")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            let project: Project = serde_json::from_str(&row?)?;
+            if project.avatar.is_none() {
+                missing.push(project);
+            }
+        }
+    }
+    for mut project in missing {
+        project.avatar = Some(SkaterAvatar::random());
+        db.execute(
+            "UPDATE projects SET json=?1 WHERE id=?2",
+            params![serde_json::to_string(&project)?, project.id],
+        )?;
+    }
+    Ok(())
 }
 
 // Providers that earlier versions stored and this version no longer has.

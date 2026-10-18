@@ -200,6 +200,10 @@ pub struct Project {
     pub color: Option<u32>,
     #[serde(default)]
     pub icon: ProjectIcon,
+    /// The pixel character that skates on the composer of this project's tasks. The store gives
+    /// each project a random one, also a project saved before avatars existed.
+    #[serde(default)]
+    pub avatar: Option<SkaterAvatar>,
     #[serde(default)]
     pub removed: bool,
     /// Provider, account, model and access used for new tasks in this project.
@@ -551,6 +555,62 @@ impl AccentColor {
             (Self::Red, false) => 0xe58387,
             (Self::Red, true) => 0xac3e48,
         }
+    }
+}
+/// Pixel characters that can skate on the top edge of a project's composer.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SkaterAvatar {
+    #[default]
+    Cat,
+    Bunny,
+    Bear,
+    Fox,
+    Frog,
+    Duck,
+    Penguin,
+    Dino,
+    Robot,
+    Ghost,
+    Slime,
+    Alien,
+}
+impl SkaterAvatar {
+    pub const ALL: [Self; 12] = [
+        Self::Cat,
+        Self::Bunny,
+        Self::Bear,
+        Self::Fox,
+        Self::Frog,
+        Self::Duck,
+        Self::Penguin,
+        Self::Dino,
+        Self::Robot,
+        Self::Ghost,
+        Self::Slime,
+        Self::Alien,
+    ];
+    /// Returns the label shown in the avatar picker.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Cat => "Cat",
+            Self::Bunny => "Bunny",
+            Self::Bear => "Bear",
+            Self::Fox => "Fox",
+            Self::Frog => "Frog",
+            Self::Duck => "Duck",
+            Self::Penguin => "Penguin",
+            Self::Dino => "Dino",
+            Self::Robot => "Robot",
+            Self::Ghost => "Ghost",
+            Self::Slime => "Slime",
+            Self::Alien => "Alien",
+        }
+    }
+    /// Returns an avatar chosen at random.
+    pub fn random() -> Self {
+        let bytes = Uuid::new_v4().into_bytes();
+        let roll = u16::from_le_bytes([bytes[0], bytes[1]]);
+        Self::ALL[usize::from(roll) % Self::ALL.len()]
     }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -1618,6 +1678,8 @@ pub struct Settings {
     pub code_font: CodeFont,
     /// Scale of the interface geometry: spacing, controls and icons. Text keeps its own sizes.
     pub ui_scale: f32,
+    /// Shows the project's pixel avatar skating on the top edge of a conversation's composer.
+    pub skater: bool,
     pub theme: ThemeId,
     pub accent: AccentColor,
     pub sort: Sort,
@@ -1658,6 +1720,7 @@ impl Default for Settings {
             text_font: TextFont::default(),
             code_font: CodeFont::default(),
             ui_scale: 1.,
+            skater: true,
             theme: ThemeId::default(),
             accent: AccentColor::default(),
             sort: Sort::Recent,
@@ -2338,6 +2401,8 @@ pub enum Request {
         name: String,
         color: Option<u32>,
         icon: ProjectIcon,
+        #[serde(default)]
+        avatar: Option<SkaterAvatar>,
         #[serde(default)]
         commands: Vec<ProjectCommand>,
     },
