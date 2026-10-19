@@ -1,5 +1,6 @@
 // Modified by Kodem in October 2026 from gpui_ce_macos 0.1.0: blurs run as compute passes over
 // the region around each shape (see region_blur.rs) and composite in the scene's render pass.
+// The textures of content-filter groups are created on the first scene that has one.
 
 use crate::metal_atlas::MetalAtlas;
 use crate::region_blur::{BlurJob, TexelRect};
@@ -172,7 +173,7 @@ pub(crate) struct MetalRenderer {
     /// Full-resolution offscreen targets a content-filter (`filter`) group renders into before
     /// being blurred and composited back. One per nesting level (indexed by isolation depth) so
     /// nested content blurs isolate correctly, up to [`MAX_FILTER_DEPTH`]; deeper nests render
-    /// inline.
+    /// inline. Empty until a scene has a content filter, and again after each resize.
     group_textures: Vec<metal::Texture>,
     path_sample_count: u32,
     /// Offscreen render target reused across `render_scene` calls when
@@ -580,24 +581,12 @@ impl MetalRenderer {
             .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
         self.path_intermediate_texture = Some(self.device.new_texture(&texture_descriptor));
 
-        // Full-res scene + group targets, and half-res ping/pong blur targets.
-        let make_color_texture = |width: u64, height: u64| {
-            let descriptor = metal::TextureDescriptor::new();
-            descriptor.set_width(width.max(1));
-            descriptor.set_height(height.max(1));
-            descriptor.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
-            descriptor.set_storage_mode(metal::MTLStorageMode::Private);
-            descriptor.set_usage(
-                metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead,
-            );
-            self.device.new_texture(&descriptor)
-        };
+        // Full-res scene target and half-res ping/pong blur targets. The group targets of
+        // content filters are created by the first scene that needs them.
         let full_w = size.width.0 as u64;
         let full_h = size.height.0 as u64;
-        self.scene_color_texture = Some(make_color_texture(full_w, full_h));
-        self.group_textures = (0..MAX_FILTER_DEPTH)
-            .map(|_| make_color_texture(full_w, full_h))
-            .collect();
+        self.scene_color_texture = Some(self.new_color_texture(full_w, full_h));
+        self.group_textures.clear();
         // The blur kernels write these, so they take a format that compute shaders can write on
         // every Mac GPU. Samples come back in RGBA order from either format.
         let make_blur_texture = |width: u64, height: u64| {
@@ -632,6 +621,18 @@ impl MetalRenderer {
         } else {
             self.path_intermediate_msaa_texture = None;
         }
+    }
+
+    // Returns a full-resolution color target that shaders can also sample.
+    fn new_color_texture(&self, width: u64, height: u64) -> metal::Texture {
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_width(width.max(1));
+        descriptor.set_height(height.max(1));
+        descriptor.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
+        descriptor.set_storage_mode(metal::MTLStorageMode::Private);
+        descriptor
+            .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        self.device.new_texture(&descriptor)
     }
 
     pub fn update_transparency(&mut self, transparent: bool) {
@@ -1049,6 +1050,17 @@ impl MetalRenderer {
             !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
         let scene_color_owned = self.scene_color_texture.clone();
         let blur_textures = self.blur_textures();
+        // Two full-window targets that only content filters use, so most windows never need them.
+        if !scene.filter_boundaries.is_empty()
+            && self.group_textures.is_empty()
+            && self.scene_color_texture.is_some()
+        {
+            let width = viewport_size.width.0.max(1) as u64;
+            let height = viewport_size.height.0.max(1) as u64;
+            self.group_textures = (0..MAX_FILTER_DEPTH)
+                .map(|_| self.new_color_texture(width, height))
+                .collect();
+        }
         let group_owned = self.group_textures.clone();
         let scene_color: &metal::TextureRef = if use_offscreen {
             scene_color_owned.as_deref().unwrap_or(texture)

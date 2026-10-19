@@ -1,3 +1,6 @@
+// Modified by Kodem in October 2026 from gpui-ce 0.2.2: sprites are sorted with an unstable
+// sort.
+
 // todo("windows"): remove
 #![cfg_attr(windows, allow(dead_code))]
 
@@ -203,12 +206,15 @@ impl Scene {
         self.quads.sort_by_key(|quad| quad.order);
         self.paths.sort_by_key(|path| path.order);
         self.underlines.sort_by_key(|underline| underline.order);
+        // Sprites with the same order and tile draw the same image in one layer, so their order
+        // among themselves does not matter, and an unstable sort moves fewer of these large
+        // structs than a stable one.
         self.monochrome_sprites
-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
+            .sort_unstable_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
         self.subpixel_sprites
-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
+            .sort_unstable_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
         self.polychrome_sprites
-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
+            .sort_unstable_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
         self.surfaces.sort_by_key(|surface| surface.order);
         self.backdrop_filters.sort_by_key(|filter| filter.order);
         // Markers normally get distinct, monotonically-increasing orders (children overlap

@@ -52,8 +52,12 @@ const LANDING: f32 = 0.14;
 const TURN: f32 = 0.42;
 /// Seconds that the character idles before it sits down and dozes.
 const DOZE_AFTER: f32 = 14.;
-/// Frames per second of the art while the character idles. Its motion runs at the display rate.
+/// Frames per second of the art while the character idles. Its motion follows the display's
+/// refreshes.
 const IDLE_RATE: f32 = 12.;
+/// Shortest time between two frames of the character's motion. Each frame draws the whole
+/// window again, so on a display faster than 90 Hz the motion takes every second refresh.
+const SMOOTH_FRAME: Duration = Duration::from_millis(11);
 
 /// What the workspace shows of the character this frame.
 #[derive(Clone, PartialEq)]
@@ -1471,6 +1475,8 @@ pub(super) struct SkaterLayer {
     sim: Rc<RefCell<Sim>>,
     /// A timer for the next slow frame is running.
     waiting: Rc<Cell<bool>>,
+    /// The next smooth frame waits for a display refresh.
+    pacing: Rc<Cell<bool>>,
 }
 
 impl SkaterLayer {
@@ -1479,8 +1485,22 @@ impl SkaterLayer {
         Self {
             sim: Rc::new(RefCell::new(Sim::new())),
             waiting: Rc::new(Cell::new(false)),
+            pacing: Rc::new(Cell::new(false)),
         }
     }
+}
+
+// Notifies the layer `view` on the first display refresh at least `SMOOTH_FRAME` after `since`,
+// so the motion keeps to whole refreshes without drawing a frame on each one.
+fn pace(view: EntityId, pacing: Rc<Cell<bool>>, since: Instant, window: &Window) {
+    window.on_next_frame(move |window, cx| {
+        if since.elapsed() < SMOOTH_FRAME {
+            pace(view, pacing, since, window);
+            return;
+        }
+        pacing.set(false);
+        cx.notify(view);
+    });
 }
 
 impl Render for SkaterLayer {
@@ -1488,6 +1508,7 @@ impl Render for SkaterLayer {
         let sim = self.sim.clone();
         let input = self.sim.clone();
         let waiting = self.waiting.clone();
+        let pacing = self.pacing.clone();
         canvas(
             move |_, window, cx| {
                 let scene = shared(cx);
@@ -1576,7 +1597,11 @@ impl Render for SkaterLayer {
                     });
                 }
                 match frame.cadence {
-                    Cadence::Smooth => window.request_animation_frame(),
+                    Cadence::Smooth => {
+                        if !pacing.replace(true) {
+                            pace(view, pacing.clone(), Instant::now(), window);
+                        }
+                    }
                     Cadence::Slow => {
                         if !waiting.replace(true) {
                             let waiting = waiting.clone();
