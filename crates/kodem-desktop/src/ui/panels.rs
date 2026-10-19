@@ -3,6 +3,9 @@ use super::*;
 /// Rows of the task terminal that fit its pane.
 pub(super) const TERMINAL_ROWS: u16 = 12;
 
+/// Space between a dialog and the window's edges.
+const DIALOG_MARGIN: f32 = 24.;
+
 // Returns the dotted rule that separates the content of a dialog from its actions.
 fn footer_rule(theme: Theme) -> Div {
     div()
@@ -559,11 +562,16 @@ impl Shell {
                 .child(kit::keycap("esc", theme))
                 .child(close),
         };
+        // The entrance wrapper takes the dialog's own size, so a share of it cannot bound the
+        // dialog. The window less the scrim's margin does: the body scrolls between the header
+        // and the actions.
+        let viewport = window.viewport_size();
+        let margin = px(DIALOG_MARGIN) * 2.;
         let dialog = div()
             .relative()
             .w(px(width))
-            .max_w_full()
-            .max_h_full()
+            .max_w((viewport.width - margin).max(px(0.)))
+            .max_h((viewport.height - margin).max(px(0.)))
             .flex()
             .flex_col()
             .child(dither::shadow(theme, crate::theme::RADIUS_FLOATING, 7.))
@@ -595,7 +603,7 @@ impl Shell {
             .flex()
             .items_center()
             .justify_center()
-            .p(px(24.))
+            .p(px(DIALOG_MARGIN))
             .child(motion::floating(
                 ("dialog-enter", self.panel.clone() as usize),
                 dialog,
