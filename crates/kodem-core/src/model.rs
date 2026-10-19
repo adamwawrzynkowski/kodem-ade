@@ -926,6 +926,9 @@ pub struct Task {
     pub draft: String,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Runs the model in its provider's fast mode, where the model has one.
+    #[serde(default)]
+    pub fast: bool,
     #[serde(default)]
     pub access: AccessMode,
     #[serde(default)]
@@ -1547,6 +1550,20 @@ pub struct Model {
     /// Native model variants for providers that encode reasoning in the model identity.
     #[serde(default)]
     pub effort_models: std::collections::BTreeMap<String, String>,
+    /// The provider's faster way to run this model, which uses more of the account's usage.
+    #[serde(default)]
+    pub fast: Option<FastMode>,
+}
+/// A provider's fast mode for one model: faster output for more usage.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct FastMode {
+    /// The provider's identity of the mode where it names one: a Codex service tier, or the
+    /// OpenCode catalog model that runs this model fast.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// The provider's own description of the trade, when it gives one.
+    #[serde(default)]
+    pub detail: String,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RuntimeInfo {
@@ -1644,6 +1661,9 @@ pub struct AgentPreferences {
     pub provider_access: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Runs the model in its provider's fast mode, where the model has one.
+    #[serde(default)]
+    pub fast: bool,
     pub access: AccessMode,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2284,6 +2304,8 @@ pub enum TaskEdit {
         model: Option<String>,
         effort: Option<String>,
     },
+    /// Turns the provider's fast mode on or off for the task's model.
+    Fast(bool),
 }
 /// A conversation that Claude Code, Codex or OpenCode stored on this computer for another app,
 /// in the folder of a project.

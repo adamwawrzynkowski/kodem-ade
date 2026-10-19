@@ -56,6 +56,8 @@ const ACCESS_MODES: [(&str, &str, &str); 4] = [
 const DEFAULT_ACCESS: &str = "ask";
 /// Reasoning variants in the order the picker lists them.
 const EFFORT_ORDER: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+/// The end of the identity OpenCode gives the fast mode of a model.
+const FAST_SUFFIX: &str = "-fast";
 /// Commands that a review or a task that reads its parent's checkout must not run. A denied
 /// rule comes last, so it wins over the rule of the approval mode.
 const BLOCKED_COMMANDS: [&str; 11] = [
@@ -296,8 +298,10 @@ fn catalog(client: &Client) -> Result<Catalog> {
                 .as_array()
                 .is_some_and(|input| input.iter().any(|kind| kind == "image")),
             effort_models: Default::default(),
+            fast: None,
         });
     }
+    fold_fast_models(&mut models);
     models.sort_by(|a, b| a.id.cmp(&b.id));
     // OpenCode's own choice for new sessions in this folder.
     let own = client
@@ -326,6 +330,45 @@ fn catalog(client: &Client) -> Result<Catalog> {
         windows,
         connected,
     })
+}
+
+// OpenCode lists the fast mode of a model as a model of its own, named after the mode. It
+// becomes the fast mode of the model it speeds up.
+fn fold_fast_models(models: &mut Vec<Model>) {
+    let fast: Vec<String> = models
+        .iter()
+        .filter_map(|model| {
+            let base = model.id.strip_suffix(FAST_SUFFIX)?;
+            models
+                .iter()
+                .any(|other| other.id == base)
+                .then(|| model.id.clone())
+        })
+        .collect();
+    for id in &fast {
+        let base = &id[..id.len() - FAST_SUFFIX.len()];
+        if let Some(model) = models.iter_mut().find(|model| model.id == base) {
+            model.fast = Some(FastMode {
+                id: Some(id.clone()),
+                detail: String::new(),
+            });
+        }
+    }
+    models.retain(|model| !fast.contains(&model.id));
+}
+
+// Returns the catalog model that runs a task: its fast one while fast mode is on.
+fn fast_model(host: &crate::Host, task: &Task) -> Option<String> {
+    let model = provider::effective_model(host, task)?;
+    if !task.fast {
+        return Some(model);
+    }
+    host.runtimes
+        .get(&Provider::OpenCode)
+        .and_then(|runtime| runtime.models.iter().find(|known| known.id == model))
+        .and_then(|known| known.fast.as_ref())
+        .and_then(|fast| fast.id.clone())
+        .or(Some(model))
 }
 
 // What the account can use: OpenCode needs no sign-in for its own free models, so an account
@@ -1314,7 +1357,7 @@ impl Owner<'_> {
             (
                 accounts::for_task(&h, task)?,
                 provider::compact_rule(&h, task)?,
-                provider::effective_model(&h, task),
+                fast_model(&h, task),
             )
         };
         if account != self.account

@@ -132,14 +132,25 @@ impl Render for EffortSlider {
         let progress = (self.visual / count).clamp(0., 1.);
         let stop_count = self.options.len();
         let entity = cx.entity();
-        let accent = t.accent;
+        let selected = self.options.get(self.selected).cloned().unwrap_or_default();
+        let usage = heavy_usage(&selected);
+        // Levels that burn usage fast take the warning color, from the first such stop on.
+        let heavy_from = self
+            .options
+            .iter()
+            .position(|option| heavy_usage(option).is_some());
+        let accent = if usage.is_some() { t.removed } else { t.accent };
+        let level_color = if usage.is_some() { t.removed } else { t.text };
         div()
             .id("effort-slider")
             .track_focus(&self.focus)
             .tab_index(0)
             .role(Role::Slider)
             .aria_label("Reasoning effort")
-            .aria_value(self.options.get(self.selected).cloned().unwrap_or_default())
+            .aria_value(match usage {
+                Some(times) => format!("{selected}, {}", usage_label(times)),
+                None => selected.clone(),
+            })
             .aria_min_numeric_value(0.)
             .aria_max_numeric_value(self.options.len().saturating_sub(1) as f64)
             .aria_numeric_value(self.selected as f64)
@@ -171,20 +182,19 @@ impl Render for EffortSlider {
                     .text_size(text_px(11.))
                     .text_color(t.muted)
                     .justify_center()
-                    .child(
-                        div()
-                            .font_family(crate::theme::mono())
-                            .text_size(text_px(12.))
-                            .letter_spacing(text_px(crate::theme::LABEL_TRACKING))
-                            .text_color(t.text)
-                            .child(
-                                self.options
-                                    .get(self.selected)
-                                    .cloned()
-                                    .unwrap_or_default()
-                                    .to_uppercase(),
-                            ),
-                    ),
+                    .gap(px(6.))
+                    .font_family(crate::theme::mono())
+                    .text_size(text_px(12.))
+                    .letter_spacing(text_px(crate::theme::LABEL_TRACKING))
+                    .child(div().text_color(level_color).child(selected.to_uppercase()))
+                    .when_some(usage, |row, times| {
+                        row.child(div().text_color(t.subtle).child("·")).child(
+                            div()
+                                .text_size(text_px(10.5))
+                                .text_color(t.removed)
+                                .child(usage_label(times).to_uppercase()),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -257,6 +267,24 @@ impl Render for EffortSlider {
                                     t.text.opacity(0.22),
                                     0.5,
                                 );
+                                // The heavy zone starts halfway to its first stop, where a
+                                // pointer selects that stop.
+                                if let Some(first) = heavy_from {
+                                    let width = f32::from(bounds.size.width);
+                                    let start = if first == 0 {
+                                        0.
+                                    } else {
+                                        slider_center(width, (first as f32 - 0.5) / count)
+                                    };
+                                    let zone = Bounds::new(
+                                        point(bounds.left() + px(start), track.top()),
+                                        size(bounds.size.width - px(start), track.size.height),
+                                    );
+                                    window.paint_quad(
+                                        fill(zone.inset(px(1.)), t.removed.opacity(0.18))
+                                            .corner_radii(px(2.)),
+                                    );
+                                }
                                 // Fill ends at the cap's center, including at endpoints.
                                 let filled = Bounds::new(
                                     track.origin,
@@ -273,7 +301,11 @@ impl Render for EffortSlider {
                                         point(x - px(0.5), bounds.center().y + px(8.)),
                                         size(px(1.), px(5.)),
                                     );
-                                    window.paint_quad(fill(tick, t.subtle));
+                                    let heavy = heavy_from.is_some_and(|first| i >= first);
+                                    window.paint_quad(fill(
+                                        tick,
+                                        if heavy { t.removed } else { t.subtle },
+                                    ));
                                 }
                                 let thumb = Bounds::new(
                                     point(center - px(4.), bounds.center().y - px(11.)),
@@ -319,6 +351,23 @@ impl Render for EffortSlider {
                     )),
             )
     }
+}
+
+/// How many times the usage of `high` an effort level can take, for the levels that burn usage
+/// much faster. Neither CLI reports a figure, so these are rough upper estimates: extra high
+/// and max think longer, and ultra also delegates work to more agents.
+fn heavy_usage(effort: &str) -> Option<u32> {
+    match effort {
+        "xhigh" => Some(2),
+        "max" => Some(4),
+        "ultra" => Some(8),
+        _ => None,
+    }
+}
+
+// Names how much more usage a heavy level can take.
+fn usage_label(times: u32) -> String {
+    format!("Up to ~{times}× the usage of high")
 }
 
 /// Room between an end of the track and the first or last stop, in points.

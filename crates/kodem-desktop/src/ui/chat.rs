@@ -823,6 +823,9 @@ impl Shell {
             .iter()
             .find(|model| preferences.model.as_ref() == Some(&model.id));
         let has_reasoning = selected_model.is_some_and(|model| !model.efforts.is_empty());
+        let fast_mode = selected_model.and_then(|model| model.fast.clone());
+        let fast = preferences.fast;
+        let options_locked = self.agent_options_locked();
         let approval = self.approval_choice();
         let access_label = if preferences.provider == Provider::Codex {
             preferences.access.label().to_owned()
@@ -1181,6 +1184,32 @@ impl Shell {
                         cx.notify();
                     })),
             )
+            // An energy toggle for the model's fast mode. On, it carries the accent; it never
+            // takes the warning color, though it uses more of the account's usage.
+            .when_some(fast_mode, |d, fast_mode| {
+                let hint = fast_hint(fast, &fast_mode.detail);
+                d.child(
+                    self.chip_button("composer-fast")
+                        .w(px(24.))
+                        .px_0()
+                        .disabled(options_locked)
+                        .when(fast, |b| b.bg(t.accent.opacity(0.12)).text_color(t.accent))
+                        .accessibility_label(if fast {
+                            "Fast mode: on. Uses more usage. Click to turn it off"
+                        } else {
+                            "Fast mode: off. Click to turn it on; it uses more usage"
+                        })
+                        .child(icon("zap").size(px(13.)))
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| Hint {
+                                text: hint.clone(),
+                                theme: t,
+                            })
+                            .into()
+                        })
+                        .on_click(cx.listener(|s, _, _, cx| s.toggle_fast(cx))),
+                )
+            })
             .when(has_reasoning, |d| {
                 d.child(
                     self.chip_button("composer-effort")
@@ -1576,6 +1605,25 @@ impl Shell {
             .hover(move |s| s.bg(t.selected).text_color(t.text))
             .styles(move |s| s.selected(|s| s.bg(t.accent.opacity(0.12)).text_color(t.text)))
     }
+}
+
+// Explains the fast mode toggle: its state, the provider's description of the speed-up, and
+// its cost in usage.
+fn fast_hint(on: bool, detail: &str) -> String {
+    let (state, action) = if on {
+        ("Fast mode on", "off")
+    } else {
+        ("Fast mode off", "on")
+    };
+    let detail = detail.trim().trim_end_matches('.');
+    let detail = if detail.is_empty() {
+        "Faster output from the same model"
+    } else {
+        detail
+    };
+    format!(
+        "{state} · {detail}. Fast mode uses more of your plan's usage. Click to turn it {action}."
+    )
 }
 
 /// Height of the strip above the floating composer that holds the jump-to-latest button. The

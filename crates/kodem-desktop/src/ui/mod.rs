@@ -1621,6 +1621,7 @@ impl Shell {
                     task_id,
                     edit:
                         TaskEdit::Model { .. }
+                        | TaskEdit::Fast(_)
                         | TaskEdit::Access(_)
                         | TaskEdit::Account(_)
                         | TaskEdit::Provider(_)

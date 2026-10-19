@@ -400,12 +400,32 @@ fn dispatch_next(
         params["approvalPolicy"] = json!(task.access.approval_policy());
         params["approvalsReviewer"] = json!(task.access.approvals_reviewer());
         params["sandboxPolicy"] = task.access.turn_policy(&task.cwd);
-        let model = effective_model(&host.lock().unwrap(), &task);
+        let (model, tier) = {
+            let h = host.lock().unwrap();
+            let model = effective_model(&h, &task);
+            let tier = h
+                .runtimes
+                .get(&Provider::Codex)
+                .and_then(|runtime| {
+                    runtime
+                        .models
+                        .iter()
+                        .find(|known| Some(&known.id) == model.as_ref())
+                })
+                .and_then(|known| known.fast.as_ref())
+                .and_then(|fast| fast.id.clone());
+            (model, tier)
+        };
         if let Some(model) = model {
             params["model"] = json!(model);
         }
         if let Some(effort) = task.effort {
             params["effort"] = json!(effort);
+        }
+        // The tier holds for this turn and the later ones. A null one returns the thread to
+        // standard speed.
+        if let Some(tier) = tier {
+            params["serviceTier"] = if task.fast { json!(tier) } else { Value::Null };
         }
         "turn/start"
     };
@@ -1127,6 +1147,34 @@ impl Catalog {
     }
 }
 
+// Returns a model's fast service tier. Older runtimes list it only by name, as a speed tier.
+fn fast_tier(model: &Value) -> Option<FastMode> {
+    let listed = model["serviceTiers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|tier| {
+            tier["name"]
+                .as_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case("fast"))
+        });
+    if let Some(tier) = listed {
+        return Some(FastMode {
+            id: Some(tier["id"].as_str()?.to_owned()),
+            detail: tier["description"].as_str().unwrap_or_default().to_owned(),
+        });
+    }
+    model["additionalSpeedTiers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|tier| tier == "fast")
+        .then(|| FastMode {
+            id: Some("fast".to_owned()),
+            detail: String::new(),
+        })
+}
+
 // Reads the model catalog through any connection to the runtime. New tasks start with 6.1 Sol
 // when the runtime lists it, and with the runtime's own default otherwise.
 fn read_runtime(mut call: impl FnMut(&'static str, Value) -> Result<Value>) -> Result<RuntimeInfo> {
@@ -1149,6 +1197,7 @@ fn read_runtime(mut call: impl FnMut(&'static str, Value) -> Result<Value>) -> R
                     models.push(Model {
                         images,
                         effort_models: Default::default(),
+                        fast: fast_tier(model),
                         id: id.into(),
                         name: if name.is_empty() { id.into() } else { name },
                         efforts: model["supportedReasoningEfforts"]

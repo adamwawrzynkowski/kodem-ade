@@ -180,6 +180,7 @@ fn runtime(initialized: &Value) -> RuntimeInfo {
                 default_effort: String::new(),
                 images: true,
                 effort_models: Default::default(),
+                fast: (model["supportsFastMode"] == true).then(FastMode::default),
             })
         })
         .collect();
@@ -277,6 +278,8 @@ struct Session {
     /// The model the process runs; absent only while the catalog names no default.
     model: Option<String>,
     effort: Option<String>,
+    /// Fast mode as the flag settings last set it. A process in print mode starts without it.
+    fast: bool,
     access: String,
     /// Bypass mode is only reachable in a process that was launched with it.
     bypass: bool,
@@ -359,6 +362,7 @@ impl Session {
             initialized,
             model,
             effort: task.effort.clone(),
+            fast: false,
             bypass: access == "bypassPermissions",
             access,
             compact,
@@ -398,6 +402,13 @@ impl Session {
                 )?;
             }
             self.effort = task.effort.clone();
+        }
+        // The CLI serves fast mode only to models that support it, so the flag can stay set
+        // across a change of model.
+        if task.fast != self.fast {
+            self.transport
+                .call(json!({"subtype":"apply_flag_settings","settings":{"fastMode":task.fast}}))?;
+            self.fast = task.fast;
         }
         let access = access_of(task);
         if access != self.access {

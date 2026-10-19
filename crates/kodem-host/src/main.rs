@@ -765,6 +765,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             let preferences_changed = matches!(
                 &edit,
                 TaskEdit::Model { .. }
+                    | TaskEdit::Fast(_)
                     | TaskEdit::Access(_)
                     | TaskEdit::Provider(_)
                     | TaskEdit::Account(_)
@@ -816,6 +817,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                     t.provider_access = preferences.provider_access.clone();
                     t.model = preferences.model.clone();
                     t.effort = preferences.effort.clone();
+                    t.fast = preferences.fast;
                     t.access = preferences.access;
                     t.context_usage = None;
                     defaults = preferences;
@@ -891,6 +893,14 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                     defaults.effort = t.effort.clone();
                     provider::validate_preferences(&h, &defaults)?;
                     t.context_usage = None;
+                }
+                TaskEdit::Fast(fast) => {
+                    ensure!(
+                        !t.state.active(),
+                        "Change fast mode after this turn finishes"
+                    );
+                    t.fast = fast;
+                    defaults.fast = fast;
                 }
             }
             // An approval rule chosen in any workspace is the rule of that model everywhere.
@@ -1405,6 +1415,7 @@ fn new_task(
         draft: String::new(),
         model: defaults.model.clone(),
         effort: defaults.effort.clone(),
+        fast: defaults.fast,
         access: defaults.access,
         review: None,
         context_usage: None,

@@ -621,6 +621,7 @@ pub(crate) fn preferences(task: &Task) -> AgentPreferences {
         provider_access: task.provider_access.clone(),
         model: task.model.clone(),
         effort: task.effort.clone(),
+        fast: task.fast,
         access: task.access,
     }
 }

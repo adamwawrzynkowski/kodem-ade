@@ -203,6 +203,7 @@ fn prepare(
         provider_access: None,
         model,
         effort: None,
+        fast: false,
         access: if write {
             parent.access
         } else {

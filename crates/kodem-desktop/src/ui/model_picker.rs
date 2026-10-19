@@ -54,12 +54,7 @@ impl Shell {
         let mut content = div().flex().flex_col().flex_shrink_0().gap(px(2.));
         let preferences = self.composer_preferences();
         let task_id = self.view.as_ref().map(|view| view.task.id.clone());
-        let disabled = self.creating_task
-            || self.view.as_ref().is_some_and(|view| {
-                view.task.state.active()
-                    || view.task.state == RunState::DeliveryUnknown
-                    || !view.outgoing.is_empty()
-            });
+        let disabled = self.agent_options_locked();
         if self.panel == Panel::Models {
             content = content.child(self.account_options(&preferences, disabled, cx));
             let mut models = div().id("model-list").flex().flex_col().gap(px(1.)).child(
@@ -651,6 +646,7 @@ impl Shell {
                     provider_access: view.task.provider_access.clone(),
                     model: view.task.model.clone(),
                     effort: view.task.effort.clone(),
+                    fast: view.task.fast,
                     access: view.task.access,
                 },
                 None,
@@ -793,6 +789,36 @@ impl Shell {
             preferences.effort = effort;
             // The approval rule follows the model.
             self.save_agent_preferences(self.with_access(preferences));
+        }
+        cx.notify();
+    }
+
+    /// Reports whether pending work holds the agent options of the open task, or a new task is
+    /// still being created.
+    pub(super) fn agent_options_locked(&self) -> bool {
+        self.creating_task
+            || self.view.as_ref().is_some_and(|view| {
+                view.task.state.active()
+                    || view.task.state == RunState::DeliveryUnknown
+                    || !view.outgoing.is_empty()
+            })
+    }
+
+    /// Turns the provider's fast mode on or off for the open task, or for the next new task.
+    pub(super) fn toggle_fast(&mut self, cx: &mut Context<Self>) {
+        if self.agent_options_locked() {
+            return;
+        }
+        let mut preferences = self.composer_preferences();
+        let fast = !preferences.fast;
+        if let Some(view) = &self.view {
+            self.send(core::Request::EditTask {
+                task_id: view.task.id.clone(),
+                edit: TaskEdit::Fast(fast),
+            });
+        } else {
+            preferences.fast = fast;
+            self.save_agent_preferences(preferences);
         }
         cx.notify();
     }
