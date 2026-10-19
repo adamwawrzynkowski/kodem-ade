@@ -474,43 +474,40 @@ impl Shell {
             .when_some(self.error.clone(), |d, error| {
                 d.child(settings::error_block("Error", error, t))
             })
-            .child(
-                div()
-                    .mt(px(4.))
-                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        self.ghost("project-remove", "close", "Remove project…")
-                            .text_color(t.removed)
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                s.error = None;
-                                s.panel = Panel::RemoveProject;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        self.primary("project-save", "check", "Save changes")
-                            .disabled(self.aux.read(cx).text().trim().is_empty())
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                if let Some(project) = &s.editing_project {
-                                    s.send(core::Request::CustomizeProject {
-                                        project_id: project.id.clone(),
-                                        name: s.aux.read(cx).text(),
-                                        color: project.color,
-                                        icon: project.icon.clone(),
-                                        avatar: project.avatar,
-                                        commands: s.edited_commands(project, cx),
-                                    });
-                                }
-                            })),
-                    ),
-            )
             .into_any_element()
+    }
+
+    /// Returns the project editor's actions, which remove the project or save its presentation.
+    pub(super) fn project_editor_actions(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                self.ghost("project-remove", "close", "Remove project…")
+                    .text_color(self.theme.removed)
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.error = None;
+                        s.panel = Panel::RemoveProject;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                self.primary("project-save", "check", "Save changes")
+                    .disabled(self.aux.read(cx).text().trim().is_empty())
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        if let Some(project) = &s.editing_project {
+                            s.send(core::Request::CustomizeProject {
+                                project_id: project.id.clone(),
+                                name: s.aux.read(cx).text(),
+                                color: project.color,
+                                icon: project.icon.clone(),
+                                avatar: project.avatar,
+                                commands: s.edited_commands(project, cx),
+                            });
+                        }
+                    })),
+            )
     }
     // Returns a choice for each skater avatar, drawn in the project's tint.
     fn avatar_picker(&self, project: &Project, cx: &mut Context<Self>) -> AnyElement {

@@ -15,6 +15,20 @@ fn footer_actions() -> Div {
     div().flex().items_center().justify_end().gap(px(6.))
 }
 
+// Returns the footer of a dialog. It stays under the scrolling content, so its actions are
+// always in reach.
+fn footer(theme: Theme, actions: Div) -> Div {
+    div()
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .px(px(18.))
+        .pb(px(18.))
+        .child(footer_rule(theme))
+        .child(actions)
+}
+
 impl Shell {
     /// Builds the active workspace dialog.
     pub(super) fn panel(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -59,6 +73,7 @@ impl Shell {
             .flex_col()
             .gap(px(12.))
             .p(px(18.));
+        let mut actions: Option<Div> = None;
         match self.panel {
             Panel::DeleteTask => {
                 if let Some(task) = self
@@ -97,7 +112,7 @@ impl Shell {
                     }
                     let id = task.id.clone();
                     let deleting = self.deleting_task.as_ref() == Some(&id);
-                    content = content.child(footer_rule(theme)).child(
+                    actions = Some(
                         footer_actions()
                             .child(
                                 self.ghost("cancel-delete-thread", "close", "Cancel")
@@ -137,6 +152,9 @@ impl Shell {
             }
             Panel::CustomizeProject => {
                 content = content.child(self.project_editor(cx));
+                if self.editing_project.is_some() {
+                    actions = Some(self.project_editor_actions(cx));
+                }
             }
             Panel::RemoveProject => {
                 if let Some(project) = self.editing_project.clone() {
@@ -156,23 +174,24 @@ impl Shell {
                         )
                         .when_some(self.error.clone(), |d, error| {
                             d.child(settings::error_block("Error", error, theme))
-                        })
-                        .child(footer_rule(theme))
-                        .child(
-                            footer_actions().child(
-                                self.tinted(
-                                    "remove-project-confirm",
-                                    "trash-2",
-                                    "Remove project",
-                                    theme.removed,
-                                )
-                                .on_click(cx.listener(move |s, _, _, _| {
+                        });
+                    actions = Some(
+                        footer_actions().child(
+                            self.tinted(
+                                "remove-project-confirm",
+                                "trash-2",
+                                "Remove project",
+                                theme.removed,
+                            )
+                            .on_click(cx.listener(
+                                move |s, _, _, _| {
                                     s.send(core::Request::RemoveProject {
                                         project_id: project.id.clone(),
                                     })
-                                })),
-                            ),
-                        );
+                                },
+                            )),
+                        ),
+                    );
                 }
             }
             Panel::NoRepository => {
@@ -206,37 +225,36 @@ impl Shell {
                         )
                         .when_some(self.error.clone(), |d, error| {
                             d.child(settings::error_block("Error", error, theme))
-                        })
-                        .child(footer_rule(theme))
-                        .child(
-                            footer_actions()
-                                .child(
-                                    self.ghost("no-repository-cancel", "close", "Cancel")
-                                        .on_click(cx.listener(|s, _, _, cx| {
-                                            s.folder_without_git = None;
-                                            s.panel = Panel::None;
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    self.ghost("no-repository-open", "folder-open", "Open anyway")
-                                        .on_click(cx.listener(|s, _, _, _| {
-                                            s.open_folder_without_git(
-                                                MissingRepository::OpenAnyway,
-                                            )
-                                        })),
-                                )
-                                .child(
-                                    self.primary(
-                                        "no-repository-initialize",
-                                        "branch",
-                                        "Initialize Git and open",
-                                    )
-                                    .on_click(cx.listener(|s, _, _, _| {
-                                        s.open_folder_without_git(MissingRepository::Initialize)
+                        });
+                    actions = Some(
+                        footer_actions()
+                            .child(
+                                self.ghost("no-repository-cancel", "close", "Cancel")
+                                    .on_click(cx.listener(|s, _, _, cx| {
+                                        s.folder_without_git = None;
+                                        s.panel = Panel::None;
+                                        cx.notify();
                                     })),
-                                ),
-                        );
+                            )
+                            .child(
+                                self.ghost("no-repository-open", "folder-open", "Open anyway")
+                                    .on_click(cx.listener(|s, _, _, _| {
+                                        s.open_folder_without_git(MissingRepository::OpenAnyway)
+                                    })),
+                            )
+                            .child(
+                                self.primary(
+                                    "no-repository-initialize",
+                                    "branch",
+                                    "Initialize Git and open",
+                                )
+                                .on_click(cx.listener(
+                                    |s, _, _, _| {
+                                        s.open_folder_without_git(MissingRepository::Initialize)
+                                    },
+                                )),
+                            ),
+                    );
                 }
             }
             Panel::Settings => {
@@ -271,33 +289,29 @@ impl Shell {
                                 .child(change),
                         )
                 });
-                content =
-                    content
-                        .child(settings::note(summary, theme))
-                        .child(div().flex().flex_col().gap(px(7.)).children(changes))
-                        .child(footer_rule(theme))
-                        .child(footer_actions().child(
-                            self.primary("whats-new-done", "check", "Got it").on_click(
-                                cx.listener(|s, _, _, cx| {
-                                    s.panel = Panel::None;
-                                    cx.notify();
-                                }),
-                            ),
-                        ));
+                content = content
+                    .child(settings::note(summary, theme))
+                    .child(div().flex().flex_col().gap(px(7.)).children(changes));
+                actions = Some(
+                    footer_actions().child(
+                        self.primary("whats-new-done", "check", "Got it")
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.panel = Panel::None;
+                                cx.notify();
+                            })),
+                    ),
+                );
             }
             Panel::Setup => {
-                content = content
-                    .child(self.setup_panel(cx))
-                    .child(footer_rule(theme))
-                    .child(
-                        footer_actions().child(
-                            self.primary("setup-done", "check", "Start")
-                                .on_click(cx.listener(|s, _, _, cx| {
-                                    s.panel = Panel::None;
-                                    cx.notify();
-                                })),
-                        ),
-                    );
+                content = content.child(self.setup_panel(cx));
+                actions = Some(
+                    footer_actions().child(self.primary("setup-done", "check", "Start").on_click(
+                        cx.listener(|s, _, _, cx| {
+                            s.panel = Panel::None;
+                            cx.notify();
+                        }),
+                    )),
+                );
             }
             Panel::Resources => {
                 content = content.child(
@@ -425,27 +439,26 @@ impl Shell {
                             .font_family(crate::theme::mono())
                             .child(div().text_color(theme.accent).child("$"))
                             .child(div().flex_1().min_w_0().child(self.aux.clone())),
-                    )
-                    .child(footer_rule(theme))
-                    .child(
-                        footer_actions().child(
-                            self.primary("run-check", "check-square", "Run check").on_click(
-                                cx.listener(|s, _, _, cx| {
-                                    if let Some(task_id) = &s.selected {
-                                        s.send(core::Request::RunCheck {
-                                            task_id: task_id.clone(),
-                                            command: s.aux.read(cx).text(),
-                                        });
-                                        s.panel = Panel::None;
-                                        cx.notify();
-                                    }
-                                }),
-                            ),
-                        ),
                     );
+                actions = Some(
+                    footer_actions().child(
+                        self.primary("run-check", "check-square", "Run check")
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                if let Some(task_id) = &s.selected {
+                                    s.send(core::Request::RunCheck {
+                                        task_id: task_id.clone(),
+                                        command: s.aux.read(cx).text(),
+                                    });
+                                    s.panel = Panel::None;
+                                    cx.notify();
+                                }
+                            })),
+                    ),
+                );
             }
             Panel::ImportThreads => {
                 content = content.child(self.thread_import(cx));
+                actions = Some(self.thread_import_actions(cx));
             }
             Panel::Rename => {
                 content = content
@@ -453,23 +466,21 @@ impl Shell {
                     .child(
                         settings::input_frame(theme)
                             .child(div().flex_1().min_w_0().child(self.aux.clone())),
-                    )
-                    .child(footer_rule(theme))
-                    .child(
-                        footer_actions().child(
-                            self.primary("rename", "check", "Save title")
-                                .on_click(cx.listener(|s, _, _, cx| {
-                                    if let Some(task_id) = &s.selected {
-                                        s.send(core::Request::EditTask {
-                                            task_id: task_id.clone(),
-                                            edit: TaskEdit::Rename(s.aux.read(cx).text()),
-                                        });
-                                        s.panel = Panel::None;
-                                        cx.notify();
-                                    }
-                                })),
-                        ),
                     );
+                actions = Some(
+                    footer_actions().child(self.primary("rename", "check", "Save title").on_click(
+                        cx.listener(|s, _, _, cx| {
+                            if let Some(task_id) = &s.selected {
+                                s.send(core::Request::EditTask {
+                                    task_id: task_id.clone(),
+                                    edit: TaskEdit::Rename(s.aux.read(cx).text()),
+                                });
+                                s.panel = Panel::None;
+                                cx.notify();
+                            }
+                        }),
+                    )),
+                );
             }
             Panel::None
             | Panel::Usage
@@ -488,6 +499,10 @@ impl Shell {
             | Panel::Sort
             | Panel::Palette
             | Panel::Comparison => {}
+        }
+        // The footer's rule follows the content at the spacing that the content keeps.
+        if actions.is_some() {
+            content = content.pb(px(12.));
         }
         let width = if self.panel == Panel::Files {
             1000.
@@ -589,7 +604,8 @@ impl Shell {
                     .rounded(px(crate::theme::RADIUS_FLOATING))
                     .overflow_hidden()
                     .child(header)
-                    .child(content),
+                    .child(content)
+                    .when_some(actions, |d, actions| d.child(footer(theme, actions))),
             );
         div()
             .absolute()

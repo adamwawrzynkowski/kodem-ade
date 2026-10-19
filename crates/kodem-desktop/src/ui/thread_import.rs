@@ -427,12 +427,10 @@ impl Shell {
             .into_any_element()
     }
 
-    /// Builds the content of the import dialog: the filters, the threads by age, the choice and
-    /// the progress of the imports.
+    /// Builds the content of the import dialog: the filters and the threads by age.
     pub(super) fn thread_import(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let state = &self.thread_import;
-        let running = state.running();
         let mut content = div().flex().flex_col().gap(px(10.)).child(
             div()
                 .text_size(text_px(13.))
@@ -517,6 +515,15 @@ impl Shell {
                 t,
             ));
         }
+        content.into_any_element()
+    }
+
+    /// Returns the actions of the thread import: look again, choose threads and import them,
+    /// with the progress of a run between them.
+    pub(super) fn thread_import_actions(&self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let state = &self.thread_import;
+        let running = state.running();
         let chosen: Vec<ExternalThread> = state
             .available()
             .filter(|thread| state.chosen.contains(&thread.key()))
@@ -630,13 +637,6 @@ impl Shell {
                     })),
             );
         }
-        content
-            .child(
-                div()
-                    .mt(px(2.))
-                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
-            )
-            .child(actions)
-            .into_any_element()
+        actions
     }
 }
