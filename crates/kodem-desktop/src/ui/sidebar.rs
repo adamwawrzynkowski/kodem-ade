@@ -1,6 +1,6 @@
 use super::*;
-use crate::thread_list::{Row, Section};
-use dither::{Dither, DitherField};
+use crate::thread_list::{Attention, Row, Section};
+use dither::{Dither, DitherField, Edge};
 use std::time::Instant;
 
 /// Returns the effect anchor name of one thread row.
@@ -8,10 +8,24 @@ pub(super) fn thread_anchor(task_id: &str) -> SharedString {
     SharedString::from(format!("thread:{task_id}"))
 }
 
-/// Side of the tile that leads a task card. It spans the title and the line under it.
+/// Side of a project's large tile, as the project views show it.
 const TASK_TILE: f32 = 30.;
 /// Size of a glyph in that tile.
 const TASK_TILE_GLYPH: f32 = 18.;
+/// Side of the small project tile that leads a settled task's row, whose project has no group
+/// around it. It sits beside the title only.
+const ROW_TILE: f32 = 16.;
+/// Size of a glyph in that tile.
+const ROW_TILE_GLYPH: f32 = 11.;
+/// Side of the tile that leads the header of a project group.
+const GROUP_TILE: f32 = 20.;
+/// Size of a glyph in that tile.
+const GROUP_TILE_GLYPH: f32 = 13.;
+/// Height of the header of a project group.
+const GROUP_HEADER: f32 = 34.;
+/// Alpha of the project's tint under a group's header and rows. It only hints at the surface
+/// that holds them.
+const GROUP_FILL: f32 = 0.05;
 /// The effect anchor of the sidebar, which places the sliding selection edge.
 const SIDEBAR_ANCHOR: &str = "sidebar-panel";
 /// How long the selection edge of the feed takes to slide to another row.
@@ -688,64 +702,149 @@ impl Shell {
                     .child(header)
                     .into_any_element()
             }
-            Row::Task { index, project, .. } => self.task_row(*index, *project, false, cx),
-            Row::Project { index, id, count } => {
-                let Some(project) = self.workspace.as_ref().and_then(|w| w.projects.get(*index))
-                else {
-                    return div().into_any_element();
-                };
-                let fold = self.group_folds.get(id);
-                let collapsed = (self.settings.collapsed_projects.contains(id)
-                    || fold.is_some_and(|fold| !fold.opening))
-                    && self.search.read(cx).text().is_empty();
-                let openness = fold.map_or(if collapsed { 0. } else { 1. }, GroupFold::chevron);
-                let id = id.clone();
-                let rows = *count;
-                div()
-                    .pt(px(8.))
-                    .child(
-                        self.ghost_icon(
-                            SharedString::from(format!("project-group:{id}")),
-                            fold_chevron(openness, 13.),
-                            "",
-                        )
-                        .w_full()
-                        .h(px(26.))
-                        .px(px(6.))
-                        .justify_start()
-                        .min_w_0()
-                        .accessibility_label(format!(
-                            "{} project {}",
-                            if collapsed { "Expand" } else { "Collapse" },
-                            project.name
-                        ))
-                        .child(project_icon(project, t))
-                        .child(
-                            caps(&project.name, t)
-                                .max_w(relative(0.6))
-                                .text_ellipsis()
-                                .text_color(t.muted),
-                        )
-                        .child(figure(count.to_string(), t.subtle))
-                        .child(
-                            div()
-                                .flex_1()
-                                .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
-                        )
-                        .on_click(cx.listener(move |s, _, _, cx| {
-                            s.toggle_project_group(id.clone(), rows, cx)
-                        })),
-                    )
-                    .into_any_element()
+            Row::Task {
+                index,
+                project,
+                grouped,
+                last,
+                ..
+            } => self.task_row(*index, *project, *grouped, *last, cx),
+            Row::Project {
+                index: project,
+                id,
+                count,
+                attention,
+            } => {
+                let (id, count, attention) = (id.clone(), *count, *attention);
+                match self
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| w.projects.get(*project))
+                {
+                    Some(project) => div()
+                        .pt(px(if index == 0 { 2. } else { 10. }))
+                        .child(self.project_header(project, id, count, attention, cx))
+                        .into_any_element(),
+                    None => div().into_any_element(),
+                }
             }
             Row::Empty(label) => kit::empty_hint(*label, t).into_any_element(),
         }
+    }
+    // The header of a project group: the project's tile over a dithered glow in its tint, its
+    // name, a dotted rule to the counts of its tasks in the states that need a person, and the
+    // fold chevron. A folded group whose tasks run keeps their motion on its header.
+    fn project_header(
+        &self,
+        project: &Project,
+        id: String,
+        count: usize,
+        attention: Attention,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let t = self.theme;
+        let tint = project_tint(project, t);
+        let searching = !self.search.read(cx).text().is_empty();
+        let fold = self.group_folds.get(&id);
+        let collapsed = (self.settings.collapsed_projects.contains(&id)
+            || fold.is_some_and(|fold| !fold.opening))
+            && !searching;
+        // A group that folds keeps its rows until the last has folded, so the header closes the
+        // group's surface only then.
+        let closed = self.settings.collapsed_projects.contains(&id) && !searching;
+        let openness = fold.map_or(if collapsed { 0. } else { 1. }, GroupFold::chevron);
+        let radius = px(crate::theme::RADIUS_SURFACE);
+        let reduce_motion = cx.reduce_motion();
+        let label = format!(
+            "{} project {}",
+            if collapsed { "Expand" } else { "Collapse" },
+            project.name
+        );
+        self.control(SharedString::from(format!("project-group:{id}")))
+            .w_full()
+            .min_w_0()
+            .h(px(GROUP_HEADER))
+            .px(px(6.))
+            .gap(px(8.))
+            .justify_start()
+            .overflow_hidden()
+            .font_family(crate::theme::sans())
+            .border_color(gpui::transparent_black())
+            .bg(tint.opacity(GROUP_FILL))
+            .when(closed, |header| header.rounded(radius))
+            .when(!closed, |header| header.rounded_t(radius).rounded_b(px(0.)))
+            .hover(move |s| s.bg(tint.opacity(GROUP_FILL * 2.)))
+            // The glow behind the tile runs on down the group as its spine.
+            .layer(
+                Dither::new(
+                    DitherField::Glow {
+                        x: 0.,
+                        y: 0.5,
+                        radius: 0.4,
+                        strength: 0.8,
+                    }
+                    .times(DitherField::Fade {
+                        from: Edge::Left,
+                        start: 1.,
+                        end: 0.,
+                    }),
+                )
+                .color(tint.opacity(0.32))
+                .grid(2., 1.)
+                .toned(),
+            )
+            .layer(kit::glint(t.dot, Edge::Bottom))
+            .when(
+                collapsed && attention.working > 0 && !reduce_motion,
+                |header| {
+                    header.layer(
+                        Dither::new(
+                            DitherField::Flow {
+                                scale: 0.2,
+                                speed: 1.3,
+                                bias: -0.08,
+                            }
+                            .times(DitherField::Fade {
+                                from: Edge::Right,
+                                start: 0.9,
+                                end: 0.,
+                            }),
+                        )
+                        .color(t.accent.opacity(0.45))
+                        .grid(2., 1.)
+                        .animated(),
+                    )
+                },
+            )
+            .accessibility_label(label)
+            .child(project_tile(project, t, GROUP_TILE, GROUP_TILE_GLYPH))
+            .child(
+                div()
+                    .min_w_0()
+                    .text_size(text_px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(t.text)
+                    .text_ellipsis()
+                    .child(project.name.clone()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(8.))
+                    .child(dither::DottedRule::horizontal(tint.opacity(0.3))),
+            )
+            .children(attention_badges(attention, reduce_motion, t))
+            .child(figure(count.to_string(), t.subtle))
+            .child(fold_chevron(openness, 12.).text_color(t.subtle))
+            .on_click(cx.listener(move |s, _, _, cx| s.toggle_project_group(id.clone(), count, cx)))
+            .into_any_element()
     }
     fn task_row(
         &self,
         index: usize,
         project: Option<usize>,
-        settled: bool,
+        grouped: bool,
+        last: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(workspace) = &self.workspace else {
@@ -758,18 +857,22 @@ impl Shell {
         // List measures the root's height without its margins; keep the gap inside the row.
         let row = div()
             .pb(px(2.))
-            .child(self.task_card(task, project, settled, cx));
-        if cx.reduce_motion() {
-            return row.into_any_element();
-        }
+            .child(self.task_card(task, project, grouped, cx));
         // A row of a project group that folds or unfolds moves with the group.
         let openness = match self.entering_tasks.get(&task.id) {
             Some(entrance) => Some(entrance.progress()),
             None => self.fold_rows.get(&task.id).copied(),
         };
-        match openness {
+        let row = match openness.filter(|_| !cx.reduce_motion()) {
             Some(openness) => motion::row_enter(row, openness, self.theme.sidebar),
             None => row.into_any_element(),
+        };
+        // The spine of the group stays beside a row while it folds, so the group shrinks as one.
+        match project.filter(|_| grouped) {
+            Some(project) => group_body(project_tint(project, self.theme), last)
+                .child(row)
+                .into_any_element(),
+            None => row,
         }
     }
     // A search unfolds the settled tasks, so that its matches among them show.
@@ -825,9 +928,13 @@ impl Shell {
                     range
                         .map(|index| {
                             let row = match s.settled_rows.get(index) {
-                                Some(Row::Task { index, project, .. }) => {
-                                    s.task_row(*index, *project, true, cx)
-                                }
+                                Some(Row::Task {
+                                    index,
+                                    project,
+                                    grouped,
+                                    last,
+                                    ..
+                                }) => s.task_row(*index, *project, *grouped, *last, cx),
                                 _ => div().into_any_element(),
                             };
                             // The rows of a uniform list keep their height, so they drop in.
@@ -852,7 +959,7 @@ impl Shell {
         &self,
         task: &core::Task,
         project: Option<&Project>,
-        settled: bool,
+        grouped: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
@@ -865,23 +972,22 @@ impl Shell {
         let active = section == Section::Working;
         let blocked = task.is_blocked();
         let unread = section == Section::Ready;
-        // The tile always names the project, so tasks of different projects stay apart in a
-        // flat list. The state of the task leads its title instead.
+        // A row in its project's card leads with its state. A settled row has no card around
+        // it, so it leads with its project's tile instead; a chat has no project.
         let tile = match (task.kind, project) {
-            (TaskKind::Coding, Some(project)) => {
-                project_tile(project, t, TASK_TILE, TASK_TILE_GLYPH)
-            }
-            // A review shows what it examines; a chat has no project to show.
-            (TaskKind::Review, _) => glyph_tile(
+            _ if grouped => None,
+            (TaskKind::Coding, Some(project)) => Some(project_icon(project, t)),
+            // A review shows what it examines.
+            (TaskKind::Review, _) => Some(glyph_tile(
                 match task.review_scope.as_ref().map(|s| &s.target) {
                     Some(ReviewTarget::Branch { .. }) => "branch",
                     _ => "git-pull-request",
                 },
                 project.map_or(t.accent, |project| project_tint(project, t)),
-                TASK_TILE,
-                TASK_TILE_GLYPH,
-            ),
-            _ => glyph_tile("chat", t.subtle, TASK_TILE, TASK_TILE_GLYPH),
+                ROW_TILE,
+                ROW_TILE_GLYPH,
+            )),
+            _ => None,
         };
         let state = if needs_input {
             Some(motion::active_icon(
@@ -935,6 +1041,9 @@ impl Shell {
             Some((name, _)) => format!("{} · {name}", provider.label()),
             None => provider.label().to_owned(),
         };
+        // Most tasks run on the default provider and account, so a row names its provider only
+        // where it differs.
+        let other_provider = account.is_some() || provider != self.settings.agent_defaults.provider;
         // The second line names where the task works. A chat has no branch, so it names its
         // model instead. A folder without Git has no branch either.
         let place = if task.kind.has_project() && task.branch.is_empty() {
@@ -956,44 +1065,42 @@ impl Shell {
             .font_family(crate::theme::mono())
             .text_size(text_px(10.5))
             .text_color(if selected { t.muted } else { t.subtle })
-            .child(
-                div()
-                    .id((
-                        ElementId::from("task-provider"),
-                        SharedString::from(id.clone()),
-                    ))
-                    .flex()
-                    .items_center()
-                    .gap(px(3.))
-                    .child(icon(provider.icon()).size(px(11.)))
-                    .when_some(account.as_ref(), |d, (_, tone)| {
-                        d.child(div().size(px(5.)).rounded(px(1.)).bg(*tone))
-                    })
-                    .tooltip(move |_, cx| {
-                        cx.new(|_| Hint {
-                            text: provider_hint.clone(),
-                            theme: t,
+            .when(other_provider, |d| {
+                d.child(
+                    div()
+                        .id((
+                            ElementId::from("task-provider"),
+                            SharedString::from(id.clone()),
+                        ))
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(px(3.))
+                        .child(icon(provider.icon()).size(px(11.)))
+                        .when_some(account.as_ref(), |d, (_, tone)| {
+                            d.child(div().size(px(5.)).rounded(px(1.)).bg(*tone))
                         })
-                        .into()
-                    }),
-            )
-            // Settled tasks are never under a project header, so they name their project.
-            .when_some(
-                project.filter(|_| {
-                    self.sidebar_project.is_none()
-                        && (settled || !self.settings.group_tasks_by_project)
-                }),
-                |d, project| {
-                    d.child(
-                        div()
-                            .flex_shrink_0()
-                            .max_w(relative(0.4))
-                            .text_ellipsis()
-                            .child(project.name.clone()),
-                    )
-                    .child(div().flex_shrink_0().child("/"))
-                },
-            )
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| Hint {
+                                text: provider_hint.clone(),
+                                theme: t,
+                            })
+                            .into()
+                        }),
+                )
+            })
+            // A row outside its project's card names its project in the project's tint.
+            .when_some(project.filter(|_| !grouped), |d, project| {
+                d.child(
+                    div()
+                        .flex_shrink_0()
+                        .max_w(relative(0.45))
+                        .text_ellipsis()
+                        .text_color(project_tint(project, t))
+                        .child(project.name.clone()),
+                )
+                .child(div().flex_shrink_0().child("/"))
+            })
             .child(div().flex_1().min_w_0().text_ellipsis().child(place));
         if let Some(review) = task.review.as_ref().filter(|r| r.error.is_none()) {
             let snapshot = review.snapshot_id.clone();
@@ -1009,7 +1116,7 @@ impl Shell {
                     .disabled(snapshot.is_none())
                     .accessibility_label("Open saved task diff")
                     .when(review.omitted_files > 0, |b| b.child(figure("~", t.subtle)))
-                    .child(kit::diffstat(review.added, review.removed, t))
+                    .child(row_diffstat(review.added, review.removed, t))
                     .on_click(cx.listener(move |s, _, _, cx| {
                         cx.stop_propagation();
                         s.select_task(task_id.clone(), cx);
@@ -1045,8 +1152,8 @@ impl Shell {
             .px(px(8.))
             .py(px(if self.settings.comfortable { 9. } else { 6. }))
             .flex()
-            .items_center()
-            .gap(px(10.))
+            .items_start()
+            .gap(px(8.))
             .rounded(px(radius))
             .border_1()
             .border_color(gpui::transparent_black())
@@ -1069,7 +1176,22 @@ impl Shell {
                 row.child(kit::selection_edge(tone))
             })
             .child(fx::anchor(thread_anchor(&id)))
-            .child(div().relative().flex_shrink_0().child(tile))
+            // The tile or the state stands beside the title only, and the line under the title
+            // hangs from it. A row without a state keeps the place, so titles line up.
+            .child(
+                div()
+                    .relative()
+                    .flex_shrink_0()
+                    .h(px(20.))
+                    .min_w(px(14.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .map(|lead| match tile {
+                        Some(tile) => lead.child(tile),
+                        None => lead.children(state),
+                    }),
+            )
             .child(
                 div()
                     .relative()
@@ -1083,18 +1205,7 @@ impl Shell {
                             .h(px(20.))
                             .flex()
                             .items_center()
-                            .gap(px(8.))
-                            .when_some(state, |d, state| {
-                                d.child(
-                                    div()
-                                        .size(px(14.))
-                                        .flex_shrink_0()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(state),
-                                )
-                            })
+                            .gap(px(6.))
                             .child(
                                 div()
                                     .flex_1()
@@ -1155,10 +1266,10 @@ impl Shell {
 }
 /// Returns a stable, distinct project glyph and tint without filesystem work during rendering.
 pub(super) fn project_icon(project: &Project, theme: Theme) -> AnyElement {
-    project_tile(project, theme, 16., 11.)
+    project_tile(project, theme, ROW_TILE, ROW_TILE_GLYPH)
 }
 
-/// Returns the project's icon at the size that leads a task row.
+/// Returns the project's large icon, as the project views show it.
 pub(super) fn project_task_tile(project: &Project, theme: Theme) -> AnyElement {
     project_tile(project, theme, TASK_TILE, TASK_TILE_GLYPH)
 }
@@ -1278,6 +1389,139 @@ pub(super) fn project_tint(project: &Project, theme: Theme) -> Hsla {
                 |accent| crate::theme::accent_color(accent, theme.light),
             )
     })
+}
+
+// One slice of a project group under its header. Consecutive rows draw consecutive slices of
+// the group's faint surface and of a dithered spine in the project's tint, which carries the
+// glow of the header's tile down the group and thins out under its last row. The last slice
+// rounds the surface off over a shade of dots.
+fn group_body(tint: Hsla, last: bool) -> Div {
+    let across = DitherField::Fade {
+        from: Edge::Left,
+        start: 0.55,
+        end: -0.15,
+    };
+    let spine = if last {
+        across.times(DitherField::Fade {
+            from: Edge::Top,
+            start: 1.,
+            end: 0.,
+        })
+    } else {
+        across
+    };
+    let radius = crate::theme::RADIUS_SURFACE;
+    div()
+        .relative()
+        .pl(px(6.))
+        .pr(px(3.))
+        .bg(tint.opacity(GROUP_FILL))
+        .when(last, |body| {
+            body.pb(px(3.)).rounded_b(px(radius)).child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(px(12.))
+                    .child(
+                        Dither::new(DitherField::Fade {
+                            from: Edge::Bottom,
+                            start: 0.35,
+                            end: 0.,
+                        })
+                        .color(tint.opacity(0.3))
+                        .grid(2., 1.)
+                        .corner_radii(Corners {
+                            bottom_left: radius,
+                            bottom_right: radius,
+                            ..Corners::default()
+                        }),
+                    ),
+            )
+        })
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(4.))
+                .w(px(14.))
+                .child(Dither::new(spine).color(tint.opacity(0.4)).grid(2., 1.)),
+        )
+}
+
+// The counts of a project group's tasks in each state that needs a person, in the tones of the
+// rows: input or failures, running work and unread results.
+fn attention_badges(attention: Attention, reduce_motion: bool, theme: Theme) -> Vec<AnyElement> {
+    let badge = |mark: AnyElement, count: usize, tone: Hsla| {
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(3.))
+            .child(mark)
+            .child(figure(count.to_string(), tone).font_weight(FontWeight::SEMIBOLD))
+            .into_any_element()
+    };
+    let mut badges = Vec::new();
+    if attention.needs_you > 0 {
+        badges.push(badge(
+            icon("shield")
+                .size(px(11.))
+                .text_color(theme.warning)
+                .into_any_element(),
+            attention.needs_you,
+            theme.warning,
+        ));
+    }
+    if attention.working > 0 {
+        badges.push(badge(
+            dither::pulse(theme.accent, reduce_motion),
+            attention.working,
+            theme.accent,
+        ));
+    }
+    if attention.ready > 0 {
+        badges.push(badge(
+            kit::marker(theme.added).into_any_element(),
+            attention.ready,
+            theme.added,
+        ));
+    }
+    badges
+}
+
+// The saved diff of a task row as short "+N −N" counts. Counts of a thousand lines or more
+// shorten, so that the column of counts keeps one width down the feed.
+fn row_diffstat(added: usize, removed: usize, theme: Theme) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(5.))
+        .when(added > 0, |d| {
+            d.child(figure(format!("+{}", short_count(added)), theme.added))
+        })
+        .when(removed > 0, |d| {
+            d.child(figure(format!("−{}", short_count(removed)), theme.removed))
+        })
+}
+
+// Returns a count in a few characters, such as `987`, `1.8k`, `69k` or `1.2M`. It rounds down,
+// so a count never shows more than it is.
+fn short_count(count: usize) -> String {
+    if count < 1_000 {
+        count.to_string()
+    } else if count < 10_000 {
+        format!("{}.{}k", count / 1_000, count / 100 % 10)
+    } else if count < 1_000_000 {
+        format!("{}k", count / 1_000)
+    } else if count < 10_000_000 {
+        format!("{}.{}M", count / 1_000_000, count / 100_000 % 10)
+    } else {
+        format!("{}M", count / 1_000_000)
+    }
 }
 
 /// Returns the age of a timestamp as one short figure, such as `12m` or `3h`.

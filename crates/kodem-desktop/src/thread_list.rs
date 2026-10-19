@@ -1,15 +1,17 @@
-//! Lightweight, stable rows shared by flat and project-grouped thread navigation.
+//! Lightweight, stable rows of the thread navigation.
 //!
-//! The feed leads with what needs a person: tasks waiting for input or blocked by a failure,
-//! then running tasks, then finished results that were not opened yet. Everything else follows
-//! in the chosen order. Settled work leaves the feed for one list of its own, which is not
-//! grouped by project, and a project without open tasks has no group. A feed holds the tasks of
-//! one workspace: agentic coding, chats or reviews.
+//! Every task of a project lives in its project's group, so that a row always shows where it
+//! belongs. Inside a group, what needs a person leads: tasks waiting for input or blocked by a
+//! failure, then running tasks, then finished results that were not opened yet. Everything else
+//! follows in the chosen order. Chats have no project, so their feed leads with sections of
+//! those states instead. Settled work leaves the feed for one list of its own, and a project
+//! without open tasks has no group. A feed holds the tasks of one workspace: agentic coding,
+//! chats or reviews.
 use kodem_core::{Settings, Task, TaskKind, Workspace};
 use std::collections::HashMap;
 
-/// A group of tasks that share a state the user acts on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A group of tasks that share a state the user acts on, from the most urgent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Section {
     NeedsYou,
     Working,
@@ -50,12 +52,17 @@ pub enum Row {
         index: usize,
         id: String,
         count: usize,
+        attention: Attention,
     },
     Task {
         index: usize,
         /// Index of the owning project; absent for a chat, which has none.
         project: Option<usize>,
         id: String,
+        /// The row sits in the group of its project, whose header names the project for it.
+        grouped: bool,
+        /// The row is the last of its group, which closes under it.
+        last: bool,
     },
     Empty(&'static str),
 }
@@ -77,6 +84,15 @@ impl Row {
             _ => None,
         }
     }
+}
+
+/// How many tasks of a project group are in each state that the user acts on. The header of a
+/// folded group still shows them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Attention {
+    pub needs_you: usize,
+    pub working: usize,
+    pub ready: usize,
 }
 
 pub struct Filter<'a> {
@@ -141,64 +157,13 @@ pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> F
             .then_with(|| a.id.cmp(&b.id))
     });
     let mut rows = Vec::new();
-    let mut rest = Vec::new();
-    let mut urgent: [Vec<Entry<'_>>; 3] = Default::default();
-    for entry in tasks {
-        match Section::of(entry.2, settings) {
-            Section::NeedsYou => urgent[0].push(entry),
-            Section::Working => urgent[1].push(entry),
-            Section::Ready => urgent[2].push(entry),
-            Section::Threads => rest.push(entry),
-        }
-    }
-    let has_urgent = urgent.iter().any(|group| !group.is_empty());
-    for (section, group) in [Section::NeedsYou, Section::Working, Section::Ready]
-        .into_iter()
-        .zip(urgent)
-    {
-        if group.is_empty() {
-            continue;
-        }
-        rows.push(Row::Section {
-            section,
-            count: group.len(),
-        });
-        rows.extend(group.into_iter().map(task_row));
-    }
-    let (rest, settled): (Vec<_>, Vec<_>) =
-        rest.into_iter().partition(|(_, _, task)| !collapses(task));
-    if settings.group_tasks_by_project && filter.kind.has_project() {
-        let mut groups: HashMap<usize, Vec<Entry<'_>>> = HashMap::new();
-        for task in rest {
-            if let Some(project) = task.1 {
-                groups.entry(project).or_default().push(task);
-            }
-        }
-        let mut project_order: Vec<_> = groups.keys().copied().collect();
-        project_order.sort_by_key(|index| workspace.projects[*index].name.to_lowercase());
-        for index in project_order {
-            let project = &workspace.projects[index];
-            let Some(tasks) = groups.remove(&index) else {
-                continue;
-            };
-            rows.push(Row::Project {
-                index,
-                id: project.id.clone(),
-                count: tasks.len(),
-            });
-            if settings.collapsed_projects.contains(&project.id) && filter.query.is_empty() {
-                continue;
-            }
-            rows.extend(tasks.into_iter().map(task_row));
-        }
+    let (open, settled): (Vec<_>, Vec<_>) = tasks.into_iter().partition(|(_, _, task)| {
+        Section::of(task, settings) != Section::Threads || !collapses(task)
+    });
+    if filter.kind.has_project() {
+        project_groups(&mut rows, workspace, settings, filter.query, open);
     } else {
-        if has_urgent && !rest.is_empty() {
-            rows.push(Row::Section {
-                section: Section::Threads,
-                count: rest.len(),
-            });
-        }
-        rows.extend(rest.into_iter().map(task_row));
+        status_sections(&mut rows, settings, open);
     }
     if rows.is_empty() {
         rows.push(Row::Empty(
@@ -230,7 +195,10 @@ pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> F
     }
     Feed {
         open: rows,
-        settled: settled.into_iter().map(task_row).collect(),
+        settled: settled
+            .into_iter()
+            .map(|entry| task_row(entry, false, false))
+            .collect(),
     }
 }
 
@@ -239,10 +207,94 @@ fn collapses(task: &Task) -> bool {
     task.is_settled() && !(task.settled.is_none() && task.pinned)
 }
 
-fn task_row((index, project, task): Entry<'_>) -> Row {
+// One group per project with open tasks: pinned projects first, then by name. A folded group
+// keeps its header, unless a search unfolds it.
+fn project_groups<'a>(
+    rows: &mut Vec<Row>,
+    workspace: &Workspace,
+    settings: &Settings,
+    query: &str,
+    open: Vec<Entry<'a>>,
+) {
+    let mut groups: HashMap<usize, Vec<Entry<'a>>> = HashMap::new();
+    for entry in open {
+        if let Some(project) = entry.1 {
+            groups.entry(project).or_default().push(entry);
+        }
+    }
+    let mut order: Vec<_> = groups.keys().copied().collect();
+    order.sort_by_key(|index| {
+        let project = &workspace.projects[*index];
+        (!project.pinned, project.name.to_lowercase())
+    });
+    for index in order {
+        let Some(mut tasks) = groups.remove(&index) else {
+            continue;
+        };
+        // The sort is stable, so the chosen order holds among tasks in one state.
+        tasks.sort_by_key(|(_, _, task)| Section::of(task, settings));
+        let mut attention = Attention::default();
+        for (_, _, task) in &tasks {
+            match Section::of(task, settings) {
+                Section::NeedsYou => attention.needs_you += 1,
+                Section::Working => attention.working += 1,
+                Section::Ready => attention.ready += 1,
+                Section::Threads => {}
+            }
+        }
+        let project = &workspace.projects[index];
+        rows.push(Row::Project {
+            index,
+            id: project.id.clone(),
+            count: tasks.len(),
+            attention,
+        });
+        if settings.collapsed_projects.contains(&project.id) && query.is_empty() {
+            continue;
+        }
+        let last = tasks.len() - 1;
+        rows.extend(
+            tasks
+                .into_iter()
+                .enumerate()
+                .map(|(order, entry)| task_row(entry, true, order == last)),
+        );
+    }
+}
+
+// The sections of a feed without projects: the states that need a person, then the rest.
+fn status_sections(rows: &mut Vec<Row>, settings: &Settings, open: Vec<Entry<'_>>) {
+    let mut sections: [Vec<Entry<'_>>; 4] = Default::default();
+    for entry in open {
+        sections[Section::of(entry.2, settings) as usize].push(entry);
+    }
+    let urgent = sections[..3].iter().any(|tasks| !tasks.is_empty());
+    for (section, tasks) in [
+        Section::NeedsYou,
+        Section::Working,
+        Section::Ready,
+        Section::Threads,
+    ]
+    .into_iter()
+    .zip(sections)
+    {
+        // The rest needs no header while nothing stands above it.
+        if !tasks.is_empty() && (section != Section::Threads || urgent) {
+            rows.push(Row::Section {
+                section,
+                count: tasks.len(),
+            });
+        }
+        rows.extend(tasks.into_iter().map(|entry| task_row(entry, false, false)));
+    }
+}
+
+fn task_row((index, project, task): Entry<'_>, grouped: bool, last: bool) -> Row {
     Row::Task {
         index,
         project,
         id: task.id.clone(),
+        grouped,
+        last,
     }
 }

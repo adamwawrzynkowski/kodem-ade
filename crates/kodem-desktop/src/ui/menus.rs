@@ -239,25 +239,6 @@ impl Shell {
                             })),
                     );
                 }
-                menu = menu.child(separator(t)).child(
-                    self.menu_row(
-                        "group-projects",
-                        "folder-closed",
-                        "Group by project",
-                        self.settings.group_tasks_by_project,
-                    )
-                    .accessibility_label(if self.settings.group_tasks_by_project {
-                        "Disable project grouping"
-                    } else {
-                        "Enable project grouping"
-                    })
-                    .on_click(cx.listener(|s, _, _, cx| {
-                        s.settings.group_tasks_by_project = !s.settings.group_tasks_by_project;
-                        s.sidebar_dirty = true;
-                        s.save_settings();
-                        cx.notify();
-                    })),
-                );
             }
             Panel::ThreadMenu => {
                 if let Some(context) = &self.thread_menu {

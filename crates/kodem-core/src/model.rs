@@ -1703,7 +1703,6 @@ pub struct Settings {
     pub theme: ThemeId,
     pub accent: AccentColor,
     pub sort: Sort,
-    pub group_tasks_by_project: bool,
     pub collapsed_projects: std::collections::HashSet<String>,
     pub selected_task: Option<String>,
     /// The project that a new task starts in, as it was chosen last.
@@ -1744,7 +1743,6 @@ impl Default for Settings {
             theme: ThemeId::default(),
             accent: AccentColor::default(),
             sort: Sort::Recent,
-            group_tasks_by_project: false,
             collapsed_projects: Default::default(),
             selected_task: None,
             selected_project: None,
