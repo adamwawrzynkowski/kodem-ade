@@ -683,7 +683,7 @@ impl Shell {
         } else {
             1. - (1. - phase).powi(3)
         };
-        div()
+        let layer = div()
             .absolute()
             .left(px(if empty { 0. } else { 20. }))
             .right(px(if empty { 0. } else { 20. }))
@@ -695,7 +695,13 @@ impl Shell {
                     .relative()
                     .child(dither::shadow(t, crate::theme::RADIUS_FLOATING, 5.))
                     .child(menu),
-            )
-            .into_any_element()
+            );
+        // The menu overhangs what comes after the composer, such as the shortcut hints of a
+        // start screen, so it paints after them. An open panel still paints over it.
+        if self.panel == Panel::None {
+            deferred(layer).into_any_element()
+        } else {
+            layer.into_any_element()
+        }
     }
 }
