@@ -47,7 +47,23 @@
 # the highlights fill six columns or more; widths that add up to 6, 10, 14… leave no gaps.
 # Visual data must be true: measured figures, real names and real shortcuts.
 
-reviewed = "50cf8a5dde32cf30a5f9b7ed68e89fdcd489f770"
+reviewed = "e3876f577ce772c5216034a07a3a168fe2e56f57"
+
+[[headline]]
+id = "headline-project-groups"
+text = "The sidebar now groups tasks into tinted project groups that count what needs you."
+
+[[highlight]]
+id = "tinted-project-groups"
+title = "Tasks grouped by project"
+text = "Every open task sits in its project's tinted group. The header counts tasks that need input, run or have unread results, and a group folds."
+wide = true
+tone = "blue"
+visual = { kind = "list", title = "Project group", items = [
+    { text = "Needs you", state = "dot", tone = "amber" },
+    { text = "Working", state = "dot", tone = "blue" },
+    { text = "Ready for review", state = "dot", tone = "green" },
+] }
 
 [[headline]]
 id = "headline-live-release-notes"
