@@ -228,12 +228,26 @@ impl TextLine {
             .map(source)
             .map_err(source)
     }
-    /// Paints a padded, rounded background for each visible fragment of an inline bubble.
+    /// Maps a pointer over a letter back to the original byte offset of that letter.
+    pub(super) fn index_for_position(
+        &self,
+        position: Point<Pixels>,
+        height: Pixels,
+    ) -> Result<usize, usize> {
+        let source = |index| self.map.source_index(self.display_start + index) - self.source_start;
+        self.line
+            .index_for_position(position, height)
+            .map(source)
+            .map_err(source)
+    }
+    /// Paints a padded, rounded background for each visible fragment of an inline bubble. A
+    /// bubble that touches the `hovered` source range is lit in the accent.
     pub(super) fn paint_bubbles(
         &self,
         origin: Point<Pixels>,
         height: Pixels,
         theme: Theme,
+        hovered: Option<&Range<usize>>,
         window: &mut Window,
     ) {
         let layout = &self.line.unwrapped_layout;
@@ -253,6 +267,11 @@ impl TextLine {
                 if a >= b || self.map.source_index(a) == self.map.source_index(b) {
                     continue;
                 }
+                let lit = hovered.is_some_and(|hovered| {
+                    hovered.start < self.map.source_index(bubble.end)
+                        && self.map.source_index(bubble.start) < hovered.end
+                });
+                let tint = if lit { theme.accent } else { theme.dot };
                 let left = layout.x_for_index(a - self.display_start)
                     - row_x
                     - if a > bubble.start {
@@ -279,10 +298,10 @@ impl TextLine {
                 let cell = window.scale_factor();
                 let corners = Corners::all(px(INLINE_RADIUS));
                 window.paint_quad(
-                    fill(bounds, theme.dot.opacity(0.3))
+                    fill(bounds, tint.opacity(0.3))
                         .corner_radii(corners)
                         .border_widths(Edges::all(gpui::px(1.)))
-                        .border_color(theme.dot.opacity(0.6)),
+                        .border_color(tint.opacity(0.6)),
                 );
                 let band = (bounds.size.height * 0.45).round();
                 window.paint_quad(
@@ -291,7 +310,7 @@ impl TextLine {
                             point(bounds.left(), bounds.bottom() - band),
                             size(bounds.size.width, band),
                         ),
-                        checkerboard(theme.dot.opacity(0.45), cell),
+                        checkerboard(tint.opacity(0.45), cell),
                     )
                     .corner_radii(Corners {
                         bottom_left: corners.bottom_left,
@@ -301,7 +320,7 @@ impl TextLine {
                 );
                 // Only a plate that opens something sits on a dotted rule, so that the rule
                 // says that a click works and a line of plain code spans stays quiet.
-                if *opens {
+                if *opens || lit {
                     let baseline = Bounds::new(
                         point(bounds.left(), bounds.bottom() - px(1.)),
                         size(bounds.size.width, px(1.)),

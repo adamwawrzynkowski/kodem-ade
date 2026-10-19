@@ -161,6 +161,8 @@ pub struct TextInput {
     click_anchor: Option<Range<usize>>,
     // Where a single press landed in read-only prose, to tell a click from a drag selection.
     press: Option<(Point<Pixels>, usize)>,
+    /// The link or reference under the pointer in read-only prose, which a click opens.
+    hovered: Option<Range<usize>>,
     undo: Vec<EditState>,
     redo: Vec<EditState>,
     readonly: bool,
@@ -217,6 +219,7 @@ impl TextInput {
             is_selecting: false,
             click_anchor: None,
             press: None,
+            hovered: None,
             undo: Vec::new(),
             redo: Vec::new(),
             readonly: false,
@@ -956,6 +959,7 @@ impl TextInput {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.hover(event, cx);
         if self.delegated_selection && event.pressed_button == Some(MouseButton::Left) {
             cx.emit(SelectionInput::Move {
                 byte: self.index_for_mouse_position(event.position),
@@ -977,6 +981,52 @@ impl TextInput {
                 self.select_to(byte, cx);
             }
         }
+    }
+
+    // Follows the link or reference under the pointer, which shows that a click opens it.
+    fn hover(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let hovered = if event.pressed_button.is_none() {
+            self.clickable_at(event.position)
+        } else {
+            None
+        };
+        if hovered != self.hovered {
+            self.hovered = hovered;
+            cx.notify();
+        }
+    }
+
+    // Finds the link or reference whose letters are under `position` in read-only prose.
+    fn clickable_at(&self, position: Point<Pixels>) -> Option<Range<usize>> {
+        let (spans, _) = self.prose.as_ref().filter(|_| self.readonly)?;
+        let bounds = self.last_bounds?;
+        let mut y = position.y - bounds.top();
+        if y < px(0.) {
+            return None;
+        }
+        for (start, line) in self.last_layout.iter() {
+            let height = line.size(self.line_height).height;
+            if y < height {
+                let index = line
+                    .index_for_position(point(position.x - bounds.left(), y), self.line_height)
+                    .ok()?;
+                let byte = start + index;
+                return spans
+                    .iter()
+                    .find(|span| {
+                        span.range.contains(&byte)
+                            && (span.style.reference
+                                || span
+                                    .style
+                                    .link
+                                    .as_deref()
+                                    .is_some_and(|url| !url.is_empty()))
+                    })
+                    .map(|span| span.range.clone());
+            }
+            y -= height;
+        }
+        None
     }
 
     fn show_character_palette(
@@ -1539,6 +1589,16 @@ impl Element for TextElement {
                 }
             });
         }
+        // The pointer can leave the text without a move inside it, so a hovered link listens
+        // to the window until the pointer is off it.
+        if self.input.read(cx).hovered.is_some() {
+            let input = self.input.clone();
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                if phase == gpui::DispatchPhase::Bubble && input.read(cx).hovered.is_some() {
+                    input.update(cx, |input, cx| input.hover(event, cx));
+                }
+            });
+        }
         let clip = bounds;
         // The text of a scrolled line starts left of the field, and the field clips it.
         let bounds = Bounds::new(
@@ -1594,6 +1654,7 @@ impl TextElement {
                     point(bounds.left(), bounds.top() + y),
                     height,
                     theme,
+                    input.hovered.as_ref(),
                     window,
                 );
                 y += line.size(height).height;
@@ -1681,7 +1742,11 @@ impl Render for TextInput {
                 "TextInput"
             })
             .track_focus(&self.focus_handle(cx))
-            .cursor(CursorStyle::IBeam);
+            .cursor(if self.hovered.is_some() {
+                CursorStyle::PointingHand
+            } else {
+                CursorStyle::IBeam
+            });
         let root = if takes_keys {
             Self::key_actions(root, cx)
         } else {
