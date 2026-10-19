@@ -68,7 +68,8 @@ pub(super) fn active_icon(
             .text_color(color)
             .into_any_element();
     }
-    let dim = dither::cycle(Duration::from_millis(1400)) >= 0.62;
+    // The glyph changes twice per cycle, so the view redraws only then.
+    let (dim, change) = dither::blink(Duration::from_millis(1400), 0.62);
     div()
         .relative()
         .flex_shrink_0()
@@ -78,7 +79,7 @@ pub(super) fn active_icon(
                 .text_color(color)
                 .opacity(if dim { 0.4 } else { 1. }),
         )
-        .child(dither::ticker())
+        .child(dither::ticker_after(change))
         .into_any_element()
 }
 

@@ -1,5 +1,5 @@
 // Modified by Kodem in October 2026 from gpui-ce 0.2.2: sprites are sorted with an unstable
-// sort.
+// sort, and each finished scene takes a generation that renderers can compare.
 
 // todo("windows"): remove
 #![cfg_attr(windows, allow(dead_code))]
@@ -17,7 +17,11 @@ use std::{
     iter::Peekable,
     ops::{Add, Range, Sub},
     slice,
+    sync::atomic::{AtomicU64, Ordering::Relaxed},
 };
+
+// The generation of the next finished scene, unique across windows.
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[allow(non_camel_case_types, unused)]
 #[expect(missing_docs)]
@@ -56,11 +60,13 @@ pub struct Scene {
     pub surfaces: Vec<PaintSurface>,
     pub backdrop_filters: Vec<BackdropFilter>,
     pub filter_boundaries: Vec<FilterBoundary>,
+    generation: u64,
 }
 
 #[expect(missing_docs)]
 impl Scene {
     pub fn clear(&mut self) {
+        self.generation = 0;
         self.paint_operations.clear();
         self.primitive_bounds.clear();
         self.layer_stack.clear();
@@ -201,7 +207,15 @@ impl Scene {
         }
     }
 
+    /// Returns a number that identifies this scene as it was last finished, unique across all
+    /// scenes, or 0 while it is not finished. A renderer that drew a scene of the same generation
+    /// can show that frame again without drawing it.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn finish(&mut self) {
+        self.generation = NEXT_GENERATION.fetch_add(1, Relaxed);
         self.shadows.sort_by_key(|shadow| shadow.order);
         self.quads.sort_by_key(|quad| quad.order);
         self.paths.sort_by_key(|path| path.order);

@@ -724,16 +724,20 @@ fn paint_shadow(
 const FRAME: Duration = Duration::from_millis(80);
 
 thread_local! {
-    // Views that already wait for the next step, so each schedules one timer.
-    static PENDING: RefCell<HashSet<EntityId>> = RefCell::default();
+    // Views that wait for a redraw, and when it comes, so each schedules one timer.
+    static PENDING: RefCell<HashMap<EntityId, Instant>> = RefCell::default();
+}
+
+// Returns the time since the animation clock started.
+fn clock_elapsed() -> Duration {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed()
 }
 
 // Returns the stepped animation time in seconds. Every animated element reads this clock, so
 // they advance together and the window redraws at most once per step.
 fn clock_seconds() -> f32 {
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    let elapsed = START.get_or_init(Instant::now).elapsed();
-    let steps = elapsed.as_millis() / FRAME.as_millis();
+    let steps = clock_elapsed().as_millis() / FRAME.as_millis();
     steps as f32 * FRAME.as_secs_f32()
 }
 
@@ -742,23 +746,66 @@ pub(super) fn cycle(period: Duration) -> f32 {
     (clock_seconds() / period.as_secs_f32()).fract()
 }
 
-// Schedules one redraw of the view that is being painted, at the next step of the clock.
+/// Returns whether a repeating cycle of `period` on the stepped clock is at `edge` or past it,
+/// from 0 to 1, and the time until that changes. Pass the time to [`ticker_after`].
+pub(super) fn blink(period: Duration, edge: f32) -> (bool, Duration) {
+    let now = clock_elapsed().as_millis() as u64;
+    let step = FRAME.as_millis() as u64;
+    let period = (period.as_millis() as u64).max(1);
+    let stepped = now / step * step;
+    let start = stepped / period * period;
+    let edge = (edge.clamp(0., 1.) * period as f32).ceil() as u64;
+    let past = stepped - start >= edge;
+    // The first step of the clock at the edge, or at the start of the next cycle.
+    let change = (if past { start + period } else { start + edge }).div_ceil(step) * step;
+    (
+        past,
+        Duration::from_millis(change.saturating_sub(now).max(1)),
+    )
+}
+
+// Schedules one redraw of the view that is being painted, `delay` from now. A view keeps one
+// timer: a later redraw waits for the one already scheduled, and an earlier one replaces it.
 //
-// The next step is scheduled from a paint, so the clock runs in every window that draws, focused
-// or not, and rests while the window is hidden and the system asks for no frames.
-fn schedule_step(window: &Window, cx: &mut App) {
+// Redraws are scheduled from a paint, so the clock runs in every window that draws, focused or
+// not, and rests while the window is hidden and the system asks for no frames.
+fn schedule_redraw(delay: Duration, window: &Window, cx: &mut App) {
     let view = window.current_view();
-    if !PENDING.with(|pending| pending.borrow_mut().insert(view)) {
+    let due = Instant::now() + delay;
+    let scheduled = PENDING.with(|pending| {
+        let mut pending = pending.borrow_mut();
+        if pending.get(&view).is_some_and(|at| *at <= due) {
+            return false;
+        }
+        pending.insert(view, due);
+        true
+    });
+    if !scheduled {
         return;
     }
     cx.spawn(async move |cx| {
-        cx.background_executor().timer(FRAME).await;
+        cx.background_executor().timer(delay).await;
         cx.update(|cx| {
-            PENDING.with(|pending| pending.borrow_mut().remove(&view));
-            cx.notify(view);
+            // A replaced timer leaves the redraw to the earlier one.
+            let current = PENDING.with(|pending| {
+                let mut pending = pending.borrow_mut();
+                if pending.get(&view) != Some(&due) {
+                    return false;
+                }
+                pending.remove(&view);
+                true
+            });
+            if current {
+                cx.notify(view);
+            }
         });
     })
     .detach();
+}
+
+// Schedules one redraw of the view that is being painted, at the next step of the clock.
+fn schedule_step(window: &Window, cx: &mut App) {
+    schedule_redraw(FRAME, window, cx);
 }
 
 /// An invisible element that redraws its view on the next clock step.
@@ -769,6 +816,17 @@ pub(super) fn ticker() -> impl IntoElement {
     canvas(|_, _, _| {}, |_, _, window, cx| schedule_step(window, cx))
         .absolute()
         .size(px(1.))
+}
+
+/// An invisible element that redraws its view after `delay`, for content that changes less often
+/// than the clock steps, such as a [`blink`].
+pub(super) fn ticker_after(delay: Duration) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |_, _, window, cx| schedule_redraw(delay, window, cx),
+    )
+    .absolute()
+    .size(px(1.))
 }
 
 /// Draws a 4×4 working glyph that fills and empties in Bayer order.

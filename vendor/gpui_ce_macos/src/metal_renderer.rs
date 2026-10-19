@@ -1,6 +1,7 @@
 // Modified by Kodem in October 2026 from gpui_ce_macos 0.1.0: blurs run as compute passes over
 // the region around each shape (see region_blur.rs) and composite in the scene's render pass.
-// The textures of content-filter groups are created on the first scene that has one.
+// The textures of content-filter groups are created on the first scene that has one, and a
+// scene that was drawn before is shown again by copying its offscreen frame.
 
 use crate::metal_atlas::MetalAtlas;
 use crate::region_blur::{BlurJob, TexelRect};
@@ -175,6 +176,9 @@ pub(crate) struct MetalRenderer {
     /// nested content blurs isolate correctly, up to [`MAX_FILTER_DEPTH`]; deeper nests render
     /// inline. Empty until a scene has a content filter, and again after each resize.
     group_textures: Vec<metal::Texture>,
+    /// The generation and size of the last scene drawn to the screen through
+    /// `scene_color_texture`, which still holds that frame.
+    drawn_scene: Option<(u64, Size<DevicePixels>)>,
     path_sample_count: u32,
     /// Offscreen render target reused across `render_scene` calls when
     /// rendering headlessly without reading pixels back.
@@ -513,6 +517,7 @@ impl MetalRenderer {
             blur_pong_texture: None,
             blur_result_texture: None,
             group_textures: Vec::new(),
+            drawn_scene: None,
             path_sample_count: PATH_SAMPLE_COUNT,
             #[cfg(any(test, feature = "test-support"))]
             headless_render_target: None,
@@ -558,6 +563,7 @@ impl MetalRenderer {
     }
 
     fn update_path_intermediate_textures(&mut self, size: Size<DevicePixels>) {
+        self.drawn_scene = None;
         // We are uncertain when this happens, but sometimes size can be 0 here. Most likely before
         // the layout pass on window creation. Zero-sized texture creation causes SIGABRT.
         // https://github.com/zed-industries/zed/issues/36229
@@ -636,6 +642,7 @@ impl MetalRenderer {
     }
 
     pub fn update_transparency(&mut self, transparent: bool) {
+        self.drawn_scene = None;
         self.opaque = !transparent;
         if let Some(layer) = &self.layer {
             layer.set_opaque(!transparent);
@@ -671,6 +678,26 @@ impl MetalRenderer {
             return;
         };
 
+        // GPUI presents the same scene again on each refresh for a while after fast input. When
+        // the offscreen target still holds that frame, copying it is enough.
+        if scene.generation() != 0
+            && self.drawn_scene == Some((scene.generation(), viewport_size))
+            && let Some(scene_color) = self.scene_color_texture.clone()
+        {
+            let command_buffer = self.command_queue.new_command_buffer();
+            self.run_metal_blur_pass(
+                command_buffer,
+                &self.blur_downsample_pipeline_state,
+                drawable.texture(),
+                &scene_color,
+                viewport_size,
+                BlurUniform::default(),
+                false,
+            );
+            self.commit(command_buffer, drawable);
+            return;
+        }
+
         loop {
             let mut instance_buffer = self
                 .instance_buffer_pool
@@ -692,13 +719,14 @@ impl MetalRenderer {
                     let block = block.copy();
                     command_buffer.add_completed_handler(&block);
 
-                    if self.presents_with_transaction {
-                        command_buffer.commit();
-                        command_buffer.wait_until_scheduled();
-                        drawable.present();
-                    } else {
-                        command_buffer.present_drawable(drawable);
-                        command_buffer.commit();
+                    self.commit(&command_buffer, drawable);
+                    // A scene without filters draws straight into the drawable, so there is no
+                    // frame to copy.
+                    let offscreen =
+                        !scene.backdrop_filters.is_empty() || !scene.filter_boundaries.is_empty();
+                    if offscreen && scene.surfaces.is_empty() && self.scene_color_texture.is_some()
+                    {
+                        self.drawn_scene = Some((scene.generation(), viewport_size));
                     }
                     return;
                 }
@@ -724,6 +752,18 @@ impl MetalRenderer {
     }
 
     /// Renders the scene to a texture and returns the pixel data as an RGBA image.
+    // Commits a frame and presents it in `drawable`.
+    fn commit(&self, command_buffer: &metal::CommandBufferRef, drawable: &metal::MetalDrawableRef) {
+        if self.presents_with_transaction {
+            command_buffer.commit();
+            command_buffer.wait_until_scheduled();
+            drawable.present();
+        } else {
+            command_buffer.present_drawable(drawable);
+            command_buffer.commit();
+        }
+    }
+
     /// This does not present the frame to screen - useful for visual testing
     /// where we want to capture what would be rendered without displaying it.
     ///
@@ -1035,6 +1075,8 @@ impl MetalRenderer {
         texture: &metal::TextureRef,
         viewport_size: Size<DevicePixels>,
     ) -> Result<metal::CommandBuffer> {
+        // This frame replaces what the offscreen target holds.
+        self.drawn_scene = None;
         let command_queue = self.command_queue.clone();
         let command_buffer = command_queue.new_command_buffer();
         let alpha = if self.opaque { 1. } else { 0. };
