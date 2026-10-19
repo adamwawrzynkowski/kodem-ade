@@ -913,6 +913,10 @@ pub struct Task {
     pub title: String,
     #[serde(default)]
     pub title_pending: bool,
+    /// Messages sent since a generated title was last compared with the conversation; absent
+    /// when the title was not generated, such as a manual one, so no review replaces it.
+    #[serde(default)]
+    pub title_review: Option<u32>,
     pub cwd: PathBuf,
     pub owns_worktree: bool,
     pub baseline: Option<String>,

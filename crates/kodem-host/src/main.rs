@@ -871,6 +871,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                     );
                     t.title = title;
                     t.title_pending = false;
+                    t.title_review = None;
                 }
                 TaskEdit::Pin(pin) => t.pinned = pin,
                 TaskEdit::Settle(settled) => {
@@ -1404,6 +1405,7 @@ fn new_task(
         project_id,
         title: "New task".into(),
         title_pending: true,
+        title_review: None,
         cwd,
         owns_worktree: false,
         baseline: None,

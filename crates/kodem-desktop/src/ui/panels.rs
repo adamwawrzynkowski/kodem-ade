@@ -503,7 +503,7 @@ impl Shell {
                 "square-terminal",
                 "Runs in the task's checkout and is recorded in the conversation",
             )),
-            Panel::Rename => Some(("pencil", "A manual title replaces the generated one")),
+            Panel::Rename => Some(("pencil", "A manual title stops automatic renaming")),
             Panel::DeleteTask => Some(("trash-2", "Removes this task's local conversation")),
             Panel::ImportThreads => Some((
                 "arrow-down-to-line",

@@ -179,7 +179,7 @@ pub(super) fn submit(
         !id.is_empty() && id.len() <= 128,
         "Invalid submission identity"
     );
-    {
+    let review_title = {
         let h = host.lock().unwrap();
         ensure!(!h.shutdown, "Host is restarting. Retry after reconnecting.");
         if h.store
@@ -265,7 +265,13 @@ pub(super) fn submit(
         }
         task.updated = now();
         task.last_started = Some(task.updated);
+        let review_title = crate::titles::count(&mut task);
         h.store.accept_outgoing(&task, &message, &prompt)?;
+        review_title
+    };
+    // The message is accepted, so a title review that cannot start does not fail it.
+    if review_title {
+        let _ = crate::titles::review(host.clone(), &task_id);
     }
     ensure_owner(host, task_id);
     Ok(())
@@ -872,9 +878,9 @@ pub(crate) fn executable(provider: Provider) -> Result<PathBuf> {
 }
 
 /// Generates a short task title under the task's account for providers without their own.
-pub(crate) fn generate_title(account: &Account, input: &str) -> Result<String> {
+pub(crate) fn generate_title(account: &Account, instructions: &str, input: &str) -> Result<String> {
     match account.provider {
-        Provider::Claude => claude::generate_title(account, input),
+        Provider::Claude => claude::generate_title(account, instructions, input),
         Provider::Codex | Provider::OpenCode => {
             anyhow::bail!("This provider titles its conversations itself")
         }
