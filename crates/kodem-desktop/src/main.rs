@@ -6,6 +6,7 @@ mod bridge;
 mod browser;
 mod clipboard;
 mod components;
+mod harness;
 mod icons;
 mod markdown;
 mod release_notes;

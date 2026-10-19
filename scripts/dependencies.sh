@@ -316,18 +316,12 @@ kodem_runtime_version() {
     [[ -x "$root/bin/codex$KODEM_EXE" && -x "$root/bin/codex-code-mode-host$KODEM_EXE" && -x "$root/codex-path/rg$KODEM_EXE" ]] || { kodem_runtime_reject "$explain" "bin/codex, bin/codex-code-mode-host or codex-path/rg is missing"; return 1; }
     case "$KODEM_PLATFORM" in
         windows) [[ -f "$root/codex-resources/codex-command-runner.exe" ]] || { kodem_runtime_reject "$explain" "codex-resources/codex-command-runner.exe is missing"; return 1; } ;;
-        linux) [[ -x "$root/codex-resources/zsh/bin/zsh" && -x "$root/codex-resources/bwrap" ]] || { kodem_runtime_reject "$explain" "codex-resources/zsh or codex-resources/bwrap is missing"; return 1; } ;;
-        macos) [[ -x "$root/codex-resources/zsh/bin/zsh" ]] || { kodem_runtime_reject "$explain" "codex-resources/zsh is missing"; return 1; } ;;
+        linux) [[ -x "$root/codex-resources/bwrap" ]] || { kodem_runtime_reject "$explain" "codex-resources/bwrap is missing"; return 1; } ;;
     esac
     cli_version=$("$root/bin/codex$KODEM_EXE" --version 2>/dev/null | tr -d '\r') || { kodem_runtime_reject "$explain" "codex --version did not run"; return 1; }
     [[ "$cli_version" == "codex-cli $package_version" ]] || { kodem_runtime_reject "$explain" "codex reports '$cli_version', not $package_version"; return 1; }
     "$root/bin/codex-code-mode-host$KODEM_EXE" --help >/dev/null 2>&1 || { kodem_runtime_reject "$explain" "codex-code-mode-host did not run"; return 1; }
     "$root/codex-path/rg$KODEM_EXE" --version >/dev/null 2>&1 || { kodem_runtime_reject "$explain" "the bundled rg did not run"; return 1; }
-    # Linux packages bundle a zsh linked against glibc 2.38, which older distributions lack.
-    # Codex runs without it there, and Kodem's own check never starts it either.
-    if [[ "$KODEM_PLATFORM" == macos ]]; then
-        "$root/codex-resources/zsh/bin/zsh" -f -c 'exit 0' >/dev/null 2>&1 || { kodem_runtime_reject "$explain" "the bundled zsh did not run"; return 1; }
-    fi
     echo "$package_version"
 }
 

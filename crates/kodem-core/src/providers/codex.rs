@@ -24,7 +24,6 @@ const INSTALL_COMMAND: &str = "scripts/build-linux.sh debug";
 const PACKAGE_FILES: &[&str] = &[
     "bin/codex-code-mode-host",
     "codex-path/rg",
-    "codex-resources/zsh/bin/zsh",
     "codex-package.json",
 ];
 #[cfg(windows)]
@@ -38,7 +37,6 @@ const PACKAGE_FILES: &[&str] = &[
 const PACKAGE_FILES: &[&str] = &[
     "bin/codex-code-mode-host",
     "codex-path/rg",
-    "codex-resources/zsh/bin/zsh",
     "codex-resources/bwrap",
     "codex-package.json",
 ];

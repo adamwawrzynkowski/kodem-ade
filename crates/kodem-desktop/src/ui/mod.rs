@@ -19,6 +19,7 @@ mod effort_slider;
 mod file_edit;
 mod fx;
 mod git;
+mod harness_updates;
 mod history;
 mod image_preview;
 mod kit;
@@ -167,6 +168,8 @@ pub struct Shell {
     update_state: crate::updater::State,
     update_tx: mpsc::Sender<crate::updater::State>,
     last_update_check: std::time::Instant,
+    /// The installed and newest release of each provider's CLI and the updates of the card.
+    harness_updates: harness_updates::HarnessUpdates,
     focus: FocusHandle,
     workspace: Option<Workspace>,
     /// The open workspace. An open task is always of this kind.
@@ -550,6 +553,10 @@ impl Shell {
                         {
                             s.check_for_updates(cx);
                         }
+                        s.receive_harness_events(cx);
+                        if s.harness_updates.due() {
+                            s.check_harness_updates(cx);
+                        }
                     })
                     .is_err()
                 {
@@ -627,6 +634,7 @@ impl Shell {
             update_state: crate::updater::State::Idle,
             update_tx,
             last_update_check: std::time::Instant::now(),
+            harness_updates: Default::default(),
             focus,
             workspace: None,
             mode: TaskKind::default(),

@@ -315,18 +315,21 @@ impl Shell {
             }))
     }
 
-    /// Returns the floating cards in the window's top right corner, newest first, or nothing
-    /// while no card floats.
+    /// Returns the floating cards in the window's top right corner: the provider update card
+    /// first, then the notices newest first, or nothing while no card floats.
     pub(super) fn floating_notices(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let mut cards = self
+        let update = self.harness_update_card(cx);
+        let cards: Vec<AnyElement> = self
             .notices
             .list
             .iter()
             .rev()
             .filter(|notice| notice.float != Float::Gone)
-            .peekable();
-        cards.peek()?;
-        let cards: Vec<AnyElement> = cards.map(|notice| self.notice_card(notice, cx)).collect();
+            .map(|notice| self.notice_card(notice, cx))
+            .collect();
+        if update.is_none() && cards.is_empty() {
+            return None;
+        }
         Some(
             div()
                 .absolute()
@@ -336,6 +339,7 @@ impl Shell {
                 .flex_col()
                 .items_end()
                 .gap(px(8.))
+                .children(update)
                 .children(cards)
                 .into_any_element(),
         )

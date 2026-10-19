@@ -297,7 +297,7 @@ fn curl(endpoint: &str, token: Option<&str>, binary: bool) -> Result<std::proces
     Ok(child)
 }
 /// Returns the curl that the system ships: macOS and Windows 10 and later include one.
-fn curl_program() -> PathBuf {
+pub(crate) fn curl_program() -> PathBuf {
     #[cfg(windows)]
     {
         std::env::var_os("SystemRoot")

@@ -20,11 +20,7 @@ const DIAGNOSTIC_LIMIT: usize = 4096;
 
 /// Resolves the native CLI, including the installer location absent from GUI PATH values.
 pub(super) fn executable() -> PathBuf {
-    if let Some(path) = std::env::var_os("KODEM_CLAUDE_PATH") {
-        return PathBuf::from(path);
-    }
-    kodem_core::platform::find_program("claude", &kodem_core::platform::tool_directories())
-        .unwrap_or_else(|| PathBuf::from("claude"))
+    kodem_core::providers::claude::executable()
 }
 
 /// How a process relates to a conversation stored by the CLI.
