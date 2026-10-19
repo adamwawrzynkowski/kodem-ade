@@ -1,5 +1,6 @@
 // Modified by Kodem in October 2026 from gpui-ce 0.2.2: a window keeps the scroll chain of the
-// current wheel gesture, and prepares it for each scroll wheel event.
+// current wheel gesture, and prepares it for each scroll wheel event. `on_next_refresh` runs
+// callbacks on every refresh without the cap on an inactive window's frames.
 
 #[cfg(any(feature = "inspector", debug_assertions))]
 use crate::Inspector;
@@ -1107,6 +1108,7 @@ pub struct Window {
     pub(crate) next_tooltip_id: TooltipId,
     pub(crate) tooltip_bounds: Option<TooltipBounds>,
     next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>>,
+    next_refresh_callbacks: Rc<RefCell<Vec<FrameCallback>>>,
     pub(crate) dirty_views: FxHashSet<EntityId>,
     focus_listeners: SubscriberSet<(), AnyWindowFocusListener>,
     pub(crate) focus_lost_listeners: SubscriberSet<(), AnyObserver>,
@@ -1447,6 +1449,7 @@ impl Window {
         let hovered = Rc::new(Cell::new(platform_window.is_hovered()));
         let needs_present = Rc::new(Cell::new(false));
         let next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
+        let next_refresh_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
         let input_rate_tracker = Rc::new(RefCell::new(InputRateTracker::default()));
         let last_frame_time = Rc::new(Cell::new(None));
 
@@ -1560,6 +1563,7 @@ impl Window {
             let active = active.clone();
             let needs_present = needs_present.clone();
             let next_frame_callbacks = next_frame_callbacks.clone();
+            let next_refresh_callbacks = next_refresh_callbacks.clone();
             let input_rate_tracker = input_rate_tracker.clone();
             let mut deferred_force_render = false;
             move |request_frame_options| {
@@ -1589,19 +1593,35 @@ impl Window {
                 let force_render =
                     mem::take(&mut deferred_force_render) || request_frame_options.force_render;
 
+                // Motion that paces itself runs on every refresh, so it keeps the display's
+                // cadence even while the window is inactive.
+                let refresh_callbacks = next_refresh_callbacks.take();
+                let paced = !refresh_callbacks.is_empty();
+                if paced {
+                    handle
+                        .update(&mut cx, |_, window, cx| {
+                            for callback in refresh_callbacks {
+                                callback(window, cx);
+                            }
+                        })
+                        .log_err();
+                }
+
                 let thermal_state = handle
                     .update(&mut cx, |_, _, cx| cx.thermal_state())
                     .log_err();
 
                 // Throttle frame rate based on conditions:
                 // - Thermal pressure (Serious/Critical): cap to ~60fps
-                // - Inactive window (not focused): cap to ~30fps to save energy
+                // - Inactive window (not focused): cap to ~30fps to save energy, unless motion
+                //   that paces itself waits for refreshes
                 let min_frame_interval = if request_frame_options.require_presentation
                     || (!request_frame_options.force_render
                         && next_frame_callbacks.borrow().is_empty())
                 {
                     None
-                } else if !active.get() && !input_rate_tracker.borrow_mut().is_high_rate() {
+                } else if !paced && !active.get() && !input_rate_tracker.borrow_mut().is_high_rate()
+                {
                     Some(Duration::from_micros(33333))
                 } else if let Some(ThermalState::Critical | ThermalState::Serious) = thermal_state {
                     Some(Duration::from_micros(16667))
@@ -1853,6 +1873,7 @@ impl Window {
             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame_callbacks,
+            next_refresh_callbacks,
             next_hitbox_id: HitboxId(0),
             next_tooltip_id: TooltipId::default(),
             tooltip_bounds: None,
@@ -2341,6 +2362,13 @@ impl Window {
     /// Schedule the given closure to be run directly after the current frame is rendered.
     pub fn on_next_frame(&self, callback: impl FnOnce(&mut Window, &mut App) + 'static) {
         RefCell::borrow_mut(&self.next_frame_callbacks).push(Box::new(callback));
+    }
+
+    /// Schedules `callback` for the next display refresh of this window, for motion that paces
+    /// itself. Unlike [`Self::on_next_frame`], a pending callback does not cap the frames of an
+    /// inactive window to save energy, so the caller must keep its own rate low.
+    pub fn on_next_refresh(&self, callback: impl FnOnce(&mut Window, &mut App) + 'static) {
+        RefCell::borrow_mut(&self.next_refresh_callbacks).push(Box::new(callback));
     }
 
     /// Schedule a frame to be drawn on the next animation frame.

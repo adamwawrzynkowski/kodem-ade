@@ -1491,9 +1491,10 @@ impl SkaterLayer {
 }
 
 // Notifies the layer `view` on the first display refresh at least `SMOOTH_FRAME` after `since`,
-// so the motion keeps to whole refreshes without drawing a frame on each one.
+// so the motion keeps to whole refreshes without drawing a frame on each one. Refreshes come at
+// the display's rate in an unfocused window too, so the motion stays as smooth there.
 fn pace(view: EntityId, pacing: Rc<Cell<bool>>, since: Instant, window: &Window) {
-    window.on_next_frame(move |window, cx| {
+    window.on_next_refresh(move |window, cx| {
         if since.elapsed() < SMOOTH_FRAME {
             pace(view, pacing, since, window);
             return;
