@@ -293,6 +293,8 @@ pub struct Shell {
     context_task: Option<String>,
     files: Vec<Vec<u8>>,
     file_text: Option<(String, String)>,
+    /// A transcript reference that waits for the checkout's file list to find its file.
+    pending_reference: Option<String>,
     dragging_sidebar: bool,
     dragging_review: bool,
     /// A press on a title bar that the app draws itself, which moves the window once the
@@ -719,6 +721,7 @@ impl Shell {
             context_task: None,
             files: Vec::new(),
             file_text: None,
+            pending_reference: None,
             dragging_sidebar: false,
             dragging_review: false,
             title_press: false,
@@ -1510,6 +1513,9 @@ impl Shell {
             Response::Files(files) => {
                 self.files = files;
                 self.files_loaded();
+                if let Some(reference) = self.pending_reference.take() {
+                    self.open_listed_reference(&reference, cx);
+                }
             }
             Response::EditableFile(file) => self.edit_opened(file, cx),
             Response::Text(text) => {
@@ -1724,6 +1730,7 @@ impl Shell {
         self.task_changes = None;
         self.terminal = None;
         self.file_text = None;
+        self.pending_reference = None;
         self.text_views.clear();
         self.unfolded_texts.clear();
         self.chat_selection = cx.new(|_| Default::default());
@@ -1797,6 +1804,7 @@ impl Shell {
         self.reviewing_file = false;
         self.terminal = None;
         self.file_text = None;
+        self.pending_reference = None;
         // The conversation is asked for first, so the settings write does not delay it.
         self.send(core::Request::Task {
             task_id: id.clone(),
@@ -2029,8 +2037,10 @@ impl Shell {
         }
     }
 
-    // Opens a file or path that the transcript referred to: in the file browser when it belongs
-    // to the task's checkout, otherwise in the system's default application.
+    // Opens a file or path that the transcript referred to. A file of the task's checkout opens
+    // in the file browser. An agent often names a file relative to a neighbouring project, or by
+    // its name alone, so a reference that is not under the task's folder is looked up in the
+    // workspace's projects and then by name among the checkout's files.
     fn open_reference(&mut self, reference: &str, cx: &mut Context<Self>) {
         let path = reference
             .split(['#', ':'])
@@ -2043,33 +2053,139 @@ impl Shell {
         let Some(view) = &self.view else {
             return;
         };
-        let root = &view.task.cwd;
-        let absolute = if let Some(rest) = path.strip_prefix("~/") {
-            kodem_core::platform::home_dir()
-                .ok()
-                .map(|home| home.join(rest))
-        } else {
-            Some(root.join(path))
-        };
-        let Some(absolute) = absolute else {
+        let task_id = view.task.id.clone();
+        let root = view.task.cwd.clone();
+        let Some(absolute) = self.locate_reference(path) else {
+            if !self.has_checkout() {
+                self.report_error(format!("Could not find {path}."), cx);
+            } else if self.files.is_empty() {
+                self.pending_reference = Some(path.to_owned());
+                self.send(core::Request::Files { task_id });
+            } else {
+                self.open_listed_reference(path, cx);
+            }
             return;
         };
-        // A chat has no checkout to browse, so its references open in their own application.
-        if self.has_checkout()
-            && let Ok(relative) = absolute.strip_prefix(root)
-        {
-            self.panel = Panel::Files;
-            self.send(core::Request::Files {
-                task_id: view.task.id.clone(),
-            });
-            self.send(core::Request::ReadFile {
-                task_id: view.task.id.clone(),
-                path: kodem_core::platform::os_bytes(relative.as_os_str()),
-            });
-        } else {
+        // A chat has no checkout to browse and a folder has no preview, so they open in the
+        // system's application.
+        if !self.has_checkout() || absolute.is_dir() {
             cx.open_with_system(&absolute);
+            return;
         }
+        let checkout = root
+            .canonicalize()
+            .map(kodem_core::platform::plain_path)
+            .unwrap_or(root);
+        let relative = absolute
+            .canonicalize()
+            .map(kodem_core::platform::plain_path)
+            .ok()
+            .and_then(|resolved| {
+                resolved
+                    .strip_prefix(&checkout)
+                    .ok()
+                    .map(|relative| kodem_core::platform::os_bytes(relative.as_os_str()))
+            });
+        if let Some(relative) = relative {
+            self.show_checkout_file(relative, cx);
+        } else {
+            self.show_outside_file(absolute, cx);
+        }
+    }
+
+    // Returns the existing file or folder that a reference names: under the task's folder
+    // first, then under the task's project and the other projects of the workspace.
+    fn locate_reference(&self, path: &str) -> Option<PathBuf> {
+        let view = self.view.as_ref()?;
+        if let Some(rest) = path.strip_prefix("~/") {
+            return kodem_core::platform::home_dir()
+                .ok()
+                .map(|home| home.join(rest))
+                .filter(|candidate| candidate.exists());
+        }
+        let mut projects: Vec<&Project> = self
+            .workspace
+            .iter()
+            .flat_map(|workspace| &workspace.projects)
+            .filter(|project| !project.removed)
+            .collect();
+        projects.sort_by_key(|project| project.id != view.task.project_id);
+        std::iter::once(&view.task.cwd)
+            .chain(projects.into_iter().map(|project| &project.path))
+            .map(|root| root.join(path))
+            .find(|candidate| candidate.exists())
+    }
+
+    // Opens the one file of the checkout's list whose path ends with a reference, such as a file
+    // that the agent named without its folder.
+    fn open_listed_reference(&mut self, path: &str, cx: &mut Context<Self>) {
+        let name = path.trim_start_matches("./");
+        let suffix = format!("/{name}");
+        let found: Vec<Vec<u8>> = self
+            .files
+            .iter()
+            .filter(|file| {
+                let file = String::from_utf8_lossy(file);
+                file == name || file.ends_with(&suffix)
+            })
+            .take(2)
+            .cloned()
+            .collect();
+        match found.as_slice() {
+            [file] => self.show_checkout_file(file.clone(), cx),
+            [] => self.report_error(
+                format!("Could not find {name} in this task's folder or its projects."),
+                cx,
+            ),
+            _ => self.report_error(
+                format!("{name} matches more than one file in this task's folder."),
+                cx,
+            ),
+        }
+    }
+
+    // Previews a file of the task's checkout, given relative to it, in the file browser.
+    fn show_checkout_file(&mut self, path: Vec<u8>, cx: &mut Context<Self>) {
+        let Some(view) = &self.view else {
+            return;
+        };
+        let task_id = view.task.id.clone();
+        self.panel = Panel::Files;
+        self.send(core::Request::Files {
+            task_id: task_id.clone(),
+        });
+        self.send(core::Request::ReadFile { task_id, path });
         cx.notify();
+    }
+
+    // Previews a text file outside the checkout, such as one of a neighbouring project, in the
+    // file browser. A file with no text preview opens in the system's application.
+    fn show_outside_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let task_id = self.selected.clone();
+        cx.spawn(async move |this, cx| {
+            let reading = path.clone();
+            let text = cx
+                .background_executor()
+                .spawn(async move { kodem_core::git::read_text(&reading) })
+                .await;
+            let _ = this.update(cx, |s, cx| {
+                if s.selected != task_id {
+                    return;
+                }
+                match text {
+                    Ok(text) => {
+                        s.panel = Panel::Files;
+                        if let Some(task_id) = task_id {
+                            s.send(core::Request::Files { task_id });
+                        }
+                        s.file_text = Some((path.display().to_string(), text));
+                    }
+                    Err(_) => cx.open_with_system(&path),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Opens preferences on one section.

@@ -1080,10 +1080,15 @@ pub fn read_file(cwd: &Path, path: &[u8]) -> Result<String> {
         resolved.starts_with(cwd.canonicalize().map(crate::platform::plain_path)?),
         "File resolves outside the task checkout"
     );
-    ensure!(fs::metadata(&resolved)?.is_file(), "Choose a regular file");
+    read_text(&resolved)
+}
+/// Reads a regular text file within the viewer's size limit.
+pub fn read_text(path: &Path) -> Result<String> {
+    let metadata = fs::metadata(path)?;
+    ensure!(metadata.is_file(), "Choose a regular file");
     ensure!(
-        fs::metadata(&resolved)?.len() <= MAX_FILE,
+        metadata.len() <= MAX_FILE,
         "File exceeds 2 MiB viewer limit"
     );
-    String::from_utf8(fs::read(resolved)?).context("Binary/non-UTF8 file has no text preview")
+    String::from_utf8(fs::read(path)?).context("Binary/non-UTF8 file has no text preview")
 }
