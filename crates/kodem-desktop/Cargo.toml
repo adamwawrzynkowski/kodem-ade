@@ -32,6 +32,8 @@ uuid.workspace = true
 [build-dependencies]
 embed-resource = "3"
 image = { version = "0.25", default-features = false, features = ["png", "ico"] }
+serde.workspace = true
+toml = { version = "1", default-features = false, features = ["std", "serde", "parse"] }
 
 # The browser of the side pane: the platform's web view inside the window.
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]

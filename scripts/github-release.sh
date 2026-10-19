@@ -11,6 +11,10 @@
 # platform alone, or adds it to the release of the same commit.
 release_repository=adamwawrzynkowski/kodem-ade
 release_workflow=release.yml
+# The release highlights that the What's new board draws (see its header for the format).
+release_highlights_file=changelog/highlights.toml
+# The subject prefix of commits that change only the highlights. The change list leaves them out.
+release_changelog_prefix='Changelog:'
 
 # Fails unless GitHub CLI's account may create release tags. The Release tags ruleset reserves
 # them for the owner, collaborators and the release workflow, whose job permissions decide.
@@ -27,11 +31,16 @@ kodem_release_prepare() {
     base=${base##*#}
     base=${base##*@}
     release_version=$base
-    # The commit subjects since the previous release of the channel, embedded for the app's
-    # What's new dialog. Debug builds have none.
+    # The commit subjects since the previous release of the channel and the ids of the highlights
+    # that it did not have, embedded for the app's What's new dialog. Debug builds have no commit
+    # list and preview the highlights that the newest Nightly in this clone lacks.
     release_previous=""
     release_notes=""
-    [[ "$channel" != debug ]] || return 0
+    release_highlights=""
+    if [[ "$channel" == debug ]]; then
+        kodem_release_local_highlights
+        return 0
+    fi
     release_existing=""
     if [[ -n "${KODEM_RELEASE_VERSION:-}" ]]; then
         # Part of a release that another build publishes: the version is given, and this build
@@ -43,6 +52,7 @@ kodem_release_prepare() {
         release_version=$KODEM_RELEASE_VERSION
         release_previous=${KODEM_RELEASE_PREVIOUS:-}
         release_notes=${KODEM_RELEASE_NOTES:-}
+        release_highlights=${KODEM_RELEASE_HIGHLIGHTS:-}
         release_tag="v$release_version"
         [[ "$channel" != nightly ]] || release_tag="nightly/$release_tag"
         echo "Release package: $release_tag at $release_commit (published by the build that started this one)"
@@ -73,6 +83,7 @@ kodem_release_prepare() {
         [[ -z "${KODEM_VERSION:-}" || "$KODEM_VERSION" == "$release_version" ]] || { echo "This commit is already released as $release_tag. Unset KODEM_VERSION to add this platform to it." >&2; return 1; }
         echo "Release: $release_repository $release_tag at $release_commit (adding this platform)"
         kodem_release_changes "$channel" "$tags"
+        kodem_release_highlights
         return 0
     fi
     if [[ "$channel" == nightly ]]; then
@@ -93,11 +104,135 @@ kodem_release_prepare() {
     [[ "$channel" != nightly ]] || release_tag="nightly/$release_tag"
     echo "Release: $release_repository $release_tag at $release_commit"
     kodem_release_changes "$channel" "$tags"
+    kodem_release_check_changelog "$(kodem_release_tag "$channel" "$release_previous")" "$release_commit"
+    kodem_release_highlights
+}
+
+# Prints the tag of a channel's version, or nothing for no version.
+kodem_release_tag() {
+    local channel=$1 version=$2
+    [[ -n "$version" ]] || return 0
+    if [[ "$channel" == nightly ]]; then echo "nightly/v$version"; else echo "v$version"; fi
+}
+
+# Prints the tag of the newest published release of a channel on GitHub, or nothing before its
+# first one.
+kodem_release_newest_tag() {
+    local channel=$1 pattern='^v[0-9]+\.[0-9]+\.[0-9]+$' tags
+    [[ "$channel" != nightly ]] || pattern='^nightly/v[0-9]+\.[0-9]+\.[0-9]+$'
+    tags=$(gh api --paginate "repos/$release_repository/releases?per_page=100" --jq '.[] | select(.draft | not) | .tag_name') || return 1
+    printf '%s\n' "$tags" | { grep -E "$pattern" || true; } | sed -E 's@^(nightly/)?v@@' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 | while read -r version; do kodem_release_tag "$channel" "$version"; done
+}
+
+# Prints the ids of the entries of a highlights file read from standard input. build.rs makes
+# every entry write its id on a line of its own in exactly this form.
+kodem_highlight_ids() {
+    sed -nE 's/^id = "([a-z0-9-]+)"$/\1/p'
+}
+
+# Sets release_highlights to the ids of the highlights that the release before this one, the
+# release_previous of the channel, did not have. Without an earlier release every entry is new.
+# Missing highlights never stop a release: when GitHub cannot tell what the previous release
+# had, this release shows none rather than old ones again.
+kodem_release_highlights() {
+    local previous_tag shipped current
+    current=$(kodem_highlight_ids < "$release_highlights_file")
+    previous_tag=$(kodem_release_tag "$channel" "$release_previous")
+    if [[ -z "$previous_tag" ]]; then
+        release_highlights=$current
+    elif shipped=$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$release_repository/contents/$release_highlights_file?ref=$previous_tag" 2>/dev/null); then
+        release_highlights=$(comm -23 <(printf '%s\n' "$current" | sort) <(printf '%s\n' "$shipped" | kodem_highlight_ids | sort))
+    elif [[ "$(gh api "repos/$release_repository/commits?sha=$previous_tag&path=$release_highlights_file&per_page=1" --jq length 2>/dev/null)" == 0 ]]; then
+        # The previous release came before the highlights file.
+        release_highlights=$current
+    else
+        echo "Could not read the highlights of $previous_tag. This release shows no highlights." >&2
+        release_highlights=""
+    fi
+    echo "Highlights new since ${previous_tag:-the first release}: $(printf '%s' "$release_highlights" | grep -c . || true)"
+}
+
+# Sets release_highlights for a Debug build to the ids that the newest Nightly tag in this clone
+# lacks, so the build previews the board of the next Nightly. Every entry without such a tag.
+kodem_release_local_highlights() {
+    local tag
+    release_highlights=$(kodem_highlight_ids < "$release_highlights_file")
+    tag=$(git tag -l 'nightly/v*' --sort=-v:refname 2>/dev/null | head -1 || true)
+    [[ -n "$tag" ]] || return 0
+    release_highlights=$(comm -23 <(printf '%s\n' "$release_highlights" | sort) <(git show "$tag:$release_highlights_file" 2>/dev/null | kodem_highlight_ids | sort))
+}
+
+# Fails unless the highlights file reviewed every commit after a channel's previous release tag
+# up to a commit: each commit after the file's `reviewed` commit must be a Changelog: commit
+# that changes only the file. Then prints the commits it lacks and a prompt for a coding model
+# that writes the highlights, and copies the prompt where a clipboard command exists. Before the
+# first release of a channel there is nothing to review.
+kodem_release_check_changelog() {
+    local previous_tag=$1 commit=$2 reviewed range after status sha subject files pending="" prompt
+    [[ -n "$previous_tag" ]] || return 0
+    reviewed=$(sed -nE 's/^reviewed = "([0-9a-f]{40})"$/\1/p' "$release_highlights_file")
+    range=$(gh api "repos/$release_repository/compare/$previous_tag...$commit?per_page=250" --jq '.commits[] | select((.parents | length) < 2) | [.sha, (.commit.message | split("\n")[0])] | @tsv') \
+        || { echo "Could not read the commits since $previous_tag, so the release highlights cannot be checked. Retry when GitHub answers." >&2; return 1; }
+    if [[ -n "$reviewed" ]]; then
+        after=$(gh api "repos/$release_repository/compare/$reviewed...$commit?per_page=250" --jq '.status, .commits[].sha') \
+            || { echo "The reviewed commit $reviewed of $release_highlights_file is not on GitHub." >&2; return 1; }
+        status=$(head -1 <<< "$after")
+        [[ "$status" == ahead || "$status" == identical ]] || { echo "The reviewed commit $reviewed of $release_highlights_file is not an ancestor of $commit." >&2; return 1; }
+    else
+        after=$(cut -f 1 <<< "$range")
+    fi
+    while IFS=$'\t' read -r sha subject; do
+        [[ -n "$sha" ]] && grep -Fxq "$sha" <<< "$after" || continue
+        if [[ "$subject" == "$release_changelog_prefix"* ]]; then
+            files=$(gh api "repos/$release_repository/commits/$sha" --jq '[.files[].filename] | join(" ")') \
+                || { echo "Could not read the files of $sha." >&2; return 1; }
+            [[ "$files" != "$release_highlights_file" ]] || continue
+            echo "${sha:0:12} \"$subject\" changes more than $release_highlights_file. A $release_changelog_prefix commit may change only that file; reword it or split it." >&2
+            return 1
+        fi
+        pending+="${sha:0:12} $subject"$'\n'
+    done <<< "$range"
+    [[ -n "$pending" ]] || { echo "Release highlights reviewed every change since $previous_tag."; return 0; }
+    # read, not a command substitution: bash 3.2 misparses apostrophes in a heredoc inside $( ).
+    IFS= read -r -d '' prompt <<PROMPT || true
+Update the release highlights of Kodem in $release_highlights_file. Kodem's What's new dialog draws them as a board of cards, and every release shows the entries that its channel's previous release did not have.
+
+These commits since $previous_tag are not reviewed yet, oldest first:
+$pending
+1. Read the header of $release_highlights_file. It defines the format, the visual kinds and their limits, and it is the only reference you need for the file.
+2. Read every commit above with \`git show <commit>\`, and the entries of docs/implementation/progress.md that the commits record, to learn what changed for the user.
+3. For each change that a user can notice, add a [[highlight]] above the existing highlights; group related commits into one card. Write a short human title and text about what the user gets, not the commit subject. Leave out refactors, internal and build changes, and fixes nobody could notice. It is fine to add no highlight when nothing is visible to users.
+4. Give a card a visual when it helps, with true data only: measured figures from the commits or the progress notes, real names, real shortcuts and real states. Never invent numbers. Prefer widths that add up to 6, 10, 14… columns, so the board has no gaps.
+5. When the changes are worth a sentence on the version card, add one [[headline]] above the existing headlines.
+6. Set reviewed = "$commit", the newest commit that you reviewed.
+7. Run \`cargo build -p kodem-desktop --locked\` (if cargo is not found, first run \`export PATH="\$HOME/.cargo/bin:\$PATH"\`). build.rs checks the file and reports each mistake; fix them all.
+8. Commit only $release_highlights_file, with a subject that starts with "$release_changelog_prefix", for example "$release_changelog_prefix Highlights for the next release". Do not change other files, and do not push.
+PROMPT
+    {
+        echo
+        echo "The release highlights are not done: $release_highlights_file has not reviewed these commits since $previous_tag:"
+        printf '%s' "$pending" | sed 's/^/  /'
+        echo
+        echo "Nothing was started. Send the prompt below to a coding model in this repository, push its $release_changelog_prefix commit, and release again."
+        echo
+        echo "----- prompt -----"
+        printf '%s' "$prompt"
+        echo "----- end of prompt -----"
+    } >&2
+    if [[ "${GITHUB_ACTIONS:-}" != true ]]; then
+        if command -v pbcopy >/dev/null; then
+            printf '%s' "$prompt" | pbcopy && echo "The prompt is on the clipboard." >&2
+        elif command -v clip.exe >/dev/null; then
+            printf '%s' "$prompt" | clip.exe && echo "The prompt is on the clipboard." >&2
+        fi
+    fi
+    return 1
 }
 
 # Sets release_previous to the newest release of the channel before release_version, and
-# release_notes to the subjects of the commits since it, newest first, without merges. GitHub
-# compares up to 250 commits; the notes keep 100. Missing notes never stop a release.
+# release_notes to the subjects of the commits since it, newest first, without merges and without
+# the Changelog: commits that only change the highlights. GitHub compares up to 250 commits; the
+# notes keep 100. Missing notes never stop a release.
 kodem_release_changes() {
     local channel=$1 tags=$2 previous_tag base
     if [[ "$channel" == nightly ]]; then
@@ -110,7 +245,7 @@ kodem_release_changes() {
     previous_tag="v$release_previous"
     [[ "$channel" != nightly ]] || previous_tag="nightly/$previous_tag"
     if ! base=$(gh api "repos/$release_repository/git/ref/tags/$previous_tag" --jq .object.sha) \
-        || ! release_notes=$(gh api "repos/$release_repository/compare/$base...$release_commit?per_page=250" --jq '[.commits[] | select((.parents | length) < 2) | .commit.message | split("\n")[0]] | reverse | .[:100] | .[]'); then
+        || ! release_notes=$(gh api "repos/$release_repository/compare/$base...$release_commit?per_page=250" --jq "[.commits[] | select((.parents | length) < 2) | .commit.message | split(\"\\n\")[0] | select(startswith(\"$release_changelog_prefix\") | not)] | reverse | .[:100] | .[]"); then
         echo "Could not read the changes since $previous_tag. This release shows no change list." >&2
         release_notes=""
         return 0

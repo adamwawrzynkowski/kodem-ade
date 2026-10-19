@@ -31,7 +31,7 @@ fn footer(theme: Theme, actions: Div) -> Div {
 
 impl Shell {
     /// Builds the active workspace dialog.
-    pub(super) fn panel(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
         let title = match self.panel {
             Panel::CustomizeProject => "Customize project",
@@ -67,7 +67,11 @@ impl Shell {
         let mut content = div()
             .id("panel-body")
             .min_h_0()
-            .max_h(px(650.))
+            .max_h(px(if self.panel == Panel::WhatsNew {
+                whats_new::BODY_HEIGHT
+            } else {
+                650.
+            }))
             .overflow_y_scroll()
             .flex()
             .flex_col()
@@ -261,37 +265,7 @@ impl Shell {
                 content = content.p_0().gap_0().child(self.settings_panel(cx));
             }
             Panel::WhatsNew => {
-                let version = format!(
-                    "{} {}",
-                    crate::updater::Channel::current().app_name(),
-                    crate::updater::VERSION
-                );
-                let summary = if crate::release_notes::PREVIOUS.is_empty() {
-                    version
-                } else {
-                    format!(
-                        "{version} · changes since {}",
-                        crate::release_notes::PREVIOUS
-                    )
-                };
-                let changes = crate::release_notes::changes().into_iter().map(|change| {
-                    div()
-                        .flex()
-                        .items_start()
-                        .gap(px(9.))
-                        .child(div().pt(px(6.)).child(kit::marker(theme.accent)))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_size(text_px(13.))
-                                .line_height(relative(1.45))
-                                .child(change),
-                        )
-                });
-                content = content
-                    .child(settings::note(summary, theme))
-                    .child(div().flex().flex_col().gap(px(7.)).children(changes));
+                content = content.child(self.whats_new(window, cx));
                 actions = Some(
                     footer_actions().child(
                         self.primary("whats-new-done", "check", "Got it")
@@ -504,7 +478,9 @@ impl Shell {
         if actions.is_some() {
             content = content.pb(px(12.));
         }
-        let width = if self.panel == Panel::Files {
+        let width = if self.panel == Panel::WhatsNew {
+            whats_new::WIDTH
+        } else if self.panel == Panel::Files {
             1000.
         } else if matches!(self.panel, Panel::Settings | Panel::ImportThreads) {
             780.
@@ -518,7 +494,10 @@ impl Shell {
             Panel::RemoveProject => Some(("trash-2", "Files and local history stay on disk")),
             Panel::NoRepository => Some(("folder", "Choose how this folder opens")),
             Panel::Setup => Some(("sparkles", "Check the providers and make the first choices")),
-            Panel::WhatsNew => Some(("sparkles", "The changes in this update, from its history")),
+            Panel::WhatsNew => Some((
+                "sparkles",
+                "The highlights of this version, then every change",
+            )),
             Panel::Resources => Some(("code", "What the provider can use in this task")),
             Panel::Check => Some((
                 "square-terminal",

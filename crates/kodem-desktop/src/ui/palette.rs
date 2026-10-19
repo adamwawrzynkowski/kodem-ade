@@ -484,7 +484,7 @@ impl Shell {
             "Settings",
             Action::Setup,
         );
-        if !crate::release_notes::changes().is_empty() {
+        if crate::release_notes::available() {
             add(
                 "sparkles",
                 "What's new",

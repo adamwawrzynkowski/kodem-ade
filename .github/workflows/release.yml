@@ -1,4 +1,5 @@
-# Releases Kodem for every platform: chooses the version and change list, builds macOS,
+# Releases Kodem for every platform: checks that changelog/highlights.toml reviewed every change
+# since the previous release, chooses the version, change list and highlights, builds macOS,
 # Windows (x64 and Arm64) and Linux in parallel, and stages one draft release with all of them.
 # Nothing is staged unless every requested build succeeds. Each platform has an update archive,
 # which installed apps download, and an installer for a first installation: a disk image on
@@ -71,6 +72,7 @@ jobs:
       commit: ${{ steps.plan.outputs.commit }}
       previous: ${{ steps.plan.outputs.previous }}
       notes: ${{ steps.plan.outputs.notes }}
+      highlights: ${{ steps.plan.outputs.highlights }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -96,7 +98,7 @@ jobs:
               echo "::error::KODEM_REQUIRE_SIGNING is set, but neither SignPath nor the KODEM_SIGN_PFX_BASE64 secret is configured."
               exit 1
           fi
-      - name: Choose the version and the change list
+      - name: Check the highlights and choose the version and the change list
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
@@ -116,6 +118,7 @@ jobs:
       KODEM_RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
       KODEM_RELEASE_PREVIOUS: ${{ needs.plan.outputs.previous }}
       KODEM_RELEASE_NOTES: ${{ needs.plan.outputs.notes }}
+      KODEM_RELEASE_HIGHLIGHTS: ${{ needs.plan.outputs.highlights }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -162,6 +165,7 @@ jobs:
       KODEM_RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
       KODEM_RELEASE_PREVIOUS: ${{ needs.plan.outputs.previous }}
       KODEM_RELEASE_NOTES: ${{ needs.plan.outputs.notes }}
+      KODEM_RELEASE_HIGHLIGHTS: ${{ needs.plan.outputs.highlights }}
       KODEM_REQUIRE_SIGNING: ${{ vars.KODEM_REQUIRE_SIGNING }}
       KODEM_SIGN_PFX_PASSWORD: ${{ secrets.KODEM_SIGN_PFX_PASSWORD }}
       # SignPath signs between the steps of scripts/build-windows.sh, which then checks its work.
@@ -270,6 +274,7 @@ jobs:
       KODEM_RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
       KODEM_RELEASE_PREVIOUS: ${{ needs.plan.outputs.previous }}
       KODEM_RELEASE_NOTES: ${{ needs.plan.outputs.notes }}
+      KODEM_RELEASE_HIGHLIGHTS: ${{ needs.plan.outputs.highlights }}
       KODEM_GPG_KEY: ${{ vars.KODEM_GPG_KEY }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

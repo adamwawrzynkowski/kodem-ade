@@ -1,10 +1,14 @@
 //! Embeds release metadata and rebuilds when a build command changes channels.
+#[path = "build/highlights.rs"]
+mod highlights;
+
 fn main() {
     for key in [
         "KODEM_RELEASE_CHANNEL",
         "KODEM_APP_VERSION",
         "KODEM_RELEASE_NOTES",
         "KODEM_RELEASE_PREVIOUS",
+        "KODEM_RELEASE_HIGHLIGHTS",
     ] {
         println!("cargo:rerun-if-env-changed={key}");
     }
@@ -32,6 +36,17 @@ fn main() {
     let previous = std::env::var("KODEM_RELEASE_PREVIOUS").unwrap_or_default();
     assert!(previous.bytes().all(|b| b.is_ascii_digit() || b == b'.'));
     println!("cargo:rustc-env=KODEM_RELEASE_PREVIOUS={previous}");
+    // The release commands pass the ids of the highlights that the previous release of the
+    // channel did not have. A build without them shows every highlight in Debug, none otherwise.
+    let chosen = std::env::var("KODEM_RELEASE_HIGHLIGHTS").ok();
+    highlights::embed(
+        &out,
+        match (&chosen, channel.as_str()) {
+            (Some(ids), _) => Some(ids.as_str()),
+            (None, "debug") => None,
+            (None, _) => Some(""),
+        },
+    );
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         windows_resources(&channel, &parts);
     }

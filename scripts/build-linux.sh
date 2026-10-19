@@ -29,7 +29,7 @@ source "$KODEM_ROOT/scripts/dependencies.sh"
 kodem_dependencies
 source "$KODEM_ROOT/scripts/github-release.sh"
 kodem_release_prepare "$channel"
-export KODEM_RELEASE_CHANNEL="$channel" KODEM_APP_VERSION="$release_version" KODEM_RELEASE_PREVIOUS="$release_previous" KODEM_RELEASE_NOTES="$release_notes"
+export KODEM_RELEASE_CHANNEL="$channel" KODEM_APP_VERSION="$release_version" KODEM_RELEASE_PREVIOUS="$release_previous" KODEM_RELEASE_NOTES="$release_notes" KODEM_RELEASE_HIGHLIGHTS="$release_highlights"
 echo "Compiling $channel $release_version from $KODEM_ROOT"
 cargo fmt --all -- --check
 # Pin both the output root and target. Shell/global Cargo overrides must never

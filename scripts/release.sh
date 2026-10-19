@@ -1,11 +1,15 @@
 #!/bin/bash
 # Releases Kodem for every platform through the Release packages workflow.
 #
-#   release.sh nightly|production    On your computer: starts the workflow for the checked-out
-#                                    commit, shows its progress, and publishes the draft release
-#                                    that it staged. Closing the window leaves the workflow running;
-#                                    publish its draft on GitHub later.
-#   release.sh plan CHANNEL          In the workflow: chooses the version and the change list.
+#   release.sh nightly|production    On your computer: checks that changelog/highlights.toml
+#                                    reviewed every change since the previous release (otherwise
+#                                    prints a prompt that writes the highlights), starts the
+#                                    workflow for the checked-out commit, shows its progress, and
+#                                    publishes the draft release that it staged. Closing the
+#                                    window leaves the workflow running; publish its draft on
+#                                    GitHub later.
+#   release.sh plan CHANNEL          In the workflow: checks the highlights, and chooses the
+#                                    version, the change list and the highlights.
 #   release.sh publish CHANNEL DIR   In the workflow: verifies the packages in DIR and stages them
 #                                    as one draft release.
 #
@@ -32,13 +36,16 @@ channel_argument() {
 
 # Starts the workflow for this checkout's commit and follows it.
 start() {
-    local channel=$1 commit url
+    local channel=$1 commit url previous
     command -v gh >/dev/null || { echo 'Install GitHub CLI and run gh auth login.' >&2; exit 1; }
     gh auth status >/dev/null 2>&1 || { echo 'Run gh auth login with the owner or a collaborator account.' >&2; exit 1; }
     kodem_release_check_account
     [[ -z "$(git status --porcelain --untracked-files=normal)" ]] || { echo 'Commit your changes first. The workflow builds the commit that is checked out here.' >&2; exit 1; }
     commit=$(git rev-parse HEAD)
     [[ "$(gh api "repos/$release_repository/commits/$commit" --jq .sha 2>/dev/null)" == "$commit" ]] || { echo "Push $commit to GitHub first. The workflow builds it there." >&2; exit 1; }
+    # The workflow checks the highlights too; checking here stops before anything starts.
+    previous=$(kodem_release_newest_tag "$channel") || { echo "Could not list the releases on GitHub." >&2; exit 1; }
+    kodem_release_check_changelog "$previous" "$commit" || exit 1
     kodem_release_dispatch "$channel" "$commit"
     echo "Releasing $channel for $commit in GitHub Actions. Closing this window leaves the release running there."
     if ! kodem_release_wait; then
@@ -48,7 +55,8 @@ start() {
     kodem_release_finish "$channel" "$commit"
 }
 
-# Writes the version, tag, commit and change list as outputs of the workflow's plan job.
+# Writes the version, tag, commit, change list and highlights as outputs of the workflow's plan
+# job. Fails when the highlights did not review every change since the previous release.
 plan() {
     local channel=$1 delimiter
     kodem_release_prepare "$channel"
@@ -62,6 +70,9 @@ plan() {
         echo "previous=$release_previous"
         echo "notes<<$delimiter"
         printf '%s\n' "$release_notes"
+        echo "$delimiter"
+        echo "highlights<<$delimiter"
+        printf '%s\n' "$release_highlights"
         echo "$delimiter"
     } >> "${GITHUB_OUTPUT:?plan runs in the release workflow}"
 }

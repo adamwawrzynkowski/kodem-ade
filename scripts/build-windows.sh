@@ -87,7 +87,7 @@ export KODEM_BUILD_TARGETS
 kodem_dependencies
 source "$KODEM_ROOT/scripts/github-release.sh"
 kodem_release_prepare "$channel"
-export KODEM_RELEASE_CHANNEL="$channel" KODEM_APP_VERSION="$release_version" KODEM_RELEASE_PREVIOUS="$release_previous" KODEM_RELEASE_NOTES="$release_notes"
+export KODEM_RELEASE_CHANNEL="$channel" KODEM_APP_VERSION="$release_version" KODEM_RELEASE_PREVIOUS="$release_previous" KODEM_RELEASE_NOTES="$release_notes" KODEM_RELEASE_HIGHLIGHTS="$release_highlights"
 python=$(kodem_python)
 build_date=$(date -u +%Y.%m.%d)
 build_id=$(date -u +%Y%m%dT%H%M%SZ)

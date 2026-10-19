@@ -1,0 +1,96 @@
+# Release highlights: the cards of the What's new board, which Kodem draws itself.
+#
+# A release shows the entries that the previous release of its channel did not have: Nightly
+# compares this file with the previous Nightly tag, Production with the previous Production tag.
+# So add new entries at the top, and never rename, reuse or delete the `id` of an entry that a
+# release shipped. The board shows the newest new headline and the new highlights in file order.
+# Every commit subject still appears in the folded list under the board.
+#
+# Release commands refuse to start until `reviewed` names the newest commit whose changes this
+# file has considered: every commit since the previous release, other than the commits that only
+# change this file, must be an ancestor of it or be it. Commit changes of this file alone, with a
+# subject that starts with "Changelog:". Those commits are left out of the commit list.
+#
+# Format (build.rs checks it, so `cargo build` reports a mistake):
+#
+#   [[headline]]       One sentence for the version card: what this version brings.
+#   id, text           text: at most 140 characters.
+#
+#   [[highlight]]      One card.
+#   id                 Lowercase letters, digits and hyphens, unique in this file.
+#   title              At most 40 characters. A human title, not the commit subject.
+#   text               At most 160 characters. What the user notices, in plain words.
+#   wide = true        Optional. The card takes two of the board's four columns.
+#   tone               Optional: accent (default), green, red, amber, blue or muted.
+#   visual             Optional. A small live picture above the title, one of:
+#     { kind = "list", title = "…", badge = "…", items = [{ text = "…", state = "done", tag = "…", tone = "…" }] }
+#         1–5 rows. state: done, open, dot (a filled mark in the tone) or faded. A title draws the
+#         rows as a tree under it; without one, each row is a small plate. title, badge, tag and
+#         tone are optional.
+#     { kind = "chips", items = [{ text = "…", icon = "…", detail = "…", added = 0, removed = 0, tone = "…" }] }
+#         1–4 capsules. All fields but text are optional. added and removed draw a diffstat.
+#     { kind = "prompt", text = "…", chips = [ …as above… ] }
+#         A composer with a draft and optional capsules above it.
+#     { kind = "bars", label = "…", values = [3, 5, 2], labels = ["…"], focus = 0 }
+#         2–8 dot-matrix bars. labels (one per bar) and focus (the lit bar's index) are optional.
+#     { kind = "figure", value = "72", label = "…", detail = "…" }
+#         A dot-matrix number of at most 7 characters from 0-9 . , % + - x : /, and a caption.
+#     { kind = "meter", segments = [{ label = "…", weight = 3, tone = "…" }], caption = "…" }
+#         2–4 parts of one dot-matrix bar with their legend.
+#     { kind = "keys", keys = ["⌘", "B"], label = "…" }
+#         1–4 keycaps of at most 5 characters.
+#     { kind = "glyph", icon = "zap" }
+#         One large icon.
+#   icon names are the files of assets/icons without ".svg".
+#
+# The board has four columns. The version card takes two in the middle of the second row when
+# the highlights fill six columns or more; widths that add up to 6, 10, 14… leave no gaps.
+# Visual data must be true: measured figures, real names and real shortcuts.
+
+reviewed = "68bfc3bbcc1b1a80f343777f7682af8feb4f66b4"
+
+[[headline]]
+id = "headline-live-release-notes"
+text = "Release notes now draw themselves, the version badge opens them, and frames got lighter on fast displays."
+
+[[highlight]]
+id = "live-release-notes"
+title = "Release notes, drawn live"
+text = "What's new is a board of highlights that Kodem draws itself. Every commit of the release waits in a folded list below it."
+wide = true
+visual = { kind = "list", title = "What's new", badge = "live", items = [
+    { text = "Highlights of this version", state = "done" },
+    { text = "The version and its headline", state = "done" },
+    { text = "Every commit, folded", state = "open" },
+] }
+
+[[highlight]]
+id = "version-badge-opens-notes"
+title = "One click to what changed"
+text = "Click the build badge in the title bar to read the notes of the version you run."
+tone = "blue"
+visual = { kind = "glyph", icon = "tag" }
+
+[[highlight]]
+id = "lighter-frames"
+title = "Lighter frames"
+text = "Unchanged frames are copied instead of drawn again, and a task that waits for you no longer redraws the window on every step."
+tone = "green"
+visual = { kind = "list", items = [
+    { text = "Unchanged frames copied", state = "done" },
+    { text = "Faster sprite sorting", state = "done" },
+    { text = "Waiting tasks redraw on blink", state = "done" },
+] }
+
+[[highlight]]
+id = "steady-skater-background"
+title = "A steady skater"
+text = "On displays above 90 Hz the skater draws every second refresh, and keeps that pace while the window is in the background."
+visual = { kind = "bars", label = "Background frames/s at 144 Hz", values = [29, 72], labels = ["Before", "Now"], focus = 1 }
+
+[[highlight]]
+id = "less-graphics-memory"
+title = "Less graphics memory"
+text = "Kodem no longer keeps two full-window textures that it never draws into."
+tone = "green"
+visual = { kind = "figure", value = "66", label = "MB freed", detail = "at 4K, on macOS" }

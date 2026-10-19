@@ -117,9 +117,27 @@ impl Shell {
                         )
                         .child(
                             div()
+                                .id("channel-badge")
                                 .min_w_0()
                                 .overflow_hidden()
-                                .child(channel_art::channel_badge(t)),
+                                .child(channel_art::channel_badge(t))
+                                // The badge reopens the notes that show after an update.
+                                .when(crate::release_notes::available(), |d| {
+                                    d.occlude()
+                                        .cursor_pointer()
+                                        .hover(|s| s.opacity(0.8))
+                                        .tooltip(move |_, cx| {
+                                            cx.new(|_| Hint {
+                                                text: "What's new in this version".into(),
+                                                theme: t,
+                                            })
+                                            .into()
+                                        })
+                                        .on_click(cx.listener(|s, _, _, cx| {
+                                            s.panel = Panel::WhatsNew;
+                                            cx.notify();
+                                        }))
+                                }),
                         )
                         .child(div().flex_1())
                         .child(

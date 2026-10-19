@@ -149,6 +149,42 @@ pub(super) fn stagger<E: IntoElement + Styled + 'static>(
         .into_any_element()
 }
 
+/// Brings in a card of a board `order` beats after the first card: it fades in and rises into
+/// place while a Bayer dissolve in `color` clears from it, so the board assembles from dither in
+/// reading order. The card must be relatively positioned and clip its content to `radius`. It
+/// plays again when the card leaves and comes back.
+pub(super) fn assemble<E: IntoElement + Styled + ParentElement + 'static>(
+    id: impl Into<ElementId>,
+    element: E,
+    order: usize,
+    color: Hsla,
+    radius: f32,
+) -> AnyElement {
+    let delay = order as f32 * 0.05;
+    let span = 0.32;
+    let total = delay + span;
+    element
+        .with_animation(
+            id,
+            Animation::new(Duration::from_secs_f32(total))
+                .with_easing(move |p| ease_out_cubic(((p * total - delay) / span).clamp(0., 1.))),
+            move |card, delta| {
+                let card = card.top(px(8. * (1. - delta))).opacity(delta);
+                if delta >= 1. {
+                    return card;
+                }
+                card.child(
+                    dither::Dither::new(dither::DitherField::Dissolve(delta))
+                        .color(color)
+                        .grid(3., 3.)
+                        .corner_radius(radius)
+                        .layer(),
+                )
+            },
+        )
+        .into_any_element()
+}
+
 /// Slides content in by `offset` while a Bayer dissolve in the surface color clears from the top.
 ///
 /// With reduced motion GPUI jumps to the final frame, so neither effect is drawn. `block` is the

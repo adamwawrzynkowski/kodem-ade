@@ -45,6 +45,7 @@ mod tool_calls;
 mod updates;
 mod usage;
 mod web_pane;
+mod whats_new;
 mod workspaces;
 use crate::icons::icon;
 use crate::{
@@ -317,6 +318,8 @@ pub struct Shell {
     /// The release notes wait for the first workspace, because this version runs for the first
     /// time after an update.
     whats_new_due: bool,
+    /// The commits of this release are unfolded under the board of What's new.
+    whats_new_changes: bool,
     window_width: f32,
     window_placement: WindowBounds,
     window_save_task: Option<gpui::Task<()>>,
@@ -740,6 +743,7 @@ impl Shell {
             tools: Vec::new(),
             tool_installers: Vec::new(),
             whats_new_due: crate::release_notes::take_unseen(),
+            whats_new_changes: false,
             window_width: f32::from(window.viewport_size().width),
             window_placement: window.window_bounds(),
             window_save_task: None,

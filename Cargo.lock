@@ -3476,6 +3476,7 @@ dependencies = [
  "sha2",
  "syntect",
  "tempfile",
+ "toml 1.1.5+spec-1.1.0",
  "unicode-segmentation",
  "uuid",
  "webkit2gtk",
