@@ -47,7 +47,19 @@
 # the highlights fill six columns or more; widths that add up to 6, 10, 14… leave no gaps.
 # Visual data must be true: measured figures, real names and real shortcuts.
 
-reviewed = "0be6d112dc77b781bc5803c8b3d38239ad9fc5e6"
+reviewed = "fa83129dc838bfd77c81b6b2d14a2be019f61594"
+
+[[highlight]]
+id = "dialogs-fit-window"
+title = "Dialogs fit the window"
+text = "A tall dialog, such as What's new, no longer runs past a small window. Its header and actions stay in view and the body scrolls between them."
+wide = true
+tone = "blue"
+visual = { kind = "list", title = "What's new", items = [
+    { text = "Header stays in view", state = "done" },
+    { text = "Body scrolls", state = "dot", tone = "blue" },
+    { text = "Actions stay in view", state = "done" },
+] }
 
 [[headline]]
 id = "headline-titles-and-santa"
