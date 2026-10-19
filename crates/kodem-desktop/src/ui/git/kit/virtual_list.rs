@@ -7,8 +7,8 @@ use std::rc::Rc;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Bounds, Context, Element, ElementId, Entity, GlobalElementId,
-    InspectorElementId, IntoElement, LayoutId, Pixels, Point, Render, ScrollHandle, ScrollStrategy,
-    Size, StyleRefinement, Styled, Window, div, point,
+    InspectorElementId, IntoElement, LayoutId, Pixels, Point, Render, ScrollContainerId,
+    ScrollHandle, ScrollStrategy, Size, StyleRefinement, Styled, Window, div, point,
 };
 
 /// Rows built beyond each edge of the view, so that a short scroll shows no gap.
@@ -56,6 +56,11 @@ impl VirtualListScrollHandle {
     /// Returns the bounds of the list's view.
     pub fn bounds(&self) -> Bounds<Pixels> {
         self.base.bounds()
+    }
+
+    /// Identifies the list's scroll container, for scroll chaining.
+    pub fn scroll_container_id(&self) -> ScrollContainerId {
+        self.base.scroll_container_id()
     }
 
     /// Scrolls so that a row shows at the place that `strategy` names.

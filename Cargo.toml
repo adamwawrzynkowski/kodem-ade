@@ -40,3 +40,7 @@ gpui_ce_macos = { path = "vendor/gpui_ce_macos" }
 # GPUI's Windows renderer, patched so that its composition lies behind child windows, such as the
 # web views of the browser pane. See vendor/gpui_ce_windows/src/directx_renderer.rs.
 gpui_ce_windows = { path = "vendor/gpui_ce_windows" }
+# GPUI, patched so that nested scroll containers chain a wheel gesture: the innermost container
+# that can move takes each axis, and its ancestors scroll only once it reaches its end. See
+# vendor/gpui_ce/src/scroll_chain.rs.
+gpui-ce = { path = "vendor/gpui_ce" }

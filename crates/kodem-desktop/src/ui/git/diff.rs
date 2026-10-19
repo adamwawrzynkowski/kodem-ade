@@ -545,10 +545,25 @@ impl DiffView {
     fn scroll_horizontally(
         &mut self,
         event: &ScrollWheelEvent,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let delta = event.delta.pixel_delta(window.line_height()).x;
+        if delta == Pixels::ZERO {
+            return;
+        }
+        let can_move = if delta > Pixels::ZERO {
+            self.scroll_x > Pixels::ZERO
+        } else {
+            self.scroll_x < self.max_scroll_x()
+        };
+        let delta = window
+            .take_scroll_delta(
+                self.scroll.scroll_container_id(),
+                point(delta, Pixels::ZERO),
+                point(can_move, false),
+            )
+            .x;
         if delta == Pixels::ZERO {
             return;
         }

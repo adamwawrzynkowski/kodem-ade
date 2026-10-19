@@ -137,16 +137,24 @@ impl Shell {
                 .min_h_0()
                 .flex()
                 .flex_col()
-                .on_scroll_wheel(cx.listener(|s, e: &ScrollWheelEvent, _, cx| {
+                .on_scroll_wheel(cx.listener(|s, e: &ScrollWheelEvent, window, cx| {
                     let delta = e.delta.pixel_delta(px(20.));
                     s.nudge_composer((f32::from(delta.y) * 0.015).clamp(-0.45, 0.45), cx);
                     // The wheel scrolls the conversation anywhere in the chat, also beside and
-                    // below the list. The list handles the wheel over itself, and the composer
-                    // scrolls its own draft.
+                    // below the list, unless a scroll container under the pointer takes it. The
+                    // list handles the wheel over itself, and the composer scrolls its own draft.
                     let over_composer = fx::anchor_bounds(COMPOSER_ANCHOR, cx)
                         .is_some_and(|bounds| bounds.contains(&e.position));
-                    if !over_composer && !s.chat_scroll.viewport_bounds().contains(&e.position) {
-                        s.chat_scroll.scroll_by(-delta.y);
+                    if over_composer || s.chat_scroll.viewport_bounds().contains(&e.position) {
+                        return;
+                    }
+                    let taken = window.take_scroll_delta(
+                        s.chat_scroll.scroll_container_id(),
+                        point(px(0.), delta.y),
+                        point(false, true),
+                    );
+                    if taken.y != px(0.) {
+                        s.chat_scroll.scroll_by(-taken.y);
                         cx.notify();
                     }
                 }));

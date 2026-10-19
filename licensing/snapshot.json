@@ -1,7 +1,7 @@
 {
   "inputs": {
-    "Cargo.lock": "34338e8c234f164212bf8e56d693eb75cde75c218838afdfd1dad7108b9d7513",
-    "Cargo.toml": "8e06d48e9b4c376b09356390bfee517b2c49242c90c1e5153003a391043cb3a5",
+    "Cargo.lock": "bcf8d28e152cf567655bb34ff810e67848970c84959afbd47cc4e16d6a8bdef3",
+    "Cargo.toml": "5aeeccce9f2e9d27fb3394f430be0cf61bab0ddf0856093a2954d3112253fd01",
     "LICENSE": "7de28eeff500ea66eaaa1d950319b5d760bf9a50a2c335427838a4b11bad6c1b",
     "about.toml": "da2721a9cea560519bd9a618e80605826bfe8fa13336a5c9346b27018bd3d671",
     "assets/THIRD_PARTY.md": "2f0efade5bc91bcd8f0152f2bc301ebf45d78fc0aa60b309cc5a39fae8205f32",
@@ -26,6 +26,10 @@
     "licensing/clarifications.json": "1c98aaa39030d86cfbf9da379462cb58d6b04fe8354d639817d803106c5c6ea8",
     "rust-toolchain.toml": "559f488c181e0e9e77cf17c29de663977f036ec7ff2e2060585714bf53c52d62",
     "scripts/licenses.py": "48b64c08fd93a61b0ae1930d0b695848dddd74927274999328f7cc690643b1c0",
+    "vendor/gpui_ce/Cargo.toml": "6eff1ead752aa1fded0261fc1057a13e6bdc0b1ceb760f2e4ef1c7df2fb9e4af",
+    "vendor/gpui_ce/LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a",
+    "vendor/gpui_ce/README.md": "989b10e5914dcc8a1f2568303849aeab2d6aa26f2c5dfead96de0491330ada79",
+    "vendor/gpui_ce/build.rs": "b90eba40b438c7de5d991969f2f685de3873cce4f070c28e4a389cc48e2b939b",
     "vendor/gpui_ce_macos/Cargo.toml": "0b86e2cf89137a17508c35062f5554a5427b04adc0ba613d25548b3ba8462409",
     "vendor/gpui_ce_macos/LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a",
     "vendor/gpui_ce_macos/build.rs": "9cbba68fe455aba60cc490d2292fac65007cd323653471e7eb49025102815cd5",
@@ -34,7 +38,7 @@
     "vendor/gpui_ce_windows/build.rs": "89db14f60f4be4bad3500341c40cdca7f8bf97601a7d5ad5c22798ab2893446f"
   },
   "outputs": {
-    "assets/licenses/Rust-THIRD-PARTY.txt": "cfd470539d68fb5a4f33fdbdd28a0fadadb09e0f7b31c8f60bb2f2cbf20cb0e2",
+    "assets/licenses/Rust-THIRD-PARTY.txt": "caf22ebdb2dbfc76670c0dcc0df271089a51da9178efdbcfa3fa43795971334f",
     "assets/licenses/Rust-standard-library.html": "0a65bb747c49c7bb816cbc7188319bd6e4e8d08091c1190b8a3c0971c47968ed",
     "assets/licenses/option-ext-0.2.0-source.tar.gz": "98db8d44c96295b9bfa85a4aacfedd6690c3155123b10b3090e74fea0cab5925"
   },
