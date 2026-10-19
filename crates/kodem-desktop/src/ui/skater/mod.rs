@@ -9,11 +9,15 @@
 //! The character idles while the agent rests and skates, jumps the tabs and does tricks while it
 //! works. It falls off when the conversation scrolls away from its end and leaps back once the
 //! end shows again. The pointer can pick it up and throw it.
+//!
+//! Two avatars ride their own way. Santa drives a sleigh that reindeer pull, which flies over the
+//! tabs, soars, loops and drops presents. The zombie has no board: it shambles along the edge and
+//! stops to breakdance or to toss its head.
 mod art;
 
 use super::*;
 // The character moves in window pixels, between measured bounds.
-use art::{Arms, Deck, Eyes, Legs, Palette, Pen, Pose};
+use art::{Arms, Deck, Eyes, Legs, Palette, Pen, Pose, Ride, Team};
 use gpui::px;
 use std::{
     cell::{Cell, RefCell},
@@ -39,9 +43,17 @@ const PUSH: f32 = 150.;
 const ROLL_FRICTION: f32 = 6.;
 const BRAKE: f32 = 140.;
 const WALK: f32 = 34.;
+/// Speed of a walking zombie, and of its glide back in a moonwalk.
+const SHAMBLE: f32 = 28.;
+const MOONWALK: f32 = 30.;
 /// Height of a trick on flat ground, and of a plain ollie.
 const TRICK_LIFT: f32 = 25.;
 const OLLIE_LIFT: f32 = 17.;
+/// Height of a sleigh's soar and of its loop, which needs room under the reindeer.
+const SOAR_LIFT: f32 = 34.;
+const LOOP_LIFT: f32 = 52.;
+/// Share of the pull that a flying sleigh feels, so it floats.
+const SLEIGH_FLOAT: f32 = 0.4;
 /// Height that a jump onto a tab clears above it.
 const STEP_CLEARANCE: f32 = 13.;
 /// A difference in height ahead that counts as a step, in points.
@@ -259,6 +271,8 @@ enum Mode {
     Held,
     /// Thrown by the pointer.
     Flung,
+    /// A zombie's dance on the spot.
+    Dance,
 }
 
 impl Mode {
@@ -278,6 +292,82 @@ enum Trick {
     Spin,
     /// The front hand grabs the board.
     Grab,
+    /// A sleigh's long, floating flight while Santa waves.
+    Soar,
+    /// A sleigh's loop about the middle of its team.
+    Loop,
+    /// A soar in which Santa drops a present at the top.
+    Gift,
+}
+
+/// A zombie's dance.
+#[derive(Clone, Copy, PartialEq)]
+enum Dance {
+    Headspin,
+    Windmill,
+    /// Faces ahead and glides back.
+    Moonwalk,
+    /// Throws its head up and catches it on its neck.
+    HeadToss,
+}
+
+impl Dance {
+    // Returns the seconds that the dance lasts.
+    fn length(self) -> f32 {
+        match self {
+            Self::Headspin => 1.8,
+            Self::Windmill => 1.6,
+            Self::Moonwalk => 2.,
+            Self::HeadToss => 1.4,
+        }
+    }
+}
+
+impl Ride {
+    // Returns the cells from the middle of the grid that the ride keeps from the ends of the edge.
+    // The reindeer run far ahead of the sleigh, and either end can be ahead after a turn.
+    fn margin(self) -> f32 {
+        match self {
+            Self::Board => 9.,
+            Self::Sleigh => 24.,
+            Self::Feet => 6.,
+        }
+    }
+
+    // Returns the cells from the middle to where the ride touches the ground on each side.
+    fn base(self) -> f32 {
+        match self {
+            Self::Board => 4.,
+            Self::Sleigh => 8.,
+            Self::Feet => 2.,
+        }
+    }
+
+    // Returns the cells from the middle to the front of the ride, which meets a step first.
+    fn front(self) -> f32 {
+        match self {
+            Self::Board => 4.,
+            Self::Sleigh => 23.,
+            Self::Feet => 3.,
+        }
+    }
+
+    // Returns the rows from the feet line down to the ground.
+    fn depth(self) -> f32 {
+        match self {
+            Self::Board | Self::Sleigh => art::DECK_DEPTH,
+            Self::Feet => 0.,
+        }
+    }
+
+    // Returns the points of flat edge ahead that a trick needs.
+    fn room(self) -> f32 {
+        match self {
+            Self::Board => 70.,
+            Self::Sleigh => 110.,
+            Self::Feet => 0.,
+        }
+    }
 }
 
 /// A moving thing: the character, at the middle of its feet line, or the board, at the middle of
@@ -305,6 +395,10 @@ impl Body {
 enum Speck {
     Dust,
     Snore,
+    /// A twinkle behind a flying sleigh.
+    Sparkle,
+    /// A present that Santa drops.
+    Gift,
 }
 
 #[derive(Clone, Copy)]
@@ -354,10 +448,15 @@ struct Sim {
     time: f32,
     me: Body,
     board: Body,
+    /// What carries the character, from its avatar.
+    ride: Ride,
     /// The board is under the feet. Otherwise it moves on its own.
     carried: bool,
     facing: f32,
     trick: Trick,
+    dance: Dance,
+    /// Seconds before the next sparkle behind a flying sleigh.
+    trail: f32,
     /// Expected seconds in the air of the current jump.
     air: f32,
     /// Height that the next jump reaches and the rise of the ground where it lands.
@@ -397,9 +496,12 @@ impl Sim {
             time: 0.,
             me: Body::default(),
             board: Body::default(),
+            ride: Ride::Board,
             carried: true,
             facing: 1.,
             trick: Trick::Ollie,
+            dance: Dance::Headspin,
+            trail: 0.,
             air: 0.5,
             lift: 0.,
             rise: 0.,
@@ -450,18 +552,28 @@ impl Sim {
     // Returns where the deck's top rests at `x` and the tilt of the board there. The board lies
     // on the ground under both of its wheels.
     fn rest(&self, ground: &Ground, x: f32) -> (f32, f32) {
-        let reach = 4. * self.pixel();
+        let reach = self.ride.base() * self.pixel();
         let (left, right) = (ground.height(x - reach), ground.height(x + reach));
         (
-            (left + right) / 2. - art::DECK_DEPTH * self.pixel(),
+            (left + right) / 2. - self.ride.depth() * self.pixel(),
             (right - left).atan2(2. * reach),
         )
     }
 
     // Returns the ends of the edge that the middle of the board stays between.
     fn lane(&self, ground: &Ground) -> (f32, f32) {
-        let margin = 9. * self.pixel();
+        let margin = self.ride.margin() * self.pixel();
         (ground.left + margin, ground.right - margin)
+    }
+
+    // Returns the pull on the character in a jump. A sleigh flies, so it floats.
+    fn air_gravity(&self) -> f32 {
+        let float = if self.ride == Ride::Sleigh {
+            SLEIGH_FLOAT
+        } else {
+            1.
+        };
+        GRAVITY * self.scale * float
     }
 
     fn hide(&mut self, respawn: f32) {
@@ -499,16 +611,19 @@ impl Sim {
             self.last = None;
             return Cadence::Rest;
         }
+        self.avatar = cue.avatar;
+        self.tone = cue.tone;
+        let ride = art::art(cue.avatar).ride;
+        // Another ride starts the character over, as the old one's state does not fit it.
+        if self.key.as_ref() != Some(&cue.key) || self.ride != ride {
+            self.key = Some(cue.key.clone());
+            self.ride = ride;
+            self.hide(0.3);
+        }
         let (low, high) = self.lane(&ground);
         if high - low < 24. * self.pixel() {
             self.hide(0.3);
             return Cadence::Rest;
-        }
-        self.avatar = cue.avatar;
-        self.tone = cue.tone;
-        if self.key.as_ref() != Some(&cue.key) {
-            self.key = Some(cue.key.clone());
-            self.hide(0.3);
         }
         if reduce_motion {
             return self.stand_still(cue, &ground);
@@ -543,15 +658,24 @@ impl Sim {
             }
             Mode::Panic | Mode::Flung => self.step_fall(view, dt),
             Mode::Held => self.step_held(dt),
+            Mode::Dance => self.step_dance(cue, &ground, dt),
         }
         if !self.carried {
             self.step_board(&ground, view, dt);
         }
-        // A rising z is slow enough for the idle rate. Dust needs the display rate.
+        if self.ride == Ride::Sleigh && self.carried && matches!(self.mode, Mode::Enter | Mode::Air)
+        {
+            self.trail -= dt;
+            if self.trail <= 0. {
+                self.trail = 0.05;
+                self.sparkle();
+            }
+        }
+        // A rising z is slow enough for the idle rate. Other specks need the display rate.
         let dusty = self
             .particles
             .iter()
-            .any(|particle| matches!(particle.kind, Speck::Dust));
+            .any(|particle| !matches!(particle.kind, Speck::Snore));
         match self.mode {
             Mode::Hidden => Cadence::Slow,
             Mode::Idle | Mode::Doze if !dusty => Cadence::Slow,
@@ -590,7 +714,7 @@ impl Sim {
         let (floor, _) = self.rest(ground, x);
         let apex = floor - 30. * self.scale;
         let start = bottom + 16. * self.pixel();
-        let gravity = GRAVITY * self.scale;
+        let gravity = self.air_gravity();
         let launch = (2. * gravity * (start - apex).max(1.)).sqrt();
         let flight = launch / gravity + (2. * (floor - apex) / gravity).sqrt();
         self.me = Body {
@@ -599,8 +723,12 @@ impl Sim {
             vx: 0.,
             vy: -launch,
             angle: 0.,
-            // One flip on the way up and down.
-            spin: self.facing * TAU / flight,
+            // A skater flips once on the way up and down. A sleigh and a zombie rise upright.
+            spin: if self.ride == Ride::Board {
+                self.facing * TAU / flight
+            } else {
+                0.
+            },
         };
         self.carried = true;
         self.fail = false;
@@ -613,14 +741,14 @@ impl Sim {
     }
 
     fn step_enter(&mut self, ground: &Ground, dt: f32) {
-        self.me.fly(GRAVITY * self.scale, dt);
+        self.me.fly(self.air_gravity(), dt);
         let (floor, tilt) = self.rest(ground, self.me.x);
         if self.me.vy > 0. && self.me.y >= floor {
             self.me.y = floor;
             self.me.vy = 0.;
             self.me.spin = 0.;
             self.me.angle = tilt;
-            self.dust(self.me.x, floor + art::DECK_DEPTH * self.pixel(), 5);
+            self.dust(self.me.x, floor + self.ride.depth() * self.pixel(), 5);
             self.cheer = 0.5;
             self.set_mode(Mode::Land);
         }
@@ -740,7 +868,16 @@ impl Sim {
         let speed = self.me.vx.abs();
         self.manual = (self.manual - dt).max(0.);
         self.drop_wait = (self.drop_wait - dt).max(0.);
-        if cue.working {
+        if self.ride == Ride::Feet {
+            // A zombie shambles at one pace and stops at once.
+            if !cue.working {
+                self.me.vx = 0.;
+                self.set_mode(Mode::Idle);
+                return;
+            }
+            self.push = -1.;
+            self.me.vx = self.facing * SHAMBLE * scale;
+        } else if cue.working {
             // Push while slow, then coast.
             if self.push >= 0. {
                 self.push += dt;
@@ -778,8 +915,9 @@ impl Sim {
             return;
         }
         let speed = self.me.vx.abs();
+        let front = self.ride.front();
         let here = ground.height(self.me.x);
-        let ahead = ground.height(self.me.x + self.facing * (4. * pixel + speed * 0.15));
+        let ahead = ground.height(self.me.x + self.facing * (front * pixel + speed * 0.15));
         // Above zero the ground rises ahead.
         let step = here - ahead;
         if step > STEP * scale {
@@ -789,7 +927,7 @@ impl Sim {
                 return;
             }
             // The jump clears the whole tab, not only the start of its slant.
-            let top = (1..=24)
+            let top = (1..=24 + front as i32)
                 .map(|i| ground.height(self.me.x + self.facing * i as f32 * pixel))
                 .fold(here, f32::min);
             let rise = here - top;
@@ -798,11 +936,16 @@ impl Sim {
             self.plan_jump(Trick::Ollie, rise + STEP_CLEARANCE * scale, rise, 0.03);
             return;
         }
-        if step < -STEP * scale && self.drop_wait <= 0. && cue.working {
-            // Off a tab the character rolls down its slant or jumps it with a trick.
+        // Off a tab a skater rolls down its slant or jumps it with a trick, a sleigh rolls or
+        // glides down, and a zombie walks down.
+        if step < -STEP * scale && self.drop_wait <= 0. && cue.working && self.ride != Ride::Feet {
             self.drop_wait = 1.2;
             if self.random() < 0.55 {
-                let trick = self.pick_trick();
+                let trick = if self.ride == Ride::Sleigh {
+                    Trick::Soar
+                } else {
+                    self.pick_trick()
+                };
                 self.plan_jump(trick, OLLIE_LIFT * scale, step, 0.07);
                 return;
             }
@@ -815,17 +958,20 @@ impl Sim {
         let flat = (1..=4).all(|i| {
             (ground.height(self.me.x + self.facing * i as f32 * 14. * scale) - here).abs() < 1.
         });
-        if self.next_trick <= 0. && room > 70. * scale && flat && self.manual <= 0. {
+        if self.next_trick <= 0. && room > self.ride.room() * scale && flat && self.manual <= 0. {
             self.next_trick = self.range(2.2, 5.5);
-            if self.random() < 0.15 {
+            if self.ride == Ride::Feet {
+                self.start_dance(high - low - room);
+            } else if self.ride == Ride::Board && self.random() < 0.15 {
                 self.manual = self.range(0.8, 1.4);
                 self.push = -1.;
             } else {
                 let trick = self.pick_trick();
-                let (lift, risk) = if trick == Trick::Ollie {
-                    (OLLIE_LIFT, 0.02)
-                } else {
-                    (TRICK_LIFT, 0.07)
+                let (lift, risk) = match trick {
+                    Trick::Ollie => (OLLIE_LIFT, 0.02),
+                    Trick::Soar | Trick::Gift => (SOAR_LIFT, 0.03),
+                    Trick::Loop => (LOOP_LIFT, 0.05),
+                    _ => (TRICK_LIFT, 0.07),
                 };
                 self.plan_jump(trick, lift * scale, 0., risk);
             }
@@ -842,7 +988,60 @@ impl Sim {
             Trick::Spin,
             Trick::Grab,
         ];
-        TRICKS[(self.random() * TRICKS.len() as f32) as usize % TRICKS.len()]
+        const STUNTS: [Trick; 5] = [
+            Trick::Ollie,
+            Trick::Soar,
+            Trick::Soar,
+            Trick::Loop,
+            Trick::Gift,
+        ];
+        let tricks: &[Trick] = if self.ride == Ride::Sleigh {
+            &STUNTS
+        } else {
+            &TRICKS
+        };
+        tricks[(self.random() * tricks.len() as f32) as usize % tricks.len()]
+    }
+
+    // Stops to dance with `behind` points of edge behind, which a moonwalk needs.
+    fn start_dance(&mut self, behind: f32) {
+        const DANCES: [Dance; 4] = [
+            Dance::Headspin,
+            Dance::Windmill,
+            Dance::Moonwalk,
+            Dance::HeadToss,
+        ];
+        let mut dance = DANCES[(self.random() * DANCES.len() as f32) as usize % DANCES.len()];
+        if dance == Dance::Moonwalk && behind < MOONWALK * self.scale * dance.length() {
+            dance = Dance::Headspin;
+        }
+        self.dance = dance;
+        // A spin on the floor ends in a tumble now and then.
+        self.fail = matches!(dance, Dance::Headspin | Dance::Windmill) && self.random() < 0.08;
+        self.me.vx = 0.;
+        self.push = -1.;
+        self.set_mode(Mode::Dance);
+    }
+
+    fn step_dance(&mut self, cue: &Cue, ground: &Ground, dt: f32) {
+        let (low, high) = self.lane(ground);
+        if self.dance == Dance::Moonwalk {
+            self.me.x -= self.facing * MOONWALK * self.scale * dt;
+        }
+        self.me.x = self.me.x.clamp(low, high);
+        let (y, tilt) = self.rest(ground, self.me.x);
+        self.me.y = y;
+        self.me.angle = tilt;
+        self.me.vx = 0.;
+        if self.clock < self.dance.length() {
+            return;
+        }
+        if self.fail {
+            self.bail();
+            return;
+        }
+        self.cheer = 0.6;
+        self.set_mode(if cue.working { Mode::Ride } else { Mode::Idle });
     }
 
     // Squats for a jump that reaches `lift` and lands on ground that is `rise` higher. A share
@@ -857,7 +1056,7 @@ impl Sim {
     }
 
     fn take_off(&mut self) {
-        let gravity = GRAVITY * self.scale;
+        let gravity = self.air_gravity();
         let launch = (2. * gravity * self.lift.max(1.)).sqrt();
         self.me.vy = -launch;
         self.air = launch / gravity + (2. * (self.lift - self.rise).max(1.) / gravity).sqrt();
@@ -866,7 +1065,11 @@ impl Sim {
 
     fn step_air(&mut self, ground: &Ground, dt: f32) {
         let (low, high) = self.lane(ground);
-        self.me.fly(GRAVITY * self.scale, dt);
+        let rising = self.me.vy < 0.;
+        self.me.fly(self.air_gravity(), dt);
+        if rising && self.me.vy >= 0. && self.trick == Trick::Gift {
+            self.drop_gift();
+        }
         if self.me.x < low || self.me.x > high {
             self.me.x = self.me.x.clamp(low, high);
             self.me.vx = 0.;
@@ -880,23 +1083,31 @@ impl Sim {
                 self.bail();
                 return;
             }
-            self.dust(self.me.x, floor + art::DECK_DEPTH * self.pixel(), 4);
+            self.dust(self.me.x, floor + self.ride.depth() * self.pixel(), 4);
             self.cheer = if self.trick == Trick::Ollie { 0. } else { 0.6 };
             self.set_mode(Mode::Land);
         }
     }
 
+    // Lets the board or the sleigh go on its own as `board`. A character on its feet has none.
+    fn let_go(&mut self, board: Body) {
+        if self.ride == Ride::Feet {
+            return;
+        }
+        self.carried = false;
+        self.board = board;
+    }
+
     fn bail(&mut self) {
         let scale = self.scale;
-        self.carried = false;
-        self.board = Body {
+        self.let_go(Body {
             x: self.me.x,
             y: self.me.y,
             vx: self.me.vx * 1.3 + self.facing * 20. * scale,
             vy: -110. * scale,
             angle: self.me.angle,
             spin: -self.facing * 7.,
-        };
+        });
         self.me.vy = -150. * scale;
         self.me.vx *= 0.7;
         self.me.spin = self.facing * 10.;
@@ -954,7 +1165,12 @@ impl Sim {
                 self.me.y = ground.height(self.me.x) - lying_lift * (1. - share);
                 if share >= 1. {
                     self.me.angle = 0.;
-                    self.set_mode(Mode::Walk);
+                    // A zombie has no board to walk back to.
+                    self.set_mode(if self.ride == Ride::Feet {
+                        Mode::Idle
+                    } else {
+                        Mode::Walk
+                    });
                 }
             }
             Mode::Walk => {
@@ -983,7 +1199,7 @@ impl Sim {
                         ..Body::default()
                     };
                     self.carried = true;
-                    self.dust(self.me.x, floor + art::DECK_DEPTH * pixel, 3);
+                    self.dust(self.me.x, floor + self.ride.depth() * pixel, 3);
                     self.set_mode(Mode::Land);
                 }
             }
@@ -1042,15 +1258,14 @@ impl Sim {
         let spin = self.range(-9., 9.);
         if self.carried {
             let drift = self.range(-40., 40.) * scale;
-            self.carried = false;
-            self.board = Body {
+            self.let_go(Body {
                 x: self.me.x,
                 y: self.me.y,
                 vx: self.me.vx * 0.5 + drift,
                 vy: -140. * scale,
                 angle: self.me.angle,
                 spin,
-            };
+            });
         } else {
             self.board.vy = -120. * scale;
             self.board.spin = spin;
@@ -1140,15 +1355,14 @@ impl Sim {
         self.me.spin = (-grip.swing_speed * 0.6 + vx * 0.005).clamp(-16., 16.);
         if self.carried {
             let drift = self.range(-30., 30.) * scale;
-            self.carried = false;
-            self.board = Body {
+            self.let_go(Body {
                 x: self.me.x,
                 y: self.me.y,
                 vx: vx * 0.85 + drift,
                 vy: vy * 0.85 - 60. * scale,
                 angle: self.me.angle,
                 spin: -self.me.spin * 0.8 - self.facing * 4.,
-            };
+            });
         }
         self.set_mode(Mode::Flung);
     }
@@ -1199,6 +1413,38 @@ impl Sim {
         }
     }
 
+    // Leaves a twinkle behind the sleigh.
+    fn sparkle(&mut self) {
+        let scale = self.scale;
+        let pixel = self.pixel();
+        let vy = self.range(-12., 12.) * scale;
+        let drift = self.range(5., 20.) * scale;
+        self.particles.push(Particle {
+            x: self.me.x - self.facing * 8. * pixel,
+            y: self.me.y + pixel,
+            vx: -self.facing * drift,
+            vy,
+            age: 0.,
+            life: 0.7,
+            kind: Speck::Sparkle,
+        });
+    }
+
+    // Drops a present out of the back of the sleigh.
+    fn drop_gift(&mut self) {
+        let scale = self.scale;
+        let pixel = self.pixel();
+        self.particles.push(Particle {
+            x: self.me.x - self.facing * 2. * pixel,
+            y: self.me.y - 8. * pixel,
+            vx: self.me.vx * 0.3 - self.facing * 25. * scale,
+            vy: -70. * scale,
+            age: 0.,
+            life: 1.6,
+            kind: Speck::Gift,
+        });
+    }
+
     fn step_particles(&mut self, dt: f32) {
         let scale = self.scale;
         for particle in &mut self.particles {
@@ -1208,6 +1454,8 @@ impl Sim {
             match particle.kind {
                 Speck::Dust => particle.vy += 60. * scale * dt,
                 Speck::Snore => particle.x += (particle.age * 4.).sin() * 6. * scale * dt,
+                Speck::Sparkle => {}
+                Speck::Gift => particle.vy += 500. * scale * dt,
             }
         }
         self.particles
@@ -1226,6 +1474,7 @@ impl Sim {
     // Returns how the character and the board look in this frame.
     fn figure(&self, snap: f32) -> Figure {
         let pixel = self.pixel();
+        let ride = self.ride;
         let base = Pen {
             x: self.me.x,
             y: self.me.y,
@@ -1248,6 +1497,12 @@ impl Sim {
         };
         let beat = |rate: f32| (self.time * rate) as i64 % 2 == 1;
         let flail = if beat(10.) { Arms::Up } else { Arms::Out };
+        // Where a skater balances, Santa holds the reins and a zombie reaches ahead.
+        let steady = match ride {
+            Ride::Board => Arms::Balance,
+            Ride::Sleigh => Arms::Reins,
+            Ride::Feet => Arms::Forward,
+        };
         let mut pose = Pose {
             dy: 0,
             legs: Legs::Stand,
@@ -1257,6 +1512,7 @@ impl Sim {
             } else {
                 Eyes::Open
             },
+            head: 0.,
         };
         let mut face = Deck::Up;
         let (mut stars, mut bang, mut sweat) = (false, false, false);
@@ -1264,7 +1520,11 @@ impl Sim {
         match self.mode {
             Mode::Hidden | Mode::Recover => {}
             Mode::Enter => {
-                pose.arms = Arms::Up;
+                pose.arms = if ride == Ride::Feet {
+                    Arms::Forward
+                } else {
+                    Arms::Up
+                };
                 pose.eyes = if self.me.vy > 0. {
                     Eyes::Happy
                 } else {
@@ -1286,8 +1546,13 @@ impl Sim {
                 }
             }
             Mode::Ride => {
-                pose.arms = Arms::Balance;
-                if self.push >= 0. {
+                pose.arms = steady;
+                if ride == Ride::Feet && self.me.vx != 0. {
+                    // A zombie leans into its shamble.
+                    pose.legs = Legs::Walk(beat(5.5));
+                    body.angle = self.me.angle + self.facing * 0.1;
+                }
+                if ride == Ride::Board && self.push >= 0. {
                     pose.legs = Legs::Push((self.push * 3.2) as i64 % 2 == 1);
                 }
                 if self.manual > 0. {
@@ -1304,23 +1569,34 @@ impl Sim {
                     pose.eyes = Eyes::Happy;
                 }
             }
-            Mode::Turn => {
-                let lift = -0.4 * self.facing * (PI * self.clock / TURN).sin();
-                board.angle = self.me.angle + lift;
-                body.angle = self.me.angle + lift * 0.5;
-                pose.arms = Arms::Out;
-            }
+            Mode::Turn => match ride {
+                Ride::Board => {
+                    let lift = -0.4 * self.facing * (PI * self.clock / TURN).sin();
+                    board.angle = self.me.angle + lift;
+                    body.angle = self.me.angle + lift * 0.5;
+                    pose.arms = Arms::Out;
+                }
+                Ride::Sleigh => {
+                    // The team swings about, narrowing to its middle and widening the other way.
+                    board.squeeze = (PI * self.clock / TURN).cos().abs().max(0.08);
+                    pose.arms = Arms::Reins;
+                }
+                Ride::Feet => pose.arms = Arms::Forward,
+            },
             Mode::Crouch => {
-                pose.dy = 1;
-                pose.legs = Legs::Crouch;
-                pose.arms = Arms::Balance;
-            }
-            Mode::Land => {
-                if self.clock < 0.08 {
+                // Santa sits, so the sleigh does not squat.
+                if ride != Ride::Sleigh {
                     pose.dy = 1;
                     pose.legs = Legs::Crouch;
                 }
-                pose.arms = Arms::Balance;
+                pose.arms = steady;
+            }
+            Mode::Land => {
+                if self.clock < 0.08 && ride != Ride::Sleigh {
+                    pose.dy = 1;
+                    pose.legs = Legs::Crouch;
+                }
+                pose.arms = steady;
                 if cheering {
                     pose.arms = Arms::Up;
                     pose.eyes = Eyes::Happy;
@@ -1330,35 +1606,62 @@ impl Sim {
                 let share = (self.clock / self.air.max(0.1)).clamp(0., 1.);
                 // The trick plays between the pop and the catch.
                 let trick = ((share - 0.12) / 0.7).clamp(0., 1.);
-                pose.arms = Arms::Balance;
-                match self.trick {
-                    Trick::Ollie => {
-                        pose.arms = Arms::Up;
-                        if share < 0.35 {
-                            let lift = -0.35 * self.facing * (1. - share / 0.35);
-                            board.angle = lift;
-                            body.angle = lift * 0.3;
+                pose.arms = steady;
+                if ride == Ride::Feet {
+                    // A zombie hops with loose legs and lifted arms.
+                    pose.legs = Legs::Dangle(false);
+                    pose.arms = Arms::Up;
+                } else {
+                    match self.trick {
+                        Trick::Ollie => {
+                            if ride == Ride::Board {
+                                pose.arms = Arms::Up;
+                            }
+                            if share < 0.35 {
+                                let lift = -0.35 * self.facing * (1. - share / 0.35);
+                                board.angle = lift;
+                                body.angle = lift * 0.3;
+                            }
                         }
-                    }
-                    Trick::Kickflip => {
-                        face = Deck::of_flip(trick);
-                        board.y += 2. * pixel * (PI * trick).sin();
-                    }
-                    Trick::Shuvit => {
-                        board.squeeze = (PI * trick).cos();
-                        board.y += pixel * (PI * trick).sin();
-                        pose.arms = Arms::Out;
-                    }
-                    Trick::Spin => {
-                        body.squeeze = (TAU * trick).cos();
-                        board.squeeze = body.squeeze;
-                        pose.arms = Arms::Up;
-                    }
-                    Trick::Grab => {
-                        if (0.15..0.85).contains(&share) {
-                            pose.dy = 1;
-                            pose.legs = Legs::Crouch;
-                            pose.arms = Arms::Grab;
+                        Trick::Kickflip => {
+                            face = Deck::of_flip(trick);
+                            board.y += 2. * pixel * (PI * trick).sin();
+                        }
+                        Trick::Shuvit => {
+                            board.squeeze = (PI * trick).cos();
+                            board.y += pixel * (PI * trick).sin();
+                            pose.arms = Arms::Out;
+                        }
+                        Trick::Spin => {
+                            body.squeeze = (TAU * trick).cos();
+                            board.squeeze = body.squeeze;
+                            pose.arms = Arms::Up;
+                        }
+                        Trick::Grab => {
+                            if (0.15..0.85).contains(&share) {
+                                pose.dy = 1;
+                                pose.legs = Legs::Crouch;
+                                pose.arms = Arms::Grab;
+                                pose.eyes = Eyes::Happy;
+                            }
+                        }
+                        Trick::Soar => {
+                            if (0.2..0.8).contains(&share) {
+                                pose.arms = Arms::Up;
+                                pose.eyes = Eyes::Happy;
+                            }
+                        }
+                        Trick::Gift => {
+                            // Santa lets go of the reins to drop the present at the top.
+                            if (0.35..0.65).contains(&share) {
+                                pose.arms = Arms::Up;
+                            }
+                        }
+                        Trick::Loop => {
+                            // The whole team loops about its middle, nose up first, while it is
+                            // high enough that the reindeer clear the edge.
+                            let turn = ((share - 0.2) / 0.6).clamp(0., 1.);
+                            board = board.turned_about(13., 10., -self.facing * TAU * turn);
                             pose.eyes = Eyes::Happy;
                         }
                     }
@@ -1402,16 +1705,75 @@ impl Sim {
                 pose.arms = flail;
                 bang = self.clock < 0.35;
             }
+            Mode::Dance => {
+                let share = (self.clock / self.dance.length()).min(1.);
+                pose.eyes = Eyes::Happy;
+                match self.dance {
+                    Dance::Headspin => {
+                        // On its head with the legs apart, turning about itself.
+                        body = base.turned_about(6., 7., PI);
+                        body.squeeze = (self.time * 16.).cos();
+                        pose.legs = Legs::Dangle(true);
+                        pose.arms = Arms::Out;
+                    }
+                    Dance::Windmill => {
+                        // Two rolls about its middle on the floor, the legs flying.
+                        body = base.turned_about(6., 7., self.facing * TAU * 2. * share);
+                        pose.legs = Legs::Dangle(beat(8.));
+                        pose.arms = Arms::Out;
+                    }
+                    Dance::Moonwalk => {
+                        pose.legs = Legs::Walk(beat(4.));
+                        pose.arms = if beat(2.) { Arms::Balance } else { Arms::Down };
+                    }
+                    Dance::HeadToss => {
+                        let toss = ((share - 0.15) / 0.7).clamp(0., 1.);
+                        let flying = toss > 0. && toss < 1.;
+                        pose.head = 40. * toss * (1. - toss);
+                        pose.arms = if flying { Arms::Up } else { Arms::Forward };
+                        if flying {
+                            pose.eyes = Eyes::Wide;
+                        }
+                    }
+                }
+            }
         }
         // A ghost bobs while it hovers.
         if art::art(self.avatar).floats && pose.dy == 0 && (self.time * 2.5).sin() > 0. {
             pose.dy = -1;
         }
+        // Santa sits in the sleigh and moves with it.
+        if ride == Ride::Sleigh && self.carried {
+            body = board;
+        }
+        // The reindeer gallop while the sleigh moves on the ground and tuck their legs in the air.
+        let (speed, flying) = if self.carried {
+            (
+                self.me.vx,
+                matches!(
+                    self.mode,
+                    Mode::Enter | Mode::Air | Mode::Panic | Mode::Held | Mode::Flung
+                ),
+            )
+        } else {
+            (
+                self.board.vx,
+                self.board.vy != 0. || matches!(self.mode, Mode::Panic | Mode::Held | Mode::Flung),
+            )
+        };
+        let team = if flying {
+            Team::Fly
+        } else if speed.abs() > 4. * self.scale {
+            Team::Gallop(beat(8.))
+        } else {
+            Team::Stand
+        };
         Figure {
             body,
             board,
             pose,
             face,
+            team,
             stars,
             bang,
             sweat,
@@ -1447,6 +1809,7 @@ struct Figure {
     board: Pen,
     pose: Pose,
     face: Deck,
+    team: Team,
     /// Stars circle the head.
     stars: bool,
     /// A `!` shows above the head.
@@ -1629,19 +1992,24 @@ impl Render for SkaterLayer {
     }
 }
 
-// Paints the board, the character, what floats around its head and the specks of dust.
+// Paints the ride, the character, what floats around its head and the specks.
 fn paint_frame(frame: &Frame, window: &mut Window) {
     let colors = &frame.colors;
     if let Some(figure) = &frame.figure {
         let pixel = figure.body.pixel;
-        art::paint_board(&figure.board, figure.face, colors, window);
-        art::paint_character(
-            &figure.body,
-            &art::art(frame.avatar),
-            figure.pose,
-            colors,
-            window,
-        );
+        let art = art::art(frame.avatar);
+        match art.ride {
+            Ride::Board => {
+                art::paint_board(&figure.board, figure.face, colors, window);
+                art::paint_character(&figure.body, &art, figure.pose, colors, window);
+            }
+            // Santa sits behind the sleigh's front wall.
+            Ride::Sleigh => {
+                art::paint_character(&figure.body, &art, figure.pose, colors, window);
+                art::paint_sleigh(&figure.board, figure.team, colors, window);
+            }
+            Ride::Feet => art::paint_character(&figure.body, &art, figure.pose, colors, window),
+        }
         let (head_x, head_y) = figure.body.point(6., 3.);
         if figure.stars {
             for i in 0..3 {
@@ -1650,6 +2018,7 @@ fn paint_frame(frame: &Frame, window: &mut Window) {
                     head_x + turn.cos() * 5. * pixel,
                     head_y - 5. * pixel + turn.sin() * 1.5 * pixel,
                     pixel,
+                    1.,
                     colors,
                     window,
                 );
@@ -1691,6 +2060,17 @@ fn paint_frame(frame: &Frame, window: &mut Window) {
                 particle.y,
                 pixel,
                 (fade * 2.).min(1.),
+                colors,
+                window,
+            ),
+            Speck::Sparkle => {
+                art::paint_star(particle.x, particle.y, pixel * 0.6, fade, colors, window)
+            }
+            Speck::Gift => art::paint_gift(
+                particle.x,
+                particle.y,
+                pixel,
+                (fade * 3.).min(1.),
                 colors,
                 window,
             ),

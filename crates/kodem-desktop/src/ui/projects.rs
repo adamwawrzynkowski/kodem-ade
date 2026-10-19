@@ -509,8 +509,30 @@ impl Shell {
                     })),
             )
     }
-    // Returns a choice for each skater avatar, drawn in the project's tint.
+    // Returns a choice for each skater avatar, drawn in the project's tint, with the thematic
+    // avatars in their own group under the everyday ones.
     fn avatar_picker(&self, project: &Project, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let everyday = SkaterAvatar::EVERYDAY.len();
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(self.avatar_choices(&SkaterAvatar::EVERYDAY, 0, project, cx))
+            .child(div().mt(px(4.)).child(caps("Thematic", t)))
+            .child(self.avatar_choices(&SkaterAvatar::THEMATIC, everyday, project, cx))
+            .into_any_element()
+    }
+
+    // Returns a row of avatar choices. `first` is the position of the row's first avatar among
+    // all of them, so that each cell keeps its own identity.
+    fn avatar_choices(
+        &self,
+        avatars: &[SkaterAvatar],
+        first: usize,
+        project: &Project,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let t = self.theme;
         let tint = sidebar::project_tint(project, t);
         let chosen = project.avatar.unwrap_or_default();
@@ -518,42 +540,36 @@ impl Shell {
             .flex()
             .flex_wrap()
             .gap(px(4.))
-            .children(
-                SkaterAvatar::ALL
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, avatar)| {
-                        let label = avatar.label();
-                        let picked = avatar == chosen;
-                        self.control(("project-avatar", i))
-                            .size(px(40.))
-                            .p(px(5.))
-                            .border_color(gpui::transparent_black())
-                            .bg(gpui::transparent_black())
-                            .aria_selected(picked)
-                            .accessibility_label(label)
-                            .tooltip(move |_, cx| {
-                                cx.new(|_| Hint {
-                                    text: label.into(),
-                                    theme: t,
-                                })
-                                .into()
-                            })
-                            .child(skater::portrait(avatar, tint))
-                            .when(picked, |cell| {
-                                cell.bg(tint.opacity(0.12)).border_color(tint.opacity(0.6))
-                            })
-                            .when(!picked, |cell| cell.hover(move |cell| cell.bg(t.selected)))
-                            .on_press(move |position, cx| fx::ripple(position, tint, cx))
-                            .on_click(cx.listener(move |s, _, _, cx| {
-                                if let Some(project) = &mut s.editing_project {
-                                    project.avatar = Some(avatar);
-                                }
-                                cx.notify();
-                            }))
-                    }),
-            )
-            .into_any_element()
+            .children(avatars.iter().copied().enumerate().map(|(i, avatar)| {
+                let label = avatar.label();
+                let picked = avatar == chosen;
+                self.control(("project-avatar", first + i))
+                    .size(px(40.))
+                    .p(px(5.))
+                    .border_color(gpui::transparent_black())
+                    .bg(gpui::transparent_black())
+                    .aria_selected(picked)
+                    .accessibility_label(label)
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| Hint {
+                            text: label.into(),
+                            theme: t,
+                        })
+                        .into()
+                    })
+                    .child(skater::portrait(avatar, tint))
+                    .when(picked, |cell| {
+                        cell.bg(tint.opacity(0.12)).border_color(tint.opacity(0.6))
+                    })
+                    .when(!picked, |cell| cell.hover(move |cell| cell.bg(t.selected)))
+                    .on_press(move |position, cx| fx::ripple(position, tint, cx))
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        if let Some(project) = &mut s.editing_project {
+                            project.avatar = Some(avatar);
+                        }
+                        cx.notify();
+                    }))
+            }))
     }
 
     // Returns the built-in icons that match the filter, in their groups, in a list that scrolls

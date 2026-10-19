@@ -573,9 +573,12 @@ pub enum SkaterAvatar {
     Ghost,
     Slime,
     Alien,
+    Santa,
+    Zombie,
 }
 impl SkaterAvatar {
-    pub const ALL: [Self; 12] = [
+    /// The avatars for every day, which a new project picks from.
+    pub const EVERYDAY: [Self; 12] = [
         Self::Cat,
         Self::Bunny,
         Self::Bear,
@@ -589,6 +592,8 @@ impl SkaterAvatar {
         Self::Slime,
         Self::Alien,
     ];
+    /// The avatars of a holiday, which ride their own way and are only chosen in the picker.
+    pub const THEMATIC: [Self; 2] = [Self::Santa, Self::Zombie];
     /// Returns the label shown in the avatar picker.
     pub fn label(self) -> &'static str {
         match self {
@@ -604,13 +609,15 @@ impl SkaterAvatar {
             Self::Ghost => "Ghost",
             Self::Slime => "Slime",
             Self::Alien => "Alien",
+            Self::Santa => "Santa",
+            Self::Zombie => "Zombie",
         }
     }
-    /// Returns an avatar chosen at random.
+    /// Returns an everyday avatar chosen at random.
     pub fn random() -> Self {
         let bytes = Uuid::new_v4().into_bytes();
         let roll = u16::from_le_bytes([bytes[0], bytes[1]]);
-        Self::ALL[usize::from(roll) % Self::ALL.len()]
+        Self::EVERYDAY[usize::from(roll) % Self::EVERYDAY.len()]
     }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
