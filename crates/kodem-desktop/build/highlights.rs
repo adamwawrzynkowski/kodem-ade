@@ -229,13 +229,19 @@ fn check(file: &File, source: &str, problems: &mut Vec<String>) {
     }
     for headline in &file.headline {
         limit(&headline.id, "text", &headline.text, 140, problems);
+        version_number(&headline.id, &headline.text, problems);
     }
     for highlight in &file.highlight {
         let id = &highlight.id;
         limit(id, "title", &highlight.title, 40, problems);
         limit(id, "text", &highlight.text, 160, problems);
+        let mut texts = vec![highlight.title.as_str(), highlight.text.as_str()];
         if let Some(visual) = &highlight.visual {
             check_visual(id, visual, problems);
+            texts.extend(visual_texts(visual));
+        }
+        for text in texts {
+            version_number(id, text, problems);
         }
     }
     let kinds: Vec<&str> = file
@@ -346,6 +352,78 @@ fn check_visual(id: &str, visual: &Visual, problems: &mut Vec<String>) {
         }
         Visual::Glyph { icon } => check_icon(id, icon, problems),
         Visual::List { .. } => {}
+    }
+}
+
+// Every text that a visual shows.
+fn visual_texts(visual: &Visual) -> Vec<&str> {
+    let mut texts = Vec::new();
+    match visual {
+        Visual::List {
+            title,
+            badge,
+            items,
+        } => {
+            texts.extend(title.as_deref());
+            texts.extend(badge.as_deref());
+            for row in items {
+                texts.push(row.text.as_str());
+                texts.extend(row.tag.as_deref());
+            }
+        }
+        Visual::Chips { items } => chip_texts(items, &mut texts),
+        Visual::Prompt { text, chips } => {
+            texts.push(text.as_str());
+            chip_texts(chips, &mut texts);
+        }
+        Visual::Bars { label, labels, .. } => {
+            texts.extend(label.as_deref());
+            texts.extend(labels.iter().map(String::as_str));
+        }
+        Visual::Figure {
+            value,
+            label,
+            detail,
+        } => {
+            texts.push(value.as_str());
+            texts.push(label.as_str());
+            texts.extend(detail.as_deref());
+        }
+        Visual::Meter { segments, caption } => {
+            texts.extend(segments.iter().map(|segment| segment.label.as_str()));
+            texts.extend(caption.as_deref());
+        }
+        Visual::Keys { keys, label } => {
+            texts.extend(keys.iter().map(String::as_str));
+            texts.extend(label.as_deref());
+        }
+        Visual::Glyph { .. } => {}
+    }
+    texts
+}
+
+fn chip_texts<'a>(chips: &'a [Chip], texts: &mut Vec<&'a str>) {
+    for chip in chips {
+        texts.push(chip.text.as_str());
+        texts.extend(chip.detail.as_deref());
+    }
+}
+
+// Refuses version numbers such as 1.19.3: a card says what the user can do now, not which
+// versions a change moves between.
+fn version_number(id: &str, text: &str, problems: &mut Vec<String>) {
+    let found = text
+        .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .map(|token| token.trim_matches('.'))
+        .find(|token| {
+            let parts: Vec<&str> = token.split('.').collect();
+            parts.len() >= 3 && parts.iter().all(|part| !part.is_empty())
+        });
+    if let Some(number) = found {
+        problems.push(format!(
+            "{id}: {number:?} is a version number; say what the user can do now, not which \
+             versions a change moves between"
+        ));
     }
 }
 

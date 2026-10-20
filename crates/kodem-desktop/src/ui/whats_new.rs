@@ -320,10 +320,12 @@ fn highlight_card(highlight: &'static Highlight, theme: Theme) -> Div {
             Visual::Figure { .. } | Visual::Glyph(_) | Visual::Keys { .. }
         );
     if beside {
+        // The words keep at least half of the card; a long caption wraps instead of
+        // squeezing them into a narrow column.
         card.items_center()
             .gap(px(24.))
-            .child(picture.flex_shrink_0())
-            .child(words.flex_1().min_w_0())
+            .child(picture.min_w_0())
+            .child(words.flex_1().min_w(relative(0.5)))
     } else {
         card.flex_col()
             .justify_end()

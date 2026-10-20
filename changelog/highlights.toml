@@ -52,6 +52,9 @@
 # The board has four columns. The version card takes two in the middle of the second row when
 # the highlights fill six columns or more; widths that add up to 6, 10, 14… leave no gaps.
 # Visual data must be true: measured figures, real names and real shortcuts.
+# Never describe a change as a move from one version to another ("OpenCode 1 updates to 2",
+# "1.19.3 to 2.1.0") in a headline, title, text or visual. Say what the user can do now. build.rs
+# refuses version numbers such as 1.19.3.
 
 reviewed = "ade89c19b7f27421709ac00a365105da8ca4fe00"
 
