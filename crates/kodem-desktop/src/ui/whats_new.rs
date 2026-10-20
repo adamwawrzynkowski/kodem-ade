@@ -275,51 +275,62 @@ fn version_card(theme: Theme) -> Div {
         )
 }
 
-/// A highlight's card: its live picture above its title and text.
+/// A highlight's card: its live picture above its title and text, or beside them when the card is
+/// wide and the picture compact.
 fn highlight_card(highlight: &'static Highlight, theme: Theme) -> Div {
     let tone = color(highlight.tone, theme);
-    kit::card(theme)
+    let words = div()
+        .relative()
         .flex()
         .flex_col()
-        .justify_end()
-        .gap(px(16.))
-        .min_h(px(212.))
-        .p(px(16.))
-        .pb(px(18.))
-        .when(!matches!(highlight.visual, Visual::None), |card| {
-            card.child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h(px(92.))
-                    .flex()
-                    .flex_col()
-                    .justify_center()
-                    .child(visual(&highlight.visual, tone, theme)),
-            )
-        })
+        .gap(px(5.))
         .child(
             div()
-                .relative()
-                .flex()
-                .flex_col()
-                .gap(px(5.))
-                .child(
-                    div()
-                        .text_size(text_px(16.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .line_height(relative(1.25))
-                        .text_color(theme.text)
-                        .child(highlight.title),
-                )
-                .child(
-                    div()
-                        .text_size(text_px(12.5))
-                        .line_height(relative(1.45))
-                        .text_color(theme.muted)
-                        .child(highlight.text),
-                ),
+                .text_size(text_px(16.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .line_height(relative(1.25))
+                .text_color(theme.text)
+                .child(highlight.title),
         )
+        .child(
+            div()
+                .text_size(text_px(12.5))
+                .line_height(relative(1.45))
+                .text_color(theme.muted)
+                .child(highlight.text),
+        );
+    let card = kit::card(theme)
+        .flex()
+        .min_h(px(212.))
+        .p(px(16.))
+        .pb(px(18.));
+    if matches!(highlight.visual, Visual::None) {
+        return card.flex_col().justify_end().child(words);
+    }
+    let picture = div()
+        .relative()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .child(visual(&highlight.visual, tone, theme));
+    // Above the words, a compact picture would stand alone in a wide empty band.
+    let beside = highlight.wide
+        && matches!(
+            highlight.visual,
+            Visual::Figure { .. } | Visual::Glyph(_) | Visual::Keys { .. }
+        );
+    if beside {
+        card.items_center()
+            .gap(px(24.))
+            .child(picture.flex_shrink_0())
+            .child(words.flex_1().min_w_0())
+    } else {
+        card.flex_col()
+            .justify_end()
+            .gap(px(16.))
+            .child(picture.flex_1().min_h(px(92.)))
+            .child(words)
+    }
 }
 
 /// Draws the picture of a highlight in its tone.

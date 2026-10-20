@@ -1354,3 +1354,13 @@ Checked with a temporary test that was not kept: 12 random seeds of ten simulate
 Recorded on 19 October 2026. The user reported that What's new did not fit the window: the dialog was taller than the window, so its header and its actions were cut off. `motion::floating` puts each dialog in a wrapper that takes the dialog's own size, so the dialog's `max_w_full` and `max_h_full` were shares of an unbounded size and had no effect; dialogs shorter than the window never showed it, and What's new is up to about 960 points tall. `Shell::panel` now bounds the dialog by the window's viewport less the scrim's margin (`DIALOG_MARGIN`, 24 points on each side), so the header and the actions stay in view and the body scrolls between them. Every dialog of `Shell::panel` gets the bound, such as Settings and Files in a small window.
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not checked in the running app, under the no-visual-testing agreement.
+
+### What's new cards vary their design
+
+Recorded on 20 October 2026. The user reported that the board of 0.1.55 looked repetitive: its three highlights all drew a list under a header, and asked that future generated highlights vary too. Nothing asked for variety: the format allowed any kind on every card, and the generation prompt did not mention it.
+
+- `build/highlights.rs` refuses a highlight whose visual kind, or "none" without a visual, is the same as that of one of the three highlights above it (`DISTINCT_ABOVE`), and names both entries. The generation prompts of `scripts/github-release.sh` and the local changelog script build the crate, so a generated file that repeats a kind fails there and gets fixed before its commit. The file's header says which kind suits which change, and both prompts ask for the variety.
+- `highlight_card` in `ui/whats_new.rs` puts a figure, keycaps or a glyph beside the words of a wide card, where it stood alone in an empty band above them before.
+- `changelog/highlights.toml` takes new visuals with the same true data: a figure for the dialog margin, chips for Santa and the zombie, a glyph for project groups and chips for the lighter frames. `less-graphics-memory` moves above `live-release-notes` within the entries of their release, so the older entries pass the rule too.
+
+The build rejected the previous file with five repeats before the new visuals. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings), `cargo fmt --check` and `bash -n` on the changed scripts. The board is not checked in the running app, under the no-visual-testing agreement.

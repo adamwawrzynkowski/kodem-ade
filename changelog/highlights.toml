@@ -43,6 +43,12 @@
 #         One large icon.
 #   icon names are the files of assets/icons without ".svg".
 #
+# Cards near each other must look different: a highlight's visual kind (or "none" without one)
+# must differ from the kinds of the three highlights above it. Pick the kind that shows the change
+# best: a figure or bars for a measured result, keys for a shortcut, a prompt for something typed,
+# chips for named things, a meter for shares of a whole, a list for states or steps, a glyph when
+# nothing else fits. A wide card shows a figure, keys or a glyph beside its words.
+#
 # The board has four columns. The version card takes two in the middle of the second row when
 # the highlights fill six columns or more; widths that add up to 6, 10, 14… leave no gaps.
 # Visual data must be true: measured figures, real names and real shortcuts.
@@ -55,11 +61,7 @@ title = "Dialogs fit the window"
 text = "A tall dialog, such as What's new, no longer runs past a small window. Its header and actions stay in view and the body scrolls between them."
 wide = true
 tone = "blue"
-visual = { kind = "list", title = "What's new", items = [
-    { text = "Header stays in view", state = "done" },
-    { text = "Body scrolls", state = "dot", tone = "blue" },
-    { text = "Actions stay in view", state = "done" },
-] }
+visual = { kind = "figure", value = "24", label = "points of margin", detail = "to every edge of the window" }
 
 [[headline]]
 id = "headline-titles-and-santa"
@@ -82,9 +84,9 @@ title = "Santa and a zombie skate in"
 text = "A new Thematic group in the project's avatar picker: Santa rides a sleigh pulled by reindeer, and a zombie walks and breakdances."
 wide = true
 tone = "amber"
-visual = { kind = "list", title = "Avatar · Thematic", items = [
-    { text = "Santa", state = "dot", tone = "red" },
-    { text = "Zombie", state = "dot", tone = "green" },
+visual = { kind = "chips", items = [
+    { text = "Santa", icon = "sparkles", detail = "sleigh", tone = "red" },
+    { text = "Zombie", icon = "user", detail = "breakdance", tone = "green" },
 ] }
 
 [[headline]]
@@ -97,15 +99,18 @@ title = "Tasks grouped by project"
 text = "Every open task sits in its project's tinted group. The header counts tasks that need input, run or have unread results, and a group folds."
 wide = true
 tone = "blue"
-visual = { kind = "list", title = "Project group", items = [
-    { text = "Needs you", state = "dot", tone = "amber" },
-    { text = "Working", state = "dot", tone = "blue" },
-    { text = "Ready for review", state = "dot", tone = "green" },
-] }
+visual = { kind = "glyph", icon = "folder-open" }
 
 [[headline]]
 id = "headline-live-release-notes"
 text = "Release notes now draw themselves, the version badge opens them, and frames got lighter on fast displays."
+
+[[highlight]]
+id = "less-graphics-memory"
+title = "Less graphics memory"
+text = "Kodem no longer keeps two full-window textures that it never draws into."
+tone = "green"
+visual = { kind = "figure", value = "66", label = "MB freed", detail = "at 4K, on macOS" }
 
 [[highlight]]
 id = "live-release-notes"
@@ -119,6 +124,12 @@ visual = { kind = "list", title = "What's new", badge = "live", items = [
 ] }
 
 [[highlight]]
+id = "steady-skater-background"
+title = "A steady skater"
+text = "On displays above 90 Hz the skater draws every second refresh, and keeps that pace while the window is in the background."
+visual = { kind = "bars", label = "Background frames/s at 144 Hz", values = [29, 72], labels = ["Before", "Now"], focus = 1 }
+
+[[highlight]]
 id = "version-badge-opens-notes"
 title = "One click to what changed"
 text = "Click the build badge in the title bar to read the notes of the version you run."
@@ -130,21 +141,8 @@ id = "lighter-frames"
 title = "Lighter frames"
 text = "Unchanged frames are copied instead of drawn again, and a task that waits for you no longer redraws the window on every step."
 tone = "green"
-visual = { kind = "list", items = [
-    { text = "Unchanged frames copied", state = "done" },
-    { text = "Faster sprite sorting", state = "done" },
-    { text = "Waiting tasks redraw on blink", state = "done" },
+visual = { kind = "chips", items = [
+    { text = "Unchanged frames", icon = "copy", detail = "copied" },
+    { text = "Sprite sort", icon = "zap", detail = "faster" },
+    { text = "Waiting tasks", icon = "clock", detail = "redraw on blink" },
 ] }
-
-[[highlight]]
-id = "steady-skater-background"
-title = "A steady skater"
-text = "On displays above 90 Hz the skater draws every second refresh, and keeps that pace while the window is in the background."
-visual = { kind = "bars", label = "Background frames/s at 144 Hz", values = [29, 72], labels = ["Before", "Now"], focus = 1 }
-
-[[highlight]]
-id = "less-graphics-memory"
-title = "Less graphics memory"
-text = "Kodem no longer keeps two full-window textures that it never draws into."
-tone = "green"
-visual = { kind = "figure", value = "66", label = "MB freed", detail = "at 4K, on macOS" }

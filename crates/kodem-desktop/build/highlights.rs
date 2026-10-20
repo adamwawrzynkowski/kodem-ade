@@ -131,6 +131,10 @@ struct Segment {
 /// The characters that the dot-matrix figures of `ui/whats_new.rs` can draw.
 const FIGURE_CHARACTERS: &str = "0123456789.,%+-x:/";
 
+/// How many highlights above a highlight must use other visual kinds, so that cards near each
+/// other on the board look different.
+const DISTINCT_ABOVE: usize = 3;
+
 /// Checks the file and writes `highlights.rs` into `out`. `chosen` lists the ids of the entries
 /// that this release shows; `None` shows every entry.
 pub fn embed(out: &std::path::Path, chosen: Option<&str>) {
@@ -233,6 +237,37 @@ fn check(file: &File, source: &str, problems: &mut Vec<String>) {
         if let Some(visual) = &highlight.visual {
             check_visual(id, visual, problems);
         }
+    }
+    let kinds: Vec<&str> = file
+        .highlight
+        .iter()
+        .map(|highlight| kind(highlight.visual.as_ref()))
+        .collect();
+    for (index, highlight) in file.highlight.iter().enumerate() {
+        if let Some(above) = (index.saturating_sub(DISTINCT_ABOVE)..index)
+            .find(|&above| kinds[above] == kinds[index])
+        {
+            problems.push(format!(
+                "{}: its visual kind {:?} repeats that of {}; a highlight takes a kind that none \
+                 of the {DISTINCT_ABOVE} highlights above it uses",
+                highlight.id, kinds[index], file.highlight[above].id
+            ));
+        }
+    }
+}
+
+// Names the kind of a visual as the file writes it; a highlight without one is "none".
+fn kind(visual: Option<&Visual>) -> &'static str {
+    match visual {
+        None => "none",
+        Some(Visual::List { .. }) => "list",
+        Some(Visual::Chips { .. }) => "chips",
+        Some(Visual::Prompt { .. }) => "prompt",
+        Some(Visual::Bars { .. }) => "bars",
+        Some(Visual::Figure { .. }) => "figure",
+        Some(Visual::Meter { .. }) => "meter",
+        Some(Visual::Keys { .. }) => "keys",
+        Some(Visual::Glyph { .. }) => "glyph",
     }
 }
 
