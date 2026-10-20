@@ -602,7 +602,8 @@ impl Render for Shell {
                 s.follow_latest();
                 cx.notify();
             }))
-            .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
+            .on_action(cx.listener(Self::request_quit))
+            .on_action(cx.listener(Self::close_window))
             .on_mouse_move(cx.listener(|s, event: &MouseMoveEvent, _, cx| {
                 // The pointer is in window pixels; the saved widths are in points.
                 let pointer = f32::from(event.position.x) / crate::theme::ui_scale();

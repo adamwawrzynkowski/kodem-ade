@@ -532,7 +532,8 @@ impl Shell {
                 .text_size(text_px(13.))
                 .line_height(relative(1.5))
                 .on_action(cx.listener(|s, _: &Cancel, window, cx| s.close_agent(window, cx)))
-                .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
+                .on_action(cx.listener(Self::request_quit))
+                .on_action(cx.listener(Self::close_window))
                 .child(
                     div()
                         .relative()

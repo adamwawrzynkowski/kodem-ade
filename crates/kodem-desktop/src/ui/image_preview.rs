@@ -180,7 +180,8 @@ impl Shell {
                 .on_action(cx.listener(|s, _: &Cancel, window, cx| {
                     s.close_image_preview(window, cx);
                 }))
-                .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
+                .on_action(cx.listener(Self::request_quit))
+                .on_action(cx.listener(Self::close_window))
                 .child(
                     div()
                         .relative()

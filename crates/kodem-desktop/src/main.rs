@@ -80,8 +80,8 @@ fn main() {
                 eprintln!("Could not load bundled fonts: {error}");
             }
             ui::init(cx);
-            // Windows and Linux apps end with their last window; a macOS app stays open.
-            #[cfg(not(target_os = "macos"))]
+            // Kodem ends with its last window. A windowless macOS app would stay as a
+            // background activity, which keeps an update from relaunching it.
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();

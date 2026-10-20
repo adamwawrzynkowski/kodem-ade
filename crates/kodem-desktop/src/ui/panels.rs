@@ -49,6 +49,7 @@ impl Shell {
             Panel::Rename => "Rename task",
             Panel::DeleteTask => "Delete thread?",
             Panel::ImportThreads => "Import threads",
+            Panel::Quit => "Quit Kodem?",
             Panel::None
             | Panel::Usage
             | Panel::Plan
@@ -82,6 +83,31 @@ impl Shell {
             .p(px(18.));
         let mut actions: Option<Div> = None;
         match self.panel {
+            Panel::Quit => {
+                content = content.child(
+                    div()
+                        .text_size(text_px(13.))
+                        .line_height(relative(1.45))
+                        .text_color(theme.muted)
+                        .child(kit::shortcut(
+                            "Kodem closes its window and stops running. Press ⌘Q again to quit.",
+                        )),
+                );
+                actions = Some(
+                    footer_actions()
+                        .child(
+                            self.ghost("cancel-quit", "close", "Cancel")
+                                .on_click(cx.listener(|s, _, _, cx| {
+                                    s.panel = Panel::None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            self.tinted("confirm-quit", "log-out", "Quit Kodem", theme.removed)
+                                .on_click(cx.listener(|_, _, _, cx| cx.quit())),
+                        ),
+                );
+            }
             Panel::DeleteTask => {
                 if let Some(task) = self
                     .thread_menu
@@ -490,7 +516,10 @@ impl Shell {
         } else {
             600.
         };
-        let danger = matches!(self.panel, Panel::DeleteTask | Panel::RemoveProject);
+        let danger = matches!(
+            self.panel,
+            Panel::DeleteTask | Panel::RemoveProject | Panel::Quit
+        );
         let tone = if danger { theme.removed } else { theme.accent };
         let presentation = match self.panel {
             Panel::CustomizeProject => Some(("palette", "Name, accent, icon and commands")),
@@ -508,6 +537,7 @@ impl Shell {
             )),
             Panel::Rename => Some(("pencil", "A manual title stops automatic renaming")),
             Panel::DeleteTask => Some(("trash-2", "Removes this task's local conversation")),
+            Panel::Quit => Some(("log-out", "Closes the window and ends the app")),
             Panel::ImportThreads => Some((
                 "arrow-down-to-line",
                 "Conversations of Claude Code, Codex and OpenCode in your projects",

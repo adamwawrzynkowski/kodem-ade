@@ -82,6 +82,8 @@ actions!(
         Search,
         Cancel,
         Quit,
+        CloseWindow,
+        Hide,
         Latest,
         CommandPalette,
         NextTask,
@@ -141,6 +143,8 @@ enum Panel {
     Notifications,
     /// Imports the conversations of Claude Code and Codex.
     ImportThreads,
+    /// Asks before Kodem quits.
+    Quit,
 }
 /// What the side pane shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -403,6 +407,17 @@ impl Shell {
             input.set_wrap(false);
             input
         });
+        // The red traffic light asks like Command-W. A windowless macOS app would stay as a
+        // background activity, which keeps an update from relaunching it.
+        #[cfg(target_os = "macos")]
+        {
+            let shell = cx.weak_entity();
+            window.on_window_should_close(cx, move |window, cx| {
+                shell
+                    .update(cx, |s, cx| s.confirm_quit(window, cx))
+                    .is_err()
+            });
+        }
         let subscriptions = vec![
             cx.observe_window_bounds(window, |s, window, cx| {
                 let placement = window.window_bounds();
@@ -1978,6 +1993,30 @@ impl Shell {
         self.dragging_review = false;
         cx.notify();
     }
+    // Asks before quitting. A second quit while the dialog is open quits.
+    fn request_quit(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panel == Panel::Quit {
+            cx.quit();
+            return;
+        }
+        self.confirm_quit(window, cx);
+    }
+    // Closing the only window ends Kodem, so it asks like a quit. Only a quit or the dialog's
+    // button confirms it.
+    fn close_window(&mut self, _: &CloseWindow, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm_quit(window, cx);
+    }
+    // Opens the quit dialog over the workspace. The full-window views close, as they would
+    // hide it.
+    fn confirm_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.image_preview = None;
+        self.agent_popup = None;
+        self.dragging_sidebar = false;
+        self.dragging_review = false;
+        self.panel = Panel::Quit;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
     fn readonly(&mut self, key: String, text: String, cx: &mut Context<Self>) -> Entity<TextInput> {
         self.readonly_streaming(key, &text, false, cx)
     }
@@ -2627,12 +2666,21 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("secondary-s", diff_view::SaveEdits, Some("DiffDocument")),
     ]);
+    // Control-W and Control-H edit text in terminals elsewhere, so only macOS binds them.
+    #[cfg(target_os = "macos")]
+    cx.bind_keys([
+        KeyBinding::new("cmd-w", CloseWindow, None),
+        KeyBinding::new("cmd-h", Hide, None),
+    ]);
+    cx.on_action(|_: &Hide, cx| cx.hide());
     cx.set_menus(vec![
         Menu {
             disabled: false,
             name: "Kodem".into(),
             items: vec![
                 MenuItem::action("Settings", ShowSettings),
+                MenuItem::separator(),
+                MenuItem::action("Hide Kodem", Hide),
                 MenuItem::separator(),
                 MenuItem::action("Quit Kodem", Quit),
             ],
@@ -2644,6 +2692,8 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Open Repository", OpenProject),
                 MenuItem::action("Clone Repository", CloneRepository),
                 MenuItem::action("New Task", NewTask),
+                MenuItem::separator(),
+                MenuItem::action("Close Window", CloseWindow),
             ],
         },
         Menu {
