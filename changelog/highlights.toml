@@ -53,7 +53,24 @@
 # the highlights fill six columns or more; widths that add up to 6, 10, 14… leave no gaps.
 # Visual data must be true: measured figures, real names and real shortcuts.
 
-reviewed = "28d2d8efb44ff01285569009454e61334c01724e"
+reviewed = "912df0d4daf866f10aa14387fd0e10b9390c3084"
+
+[[headline]]
+id = "headline-settings-categories"
+text = "Settings is sorted into categories with pages, and each provider has its own pages."
+
+[[highlight]]
+id = "settings-categories"
+title = "Settings, sorted into pages"
+text = "Categories on the left open their pages, and each agent provider has its own: Connection, Accounts, Model, Access and Compaction."
+wide = true
+tone = "blue"
+visual = { kind = "chips", items = [
+    { text = "Appearance", detail = "3 pages" },
+    { text = "Workspace", detail = "4 pages" },
+    { text = "Agents", detail = "per provider" },
+    { text = "Git", detail = "7 pages" },
+] }
 
 [[highlight]]
 id = "release-cards-vary"
