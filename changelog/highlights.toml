@@ -56,7 +56,25 @@
 # "1.19.3 to 2.1.0") in a headline, title, text or visual. Say what the user can do now. build.rs
 # refuses version numbers such as 1.19.3.
 
-reviewed = "ade89c19b7f27421709ac00a365105da8ca4fe00"
+reviewed = "901db3e7048048984bdfeb5ac66a7057996b5b89"
+
+[[headline]]
+id = "headline-subagent-tiles"
+text = "Subagents sit in tidy status tiles above the composer, with a count for each state."
+
+[[highlight]]
+id = "subagent-status-tiles"
+title = "Subagents in status tiles"
+text = "Agents above the composer form two even columns of tiles with name and state. The header counts agents by state, so you see who runs, waits or failed."
+wide = true
+tone = "accent"
+visual = { kind = "list", title = "Agents", badge = "by state", items = [
+    { text = "Running", state = "dot", tone = "accent" },
+    { text = "Waiting", state = "dot", tone = "amber" },
+    { text = "Completed", state = "done", tone = "green" },
+    { text = "Failed", state = "dot", tone = "red" },
+    { text = "Interrupted", state = "faded" },
+] }
 
 [[headline]]
 id = "headline-opencode-2-update-and-polish"
@@ -64,11 +82,11 @@ text = "OpenCode 1 now updates to OpenCode 2 from the update card, and buttons, 
 
 [[highlight]]
 id = "opencode-2-update"
-title = "OpenCode 1 updates to 2"
-text = "The update card now moves OpenCode 1.19.3 to OpenCode 2.1.0 instead of ending with the old version. Older OpenCode 1 versions first update to 1.19."
+title = "OpenCode 2 from the update card"
+text = "The update card now takes OpenCode all the way to OpenCode 2 instead of stopping at the last OpenCode 1 release."
 wide = true
 tone = "green"
-visual = { kind = "figure", value = "2.1.0", label = "OpenCode 2", detail = "reached from OpenCode 1.19.3" }
+visual = { kind = "figure", value = "2", label = "OpenCode 2", detail = "offered by the update card" }
 
 [[highlight]]
 id = "interface-polish"
