@@ -453,13 +453,7 @@ impl Shell {
             .context_usage
             .as_ref()
             .and_then(|usage| usage.cost.as_ref())
-            .map(|cost| {
-                if cost.currency.eq_ignore_ascii_case("usd") {
-                    format!("${:.2}", cost.amount)
-                } else {
-                    format!("{:.2} {}", cost.amount, cost.currency)
-                }
-            });
+            .map(usage::session_cost);
         div()
             .h(px(38.))
             .flex_shrink_0()

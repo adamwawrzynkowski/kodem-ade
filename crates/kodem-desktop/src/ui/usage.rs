@@ -161,7 +161,8 @@ impl Shell {
             .rule(preferences.provider, preferences.model.as_deref())
     }
 
-    // The open task's context: occupancy against the compaction threshold, and the manual action.
+    // The open task's context as a block: occupancy against the compaction threshold and the
+    // session cost, with the manual action in its footer.
     fn context_section(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let t = self.theme;
         let view = self.view.as_ref()?;
@@ -170,55 +171,58 @@ impl Shell {
         let fraction = usage.and_then(context_fraction);
         let busy = view.task.state.active() || view.task.state == RunState::DeliveryUnknown;
         let started = view.task.provider_thread.is_some();
-        let mut section = div()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
-            .child(kit::section_header("Context", None, t));
-        if let Some(usage) = usage {
-            section = section.child(context_readout(usage, rule, t));
-        } else {
-            section = section.child(
-                div()
-                    .text_size(text_px(11.5))
-                    .text_color(t.muted)
-                    .child("The provider has not reported context usage for this task yet."),
-            );
-        }
         let over = fraction.is_some_and(|value| value * 100. >= rule.threshold as f32);
-        Some(
-            section
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .child(
-                            self.button("compact-now", "layers", "Compact now")
-                                .disabled(busy || !started)
-                                .when(over && !busy, |b| {
-                                    b.border_color(t.warning.opacity(0.5)).text_color(t.warning)
-                                })
-                                .on_click(cx.listener(|s, _, _, cx| {
-                                    s.panel = Panel::None;
-                                    s.compact_task(cx);
-                                })),
-                        )
-                        .child(self.ghost("compact-rules", "settings-2", "Rules").on_click(
-                            cx.listener(|s, _, _, cx| {
-                                s.open_provider_settings(settings::ProviderPage::Compaction);
-                                cx.notify();
-                            }),
-                        )),
-                )
-                .when(busy, |section| {
-                    section.child(
-                        div()
-                            .text_size(text_px(11.))
-                            .text_color(t.subtle)
-                            .child("Compact now is available when the current turn finishes."),
+        let tone = fraction.map_or(t.info, |value| context_tone(value, rule, t));
+        let body = match usage {
+            Some(usage) => div()
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .child(context_readout(usage, rule, t))
+                .when_some(usage.cost.as_ref(), |body, cost| {
+                    body.child(kit::leader("Session cost", session_cost(cost), t.text, t))
+                }),
+            None => note(
+                "The provider has not reported context usage for this task yet.",
+                t,
+            ),
+        };
+        let footer = block_footer(t)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        self.button("compact-now", "layers", "Compact now")
+                            .disabled(busy || !started)
+                            .when(over && !busy, |b| {
+                                b.border_color(t.warning.opacity(0.5)).text_color(t.warning)
+                            })
+                            .on_click(cx.listener(|s, _, _, cx| {
+                                s.panel = Panel::None;
+                                s.compact_task(cx);
+                            })),
                     )
-                })
+                    .child(div().flex_1())
+                    .child(self.ghost("compact-rules", "settings-2", "Rules").on_click(
+                        cx.listener(|s, _, _, cx| {
+                            s.open_provider_settings(settings::ProviderPage::Compaction);
+                            cx.notify();
+                        }),
+                    )),
+            )
+            .when(busy, |footer| {
+                footer.child(caption(
+                    "Compact now is available when the current turn finishes.",
+                    t,
+                ))
+            });
+        Some(
+            kit::block(t)
+                .child(kit::block_header("Context", tone, t))
+                .child(div().p(px(10.)).child(body))
+                .child(footer)
                 .into_any_element(),
         )
     }
@@ -262,72 +266,54 @@ impl Shell {
             .account_usage()
             .and_then(|usage| usage.plan_type.as_deref())
             .map(plan_name);
+        // The plan chip sits over the header, level with the icon tile; the padding keeps a long
+        // identity clear of it.
         let header = div()
             .relative()
             .rounded(px(crate::theme::RADIUS_CONTROL))
             .overflow_hidden()
-            .child(kit::glow_header(
-                provider.icon(),
-                account_name,
-                identity,
-                tone,
-                t,
-            ))
+            .child(
+                kit::glow_header(provider.icon(), account_name, identity, tone, t)
+                    .when(plan.is_some(), |header| header.pr(px(72.))),
+            )
             .when_some(plan, |header, plan| {
                 header.child(
                     div()
                         .absolute()
-                        .top(px(10.))
-                        .right(px(10.))
+                        .top(px(25.))
+                        .right(px(14.))
                         .child(kit::chip(plan.to_uppercase(), tone)),
                 )
             });
-        let mut panel = div()
+        let panel = div()
             .flex()
             .flex_col()
-            .gap(px(12.))
+            .gap(px(8.))
+            .pb(px(2.))
             .child(header)
             .when_some(self.context_section(cx), |panel, section| {
-                panel.child(div().px(px(8.)).child(section))
+                panel.child(section)
             });
-        if let Some(usage) = self
-            .view
-            .as_ref()
-            .and_then(|view| view.task.context_usage.as_ref())
-            && let Some(cost) = &usage.cost
-        {
-            panel = panel.child(div().px(px(8.)).child(kit::leader(
-                "Session cost",
-                format!("{:.4} {}", cost.amount, cost.currency),
-                t.text,
-                t,
-            )));
-        }
         if !runtime.account_usage {
             return panel
-                .child(
-                    div()
-                        .px(px(8.))
-                        .pb(px(6.))
-                        .text_size(text_px(11.5))
-                        .text_color(t.muted)
-                        .child(
-                            "Account quotas are unavailable through this provider's CLI. Session cost and context appear when the provider reports them.",
-                        ),
-                )
+                .child(div().px(px(8.)).pb(px(4.)).child(note(
+                    "Account quotas are unavailable through this provider's CLI. Session cost and context appear when the provider reports them.",
+                    t,
+                )))
                 .into_any_element();
         }
-        panel = panel.child(
-            div()
-                .px(px(8.))
-                .child(usage_details(self.account_usage(), t)),
-        );
-        let mut controls = div().flex().items_center().gap(px(6.)).child(
-            self.button(
-                "refresh-account-usage",
-                "refresh",
-                if pending { "Working…" } else { "Refresh" },
-            )
+        let usage = self.account_usage();
+        let limits_tone = usage
+            .and_then(highest_usage)
+            .map_or(t.accent, |value| kit::usage_tone(value, t));
+        let updated = if pending {
+            Some("Updating…".to_owned())
+        } else {
+            usage.map(|usage| format!("{} ago", age(usage.reported)))
+        };
+        let refresh = self
+            .icon_button("refresh-account-usage", "refresh", "Refresh usage")
+            .size(px(22.))
             .disabled(pending)
             .on_click(cx.listener({
                 let account = account.clone();
@@ -344,66 +330,71 @@ impl Shell {
                     });
                     cx.notify();
                 }
-            })),
-        );
-        if runtime.usage_resets {
-            controls = controls.child(
-                self.tinted(
-                    "consume-usage-reset",
-                    "zap",
-                    if retry {
-                        "Retry reset"
-                    } else {
-                        "Use one reset"
-                    },
-                    t.warning,
-                )
-                .disabled(pending || (!available && !retry))
-                .on_click(cx.listener(move |s, _, _, cx| {
-                    let actions = s
-                        .usage_actions
-                        .entry((provider, account.clone()))
-                        .or_default();
-                    if actions.pending {
-                        return;
-                    }
-                    let key = actions.retry_key.get_or_insert_with(core::new_id).clone();
-                    actions.pending = true;
-                    actions.message = None;
-                    s.send(core::Request::ConsumeUsageReset {
-                        provider,
-                        account: Some(account.clone()),
-                        idempotency_key: key,
-                    });
-                    cx.notify();
-                })),
-            );
-        }
+            }));
+        let reset = runtime.usage_resets.then(|| {
+            self.tinted(
+                "consume-usage-reset",
+                "zap",
+                if retry {
+                    "Retry reset"
+                } else {
+                    "Use one reset"
+                },
+                t.warning,
+            )
+            .disabled(pending || (!available && !retry))
+            .on_click(cx.listener(move |s, _, _, cx| {
+                let actions = s
+                    .usage_actions
+                    .entry((provider, account.clone()))
+                    .or_default();
+                if actions.pending {
+                    return;
+                }
+                let key = actions.retry_key.get_or_insert_with(core::new_id).clone();
+                actions.pending = true;
+                actions.message = None;
+                s.send(core::Request::ConsumeUsageReset {
+                    provider,
+                    account: Some(account.clone()),
+                    idempotency_key: key,
+                });
+                cx.notify();
+            }))
+        });
+        let footer = (reset.is_some() || actions.message.is_some()).then(|| {
+            block_footer(t)
+                .when_some(reset, |footer, reset| {
+                    footer.child(
+                        div().flex().items_center().gap(px(8.)).child(reset).child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(caption("Uses one banked reset on eligible limits.", t)),
+                        ),
+                    )
+                })
+                .when_some(actions.message, |footer, message| {
+                    footer.child(
+                        div()
+                            .text_size(text_px(11.5))
+                            .text_color(t.text)
+                            .child(message),
+                    )
+                })
+        });
         panel
             .child(
-                div()
-                    .px(px(8.))
-                    .pb(px(6.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .child(controls)
-                    .when(runtime.usage_resets, |d| {
-                        d.child(
-                            div()
-                                .text_size(text_px(11.))
-                                .text_color(t.subtle)
-                                .child("A reset uses one banked reset on eligible usage limits."),
-                        )
-                    })
-                    .when_some(actions.message, |d, message| {
-                        d.child(
-                            div()
-                                .text_size(text_px(11.5))
-                                .text_color(t.text)
-                                .child(message),
-                        )
-                    }),
+                kit::block(t)
+                    .child(
+                        kit::block_header("Limits", limits_tone, t)
+                            .when_some(updated, |header, updated| {
+                                header.child(figure(updated, t.subtle))
+                            })
+                            .child(refresh),
+                    )
+                    .child(div().p(px(10.)).child(usage_details(usage, t)))
+                    .when_some(footer, |block, footer| block.child(footer)),
             )
             .into_any_element()
     }
@@ -430,7 +421,6 @@ impl Shell {
                 if let Some(status) = status {
                     status.usage = Some(usage);
                 }
-                actions.message = Some("Usage updated.".into());
             }
             Ok(Response::UsageReset {
                 outcome,
@@ -506,28 +496,67 @@ fn hint_card(theme: Theme) -> Div {
         .shadow(theme.floating())
 }
 
-// One measured share: a mono label and its figure, a dot-matrix meter with an optional
-// threshold tick, and a caption line.
+// A paragraph that stands in for a readout the provider has not reported.
+fn note(text: &'static str, t: Theme) -> Div {
+    div()
+        .text_size(text_px(11.5))
+        .line_height(text_px(16.))
+        .text_color(t.muted)
+        .child(text)
+}
+
+// A secondary line under an action or a meter.
+fn caption(text: &'static str, t: Theme) -> Div {
+    div()
+        .text_size(text_px(11.))
+        .line_height(text_px(15.))
+        .text_color(t.subtle)
+        .child(text)
+}
+
+// The footer of a usage block: its actions on the header tone, below a hairline.
+fn block_footer(t: Theme) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .px(px(8.))
+        .py(px(7.))
+        .bg(t.header)
+        .border_t_1()
+        .border_color(t.border)
+}
+
+// One measured share: a label and its figure, a dot-matrix meter with an optional threshold
+// tick, and a caption line with an optional second figure on its right.
 fn meter_block(
     label: &str,
     figure_text: String,
     fraction: f32,
     tone: Hsla,
     tick: Option<f32>,
-    caption: (String, String),
+    caption: (String, Option<String>),
     t: Theme,
 ) -> Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(5.))
+        .gap(px(6.))
         .child(
             div()
                 .flex()
                 .items_center()
                 .justify_between()
                 .gap(px(8.))
-                .child(caps(label, t).text_color(t.muted))
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_ellipsis()
+                        .text_size(text_px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(t.text)
+                        .child(label.to_owned()),
+                )
                 .child(figure(figure_text, tone).font_weight(FontWeight::SEMIBOLD)),
         )
         .child(
@@ -540,9 +569,10 @@ fn meter_block(
                             .absolute()
                             .top(px(-2.))
                             .left(relative(tick.clamp(0., 1.)))
-                            .w(px(1.))
+                            .w(px(2.))
                             .h(px(10.))
-                            .bg(t.text),
+                            .rounded(px(1.))
+                            .bg(t.muted),
                     )
                 }),
         )
@@ -552,7 +582,7 @@ fn meter_block(
                 .justify_between()
                 .gap(px(8.))
                 .child(figure(caption.0, t.subtle))
-                .child(figure(caption.1, t.subtle)),
+                .when_some(caption.1, |line, right| line.child(figure(right, t.subtle))),
         )
 }
 
@@ -560,9 +590,9 @@ fn meter_block(
 fn context_readout(usage: &ContextUsage, rule: CompactRule, t: Theme) -> Div {
     let capacity = usage.window.filter(|window| *window > 0);
     let compaction = if rule.enabled {
-        format!("AUTO-COMPACT AT {}%", rule.threshold)
+        format!("Auto-compact at {}%", rule.threshold)
     } else {
-        "AUTO-COMPACT OFF".to_owned()
+        "Auto-compact off".to_owned()
     };
     let Some((fraction, capacity)) = context_fraction(usage).zip(capacity) else {
         return div()
@@ -578,8 +608,8 @@ fn context_readout(usage: &ContextUsage, rule: CompactRule, t: Theme) -> Div {
             .child(figure(compaction, t.subtle));
     };
     meter_block(
-        "Window",
-        format!("{:.0}% USED", fraction * 100.),
+        "Context window",
+        format!("{:.0}% used", fraction * 100.),
         fraction,
         context_tone(fraction, rule, t),
         rule.enabled.then_some(rule.threshold as f32 / 100.),
@@ -589,7 +619,7 @@ fn context_readout(usage: &ContextUsage, rule: CompactRule, t: Theme) -> Div {
                 number(&usage.used.to_string()),
                 number(&capacity.to_string())
             ),
-            compaction,
+            Some(compaction),
         ),
         t,
     )
@@ -614,27 +644,24 @@ impl Render for MetersHint {
                     .child("Context usage has not been reported yet."),
             ),
         };
-        card.child(usage_details(self.usage.as_ref(), t))
+        card.child(kit::section_header("Limits", None, t))
+            .child(usage_details(self.usage.as_ref(), t))
+            .when_some(self.usage.as_ref(), |card, usage| {
+                card.child(figure(
+                    format!("UPDATED {} AGO", age(usage.reported).to_uppercase()),
+                    t.subtle,
+                ))
+            })
             .child(figure("CLICK FOR COMPACTION AND LIMIT ACTIONS", t.subtle))
     }
 }
 
+// The account's limit windows, credits and banked resets, under a header the caller supplies.
 fn usage_details(usage: Option<&UsageLimits>, t: Theme) -> AnyElement {
-    let mut details = div()
-        .flex()
-        .flex_col()
-        .gap(px(10.))
-        .child(kit::section_header("Limits", None, t));
     let Some(usage) = usage else {
-        return details
-            .child(
-                div()
-                    .text_size(text_px(11.5))
-                    .text_color(t.muted)
-                    .child("Usage has not been reported yet."),
-            )
-            .into_any_element();
+        return note("Usage has not been reported yet.", t).into_any_element();
     };
+    let mut details = div().flex().flex_col().gap(px(12.));
     for (label, window) in [
         ("Primary window", &usage.primary),
         ("Secondary window", &usage.secondary),
@@ -644,13 +671,13 @@ fn usage_details(usage: Option<&UsageLimits>, t: Theme) -> AnyElement {
             let progress = used as f32 / 100.;
             details = details.child(meter_block(
                 &window_name(label, window.window_duration_mins),
-                format!("{used}% USED"),
+                format!("{used}% used"),
                 progress,
                 kit::usage_tone(progress, t),
                 None,
                 (
-                    format!("{}% LEFT", 100 - used),
-                    reset_time(window.resets_at).to_uppercase(),
+                    reset_time(window.resets_at),
+                    Some(format!("{}% left", 100 - used)),
                 ),
                 t,
             ));
@@ -660,12 +687,7 @@ fn usage_details(usage: Option<&UsageLimits>, t: Theme) -> AnyElement {
         details = details.child(spend_readout(spend, t));
     }
     if usage.primary.is_none() && usage.secondary.is_none() && usage.spend.is_none() {
-        details = details.child(
-            div()
-                .text_size(text_px(11.5))
-                .text_color(t.muted)
-                .child("Usage windows unavailable."),
-        );
+        details = details.child(note("Usage windows unavailable.", t));
     }
     // Credits and banked resets are shown only when the provider reports them.
     if let Some(credits) = usage.credits.as_ref() {
@@ -694,12 +716,7 @@ fn usage_details(usage: Option<&UsageLimits>, t: Theme) -> AnyElement {
                 .child(caps("A usage or spending limit has been reached", t).text_color(t.removed)),
         );
     }
-    details
-        .child(figure(
-            format!("UPDATED {} AGO", age(usage.reported).to_uppercase()),
-            t.subtle,
-        ))
-        .into_any_element()
+    details.into_any_element()
 }
 
 /// Reports that the provider refused further use of this account until a reset.
@@ -765,14 +782,11 @@ fn spend_readout(spend: &UsageSpend, t: Theme) -> Div {
     let progress = used as f32 / 100.;
     meter_block(
         "Usage credits",
-        format!("{used}% USED"),
+        format!("{used}% used"),
         progress,
         kit::usage_tone(progress, t),
         None,
-        (
-            spend_amounts(spend).to_uppercase(),
-            format!("{}% LEFT", 100 - used),
-        ),
+        (spend_amounts(spend), Some(format!("{}% left", 100 - used))),
         t,
     )
 }
@@ -783,6 +797,16 @@ fn money(minor: f64, currency: Option<&str>) -> String {
     match currency {
         None | Some("USD") => format!("${amount}"),
         Some(currency) => format!("{amount} {currency}"),
+    }
+}
+
+/// Formats the session cost a provider reported in whole currency units, to the cent.
+pub(super) fn session_cost(cost: &UsageCost) -> String {
+    let amount = number(&format!("{:.2}", cost.amount));
+    if cost.currency.eq_ignore_ascii_case("usd") {
+        format!("${amount}")
+    } else {
+        format!("{amount} {}", cost.currency)
     }
 }
 
@@ -829,12 +853,22 @@ fn credit_balance(credits: Option<&UsageCredits>) -> String {
     match credits {
         Some(c) if c.unlimited => "Unlimited".into(),
         Some(c) => match c.balance.as_deref().filter(|v| !v.is_empty()) {
-            Some(balance) => format!("{} credits", number(balance)),
+            Some(balance) => format!("{} credits", credit_amount(balance)),
             None if c.has_credits => "Available · Balance not reported".into(),
             None => "No credits available".into(),
         },
         None => "Not reported".into(),
     }
+}
+
+// Rounds a decimal credit balance to the hundredth and drops the zeros a whole amount would
+// show, so `2500.0000000000` reads `2,500`. A balance that is not a number stays as reported.
+fn credit_amount(balance: &str) -> String {
+    let Ok(value) = balance.parse::<f64>() else {
+        return number(balance);
+    };
+    let rounded = format!("{value:.2}");
+    number(rounded.trim_end_matches('0').trim_end_matches('.'))
 }
 
 /// Returns a provider plan identifier as a display name.
