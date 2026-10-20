@@ -433,7 +433,7 @@ impl Shell {
             return div()
                 .px_5()
                 .py_2()
-                .child(self.agent_link(&message.text, false, cx))
+                .child(self.agent_link(&message.text, cx))
                 .into_any_element();
         }
         let t = self.theme;

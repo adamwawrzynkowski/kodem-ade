@@ -52,6 +52,26 @@ fn state_tone(state: &RunState, theme: Theme) -> Hsla {
     }
 }
 
+// The groups that the strip header counts, in reading order. Each state names and tones its group.
+const TALLIES: [RunState; 5] = [
+    RunState::Running,
+    RunState::Waiting,
+    RunState::Completed,
+    RunState::Failed,
+    RunState::Interrupted,
+];
+
+// The index in `TALLIES` of the group that counts an agent in this state.
+fn tally(state: &RunState) -> usize {
+    match state {
+        RunState::Starting | RunState::Running => 0,
+        RunState::Waiting => 1,
+        RunState::Completed => 2,
+        RunState::Failed | RunState::DeliveryUnknown => 3,
+        RunState::Interrupted | RunState::Idle => 4,
+    }
+}
+
 impl Shell {
     /// Keeps child questions and approvals inside their own conversation.
     pub(super) fn request_in_current_thread(&self, request: &InputRequest) -> bool {
@@ -98,14 +118,8 @@ impl Shell {
     }
 
     /// Opens the identified descendant using its persistent name, glyph and live status. The
-    /// link is glass; `on_glass` says that it lies on a glass surface already, so that it takes a
-    /// share of its tone without a second blur.
-    pub(super) fn agent_link(
-        &self,
-        thread_id: &str,
-        on_glass: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    /// link is glass.
+    pub(super) fn agent_link(&self, thread_id: &str, cx: &mut Context<Self>) -> AnyElement {
         let Some((index, agent)) = self.view.as_ref().and_then(|view| {
             view.task
                 .subagents
@@ -123,12 +137,8 @@ impl Shell {
             ElementId::from("agent-link"),
             SharedString::from(id.clone()),
         ));
-        let link = if on_glass {
-            link.bg(t.control.opacity(share))
-        } else {
-            kit::glass(link, t.control, share)
-        };
-        link.overflow_hidden()
+        kit::glass(link, t.control, share)
+            .overflow_hidden()
             .h(px(28.))
             .px(px(8.))
             .border_color(t.edge)
@@ -166,13 +176,35 @@ impl Shell {
         if view.task.subagents.is_empty() {
             return div().into_any_element();
         }
-        let active = view
-            .task
-            .subagents
-            .iter()
-            .filter(|agent| agent.state.active())
-            .count();
         let t = self.theme;
+        let mut counts = [0; TALLIES.len()];
+        for agent in &view.task.subagents {
+            counts[tally(&agent.state)] += 1;
+        }
+        // The header ends with one quiet tally per group in use, in place of a badge per agent.
+        let header = TALLIES
+            .iter()
+            .zip(counts)
+            .filter(|(_, count)| *count > 0)
+            .fold(
+                kit::section_header("Agents", Some(view.task.subagents.len()), t),
+                |header, (state, count)| {
+                    let tone = state_tone(state, t);
+                    header.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .child(kit::marker(tone))
+                            .child(
+                                figure(count.to_string(), tone).font_weight(FontWeight::SEMIBOLD),
+                            )
+                            .child(caps(state_label(state), t)),
+                    )
+                },
+            );
+        // Two even columns keep every name and state on one alignment, however long the names.
+        let columns = view.task.subagents.len().min(2) as u16;
         div()
             .flex_shrink_0()
             .flex()
@@ -182,29 +214,107 @@ impl Shell {
                 div()
                     .id("composer-agents")
                     .px(px(14.))
-                    .py(px(8.))
-                    .max_h(px(156.))
+                    .pt(px(8.))
+                    .pb(px(10.))
+                    .max_h(px(170.))
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
-                    .gap(px(6.))
+                    .gap(px(8.))
+                    .child(header.gap(px(10.)))
                     .child(
-                        kit::section_header("Agents", Some(view.task.subagents.len()), t)
-                            .when(active > 0, |header| {
-                                header.child(kit::chip(format!("{active} WORKING"), t.accent))
-                            }),
-                    )
-                    .child(
-                        div().flex().flex_wrap().gap(px(4.)).children(
-                            view.task
-                                .subagents
-                                .iter()
-                                .map(|agent| self.agent_link(&agent.thread_id, true, cx)),
-                        ),
+                        div()
+                            .w_full()
+                            .grid()
+                            .grid_cols(columns)
+                            .gap(px(6.))
+                            .children(
+                                view.task
+                                    .subagents
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, agent)| self.agent_tile(index, agent, cx)),
+                            ),
                     ),
             )
             .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
             .into_any_element()
+    }
+
+    // One agent of the composer strip: its live state on the leading edge, its glyph and name,
+    // and the state on the trailing edge, in the tone of that state.
+    fn agent_tile(&self, index: usize, agent: &Subagent, cx: &mut Context<Self>) -> AnyElement {
+        let id = agent.thread_id.clone();
+        let t = self.theme;
+        let tone = state_tone(&agent.state, t);
+        let share = kit::SURFACE_GLASS_FILL;
+        let group = SharedString::from(format!("agent-tile:{id}"));
+        let status = if agent.state.active() {
+            motion::active_icon("loader", tone, true, cx.reduce_motion())
+        } else {
+            kit::marker(tone).into_any_element()
+        };
+        self.control((
+            ElementId::from("agent-tile"),
+            SharedString::from(id.clone()),
+        ))
+        .group(group.clone())
+        .accessibility_label(format!(
+            "Open agent {}, {}",
+            agent.name,
+            state_label(&agent.state)
+        ))
+        .w_full()
+        .min_w_0()
+        .overflow_hidden()
+        .h(px(30.))
+        .pl(px(8.))
+        .pr(px(6.))
+        .gap(px(8.))
+        .bg(t.control.opacity(share))
+        .border_color(t.border)
+        .font_family(crate::theme::sans())
+        .text_size(text_px(12.5))
+        .font_weight(FontWeight::NORMAL)
+        .layer(kit::glint(t.dot, dither::Edge::Bottom))
+        .hover(move |s| s.bg(t.control_hover.opacity(share)).border_color(t.edge))
+        .active(move |s| {
+            s.bg(t.control_active.opacity(share))
+                .shadow(kit::recessed_light(t))
+        })
+        .on_press(move |position, cx| fx::ripple(position, t.muted, cx))
+        .child(
+            div()
+                .size(px(14.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(status),
+        )
+        .child(
+            icon(glyph(index))
+                .size(px(13.))
+                .flex_shrink_0()
+                .text_color(t.subtle),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_ellipsis()
+                .child(agent.name.clone()),
+        )
+        .child(caps(state_label(&agent.state), t).text_color(tone))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(t.subtle)
+                .group_hover(group, move |s| s.text_color(t.text))
+                .child(icon("chevron-right").size(px(12.))),
+        )
+        .on_click(cx.listener(move |s, _, window, cx| s.open_agent(id.clone(), window, cx)))
+        .into_any_element()
     }
 
     /// Merges tail updates and earlier pages without changing the main conversation scroll.
