@@ -1,7 +1,8 @@
 //! The Git section of Kodem's Preferences. Its pages came from the settings window of the
 //! standalone Liquid app: General, Remote, Diffs, Display, Accounts, AI and Local Ignore. The
-//! section draws one page at a time with the rows, switches, sliders and segmented controls of
-//! the other preference sections. Every change saves at once.
+//! navigation of Preferences lists them under Git. The section draws one page at a time with the
+//! rows, switches, sliders and segmented controls of the other preference pages. Every change
+//! saves at once.
 mod accounts;
 mod ai;
 mod diffs;
@@ -54,7 +55,7 @@ pub enum GitSettingsPage {
 }
 
 impl GitSettingsPage {
-    /// The pages in the order of the tab row.
+    /// The pages in the order of the navigation.
     pub const ALL: [GitSettingsPage; 7] = [
         GitSettingsPage::General,
         GitSettingsPage::Remote,
@@ -65,7 +66,26 @@ impl GitSettingsPage {
         GitSettingsPage::LocalIgnore,
     ];
 
-    /// Returns the name of the page in the tab row.
+    /// Returns the description under the page's title.
+    pub fn detail(self) -> &'static str {
+        match self {
+            GitSettingsPage::General => {
+                "Set auto-fetch, repository defaults, confirmations and the welcome tour."
+            }
+            GitSettingsPage::Remote => {
+                "Set how Git pulls, fetches, pushes, merges and signs commits."
+            }
+            GitSettingsPage::Diffs => "Set up the diff view and the commit editor.",
+            GitSettingsPage::Display => "Choose what the commit list shows.",
+            GitSettingsPage::Accounts => "Link GitHub accounts for remotes and pull requests.",
+            GitSettingsPage::Ai => "Choose the AI provider, its models and its prompts.",
+            GitSettingsPage::LocalIgnore => {
+                "Choose the files that the Changes view hides in the active repository."
+            }
+        }
+    }
+
+    /// Returns the name of the page in the navigation.
     pub fn label(self) -> &'static str {
         match self {
             GitSettingsPage::General => "General",
@@ -79,8 +99,8 @@ impl GitSettingsPage {
     }
 }
 
-/// The pages of the Git section of Preferences. It draws the open page; the section above it
-/// shows the tab row that chooses the page.
+/// The pages of the Git section of Preferences. It draws the open page; the navigation of
+/// Preferences chooses the page.
 pub struct GitSettingsView {
     page: GitSettingsPage,
     gpg_key: Entity<InputState>,

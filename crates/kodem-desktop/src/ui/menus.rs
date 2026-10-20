@@ -175,7 +175,7 @@ impl Shell {
                         self.ghost("picker-manage-projects", "settings", "Customize projects…")
                             .justify_start()
                             .on_click(cx.listener(|s, _, _, cx| {
-                                s.open_settings(settings::PROJECTS);
+                                s.open_settings(settings::SettingsPage::Projects);
                                 cx.notify();
                             })),
                     );

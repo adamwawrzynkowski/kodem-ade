@@ -221,7 +221,6 @@ pub struct Shell {
     /// The approval rule that returns when a task or the new-task draft leaves plan mode,
     /// keyed by task id; the draft uses an empty key.
     approval_memory: HashMap<String, String>,
-    settings_provider: Provider,
     // Project chosen for the next task, independent of the currently viewed thread.
     selected_project: Option<String>,
     editing_project: Option<Project>,
@@ -368,7 +367,7 @@ pub struct Shell {
     composer_spring: motion::ComposerSpring,
     reveals: motion::Reveals,
     rail_slide: workspaces::RailSlide,
-    settings_section: usize,
+    settings_page: settings::SettingsPage,
     effort_slider: Option<(String, Entity<effort_slider::EffortSlider>, Subscription)>,
     image_preview: Option<image_preview::ImagePreview>,
     palette_input: Entity<TextInput>,
@@ -674,7 +673,6 @@ impl Shell {
             new_worktree_override: None,
             new_preferences: None,
             approval_memory: HashMap::new(),
-            settings_provider: Provider::default(),
             selected_project: None,
             editing_project: None,
             command_names: HashMap::new(),
@@ -783,7 +781,7 @@ impl Shell {
             composer_spring: motion::ComposerSpring::default(),
             reveals: motion::Reveals::default(),
             rail_slide: workspaces::RailSlide::default(),
-            settings_section: 0,
+            settings_page: settings::SettingsPage::default(),
             effort_slider: None,
             image_preview: None,
             palette_input,
@@ -2200,14 +2198,21 @@ impl Shell {
         .detach();
     }
 
-    /// Opens preferences on one section.
-    pub(super) fn open_settings(&mut self, section: usize) {
+    /// Opens preferences on one page. A provider's page that opens from outside its provider
+    /// connects the provider's CLI, which reports its version, models and access modes.
+    pub(super) fn open_settings(&mut self, page: settings::SettingsPage) {
+        let previous = (self.panel == Panel::Settings).then_some(self.settings_page);
         self.panel = Panel::Settings;
-        self.settings_section = section;
-        if section == settings::PROVIDERS {
-            self.settings_provider = self.composer_preferences().provider;
+        self.settings_page = page;
+        if previous != Some(page) {
+            // A half-done account form belongs to the page that it was started on.
+            self.accounts = accounts::AccountsView::default();
+        }
+        if let Some(provider) = page.provider()
+            && previous.and_then(settings::SettingsPage::provider) != Some(provider)
+        {
             self.send(core::Request::ConnectRuntime {
-                provider: self.settings_provider,
+                provider,
                 account: None,
             });
         }

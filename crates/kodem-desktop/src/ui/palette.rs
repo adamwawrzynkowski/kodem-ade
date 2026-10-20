@@ -25,7 +25,7 @@ enum Action {
     ToggleArchived,
     Files,
     Resources,
-    Settings(usize),
+    Settings(settings::SettingsPage),
     Setup,
     WhatsNew,
     Theme(ThemeId),
@@ -466,15 +466,22 @@ impl Shell {
                 );
             }
         }
-        for (section, glyph, label) in settings::SECTIONS {
-            add(
-                glyph,
-                &format!("Settings: {label}"),
-                "",
-                if section == 0 { "⌘," } else { "" },
-                "Settings",
-                Action::Settings(section),
-            );
+        for category in &settings::CATEGORIES {
+            for page in category.all_pages() {
+                add(
+                    page.provider()
+                        .map_or(category.icon, |provider| provider.icon()),
+                    &format!("Settings: {}", page.trail()),
+                    "",
+                    if page == settings::SettingsPage::default() {
+                        "⌘,"
+                    } else {
+                        ""
+                    },
+                    "Settings",
+                    Action::Settings(page),
+                );
+            }
         }
         add(
             "sparkles",

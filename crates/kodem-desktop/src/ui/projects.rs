@@ -210,10 +210,7 @@ impl Shell {
     /// Lists projects with their presentation, their default agent and customization actions.
     pub(super) fn project_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let mut list = div().flex().flex_col().gap_3().child(self.section_title(
-            "Projects",
-            "Customize how repositories appear, and which provider, account and model their new tasks start with.",
-        ));
+        let mut list = div().flex().flex_col().gap_3();
         for (i, project) in self
             .workspace
             .as_ref()

@@ -1,25 +1,352 @@
 use super::git::settings_view::GitSettingsPage;
 use super::*;
+use crate::icons::Icon;
 
-/// Index of the provider section.
-pub(super) const PROVIDERS: usize = 2;
-/// Index of the projects section.
-pub(super) const PROJECTS: usize = 5;
-/// Index of the accounts section.
-pub(super) const ACCOUNTS: usize = 6;
-/// Index of the Git section.
-pub(super) const GIT: usize = 7;
-/// Preference sections in navigation order: stable index, icon and label.
-pub(super) const SECTIONS: [(usize, &str, &str); 8] = [
-    (0, "sun", "Appearance"),
-    (1, "folder", "Workspace"),
-    (PROVIDERS, "settings-2", "Providers"),
-    (ACCOUNTS, "users", "Accounts"),
-    (PROJECTS, "layers", "Projects"),
-    (GIT, "git-pull-request", "Git"),
-    (3, "bell", "Notifications"),
-    (4, "keyboard", "Shortcuts"),
+/// One page of Preferences. The navigation lists it under its category.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SettingsPage {
+    #[default]
+    Theme,
+    Typography,
+    Interface,
+    Tasks,
+    Layout,
+    Projects,
+    Import,
+    /// What applies to every provider.
+    Agents,
+    /// One page of a provider. The navigation lists it under the provider.
+    Provider(Provider, ProviderPage),
+    /// The Git section. Its view keeps which of its own pages is open.
+    Git,
+    Events,
+    Sound,
+    Shortcuts,
+}
+
+impl SettingsPage {
+    /// Returns the name of the page in the navigation and over its content.
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Theme => "Theme",
+            Self::Typography => "Typography",
+            Self::Interface => "Interface",
+            Self::Tasks => "Tasks",
+            Self::Layout => "Layout",
+            Self::Projects => "Projects",
+            Self::Import => "Import",
+            Self::Agents => "General",
+            Self::Provider(_, page) => page.label(),
+            Self::Git => "Git",
+            Self::Events => "Events",
+            Self::Sound => "Sound",
+            Self::Shortcuts => "Keyboard shortcuts",
+        }
+    }
+
+    // Returns the description under the page's title.
+    fn detail(self) -> &'static str {
+        match self {
+            Self::Theme => "Choose the colors of the workspace and its accent.",
+            Self::Typography => "Set the typefaces and the sizes of text and code.",
+            Self::Interface => "Set the size of the controls and the spacing of the task list.",
+            Self::Tasks => "Choose where new tasks work and how the task list sorts them.",
+            Self::Layout => "Choose where file diffs open and how wide the sidebar is.",
+            Self::Projects => {
+                "Customize how repositories appear, and which provider, account and model their new tasks start with."
+            }
+            Self::Import => "Bring conversations from other coding agents into Kodem.",
+            Self::Agents => {
+                "Set what applies to every provider: messages during a turn, the shared compaction rule and the background host."
+            }
+            Self::Provider(_, page) => page.detail(),
+            Self::Git => {
+                "Choose how the Git workspace syncs with remotes, shows diffs and history, and uses AI."
+            }
+            Self::Events => {
+                "Choose the task events that send a notification, even after closing the window."
+            }
+            Self::Sound => "Choose the sound of a notification and send a test.",
+            Self::Shortcuts => "Move around the workspace without leaving the keyboard.",
+        }
+    }
+
+    /// Returns the category that lists the page.
+    pub(super) fn category(self) -> &'static SettingsCategory {
+        let index = match self {
+            Self::Theme | Self::Typography | Self::Interface => 0,
+            Self::Tasks | Self::Layout | Self::Projects | Self::Import => 1,
+            Self::Agents | Self::Provider(..) => 2,
+            Self::Git => 3,
+            Self::Events | Self::Sound => 4,
+            Self::Shortcuts => 5,
+        };
+        &CATEGORIES[index]
+    }
+
+    /// Returns the provider whose page this is.
+    pub(super) fn provider(self) -> Option<Provider> {
+        match self {
+            Self::Provider(provider, _) => Some(provider),
+            _ => None,
+        }
+    }
+
+    /// Returns the path of the page in the navigation, such as "Agents › Claude Code › Model".
+    /// A category of one page is the whole path.
+    pub(super) fn trail(self) -> String {
+        let category = self.category();
+        match self {
+            Self::Provider(provider, page) => format!(
+                "{} › {} › {}",
+                category.label,
+                provider.label(),
+                page.label()
+            ),
+            _ if category.pages.len() == 1 && self != Self::Agents => category.label.to_owned(),
+            _ => format!("{} › {}", category.label, self.label()),
+        }
+    }
+
+    // Returns where the page sits, over its title: its category and its provider.
+    fn section(self) -> String {
+        match self {
+            Self::Provider(provider, _) => {
+                format!("{} › {}", self.category().label, provider.label())
+            }
+            _ => self.category().label.to_owned(),
+        }
+    }
+}
+
+/// One page of a provider in Preferences.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProviderPage {
+    Connection,
+    Accounts,
+    Model,
+    Access,
+    Compaction,
+    /// The Claude Code features that the CLI keeps off in a session that an app starts.
+    Features,
+}
+
+impl ProviderPage {
+    /// The pages in navigation order. [`ProviderPage::pages`] lists those of one provider.
+    const ALL: [ProviderPage; 6] = [
+        ProviderPage::Connection,
+        ProviderPage::Accounts,
+        ProviderPage::Model,
+        ProviderPage::Access,
+        ProviderPage::Compaction,
+        ProviderPage::Features,
+    ];
+
+    /// Returns the pages of a provider in navigation order.
+    pub(super) fn pages(provider: Provider) -> impl Iterator<Item = ProviderPage> {
+        Self::ALL
+            .into_iter()
+            .filter(move |page| *page != Self::Features || provider == Provider::Claude)
+    }
+
+    // Returns the name of the page in the navigation and over its content.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Connection => "Connection",
+            Self::Accounts => "Accounts",
+            Self::Model => "Model",
+            Self::Access => "Access",
+            Self::Compaction => "Compaction",
+            Self::Features => "Features",
+        }
+    }
+
+    // Returns the description under the page's title.
+    fn detail(self) -> &'static str {
+        match self {
+            Self::Connection => {
+                "See the provider's local CLI, refresh it and choose it for new conversations."
+            }
+            Self::Accounts => {
+                "Stay signed in to several accounts of one provider and choose one per task. Each account is its own configuration directory of the provider's CLI, which keeps the sign-in. Kodem never reads or stores credentials."
+            }
+            Self::Model => "Choose the model and reasoning that new conversations start with.",
+            Self::Access => "Choose the approval rule that new conversations start with.",
+            Self::Compaction => {
+                "Choose when Kodem asks this provider to summarize a task's context."
+            }
+            Self::Features => {
+                "Turn on the Claude Code features that the CLI keeps off in sessions that an app starts."
+            }
+        }
+    }
+}
+
+/// One category of Preferences: its icon and name in the navigation, and its pages.
+pub(super) struct SettingsCategory {
+    pub(super) icon: &'static str,
+    pub(super) label: &'static str,
+    /// The pages under the category. Agents also lists the pages of each provider, and Git
+    /// the pages of its own view.
+    pub(super) pages: &'static [SettingsPage],
+}
+
+impl SettingsCategory {
+    /// Returns every page of the category with the pages of each provider, in navigation
+    /// order.
+    pub(super) fn all_pages(&self) -> Vec<SettingsPage> {
+        let mut pages = self.pages.to_vec();
+        if self.pages.contains(&SettingsPage::Agents) {
+            for provider in Provider::ALL {
+                pages.extend(
+                    ProviderPage::pages(provider)
+                        .map(|page| SettingsPage::Provider(provider, page)),
+                );
+            }
+        }
+        pages
+    }
+}
+
+/// The categories of Preferences in navigation order.
+pub(super) static CATEGORIES: [SettingsCategory; 6] = [
+    SettingsCategory {
+        icon: "sun",
+        label: "Appearance",
+        pages: &[
+            SettingsPage::Theme,
+            SettingsPage::Typography,
+            SettingsPage::Interface,
+        ],
+    },
+    SettingsCategory {
+        icon: "folder",
+        label: "Workspace",
+        pages: &[
+            SettingsPage::Tasks,
+            SettingsPage::Layout,
+            SettingsPage::Projects,
+            SettingsPage::Import,
+        ],
+    },
+    SettingsCategory {
+        icon: "bot",
+        label: "Agents",
+        pages: &[SettingsPage::Agents],
+    },
+    SettingsCategory {
+        icon: "git-pull-request",
+        label: "Git",
+        pages: &[SettingsPage::Git],
+    },
+    SettingsCategory {
+        icon: "bell",
+        label: "Notifications",
+        pages: &[SettingsPage::Events, SettingsPage::Sound],
+    },
+    SettingsCategory {
+        icon: "keyboard",
+        label: "Shortcuts",
+        pages: &[SettingsPage::Shortcuts],
+    },
 ];
+
+// A row of the navigation opens a page of Preferences, or a page of the Git section.
+#[derive(Clone, Copy)]
+enum NavTarget {
+    Page(SettingsPage),
+    Git(GitSettingsPage),
+}
+
+impl NavTarget {
+    // Returns the element id of the row that opens this target.
+    fn id(self) -> ElementId {
+        ElementId::Name(match self {
+            Self::Page(page) => format!("settings-page:{page:?}").into(),
+            Self::Git(page) => format!("settings-git-page:{page:?}").into(),
+        })
+    }
+}
+
+// One row of the navigation and the rows under it, which show while it is open.
+struct NavRow {
+    target: NavTarget,
+    glyph: Option<&'static str>,
+    label: &'static str,
+    chosen: bool,
+    open: bool,
+    children: Vec<NavRow>,
+}
+
+impl NavRow {
+    // Returns a row without rows under it.
+    fn leaf(target: NavTarget, label: &'static str, chosen: bool) -> Self {
+        Self {
+            target,
+            glyph: None,
+            label,
+            chosen,
+            open: false,
+            children: Vec::new(),
+        }
+    }
+}
+
+/// Width of the navigation of Preferences.
+const NAVIGATION_WIDTH: f32 = 212.;
+/// Space between the edges of the content of a Preferences page and its column.
+const PAGE_INSET: f32 = 28.;
+
+/// The key chords of the workspace in the groups of the Shortcuts page. A slash separates the
+/// chords that do the same thing.
+const SHORTCUTS: [(&str, &[(&str, &str)]); 3] = [
+    (
+        "Navigation",
+        &[
+            ("Command palette", "⌘ K"),
+            ("New task", "⌘ N"),
+            ("Open repository", "⌘ O"),
+            ("Clone repository into Git", "⇧ ⌘ O"),
+            ("Search tasks, or commits in Git", "⌘ F"),
+            ("Next or previous task", "⌃ Tab / ⌃ ⇧ Tab / ⇧ ⌘ ] / ⇧ ⌘ ["),
+            ("Go to a task in the feed", "⌘ 1 – ⌘ 9"),
+            ("Next task that needs you", "⌥ ⌘ A"),
+            (
+                "Agentic Coding, Chat, Review or Git",
+                "⌥ ⌘ 1 / ⌥ ⌘ 2 / ⌥ ⌘ 3 / ⌥ ⌘ 4",
+            ),
+            ("Settings", "⌘ ,"),
+            ("Close dialog or menu", "Esc"),
+        ],
+    ),
+    (
+        "Composer",
+        &[
+            ("Send message", "Return"),
+            ("Send the other way during a turn", "⌘ Return"),
+            ("New line in prompt", "⇧ Return"),
+            ("Provider, account and model", "⇧ ⌘ M"),
+            ("Reasoning effort", "⇧ ⌘ E"),
+            ("Access mode", "⇧ ⌘ A"),
+            ("Switch build and plan, or cycle Codex access", "⇧ Tab"),
+        ],
+    ),
+    (
+        "Panels",
+        &[
+            ("Toggle sidebar", "⌘ B"),
+            ("Toggle changes", "⌘ D"),
+            ("Toggle browser", "⇧ ⌘ B"),
+            ("Toggle terminal", "⌃ `"),
+            ("Copy diff selection", "⌘ C"),
+        ],
+    ),
+];
+
+// Returns the column of one Preferences page: its groups with the gap between groups.
+fn page_column() -> Div {
+    div().flex().flex_col().gap(px(GROUP_GAP))
+}
 
 /// Space between the groups of one preferences section.
 pub(super) const GROUP_GAP: f32 = 18.;
@@ -330,6 +657,17 @@ fn theme_preview(theme: Theme) -> Div {
         )
 }
 
+// The chevron of a navigation row with rows under it: down while they show.
+fn nav_chevron(open: bool, theme: Theme) -> Icon {
+    icon(if open {
+        "chevron-down"
+    } else {
+        "chevron-right"
+    })
+    .size(px(11.))
+    .text_color(theme.subtle)
+}
+
 // Lays out the cards of a picker in rows of equal columns.
 fn picker_grid(cards: Vec<AnyElement>) -> Div {
     div()
@@ -340,13 +678,81 @@ fn picker_grid(cards: Vec<AnyElement>) -> Div {
 }
 
 impl Shell {
-    /// Builds native preferences with section navigation and labeled controls.
+    /// Builds native preferences: the categories and their pages on the left, and the open
+    /// page under its title on the right.
     pub(super) fn settings_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        let page = self.settings_page;
+        let git_page = self.git_settings.as_ref().map(|view| view.read(cx).page());
+        let open_git_page = git_page.filter(|_| page == SettingsPage::Git);
+        let (title, detail) = match open_git_page {
+            Some(git_page) => (git_page.label(), git_page.detail()),
+            None => (page.label(), page.detail()),
+        };
+        let content = match page {
+            SettingsPage::Theme => self.theme_settings(cx),
+            SettingsPage::Typography => self.typography_settings(cx),
+            SettingsPage::Interface => self.interface_settings(cx),
+            SettingsPage::Tasks => self.task_settings(cx),
+            SettingsPage::Layout => self.layout_settings(cx),
+            SettingsPage::Projects => self.project_settings(cx),
+            SettingsPage::Import => self.import_settings(cx),
+            SettingsPage::Agents => self.agent_settings(cx),
+            SettingsPage::Provider(provider, page) => self.provider_page(provider, page, cx),
+            SettingsPage::Git => self.git_settings(),
+            SettingsPage::Events => self.event_settings(cx),
+            SettingsPage::Sound => self.sound_settings(cx),
+            SettingsPage::Shortcuts => self.shortcut_settings(),
+        };
+        // Each page, and each page of the Git section, scrolls on its own from the top.
+        let scroll = SharedString::from(format!("preferences-content:{page:?}:{open_git_page:?}"));
+        div()
+            .h(px(520.))
+            .flex()
+            .child(self.settings_navigation(git_page, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .px(px(PAGE_INSET))
+                            .pt(px(20.))
+                            .child(self.page_header(&page.section(), title, detail)),
+                    )
+                    .child(
+                        div()
+                            .id(scroll)
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .px(px(PAGE_INSET))
+                            .pt(px(16.))
+                            .pb(px(24.))
+                            .child(content),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    // Builds the navigation of Preferences: every category, and under the open one its rows
+    // along a dotted guide. A category of one page opens it from its own row.
+    fn settings_navigation(
+        &self,
+        git_page: Option<GitSettingsPage>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let t = self.theme;
+        let open = self.settings_page.category();
         let mut navigation = div()
-            .w(px(180.))
+            .id("preferences-navigation")
+            .w(px(NAVIGATION_WIDTH))
             .h_full()
             .flex_shrink_0()
+            .overflow_y_scroll()
             .p(px(10.))
             // A share of the panel tone, so that the dialog's glass shows through.
             .bg(t.sidebar.opacity(kit::PANE_SHARE))
@@ -356,43 +762,207 @@ impl Shell {
             .border_r_1()
             .border_color(t.border)
             .child(caps("Preferences", t).px(px(8.)).pt(px(4.)).pb(px(8.)));
-        for (i, glyph, label) in SECTIONS {
+        for (index, category) in CATEGORIES.iter().enumerate() {
+            let current = std::ptr::eq(category, open);
+            let rows = self.category_rows(category, git_page);
+            let first = NavTarget::Page(category.pages[0]);
             navigation = navigation.child(
-                self.choice_row(("settings-section", i), self.settings_section == i)
-                    .child(icon(glyph).size(px(13.)))
-                    .child(label)
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        s.open_settings(i);
-                        cx.notify();
-                    })),
+                self.choice_row(("settings-category", index), current && rows.is_empty())
+                    .when(current, |row| row.text_color(t.text).cursor_default())
+                    .child(
+                        icon(category.icon)
+                            .size(px(13.))
+                            .when(current, |glyph| glyph.text_color(t.accent)),
+                    )
+                    .child(div().relative().flex_1().min_w_0().child(category.label))
+                    .when(!rows.is_empty(), |row| row.child(nav_chevron(current, t)))
+                    .when(!current, |row| {
+                        row.on_click(
+                            cx.listener(move |s, _, _, cx| s.open_settings_target(first, cx)),
+                        )
+                    }),
             );
+            if current && !rows.is_empty() {
+                navigation = navigation.child(self.nav_branch(rows, cx));
+            }
         }
-        let section = match self.settings_section {
-            PROJECTS => self.project_settings(cx),
-            ACCOUNTS => self.account_settings(cx),
-            GIT => self.git_settings(cx),
-            0 => self.appearance_settings(cx),
-            1 => self.workspace_settings(cx),
-            PROVIDERS => self.provider_settings(cx),
-            3 => self.notification_settings(cx),
-            _ => self.shortcut_settings(),
-        };
-        div()
-            .h(px(520.))
+        navigation.into_any_element()
+    }
+
+    // Returns the rows under a category in the navigation. Agents lists its General page and
+    // each provider with its pages; a category of one other page has no rows.
+    fn category_rows(
+        &self,
+        category: &SettingsCategory,
+        git_page: Option<GitSettingsPage>,
+    ) -> Vec<NavRow> {
+        let page = self.settings_page;
+        match category.pages {
+            [SettingsPage::Git] => GitSettingsPage::ALL
+                .into_iter()
+                .map(|candidate| {
+                    NavRow::leaf(
+                        NavTarget::Git(candidate),
+                        candidate.label(),
+                        page == SettingsPage::Git && git_page == Some(candidate),
+                    )
+                })
+                .collect(),
+            [SettingsPage::Agents] => {
+                let mut rows = vec![NavRow::leaf(
+                    NavTarget::Page(SettingsPage::Agents),
+                    SettingsPage::Agents.label(),
+                    page == SettingsPage::Agents,
+                )];
+                for provider in Provider::ALL {
+                    rows.push(NavRow {
+                        target: NavTarget::Page(SettingsPage::Provider(
+                            provider,
+                            ProviderPage::Connection,
+                        )),
+                        glyph: Some(provider.icon()),
+                        label: provider.label(),
+                        chosen: false,
+                        open: page.provider() == Some(provider),
+                        children: ProviderPage::pages(provider)
+                            .map(|candidate| {
+                                let target = SettingsPage::Provider(provider, candidate);
+                                NavRow::leaf(
+                                    NavTarget::Page(target),
+                                    candidate.label(),
+                                    page == target,
+                                )
+                            })
+                            .collect(),
+                    });
+                }
+                rows
+            }
+            [_] => Vec::new(),
+            pages => pages
+                .iter()
+                .map(|candidate| {
+                    NavRow::leaf(
+                        NavTarget::Page(*candidate),
+                        candidate.label(),
+                        *candidate == page,
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    // Lays out rows of the navigation along a dotted guide, each open row with its own rows
+    // under it, one step further in.
+    fn nav_branch(&self, rows: Vec<NavRow>, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let mut branch = div()
+            .relative()
+            .ml(px(16.))
+            .pl(px(8.))
+            .pb(px(4.))
             .flex()
-            .child(navigation)
+            .flex_col()
+            .gap(px(1.))
             .child(
                 div()
-                    .id("preferences-content")
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .overflow_y_scroll()
-                    .px(px(28.))
-                    .py(px(24.))
-                    .child(section),
+                    .absolute()
+                    .left_0()
+                    .top(px(2.))
+                    .bottom(px(6.))
+                    .child(dither::DottedRule::vertical(t.subtle.opacity(0.45))),
+            );
+        for row in rows {
+            let target = row.target;
+            let parent = !row.children.is_empty();
+            // A parent row opens its first page; a chosen or open row has nothing to open.
+            let idle = row.chosen || row.open;
+            branch = branch.child(
+                self.choice_row(target.id(), row.chosen)
+                    .h(px(26.))
+                    .font_family(crate::theme::sans())
+                    .font_weight(FontWeight::NORMAL)
+                    .text_size(text_px(12.5))
+                    .when(row.open, |item| item.text_color(t.text))
+                    .when(idle, |item| item.cursor_default())
+                    .when_some(row.glyph, |item, glyph| {
+                        item.child(
+                            icon(glyph)
+                                .size(px(12.))
+                                .when(row.open, |glyph| glyph.text_color(t.accent)),
+                        )
+                    })
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .child(row.label),
+                    )
+                    .when(parent, |item| item.child(nav_chevron(row.open, t)))
+                    .when(!idle, |item| {
+                        item.on_click(
+                            cx.listener(move |s, _, _, cx| s.open_settings_target(target, cx)),
+                        )
+                    }),
+            );
+            if row.open && parent {
+                branch = branch.child(self.nav_branch(row.children, cx));
+            }
+        }
+        branch
+    }
+
+    // Opens the page that a row of the navigation names.
+    fn open_settings_target(&mut self, target: NavTarget, cx: &mut Context<Self>) {
+        match target {
+            NavTarget::Page(page) => self.open_settings(page),
+            NavTarget::Git(page) => {
+                self.open_settings(SettingsPage::Git);
+                if let Some(view) = &self.git_settings {
+                    view.update(cx, |view, cx| view.set_page(page, cx));
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    // Returns the heading of a Preferences page: its category beside a marker, its title and
+    // its description, closed by a dotted rule above the scrolling content.
+    fn page_header(&self, category: &str, title: &str, detail: &str) -> Div {
+        let t = self.theme;
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(7.))
+                    .child(kit::marker(t.accent))
+                    .child(caps(category, t).text_color(t.muted)),
             )
-            .into_any_element()
+            .child(
+                div()
+                    .text_size(text_px(16.))
+                    .line_height(relative(1.3))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title.to_owned()),
+            )
+            .child(note(detail.to_owned(), t))
+            .child(
+                div()
+                    .pt(px(8.))
+                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.45))),
+            )
+    }
+
+    /// Opens one page of the composer's provider.
+    pub(super) fn open_provider_settings(&mut self, page: ProviderPage) {
+        let provider = self.composer_preferences().provider;
+        self.open_settings(SettingsPage::Provider(provider, page));
     }
 
     /// Saves the theme and applies it at once.
@@ -640,20 +1210,20 @@ impl Shell {
         )
     }
 
-    fn appearance_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    // Builds the Theme page: the theme picker and the accent.
+    fn theme_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        page_column()
+            .child(self.theme_choices(cx))
+            .child(self.accent_choices(cx))
+            .into_any_element()
+    }
+
+    // Builds the Typography page: the typeface and size of text, then of code.
+    fn typography_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         let (smallest_text, largest_text) = Settings::FONT_SIZE_RANGE;
         let (smallest_code, largest_code) = Settings::CODE_FONT_SIZE_RANGE;
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(GROUP_GAP))
-            .child(self.section_title(
-                "Appearance",
-                "Set the theme, the typefaces and the size of the interface.",
-            ))
-            .child(self.theme_choices(cx))
-            .child(self.accent_choices(cx))
+        page_column()
             .child(
                 setting_group("Text", None, t)
                     .child(self.text_font_choices(cx))
@@ -710,11 +1280,18 @@ impl Shell {
                         ),
                     ),
             )
+            .into_any_element()
+    }
+
+    // Builds the Interface page: the scale and density of the workspace, and the composer.
+    fn interface_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        page_column()
             .child(
-                setting_group("Interface", None, t)
+                setting_group("Size and spacing", None, t)
                     .child(self.setting_row(
                         "Interface scale",
-                        "Size of spacing, controls and icons. Text keeps the sizes set above.",
+                        "Size of spacing, controls and icons. Text keeps the sizes of Typography.",
                         self.scale_slider(cx),
                     ))
                     .child(self.setting_row(
@@ -731,21 +1308,23 @@ impl Shell {
                             },
                             cx,
                         ),
-                    ))
-                    .child(
-                        self.setting_row(
-                            SKATER_LABEL,
-                            SKATER_DETAIL,
-                            controls::Switch::new("skater", self.settings.skater)
-                                .label(SKATER_LABEL)
-                                .on_click(cx.listener(|s, enabled: &bool, _, cx| {
-                                    s.settings.skater = *enabled;
-                                    s.save_settings();
-                                    cx.notify();
-                                }))
-                                .into_any_element(),
-                        ),
+                    )),
+            )
+            .child(
+                setting_group("Composer", None, t).child(
+                    self.setting_row(
+                        SKATER_LABEL,
+                        SKATER_DETAIL,
+                        controls::Switch::new("skater", self.settings.skater)
+                            .label(SKATER_LABEL)
+                            .on_click(cx.listener(|s, enabled: &bool, _, cx| {
+                                s.settings.skater = *enabled;
+                                s.save_settings();
+                                cx.notify();
+                            }))
+                            .into_any_element(),
                     ),
+                ),
             )
             .into_any_element()
     }
@@ -771,100 +1350,108 @@ impl Shell {
         )
     }
 
-    fn workspace_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    // Builds the Tasks page: where new tasks work, how the list sorts them and the sleep guard.
+    fn task_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(GROUP_GAP))
-            .child(self.section_title("Workspace", "Choose how projects and tasks are arranged."))
+        page_column()
+            .child(setting_group("New tasks", None, t).child(self.task_location_setting(cx)))
+            .child(setting_group("Task list", None, t).child(self.setting_row(
+                "Task order",
+                "Sort by the last update, the name, what needs you, or the creation time.",
+                self.segmented(
+                    "sort",
+                    [
+                        (Sort::Recent, "Updated"),
+                        (Sort::Name, "Name"),
+                        (Sort::Attention, "Attention"),
+                        (Sort::Created, "Created"),
+                    ],
+                    &self.settings.sort,
+                    |s, sort, cx| {
+                        s.settings.sort = sort;
+                        s.save_settings();
+                        cx.notify();
+                    },
+                    cx,
+                ),
+            )))
             .child(
-                setting_group("Tasks", None, t)
-                    .child(self.task_location_setting(cx))
-                    .child(self.setting_row(
-                        "Task order",
-                        "Sort by the last update, the name, what needs you, or the creation time.",
-                        self.segmented(
-                            "sort",
-                            [
-                                (Sort::Recent, "Updated"),
-                                (Sort::Name, "Name"),
-                                (Sort::Attention, "Attention"),
-                                (Sort::Created, "Created"),
-                            ],
-                            &self.settings.sort,
-                            |s, sort, cx| {
-                                s.settings.sort = sort;
+                setting_group("While agents work", None, t).child(
+                    self.setting_row(
+                        AWAKE_LABEL,
+                        AWAKE_DETAIL,
+                        controls::Switch::new("prevent-sleep", self.settings.prevent_sleep)
+                            .label(AWAKE_LABEL)
+                            .on_click(cx.listener(|s, enabled: &bool, _, cx| {
+                                s.settings.prevent_sleep = *enabled;
                                 s.save_settings();
                                 cx.notify();
-                            },
-                            cx,
-                        ),
-                    ))
-                    .child(
-                        self.setting_row(
-                            AWAKE_LABEL,
-                            AWAKE_DETAIL,
-                            controls::Switch::new("prevent-sleep", self.settings.prevent_sleep)
-                                .label(AWAKE_LABEL)
-                                .on_click(cx.listener(|s, enabled: &bool, _, cx| {
-                                    s.settings.prevent_sleep = *enabled;
+                            }))
+                            .into_any_element(),
+                    ),
+                ),
+            )
+            .into_any_element()
+    }
+
+    // Builds the Layout page: where file diffs open and the width of the sidebar.
+    fn layout_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        page_column()
+            .child(setting_group("Diffs", None, t).child(self.setting_row(
+                "Open file diffs in",
+                "Choose where a file opens when you select a change.",
+                self.segmented(
+                    "diff-placement",
+                    [
+                        (DiffPlacement::Conversation, "Conversation"),
+                        (DiffPlacement::RightPanel, "Right panel"),
+                    ],
+                    &self.settings.diff_placement,
+                    |s, placement, cx| {
+                        s.settings.diff_placement = placement;
+                        if s.reviewing_file {
+                            s.show_pane(PanePage::Changes);
+                        }
+                        s.save_settings();
+                        cx.notify();
+                    },
+                    cx,
+                ),
+            )))
+            .child(
+                setting_group("Sidebar", None, t).child(
+                    self.setting_row(
+                        "Sidebar width",
+                        "You can also drag its right edge.",
+                        self.slider_control(
+                            controls::Slider::new(
+                                "sidebar-width",
+                                self.settings.sidebar_width,
+                                220.,
+                                420.,
+                                10.,
+                                cx.listener(|s, value: &f32, _, cx| {
+                                    s.settings.sidebar_width = value.clamp(220., 420.);
                                     s.save_settings();
                                     cx.notify();
-                                }))
-                                .into_any_element(),
+                                }),
+                            )
+                            .label("Sidebar width"),
+                            format!("{} PT", self.settings.sidebar_width as u32),
+                            t.text,
                         ),
                     ),
+                ),
             )
+            .into_any_element()
+    }
+
+    // Builds the Import page: the dialog that imports threads of other coding agents.
+    fn import_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        page_column()
             .child(
-                setting_group("Layout", None, t)
-                    .child(self.setting_row(
-                        "Open file diffs in",
-                        "Choose where a file opens when you select a change.",
-                        self.segmented(
-                            "diff-placement",
-                            [
-                                (DiffPlacement::Conversation, "Conversation"),
-                                (DiffPlacement::RightPanel, "Right panel"),
-                            ],
-                            &self.settings.diff_placement,
-                            |s, placement, cx| {
-                                s.settings.diff_placement = placement;
-                                if s.reviewing_file {
-                                    s.show_pane(PanePage::Changes);
-                                }
-                                s.save_settings();
-                                cx.notify();
-                            },
-                            cx,
-                        ),
-                    ))
-                    .child(
-                        self.setting_row(
-                            "Sidebar width",
-                            "You can also drag its right edge.",
-                            self.slider_control(
-                                controls::Slider::new(
-                                    "sidebar-width",
-                                    self.settings.sidebar_width,
-                                    220.,
-                                    420.,
-                                    10.,
-                                    cx.listener(|s, value: &f32, _, cx| {
-                                        s.settings.sidebar_width = value.clamp(220., 420.);
-                                        s.save_settings();
-                                        cx.notify();
-                                    }),
-                                )
-                                .label("Sidebar width"),
-                                format!("{} PT", self.settings.sidebar_width as u32),
-                                t.text,
-                            ),
-                        ),
-                    ),
-            )
-            .child(
-                setting_group("Import", None, t).child(
+                setting_group("Threads", None, self.theme).child(
                     self.setting_row(
                         "Threads from Claude Code, Codex and OpenCode",
                         "Import conversations that you had in those apps in the folders of your projects. Each one keeps its history and continues the same conversation.",
@@ -897,33 +1484,14 @@ impl Shell {
         )
     }
 
-    fn notification_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    // Builds the Events page: the switch of all task notifications and one for each event.
+    fn event_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let delivery = self.workspace.as_ref().map(|w| &w.notification_delivery);
-        let pending = matches!(delivery, Some(NotificationDelivery::Pending));
-        let message = match delivery {
-            Some(NotificationDelivery::Pending) => Some(format!(
-                "Waiting for {NOTIFIER}. Allow notifications if prompted."
-            )),
-            Some(NotificationDelivery::Submitted) => {
-                Some(format!("Notification submitted to {NOTIFIER}."))
-            }
-            Some(NotificationDelivery::Failed(error)) => Some(error.clone()),
-            _ => None,
-        };
-        let failed = matches!(delivery, Some(NotificationDelivery::Failed(_)));
         // An event switch has no effect while task notifications are off as a whole.
         let muted = !self.settings.notifications.enabled;
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(GROUP_GAP))
-            .child(self.section_title(
-                "Notifications",
-                "Get task updates, even after closing the window.",
-            ))
+        page_column()
             .child(
-                setting_group("Events", None, t)
+                setting_group("Task events", None, t)
                     .child(self.task_notifications_setting(
                         &format!("Send {NOTIFIER} notifications for the events selected below."),
                         cx,
@@ -972,8 +1540,30 @@ impl Shell {
                         ))
                     }),
             )
+            .child(note(NOTIFICATION_CONTROL, t))
+            .into_any_element()
+    }
+
+    // Builds the Sound page: the sound of a notification, its preview and a test notification
+    // with the state of its delivery.
+    fn sound_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let delivery = self.workspace.as_ref().map(|w| &w.notification_delivery);
+        let pending = matches!(delivery, Some(NotificationDelivery::Pending));
+        let message = match delivery {
+            Some(NotificationDelivery::Pending) => Some(format!(
+                "Waiting for {NOTIFIER}. Allow notifications if prompted."
+            )),
+            Some(NotificationDelivery::Submitted) => {
+                Some(format!("Notification submitted to {NOTIFIER}."))
+            }
+            Some(NotificationDelivery::Failed(error)) => Some(error.clone()),
+            _ => None,
+        };
+        let failed = matches!(delivery, Some(NotificationDelivery::Failed(_)));
+        page_column()
             .child(
-                setting_group("Sound", None, t)
+                setting_group("Notification sound", None, t)
                     .child(self.notification_toggle(
                         "notifications-sound",
                         ("Play sound", "Use the selected sound with task notifications."),
@@ -1008,8 +1598,10 @@ impl Shell {
                                 }))
                                 .into_any_element(),
                         ),
-                    )
-                    .child(
+                    ),
+            )
+            .child(
+                setting_group("Test", None, t).child(
                         self.setting_row(
                             "Test notification",
                             "Send a preview using the selected sound settings, even if task notifications are off. It shows while Kodem is active.",
@@ -1038,7 +1630,7 @@ impl Shell {
                             }))
                             .into_any_element(),
                         ),
-                    ),
+                ),
             )
             .child(
                 div()
@@ -1053,68 +1645,37 @@ impl Shell {
             .into_any_element()
     }
 
+    // Builds the Shortcuts page: the key chords of the workspace in groups.
     fn shortcut_settings(&self) -> AnyElement {
         let t = self.theme;
-        let mut shortcuts = setting_group("Shortcuts", None, t);
-        for (label, key) in [
-            ("Command palette", "⌘ K"),
-            ("New task", "⌘ N"),
-            ("Open repository", "⌘ O"),
-            ("Clone repository into Git", "⇧ ⌘ O"),
-            ("Search tasks, or commits in Git", "⌘ F"),
-            ("Next or previous task", "⌃ Tab / ⌃ ⇧ Tab / ⇧ ⌘ ] / ⇧ ⌘ ["),
-            ("Go to a task in the feed", "⌘ 1 – ⌘ 9"),
-            ("Next task that needs you", "⌥ ⌘ A"),
-            (
-                "Agentic Coding, Chat, Review or Git",
-                "⌥ ⌘ 1 / ⌥ ⌘ 2 / ⌥ ⌘ 3 / ⌥ ⌘ 4",
-            ),
-            ("Send message", "Return"),
-            ("Send the other way during a turn", "⌘ Return"),
-            ("New line in prompt", "⇧ Return"),
-            ("Provider, account and model", "⇧ ⌘ M"),
-            ("Reasoning effort", "⇧ ⌘ E"),
-            ("Access mode", "⇧ ⌘ A"),
-            ("Switch build and plan, or cycle Codex access", "⇧ Tab"),
-            ("Copy diff selection", "⌘ C"),
-            ("Toggle sidebar", "⌘ B"),
-            ("Toggle changes", "⌘ D"),
-            ("Toggle browser", "⇧ ⌘ B"),
-            ("Toggle terminal", "⌃ `"),
-            ("Settings", "⌘ ,"),
-            ("Close dialog or menu", "Esc"),
-        ] {
-            shortcuts = shortcuts.child(
-                div()
-                    .py(px(7.))
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .child(div().flex_shrink_0().text_size(text_px(13.)).child(label))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(12.))
-                            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
-                    )
-                    .child(
-                        div().flex().flex_shrink_0().gap(px(4.)).children(
-                            key.split(" / ")
-                                .map(|chord| kit::keycap(chord.to_owned(), t)),
+        let mut page = page_column();
+        for (group, entries) in SHORTCUTS {
+            let mut shortcuts = setting_group(group, None, t).child(div().h(px(4.)));
+            for (label, key) in entries {
+                shortcuts = shortcuts.child(
+                    div()
+                        .py(px(7.))
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(div().flex_shrink_0().text_size(text_px(13.)).child(*label))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(12.))
+                                .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
+                        )
+                        .child(
+                            div().flex().flex_shrink_0().gap(px(4.)).children(
+                                key.split(" / ")
+                                    .map(|chord| kit::keycap(chord.to_owned(), t)),
+                            ),
                         ),
-                    ),
-            );
+                );
+            }
+            page = page.child(shortcuts);
         }
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(GROUP_GAP))
-            .child(self.section_title(
-                "Keyboard shortcuts",
-                "Move around the workspace without leaving the keyboard.",
-            ))
-            .child(shortcuts)
-            .into_any_element()
+        page.into_any_element()
     }
 
     // Plays a notification sound in this process, so no notification is sent.
@@ -1146,36 +1707,6 @@ impl Shell {
                 }))
                 .into_any_element(),
         )
-    }
-
-    /// Returns a settings section heading: its title before a dotted rule, over its description.
-    pub(super) fn section_title(&self, title: &str, detail: &str) -> AnyElement {
-        let t = self.theme;
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(6.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_size(text_px(16.))
-                            .line_height(relative(1.3))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(title.to_owned()),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(dither::DottedRule::horizontal(t.subtle.opacity(0.45))),
-                    ),
-            )
-            .child(note(detail.to_owned(), t))
-            .into_any_element()
     }
 
     /// Returns a row that can be chosen. A chosen row carries the accent tint, faint dots along
@@ -1275,35 +1806,12 @@ impl Shell {
         setting_row(label, detail, control, self.theme)
     }
 
-    // Builds the Git section: a tab row of its pages over the open page.
-    fn git_settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(view) = self.git_settings.clone() else {
-            return div().into_any_element();
-        };
-        let page = view.read(cx).page();
-        let pages = self.segmented(
-            "git-settings-page",
-            GitSettingsPage::ALL.map(|page| (page, page.label())),
-            &page,
-            |s, page, cx| {
-                if let Some(view) = &s.git_settings {
-                    view.update(cx, |view, cx| view.set_page(page, cx));
-                }
-                cx.notify();
-            },
-            cx,
-        );
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(GROUP_GAP))
-            .child(self.section_title(
-                "Git",
-                "Choose how the Git workspace syncs with remotes, shows diffs and history, and uses AI.",
-            ))
-            .child(pages)
-            .child(view)
-            .into_any_element()
+    // Builds the Git section: its open page. The navigation chooses the page.
+    fn git_settings(&self) -> AnyElement {
+        match self.git_settings.clone() {
+            Some(view) => view.into_any_element(),
+            None => div().into_any_element(),
+        }
     }
 
     /// Reports whether any account of the provider is signed in; unknown until one was checked.
@@ -1317,58 +1825,10 @@ impl Shell {
             .reduce(|any, signed_in| any || signed_in)
     }
 
-    fn provider_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    // Builds the General page of Agents: what applies to every provider.
+    fn agent_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let provider = self.settings_provider;
-        let runtime = self.provider_runtime(provider);
-        let preferences = self.provider_preferences(provider);
-        let mut chooser = div().flex().gap_2();
-        for (index, candidate) in Provider::ALL.into_iter().enumerate() {
-            let connected = self.provider_signed_in(candidate) == Some(true);
-            chooser = chooser.child(
-                self.choice_row(("settings-provider", index), candidate == provider)
-                    .flex_1()
-                    .h(px(44.))
-                    .px(px(12.))
-                    .border_color(t.border)
-                    .child(icon(candidate.icon()).size(px(13.)))
-                    // Three providers share the row, so the state goes under the name.
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .child(candidate.label())
-                                    .when(candidate.beta(), |name| name.child(kit::beta_chip(t))),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.))
-                                    .child(kit::marker(if connected { t.added } else { t.subtle }))
-                                    .child(caps(
-                                        if connected { "Signed in" } else { "Offline" },
-                                        t,
-                                    )),
-                            ),
-                    )
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        s.settings_provider = candidate;
-                        s.send(core::Request::ConnectRuntime {
-                            provider: candidate,
-                            account: None,
-                        });
-                        cx.notify();
-                    })),
-            );
-        }
-        let mut upcoming = div().flex().gap_2();
+        let mut upcoming = div().pt(px(8.)).flex().gap_2();
         for (index, candidate) in UpcomingProvider::ALL.into_iter().enumerate() {
             upcoming = upcoming.child(
                 self.choice_row(("settings-provider-soon", index), false)
@@ -1388,6 +1848,77 @@ impl Shell {
                     }),
             );
         }
+        page_column()
+            .child(
+                setting_group("Messages", None, t).child(self.setting_row(
+                    "Messages during a turn",
+                    "Queue waits for completion. Steer updates the current turn. A provider that cannot steer queues every message.",
+                    self.segmented(
+                        "provider-send-mode",
+                        [(SendMode::Queue, "Queue"), (SendMode::Steer, "Steer")],
+                        &self.settings.send_mode,
+                        |s, mode, cx| {
+                            s.settings.send_mode = mode;
+                            s.save_settings();
+                            cx.notify();
+                        },
+                        cx,
+                    ),
+                )),
+            )
+            .child(self.shared_compaction(cx))
+            .child(
+                setting_group("Background tasks", None, t)
+                    .child(
+                        note(
+                            "Tasks and terminals continue when you close the window. An idle host stops after five minutes when no task or shell is running.",
+                            t,
+                        )
+                        .pt(px(8.)),
+                    )
+                    .child(
+                        div().pt(px(8.)).flex().child(
+                            self.ghost("shutdown-host", "stop", "Stop idle host and quit")
+                                .on_click(
+                                    cx.listener(|s, _, _, _| s.send(core::Request::Shutdown)),
+                                ),
+                        ),
+                    ),
+            )
+            .child(setting_group("Coming soon", Some(UpcomingProvider::ALL.len()), t).child(upcoming))
+            .into_any_element()
+    }
+
+    // Builds one page of a provider.
+    fn provider_page(
+        &self,
+        provider: Provider,
+        page: ProviderPage,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match page {
+            ProviderPage::Connection => self.connection_settings(provider, cx),
+            ProviderPage::Accounts => self.account_settings(provider, cx),
+            ProviderPage::Model => self.model_settings(provider, cx),
+            ProviderPage::Access => self.access_settings(provider, cx),
+            ProviderPage::Compaction => {
+                let runtime = self.provider_runtime(provider);
+                page_column()
+                    .child(self.compaction_settings(provider, &runtime.models, cx))
+                    .into_any_element()
+            }
+            ProviderPage::Features => page_column()
+                .child(self.claude_feature_settings(cx))
+                .into_any_element(),
+        }
+    }
+
+    // Builds the Connection page of a provider: its CLI's runtime, its accounts in short and
+    // the choice of the provider for new conversations.
+    fn connection_settings(&self, provider: Provider, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let runtime = self.provider_runtime(provider);
+        let connected = self.provider_signed_in(provider) == Some(true);
         let (accounts, signed_in) = self.workspace.as_ref().map_or((0, 0), |workspace| {
             workspace
                 .accounts
@@ -1404,82 +1935,127 @@ impl Shell {
             "{accounts} {} · {signed_in} signed in. Sign-in stays with the provider's CLI.",
             if accounts == 1 { "account" } else { "accounts" }
         );
-        let connection = div()
+        let identity = kit::card(t)
+            .p(px(12.))
             .flex()
-            .flex_col()
+            .items_center()
+            .gap(px(10.))
+            .child(kit::icon_tile(provider.icon(), t.accent, 30., false))
             .child(
                 div()
-                    .py(px(8.))
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
                     .flex()
-                    .items_center()
-                    .gap(px(10.))
+                    .flex_col()
+                    .gap(px(4.))
                     .child(
-                        div().flex_1().min_w_0().child(kit::leader(
-                            "Runtime",
-                            runtime
-                                .version
-                                .clone()
-                                .unwrap_or_else(|| "Not connected".into()),
-                            if runtime.version.is_some() {
-                                t.text
-                            } else {
-                                t.warning
-                            },
-                            t,
-                        )),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .text_size(text_px(13.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(provider.label())
+                            .when(provider.beta(), |name| name.child(kit::beta_chip(t))),
                     )
                     .child(
-                        self.ghost("provider-refresh", "refresh", "Refresh")
-                            .on_click(cx.listener(move |s, _, _, _| {
-                                s.send(core::Request::ConnectRuntime {
-                                    provider,
-                                    account: None,
-                                })
-                            })),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(kit::marker(if connected { t.added } else { t.subtle }))
+                            .child(caps(if connected { "Signed in" } else { "Offline" }, t)),
                     ),
+            )
+            .child(
+                div().relative().child(
+                    self.ghost("provider-refresh", "refresh", "Refresh")
+                        .on_click(cx.listener(move |s, _, _, _| {
+                            s.send(core::Request::ConnectRuntime {
+                                provider,
+                                account: None,
+                            })
+                        })),
+                ),
+            );
+        let runtime_group = setting_group("Runtime", None, t)
+            .child(
+                div().py(px(10.)).child(kit::leader(
+                    "Version",
+                    runtime
+                        .version
+                        .clone()
+                        .unwrap_or_else(|| "Not connected".into()),
+                    if runtime.version.is_some() {
+                        t.text
+                    } else {
+                        t.warning
+                    },
+                    t,
+                )),
             )
             .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
             .child(
                 self.setting_row(
-                    "Accounts",
-                    &accounts_summary,
-                    self.button("provider-accounts", "users", "Manage accounts")
-                        .on_click(cx.listener(move |s, _, _, cx| {
-                            s.accounts.provider = provider;
-                            s.open_settings(ACCOUNTS);
-                            cx.notify();
-                        }))
-                        .into_any_element(),
+                    "New conversations",
+                    &format!("Start new conversations with {}.", provider.label()),
+                    self.button(
+                        "provider-use-default",
+                        provider.icon(),
+                        "Use for new conversations",
+                    )
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        let preferences = s.provider_preferences(provider);
+                        s.save_agent_preferences(preferences);
+                        cx.notify();
+                    }))
+                    .into_any_element(),
                 ),
             )
-            .child(
-                div()
-                    .pt(px(10.))
-                    .flex()
-                    .flex_wrap()
-                    .gap(px(6.))
-                    .child(
-                        self.ghost(
-                            "provider-use-default",
-                            provider.icon(),
-                            "Use for new conversations",
-                        )
-                        .on_click(cx.listener(move |s, _, _, cx| {
-                            let preferences = s.provider_preferences(provider);
-                            s.save_agent_preferences(preferences);
-                            cx.notify();
-                        })),
+            .when_some(
+                install_guide(provider).filter(|_| runtime.version.is_none()),
+                |group, (label, url)| {
+                    group.child(
+                        div().pt(px(10.)).flex().child(
+                            self.ghost("provider-install", "external-link", label)
+                                .on_click(cx.listener(move |_, _, _, cx| cx.open_url(url))),
+                        ),
                     )
-                    .when_some(
-                        install_guide(provider).filter(|_| runtime.version.is_none()),
-                        |d, (label, url)| {
-                            d.child(
-                                self.ghost("provider-install", "external-link", label)
-                                    .on_click(cx.listener(move |_, _, _, cx| cx.open_url(url))),
-                            )
-                        },
-                    ),
+                },
             );
+        page_column()
+            .child(identity)
+            .when_some(runtime.error, |d, error| {
+                d.child(error_block("Runtime error", error, t))
+            })
+            .child(runtime_group)
+            .child(
+                setting_group("Accounts", Some(accounts), t).child(
+                    self.setting_row(
+                        "Accounts",
+                        &accounts_summary,
+                        self.button("provider-accounts", "users", "Manage accounts")
+                            .on_click(cx.listener(move |s, _, _, cx| {
+                                s.open_settings(SettingsPage::Provider(
+                                    provider,
+                                    ProviderPage::Accounts,
+                                ));
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    ),
+                ),
+            )
+            .into_any_element()
+    }
+
+    // Builds the Model page of a provider: the model and reasoning that new conversations
+    // start with.
+    fn model_settings(&self, provider: Provider, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let runtime = self.provider_runtime(provider);
+        let preferences = self.provider_preferences(provider);
         let mut models = div().pt(px(6.)).flex().flex_col().gap(px(1.));
         for (index, model) in runtime.models.iter().enumerate() {
             let mut selected = preferences.clone();
@@ -1554,6 +2130,28 @@ impl Shell {
                 .pt(px(8.)),
             );
         }
+        page_column()
+            .when_some(runtime.error, |d, error| {
+                d.child(error_block("Runtime error", error, t))
+            })
+            .child(defaults.when(runtime.models.is_empty(), |group| {
+                group.child(
+                    note(
+                        format!("Connect {} to list its models.", provider.label()),
+                        t,
+                    )
+                    .pt(px(8.)),
+                )
+            }))
+            .into_any_element()
+    }
+
+    // Builds the Access page of a provider: the approval rule that new conversations start
+    // with.
+    fn access_settings(&self, provider: Provider, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let runtime = self.provider_runtime(provider);
+        let preferences = self.provider_preferences(provider);
         let mut access = div().pt(px(6.)).flex().flex_col().gap(px(1.));
         if provider == Provider::Codex {
             for (index, mode) in [
@@ -1622,75 +2220,8 @@ impl Shell {
                 );
             }
         }
-        let messages = setting_group("Messages", None, t).child(if runtime.steering {
-            self.setting_row(
-                "Messages during a turn",
-                "Queue waits for completion. Steer updates the current turn.",
-                self.segmented(
-                    "provider-send-mode",
-                    [(SendMode::Queue, "Queue"), (SendMode::Steer, "Steer")],
-                    &self.settings.send_mode,
-                    |s, mode, cx| {
-                        s.settings.send_mode = mode;
-                        s.save_settings();
-                        cx.notify();
-                    },
-                    cx,
-                ),
-            )
-        } else {
-            note(
-                "Messages sent during a turn are queued. This provider does not support steering.",
-                t,
-            )
-            .pt(px(8.))
-            .into_any_element()
-        });
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(GROUP_GAP))
-            .child(self.section_title(
-                "Providers",
-                "Connect a local CLI and choose the defaults for new conversations.",
-            ))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(chooser)
-                    .child(upcoming),
-            )
-            .when_some(runtime.error, |d, error| {
-                d.child(error_block("Runtime error", error, t))
-            })
-            .child(connection)
-            .child(defaults)
+        page_column()
             .child(setting_group("Default access", None, t).child(access))
-            .child(messages)
-            .when(provider == Provider::Claude, |d| {
-                d.child(self.claude_feature_settings(cx))
-            })
-            .child(self.compaction_settings(provider, &runtime.models, cx))
-            .child(
-                setting_group("Background tasks", None, t)
-                    .child(
-                        note(
-                            "Tasks and terminals continue when you close the window. An idle host stops after five minutes when no task or shell is running.",
-                            t,
-                        )
-                        .pt(px(8.)),
-                    )
-                    .child(
-                        div().pt(px(8.)).flex().child(
-                            self.ghost("shutdown-host", "stop", "Stop idle host and quit")
-                                .on_click(
-                                    cx.listener(|s, _, _, _| s.send(core::Request::Shutdown)),
-                                ),
-                        ),
-                    ),
-            )
             .into_any_element()
     }
 
@@ -1823,23 +2354,14 @@ impl Shell {
         )
     }
 
-    // Builds the automatic compaction rules for one provider: the rule for every provider, the
-    // provider's own rule, and one row for each of its models.
-    fn compaction_settings(
-        &self,
-        provider: Provider,
-        models: &[Model],
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    // Builds the compaction rule for every provider and model that has no rule of its own.
+    fn shared_compaction(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let rules = &self.settings.auto_compact;
-        let shared = rules.default.bounded();
-        let own = rules.providers.get(&provider).map(|rule| rule.bounded());
-        let name = provider.label();
-        let mut group = setting_group("Context compaction", None, t)
+        let shared = self.settings.auto_compact.default.bounded();
+        setting_group("Context compaction", None, t)
             .child(
                 note(
-                    "When a task's context reaches this share of the model's window, Kodem asks the provider to summarize the conversation.",
+                    "When a task's context reaches this share of the model's window, Kodem asks the provider to summarize the conversation. Each provider and model can set a rule of its own on its Compaction page.",
                     t,
                 )
                 .pt(px(8.)),
@@ -1866,6 +2388,29 @@ impl Shell {
                     cx,
                 ),
             ))
+            .into_any_element()
+    }
+
+    // Builds the automatic compaction rules of one provider: its own rule, and one row for
+    // each of its models.
+    fn compaction_settings(
+        &self,
+        provider: Provider,
+        models: &[Model],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let t = self.theme;
+        let rules = &self.settings.auto_compact;
+        let own = rules.providers.get(&provider).map(|rule| rule.bounded());
+        let name = provider.label();
+        let mut group = setting_group("Rules", None, t)
+            .child(
+                note(
+                    format!("Without a rule of its own, {name} follows the rule for all providers in Agents › General."),
+                    t,
+                )
+                .pt(px(8.)),
+            )
             .child(compact_level(
                 name,
                 rules.rule(provider, None),

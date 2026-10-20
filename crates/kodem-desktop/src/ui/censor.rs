@@ -8,9 +8,9 @@
 use super::*;
 use std::collections::BTreeSet;
 
-/// What is open above the workspace: the panel, the settings section, the agent popup and the
+/// What is open above the workspace: the panel, the settings page, the agent popup and the
 /// image preview.
-type Surface = (Panel, usize, bool, bool);
+type Surface = (Panel, settings::SettingsPage, bool, bool);
 
 #[derive(Default)]
 pub(super) struct Censor {
@@ -25,7 +25,7 @@ impl Shell {
     pub(super) fn sync_censor(&mut self) {
         let surface = (
             self.panel.clone(),
-            self.settings_section,
+            self.settings_page,
             self.agent_popup.is_some(),
             self.image_preview.is_some(),
         );

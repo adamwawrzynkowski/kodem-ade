@@ -7,8 +7,6 @@ use super::*;
 
 #[derive(Default)]
 pub(super) struct AccountsView {
-    /// The provider whose accounts are shown.
-    pub provider: Provider,
     adding: bool,
     renaming: Option<String>,
     removing: Option<String>,
@@ -29,7 +27,6 @@ impl Shell {
     /// Starts the provider's sign-in for an account that was just added.
     pub(super) fn account_added(&mut self, account: &Account, cx: &mut Context<Self>) {
         self.accounts.adding = false;
-        self.accounts.provider = account.provider;
         self.send(core::Request::SignInAccount {
             provider: account.provider,
             id: account.id.clone(),
@@ -77,53 +74,14 @@ impl Shell {
             .into_any_element()
     }
 
-    /// Builds the accounts section: a provider rail, one card per account, and the add form.
-    pub(super) fn account_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Builds the Accounts page of a provider: the provider's terms, one card per account, and
+    /// the add form.
+    pub(super) fn account_settings(
+        &self,
+        provider: Provider,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let t = self.theme;
-        let provider = self.accounts.provider;
-        let mut rail = div()
-            .h(px(34.))
-            .flex()
-            .items_center()
-            .border_b_1()
-            .border_color(t.border);
-        for (index, candidate) in Provider::ALL.into_iter().enumerate() {
-            let chosen = candidate == provider;
-            let count = self.workspace.as_ref().map_or(0, |workspace| {
-                workspace
-                    .accounts
-                    .iter()
-                    .filter(|state| state.account.provider == candidate)
-                    .count()
-            });
-            rail = rail.child(
-                div()
-                    .id(("account-provider", index))
-                    .relative()
-                    .h_full()
-                    .px(px(12.))
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .cursor_pointer()
-                    .font_family(crate::theme::mono())
-                    .text_size(text_px(11.5))
-                    .text_color(if chosen { t.text } else { t.muted })
-                    .when(!chosen, |cell| cell.hover(move |cell| cell.bg(t.selected)))
-                    .child(icon(candidate.icon()).size(px(13.)))
-                    .child(candidate.label())
-                    .when(candidate.beta(), |cell| cell.child(kit::beta_chip(t)))
-                    .child(figure(count.to_string(), t.subtle))
-                    .when(chosen, |cell| cell.child(kit::tab_indicator(t.accent)))
-                    .on_click(cx.listener(move |s, _, _, cx| {
-                        s.accounts = AccountsView {
-                            provider: candidate,
-                            ..Default::default()
-                        };
-                        cx.notify();
-                    })),
-            );
-        }
         let accounts: Vec<AccountState> = self
             .workspace
             .as_ref()
@@ -140,11 +98,6 @@ impl Shell {
             .flex()
             .flex_col()
             .gap(px(12.))
-            .child(self.section_title(
-                "Accounts",
-                "Stay signed in to several accounts of one provider and choose one per task. Each account is its own configuration directory of the provider's CLI, which keeps the sign-in. Kodem never reads or stores credentials.",
-            ))
-            .child(rail)
             .child(self.account_terms(provider));
         for state in &accounts {
             body = body.child(self.account_card(state, cx));

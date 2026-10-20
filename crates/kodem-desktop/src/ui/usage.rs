@@ -206,7 +206,7 @@ impl Shell {
                         )
                         .child(self.ghost("compact-rules", "settings-2", "Rules").on_click(
                             cx.listener(|s, _, _, cx| {
-                                s.open_settings(settings::PROVIDERS);
+                                s.open_provider_settings(settings::ProviderPage::Compaction);
                                 cx.notify();
                             }),
                         )),

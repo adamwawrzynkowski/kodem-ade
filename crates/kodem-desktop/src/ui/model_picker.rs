@@ -520,8 +520,10 @@ impl Shell {
                     .child(icon("plus").size(px(13.)))
                     .child("Add or manage accounts…")
                     .on_click(cx.listener(move |s, _, _, cx| {
-                        s.accounts.provider = provider;
-                        s.open_settings(settings::ACCOUNTS);
+                        s.open_settings(settings::SettingsPage::Provider(
+                            provider,
+                            settings::ProviderPage::Accounts,
+                        ));
                         cx.notify();
                     })),
             );

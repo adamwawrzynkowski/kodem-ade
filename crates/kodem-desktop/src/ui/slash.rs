@@ -472,7 +472,7 @@ impl Shell {
                     }
                 }
                 ComposerCommand::Status => {
-                    self.open_settings(settings::PROVIDERS);
+                    self.open_provider_settings(settings::ProviderPage::Connection);
                 }
             },
             Choice::Retry => unreachable!(),

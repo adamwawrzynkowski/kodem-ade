@@ -384,7 +384,7 @@ impl Shell {
                 .child(
                     self.ghost("setup-providers", "settings-2", "Provider settings")
                         .on_click(cx.listener(|s, _, _, cx| {
-                            s.open_settings(settings::PROVIDERS);
+                            s.open_provider_settings(settings::ProviderPage::Connection);
                             cx.notify();
                         })),
                 ),

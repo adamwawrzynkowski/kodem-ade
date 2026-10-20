@@ -536,7 +536,7 @@ impl Render for Shell {
             .on_action(cx.listener(|s, _: &ShowSettings, _, cx| {
                 // The Git workspace's preferences are its own section.
                 if s.git_open {
-                    s.open_settings(settings::GIT);
+                    s.open_settings(settings::SettingsPage::Git);
                 } else {
                     s.panel = Panel::Settings;
                 }
