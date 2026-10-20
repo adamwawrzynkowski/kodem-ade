@@ -335,7 +335,9 @@ impl Shell {
                     .text_size(text_px(12.))
                     .line_height(text_px(17.))
                     .when(current, |row| {
-                        row.bg(t.accent.opacity(0.08))
+                        row.overflow_hidden()
+                            .bg(t.accent.opacity(0.1))
+                            .layer(dither::row_wash(t.accent, true, false))
                             .child(kit::selection_edge(t.accent))
                     })
                     .child(

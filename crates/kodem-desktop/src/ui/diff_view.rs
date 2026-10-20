@@ -1156,7 +1156,8 @@ impl DiffView {
 }
 
 // A button of the comment editor in the shared control language. This view is its own entity,
-// so it cannot use the shell's button builders. `filled` selects the accent main action.
+// so it cannot use the shell's button builders. `filled` selects the accent main action, a
+// glass key like the shell's `primary`; the other is a ghost button.
 fn action_button(
     id: &'static str,
     glyph: &'static str,
@@ -1181,25 +1182,35 @@ fn action_button(
         .on_press(move |position, cx| fx::ripple(position, tone, cx));
     if filled {
         button
-            .layer(kit::shade(gpui::black().opacity(0.2), dither::Edge::Bottom))
-            .layer(kit::glint(gpui::white().opacity(0.3), dither::Edge::Top))
-            .bg(theme.accent)
-            .border_color(theme.accent)
+            .group(kit::GLASS)
+            .px(px(12.))
+            .layer(kit::glass_body(tone))
+            .child(kit::engraved(glyph, tone, 13.))
+            .bg(gpui::transparent_black())
+            .border_color(gpui::transparent_black())
+            .shadow(kit::glass_glow(tone, theme, kit::Pose::Rest))
             .text_color(theme.on_accent)
             .font_weight(FontWeight::SEMIBOLD)
-            .hover(move |s| s.bg(theme.accent.opacity(0.9)))
-            .active(move |s| s.bg(theme.accent.opacity(0.8)))
+            .hover(move |s| s.shadow(kit::glass_glow(tone, theme, kit::Pose::Hover)))
+            .active(move |s| s.shadow(kit::glass_glow(tone, theme, kit::Pose::Pressed)))
     } else {
         button
             .layer(kit::glint(theme.dot, dither::Edge::Bottom))
+            .child(icon(glyph).size(px(13.)))
             .bg(gpui::transparent_black())
             .border_color(gpui::transparent_black())
             .text_color(theme.muted)
             .font_weight(FontWeight::MEDIUM)
-            .hover(move |s| s.bg(theme.selected).text_color(theme.text))
-            .active(move |s| s.bg(theme.control_active))
+            .hover(move |s| {
+                s.bg(theme.selected)
+                    .text_color(theme.text)
+                    .shadow(kit::plate_light(theme, false))
+            })
+            .active(move |s| {
+                s.bg(theme.control_active)
+                    .shadow(kit::recessed_light(theme))
+            })
     }
-    .child(icon(glyph).size(px(13.)))
     .child(label)
 }
 impl Render for DiffView {

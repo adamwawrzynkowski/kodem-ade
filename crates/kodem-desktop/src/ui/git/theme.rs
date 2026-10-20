@@ -1,8 +1,7 @@
 //! The Git workspace's view of Kodem's theme. The workspace's views name colors by their role in
 //! a Git client: the accent is `primary`, secondary text is `muted_foreground`, and list rows have
-//! `list_hover` and `list_active` fills. Every color here derives from the open Kodem theme, so
-//! the Git workspace follows the theme, the accent and light or dark appearance like the rest of
-//! the window.
+//! a `list_hover` fill. Every color here derives from the open Kodem theme, so the Git workspace
+//! follows the theme, the accent and light or dark appearance like the rest of the window.
 use std::ops::Deref;
 
 use gpui::{App, Hsla, Pixels, rgb, rgb_to_hsla};
@@ -32,7 +31,6 @@ pub struct ThemeColor {
     /// The main content surface behind lists.
     pub list: Hsla,
     pub list_hover: Hsla,
-    pub list_active: Hsla,
     pub sidebar: Hsla,
     pub title_bar: Hsla,
     pub button: Hsla,
@@ -85,7 +83,6 @@ impl GitTheme {
                 popover: t.raised,
                 list: t.canvas,
                 list_hover: t.selected,
-                list_active: t.accent_bg,
                 sidebar: t.sidebar,
                 title_bar: t.sidebar,
                 button: t.control,

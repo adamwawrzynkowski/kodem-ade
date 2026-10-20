@@ -1017,12 +1017,15 @@ impl Shell {
             .rounded(px(crate::theme::RADIUS_SURFACE))
             .border_1()
             .border_color(if chosen { t.accent } else { t.border })
+            // A card stands a little off its surface, and sinks under a press.
+            .shadow(kit::plate_light(t, true))
             .accessibility_label(theme.label())
             .aria_selected(chosen)
             .focus_visible(move |card| card.border_color(t.accent.opacity(0.7)))
             .when(!chosen, |card| {
                 card.cursor_pointer()
                     .hover(move |card| card.border_color(t.edge))
+                    .active(move |card| card.shadow(kit::recessed_light(t)))
                     .on_press(move |position, cx| fx::ripple(position, t.muted, cx))
                     .on_click(cx.listener(move |s, _, _, cx| s.set_theme(theme, cx)))
             })

@@ -639,6 +639,8 @@ impl Shell {
             .flex()
             .items_center()
             .flex_shrink_0()
+            // The same spacing as the title's other actions.
+            .gap(px(8.))
             .when(saving, |d| d.child(kit::chip("SAVING", t.muted)))
             .when(dirty && !saving, |d| {
                 d.child(kit::chip("UNSAVED", t.accent))
@@ -666,9 +668,7 @@ impl Shell {
             .child(
                 self.icon_button("edit-save", "arrow-down-to-line", "Save · ⌘S")
                     .disabled(!dirty || saving)
-                    .when(dirty && !saving, |button| {
-                        button.bg(t.accent.opacity(0.1)).text_color(t.accent)
-                    })
+                    .when(dirty && !saving, |button| kit::lit(button, t.accent))
                     .on_click(cx.listener(|s, _, _, cx| s.save_edit(cx))),
             )
     }

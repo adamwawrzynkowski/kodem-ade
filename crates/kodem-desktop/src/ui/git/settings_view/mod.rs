@@ -23,11 +23,11 @@ use kodem_git::ai::{CodexModel, OllamaModel};
 use kodem_git::settings::Settings;
 
 use crate::components::Button;
-use crate::theme::{RADIUS_CONTROL, RADIUS_SMALL, Theme, px, text_px};
+use crate::theme::{RADIUS_CONTROL, RADIUS_SMALL, RADIUS_SURFACE, Theme, px, text_px};
 use crate::ui::controls::{Slider, Switch};
 use crate::ui::dither::{Dither, DitherField, DottedRule, Edge};
 use crate::ui::git::account_link::AccountLinkForm;
-use crate::ui::git::components::mono_font;
+use crate::ui::git::components::{self, mono_font};
 use crate::ui::git::kit::{ActiveTheme as _, InputEvent, InputState, TextareaState, h_flex};
 use crate::ui::git::settings::GitSettings;
 use crate::ui::git::theme::liquid_colors;
@@ -263,7 +263,7 @@ fn section(label: &'static str, cx: &App) -> Div {
 }
 
 /// A bordered card row for lists inside settings, such as accounts and
-/// installed models.
+/// installed models. A selected card takes the selection of a row, without an outline.
 pub(crate) fn list_card(selected: bool, cx: &App) -> Div {
     let colors = liquid_colors(cx);
     h_flex()
@@ -272,17 +272,12 @@ pub(crate) fn list_card(selected: bool, cx: &App) -> Div {
         .py_2()
         .gap_3()
         .items_center()
-        .rounded(px(8.))
+        .rounded(px(RADIUS_SURFACE))
         .border_1()
-        .border_color(if selected {
-            cx.theme().primary.opacity(0.55)
-        } else {
-            cx.theme().border
-        })
-        .bg(if selected {
-            cx.theme().primary.opacity(0.06)
-        } else {
-            colors.panel_secondary
+        .border_color(cx.theme().border)
+        .bg(colors.panel_secondary)
+        .when(selected, |card| {
+            components::selected_row(card, cx.theme().primary)
         })
 }
 
@@ -296,7 +291,7 @@ pub(crate) fn status_note(message: impl Into<SharedString>, tone: Hsla) -> Div {
         .pl_3p5()
         .pr_3()
         .py_2()
-        .rounded(px(7.))
+        .rounded(px(RADIUS_CONTROL))
         .overflow_hidden()
         .border_1()
         .border_color(tone.opacity(0.28))

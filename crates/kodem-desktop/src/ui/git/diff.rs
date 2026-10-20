@@ -18,12 +18,13 @@ use kodem_git::git::{
     DiffLineKind, FileComparison, FileDiff, FileRevision, LfsPointer, PreviewImageFormat,
 };
 
-use crate::theme::{code_px, px, text_px};
+use crate::theme::{RADIUS_CONTROL, code_px, px, text_px};
 use crate::ui::dither::{
-    BarSegment, Dither, DitherBar, DitherField, Edge, cell_threshold, checker,
+    BarSegment, Dither, DitherBar, DitherField, DottedRule, Edge, cell_threshold,
 };
 use crate::ui::git::components::{
     button, dither_empty_hint, dither_empty_state, file_path_label, mono_font, mono_label,
+    tinted_badge,
 };
 use crate::ui::git::icons;
 use crate::ui::git::kit::{
@@ -33,6 +34,7 @@ use crate::ui::git::kit::{
 use crate::ui::git::settings::GitSettings;
 use crate::ui::git::syntax::{DiffSyntaxHighlighter, SyntaxSpan};
 use crate::ui::git::theme;
+use crate::ui::kit;
 
 /// Returns the size of diff text: Kodem's code size.
 fn diff_font_size() -> Pixels {
@@ -578,8 +580,8 @@ impl DiffView {
 
     /// Builds a row, shifted to the left by the horizontal scroll and widened so that its fill
     /// still reaches the right edge.
-    fn render_scrolled_row(&self, ix: usize, window: &Window, cx: &App) -> Div {
-        let row = self.render_row(ix, window, cx);
+    fn render_scrolled_row(&self, ix: usize, cx: &App) -> Div {
+        let row = self.render_row(ix, cx);
         if self.scroll_x > Pixels::ZERO {
             row.ml(-self.scroll_x)
                 .w(gpui::px(self.viewport_width) + self.scroll_x)
@@ -694,7 +696,7 @@ impl DiffView {
             .collect()
     }
 
-    fn render_row(&self, ix: usize, window: &Window, cx: &App) -> Div {
+    fn render_row(&self, ix: usize, cx: &App) -> Div {
         let settings = GitSettings::get(cx);
         let show_numbers = settings.show_line_numbers;
         let word_wrap = settings.diff_word_wrap;
@@ -749,8 +751,6 @@ impl DiffView {
                     .items_center()
                     .px_2()
                     .bg(accent.opacity(0.05))
-                    .border_y_1()
-                    .border_color(accent.opacity(0.14))
                     .child(
                         Dither::new(DitherField::Fade {
                             from: Edge::Left,
@@ -798,15 +798,16 @@ impl DiffView {
                 base.relative()
                     .when_some(bg, |this, bg| this.bg(bg))
                     .when_some(marker, |this, marker| {
-                        // A dithered gutter marks added and removed lines.
+                        // A solid two-point edge in the line's color marks added and removed
+                        // lines.
                         this.child(
                             div()
                                 .absolute()
                                 .left_0()
                                 .top_0()
                                 .bottom_0()
-                                .w(px(3.))
-                                .bg(checker(marker.opacity(0.9), 1.0, window)),
+                                .w(px(2.))
+                                .bg(marker),
                         )
                     })
                     .when(show_numbers, |this| {
@@ -935,7 +936,9 @@ impl DiffView {
             .w(px(1.))
             .h(px(14.))
             .flex_shrink_0()
-            .bg(cx.theme().border)
+            .child(DottedRule::vertical(
+                theme::liquid_colors(cx).text_tertiary.opacity(0.4),
+            ))
     }
 
     fn checkerboard(cx: &App) -> Div {
@@ -1084,7 +1087,7 @@ impl DiffView {
                     div()
                         .px_2()
                         .py_1()
-                        .rounded(px(6.))
+                        .rounded(px(RADIUS_CONTROL))
                         .bg(cx.theme().primary.opacity(0.14))
                         .text_color(cx.theme().primary)
                         .font_family(mono_font())
@@ -1338,15 +1341,7 @@ fn paint_overview_ruler(
 
 /// A mono chip with one side of a hunk range, for example `+12,9`.
 fn hunk_range_chip(label: String, color: Hsla) -> Div {
-    div()
-        .flex_shrink_0()
-        .px_1()
-        .rounded(px(3.))
-        .border_1()
-        .border_color(color.opacity(0.35))
-        .bg(color.opacity(0.1))
-        .text_color(color)
-        .child(label)
+    tinted_badge(div().flex_shrink_0().px_1(), color, 0.1).child(label)
 }
 
 impl Render for DiffView {
@@ -1421,17 +1416,11 @@ impl Render for DiffView {
                 .size_full()
                 .when(word_wrap, |this| this.overflow_x_hidden())
                 .child({
-                    let mut list = v_virtual_list(
-                        cx.entity(),
-                        "diff-rows",
-                        sizes,
-                        |this, range, window, cx| {
-                            range
-                                .map(|ix| this.render_scrolled_row(ix, window, cx))
-                                .collect()
-                        },
-                    )
-                    .track_scroll(&self.scroll);
+                    let mut list =
+                        v_virtual_list(cx.entity(), "diff-rows", sizes, |this, range, _, cx| {
+                            range.map(|ix| this.render_scrolled_row(ix, cx)).collect()
+                        })
+                        .track_scroll(&self.scroll);
                     // A sideways gesture scrolls the rows sideways, not the list down.
                     list.style().restrict_scroll_to_axis = Some(true);
                     list
@@ -1530,54 +1519,18 @@ impl Render for DiffView {
                         self.comparison
                             .as_ref()
                             .is_some_and(PreviewComparison::is_lfs),
-                        |this| {
-                            this.child(
-                                div()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded(px(4.))
-                                    .bg(cx.theme().primary.opacity(0.14))
-                                    .border_1()
-                                    .border_color(cx.theme().primary.opacity(0.35))
-                                    .font_family(mono_font())
-                                    .text_size(text_px(10.5))
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(cx.theme().primary)
-                                    .child("LFS"),
-                            )
-                        },
+                        |this| this.child(kit::chip("LFS", cx.theme().primary)),
                     )
                     .when(self.comparison.is_some(), |this| {
-                        this.child(
-                            div()
-                                .px_1p5()
-                                .py_0p5()
-                                .rounded(px(4.))
-                                .border_1()
-                                .border_color(cx.theme().border)
-                                .bg(cx.theme().muted)
-                                .font_family(mono_font())
-                                .text_size(text_px(10.5))
-                                .text_color(cx.theme().muted_foreground)
-                                .child(self.file_format.clone()),
-                        )
+                        this.child(kit::chip(
+                            self.file_format.clone(),
+                            cx.theme().muted_foreground,
+                        ))
                     })
                     .when_some(
                         language.filter(|_| self.comparison.is_none()),
                         |this, language| {
-                            this.child(
-                                div()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded(px(4.))
-                                    .border_1()
-                                    .border_color(cx.theme().border)
-                                    .bg(cx.theme().muted)
-                                    .font_family(mono_font())
-                                    .text_size(text_px(10.5))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(language),
-                            )
+                            this.child(kit::chip(language, cx.theme().muted_foreground))
                         },
                     )
                     .when(show_text_tools, |this| {
@@ -1588,7 +1541,7 @@ impl Render for DiffView {
                                 .p(px(2.))
                                 .gap(px(2.))
                                 .items_center()
-                                .rounded(px(6.))
+                                .rounded(px(RADIUS_CONTROL))
                                 .border_1()
                                 .border_color(cx.theme().border)
                                 .bg(cx.theme().muted)

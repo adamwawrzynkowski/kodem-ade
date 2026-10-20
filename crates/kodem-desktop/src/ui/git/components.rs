@@ -7,17 +7,18 @@ use gpui::ColorExt as _;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, Asset, Div, ElementId, Entity, Hsla, Image, ImageFormat, InteractiveElement as _,
-    IntoElement, ObjectFit, ParentElement as _, Pixels, RenderOnce, SharedString, StyleRefinement,
-    Styled as _, StyledImage as _, Window, div, img,
+    IntoElement, ObjectFit, ParentElement, Pixels, RenderOnce, SharedString, StyleRefinement,
+    Styled, StyledImage as _, Window, div, img,
 };
 use kodem_git::git::{CommitRef, FileChangeKind, RefKind};
 use sha2::{Digest as _, Sha256};
 
-use super::kit::{Icon, Input, InputState, LiquidButton, Sizable as _, h_flex, v_flex};
+use super::kit::{Icon, Input, InputState, LiquidButton, h_flex, v_flex};
 use super::settings::GitSettings;
 use super::theme::{self, ActiveTheme as _};
-use crate::theme::{px, text_px};
-use crate::ui::dither::{Dither, DitherField, DottedRule, Edge, checker};
+use crate::theme::{RADIUS_SMALL, px, text_px};
+use crate::ui::dither::{self, Dither, DitherField, DottedRule, Edge, checker};
+use crate::ui::kit::{self, Layers};
 
 /// Returns the mono typeface used for hashes, counts, labels, and diff text.
 pub fn mono_font() -> &'static str {
@@ -226,6 +227,32 @@ pub fn status_section_header(
         )
 }
 
+/// Gives a selected row the selection of Kodem's lists: an accent tint, an accent edge on its
+/// leading side and faint accent dots in a band along its bottom edge. It has no outline. Set the
+/// row's corners before this call, so the dots round as the row does.
+pub(super) fn selected_row<E: Styled + ParentElement + Layers>(row: E, accent: Hsla) -> E {
+    row.relative()
+        .overflow_hidden()
+        .bg(accent.opacity(0.1))
+        .layer(dither::row_wash(accent, true, false))
+        .child(kit::selection_edge(accent))
+}
+
+/// Gives a badge the depth of a tinted chip in `tone`: the tint stronger at its top, the light
+/// of its tone and faint dots of the tone along its bottom edge. `strength` is the mean alpha of
+/// the tint.
+pub(super) fn tinted_badge(badge: Div, tone: Hsla, strength: f32) -> Div {
+    badge
+        .relative()
+        .rounded(px(RADIUS_SMALL))
+        .border_1()
+        .border_color(tone.opacity(0.36))
+        .bg(kit::tint_fill(tone, strength))
+        .shadow(kit::tint_light(tone))
+        .layer(kit::shade(tone.opacity(0.25), Edge::Bottom))
+        .text_color(tone)
+}
+
 /// Returns the layout style of a cached view that fills its parent.
 /// Pass it to `Entity::cached` for panels that render again only when
 /// their own entity is notified.
@@ -261,16 +288,9 @@ pub fn ref_badge(commit_ref: &CommitRef, lane_color: Hsla, is_checked_out: bool,
         RefKind::Head | RefKind::LocalBranch if is_checked_out => "●",
         RefKind::Head | RefKind::LocalBranch => "○",
     };
-    h_flex()
-        .flex_shrink_0()
-        .h(px(18.))
-        .gap_1()
-        .px_1p5()
-        .rounded(px(4.))
-        .border_1()
-        .border_color(color.opacity(if filled { 0.5 } else { 0.32 }))
-        .bg(color.opacity(if filled { 0.16 } else { 0.06 }))
-        .text_color(color)
+    let badge = h_flex().flex_shrink_0().h(px(18.)).gap_1().px_1p5();
+    tinted_badge(badge, color, if filled { 0.16 } else { 0.07 })
+        .when(filled, |badge| badge.border_color(color.opacity(0.5)))
         .font_family(mono_font())
         .text_size(text_px(11.))
         .when(filled, |badge| {
@@ -506,15 +526,7 @@ pub fn change_kind_color(kind: FileChangeKind, cx: &App) -> Hsla {
 /// A small square chip with the status letter of a file change.
 pub fn change_kind_chip(kind: FileChangeKind, cx: &App) -> Div {
     let color = change_kind_color(kind, cx);
-    div()
-        .flex_shrink_0()
-        .w(px(16.))
-        .h(px(16.))
-        .rounded(px(4.))
-        .border_1()
-        .border_color(color.opacity(0.3))
-        .bg(color.opacity(0.1))
-        .text_color(color)
+    tinted_badge(div().flex_shrink_0().w(px(16.)).h(px(16.)), color, 0.1)
         .font_family(mono_font())
         .text_size(text_px(10.))
         .font_weight(gpui::FontWeight::BOLD)
@@ -558,15 +570,13 @@ pub fn file_path_label(path: &str, cx: &App) -> Div {
 
 /// A neutral mono count badge, like the sidebar folder counts.
 pub fn count_badge(count: usize, cx: &App) -> Div {
-    div()
+    let badge = div()
         .flex_shrink_0()
         .h(px(16.))
         .px_1p5()
         .flex()
-        .items_center()
-        .rounded(px(4.))
-        .bg(cx.theme().muted)
-        .text_color(cx.theme().muted_foreground)
+        .items_center();
+    tinted_badge(badge, cx.theme().muted_foreground, 0.08)
         .font_family(mono_font())
         .text_size(text_px(10.5))
         .child(count.to_string())
@@ -591,7 +601,7 @@ pub fn accent_count_badge(count: usize, selected: bool, cx: &App) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(4.))
+        .rounded(px(RADIUS_SMALL))
         .border_1()
         .border_color(if selected {
             cx.theme().primary_foreground.opacity(0.6)
@@ -599,6 +609,7 @@ pub fn accent_count_badge(count: usize, selected: bool, cx: &App) -> Div {
             accent
         })
         .bg(accent)
+        .shadow(kit::tint_light(accent))
         .text_color(cx.theme().primary_foreground)
         .font_family(mono_font())
         .text_size(text_px(10.))
@@ -648,19 +659,7 @@ pub fn dialog_header(
                 .px_4()
                 .pt_4()
                 .pb_3()
-                .child(
-                    div()
-                        .size(px(36.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(9.))
-                        .border_1()
-                        .border_color(tone.opacity(0.32))
-                        .bg(colors.elevated.blend(&tone.opacity(0.14)))
-                        .child(icon.into().small().text_color(tone)),
-                )
+                .child(dither_icon_tile(icon, tone, 36., false))
                 .child(
                     v_flex()
                         .flex_1()
@@ -686,64 +685,28 @@ pub fn dialog_header(
         )
 }
 
-/// An empty or loading state with an animated dithered emblem.
+/// An empty or loading state with a still dithered emblem above a title and a detail line.
 pub fn dither_empty_state(
     title: impl Into<SharedString>,
     detail: impl Into<SharedString>,
     field: DitherField,
     cx: &App,
 ) -> Div {
-    let colors = theme::liquid_colors(cx);
-    let title: SharedString = title.into();
-    let detail: SharedString = detail.into();
-    v_flex()
-        .size_full()
-        .items_center()
-        .justify_center()
-        .gap_3()
-        .p_6()
-        .child(
-            div().relative().w(px(168.)).h(px(72.)).child(
-                Dither::new(field)
-                    .color(cx.theme().primary.opacity(0.85))
-                    .grid(4.0, 3.0)
-                    .toned()
-                    .animated()
-                    .corner_radius(8.0)
-                    .layer(),
-            ),
-        )
-        .child(
-            div()
-                .text_size(text_px(12.5))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(cx.theme().foreground)
-                .child(title),
-        )
-        .when(!detail.is_empty(), |state| {
-            state.child(
-                div()
-                    .max_w(px(320.))
-                    .text_center()
-                    .text_size(text_px(11.5))
-                    .text_color(colors.text_tertiary)
-                    .child(detail),
-            )
-        })
+    kit::empty_state(title, detail, field, cx.theme().kodem)
 }
 
 /// A square icon tile with a dithered fill rising from the bottom, used
-/// for list rows such as accounts, notifications, and pull requests.
+/// for list rows such as accounts, notifications, and pull requests. It
+/// stands off its surface as a tinted chip does.
 pub fn dither_icon_tile(icon: impl Into<Icon>, tone: Hsla, size: f32, animated: bool) -> Div {
     let radius = (size * 0.27).round();
-    let dither = Dither::new(DitherField::Fade {
+    let fill = Dither::new(DitherField::Fade {
         from: Edge::Bottom,
         start: 0.8,
         end: 0.0,
     })
     .color(tone.opacity(0.55))
-    .grid(2.0, 1.0)
-    .corner_radius(radius);
+    .grid(2.0, 1.0);
     div()
         .relative()
         .size(px(size))
@@ -755,8 +718,9 @@ pub fn dither_icon_tile(icon: impl Into<Icon>, tone: Hsla, size: f32, animated: 
         .overflow_hidden()
         .border_1()
         .border_color(tone.opacity(0.35))
-        .bg(tone.opacity(0.08))
-        .child(if animated { dither.animated() } else { dither }.layer())
+        .bg(kit::tint_fill(tone, 0.08))
+        .shadow(kit::tint_light(tone))
+        .layer(if animated { fill.animated() } else { fill })
         .child(
             div()
                 .relative()

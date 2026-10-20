@@ -13,6 +13,7 @@ use gpui::{
 use crate::theme::px;
 use crate::ui::dither;
 use crate::ui::git::theme::ActiveTheme;
+use crate::ui::kit;
 
 /// Paint order of dialogs above the window's content and below popup menus.
 const DIALOG_PRIORITY: usize = 20;
@@ -291,23 +292,29 @@ pub fn overlays(window: &mut Window, cx: &mut App) -> AnyElement {
     for (index, (builder, focus)) in dialogs.into_iter().enumerate() {
         let dialog = builder(Dialog::new(), window, cx);
         let closable = dialog.overlay_closable;
-        let mut frame = div()
-            .relative()
-            .max_w_full()
-            .max_h_full()
-            .flex()
-            .flex_col()
-            .bg(t.raised)
-            .border_1()
-            .border_color(t.edge)
-            .rounded(px(crate::theme::RADIUS_FLOATING))
-            .shadow(t.floating())
-            .overflow_hidden();
+        let mut frame = div().relative().max_w_full().max_h_full().flex().flex_col();
         frame.style().refine(&dialog.style);
+        // The content has no fill of its own: the glass face beneath it is the dialog's surface.
         let frame = frame
             .id(("git-dialog", index))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .children(dialog.children);
+            .child(kit::floating_face(
+                t.raised,
+                crate::theme::RADIUS_FLOATING,
+                t,
+            ))
+            .child(
+                div()
+                    .w_full()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .border_1()
+                    .border_color(gpui::transparent_black())
+                    .rounded(px(crate::theme::RADIUS_FLOATING))
+                    .overflow_hidden()
+                    .children(dialog.children),
+            );
         let top = index + 1 == count;
         layer = layer.child(
             div()

@@ -651,6 +651,10 @@ impl Shell {
                                 .child(kit::selection_edge(t.accent))
                         })
                         .when(!chosen, |row| row.hover(move |row| row.bg(t.selected)))
+                        .active(move |row| row.bg(t.control_active))
+                        .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+                            fx::ripple(event.position, t.muted, cx)
+                        })
                         .child(icon(item.glyph).size(px(14.)).text_color(if chosen {
                             t.accent
                         } else {
@@ -705,13 +709,17 @@ impl Shell {
             .relative()
             .w(px(640.).min((viewport.width - px(48.)).max(px(0.))))
             .child(dither::shadow(t, crate::theme::RADIUS_FLOATING, 8.))
+            .child(kit::floating_face(
+                t.raised,
+                crate::theme::RADIUS_FLOATING,
+                t,
+            ))
             .child(
                 div()
+                    .relative()
                     .rounded(px(crate::theme::RADIUS_FLOATING))
-                    .bg(t.raised)
                     .border_1()
-                    .border_color(t.edge)
-                    .shadow(t.floating())
+                    .border_color(gpui::transparent_black())
                     .overflow_hidden()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(
@@ -741,7 +749,7 @@ impl Shell {
                             .flex()
                             .items_center()
                             .gap(px(14.))
-                            .bg(t.header)
+                            .bg(t.header.opacity(kit::PANE_SHARE))
                             .child(
                                 div()
                                     .flex()

@@ -12,7 +12,7 @@ use gpui::{
 };
 use kodem_git::settings::{DateFormat, PullStrategy};
 
-use crate::theme::{px, text_px};
+use crate::theme::{RADIUS_SURFACE, px, text_px};
 use crate::ui::dither::{Dither, DitherField, Edge};
 use crate::ui::fx;
 use crate::ui::git::account_link::{AccountLinkEvent, AccountLinkForm, linked_account_rows};
@@ -513,7 +513,7 @@ fn feature_tile(icon: impl Into<Icon>, title: &'static str, detail: &'static str
         .min_w_0()
         .gap_2()
         .p_3()
-        .rounded(px(10.))
+        .rounded(px(RADIUS_SURFACE))
         .border_1()
         .border_color(cx.theme().border)
         .bg(colors.panel_secondary)
@@ -698,7 +698,7 @@ impl Render for OnboardingView {
         let card = v_flex()
             .relative()
             .w_full()
-            .rounded(px(14.))
+            .rounded(px(RADIUS_SURFACE))
             .overflow_hidden()
             .border_1()
             .border_color(cx.theme().border)
@@ -720,7 +720,7 @@ impl Render for OnboardingView {
                 .color(accent.opacity(0.35))
                 .grid(3.0, 2.0)
                 .animated()
-                .corner_radius(14.0)
+                .corner_radius(RADIUS_SURFACE)
                 .layer(),
             )
             .child(div().relative().w_full().p_6().child(step_motion(

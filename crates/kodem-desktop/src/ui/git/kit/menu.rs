@@ -522,6 +522,12 @@ impl Render for PopupMenu {
             .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
             .relative()
             .child(dither::shadow(t, crate::theme::RADIUS_FLOATING, 5.))
+            // The glass lies beneath the scrolling list, so its dots stay at the bottom edge.
+            .child(kit::floating_face(
+                t.raised,
+                crate::theme::RADIUS_FLOATING,
+                t,
+            ))
             .child(
                 div()
                     .id("git-popup-menu-body")
@@ -534,10 +540,8 @@ impl Render for PopupMenu {
                     .flex()
                     .flex_col()
                     .rounded(px(crate::theme::RADIUS_FLOATING))
-                    .bg(t.raised)
                     .border_1()
-                    .border_color(t.edge)
-                    .shadow(t.floating())
+                    .border_color(gpui::transparent_black())
                     .text_color(t.text)
                     .children(entries),
             )

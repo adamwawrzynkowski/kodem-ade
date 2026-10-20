@@ -7,11 +7,12 @@ use gpui::{
     Animation, AnimationExt as _, AnyElement, App, ElementId, Hsla, IntoElement, Pixels, div,
 };
 
-use super::kit::{PopoverStyled as _, ease_out_cubic};
+use super::kit::ease_out_cubic;
 use super::theme::ActiveTheme as _;
-use crate::theme::px;
-use crate::ui::dither::{Dither, DitherField};
+use crate::theme::{RADIUS_FLOATING, px};
+use crate::ui::dither::{self, Dither, DitherField};
 use crate::ui::fx::ease_out_back;
+use crate::ui::kit;
 
 const POPOVER_DURATION: Duration = Duration::from_millis(220);
 const CONTEXT_MENU_DURATION: Duration = Duration::from_millis(180);
@@ -68,7 +69,8 @@ fn reveal(
         .into_any_element()
 }
 
-/// A popover body that dissolves in below its trigger.
+/// A popover body that dissolves in below its trigger. It is glass, as a menu is: the content
+/// lies on a floating face over a dithered contact shadow and has no fill of its own.
 pub(crate) fn popover_surface(
     name: &'static str,
     sequence: u64,
@@ -76,6 +78,7 @@ pub(crate) fn popover_surface(
     content: impl IntoElement + 'static,
     cx: &App,
 ) -> AnyElement {
+    let t = cx.theme().kodem;
     reveal(
         name,
         sequence,
@@ -87,7 +90,19 @@ pub(crate) fn popover_surface(
             block: 3.0,
             fill: false,
         },
-        div().popover_style(cx).p(padding).child(content),
+        div()
+            .relative()
+            .child(dither::shadow(t, RADIUS_FLOATING, 5.))
+            .child(kit::floating_face(t.raised, RADIUS_FLOATING, t))
+            .child(
+                div()
+                    .relative()
+                    .p(padding)
+                    .rounded(px(RADIUS_FLOATING))
+                    .border_1()
+                    .border_color(gpui::transparent_black())
+                    .child(content),
+            ),
     )
 }
 

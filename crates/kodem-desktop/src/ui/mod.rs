@@ -2318,14 +2318,19 @@ impl Shell {
         glyph: &'static str,
         label: impl Into<SharedString>,
     ) -> Button {
-        let theme = self.theme;
         let label = label.into();
+        self.raised(id)
+            .child(icon(glyph).size(px(13.)))
+            .when(!label.is_empty(), |b| b.child(label))
+    }
+    /// Returns the surface of a raised neutral button without content, for buttons that carry
+    /// figures or other children of their own.
+    fn raised(&self, id: impl Into<ElementId>) -> Button {
+        let theme = self.theme;
         self.control(id)
             .overflow_hidden()
             .layer(kit::shade(theme.dot.opacity(0.9), dither::Edge::Bottom))
             .layer(kit::glint(theme.accent.opacity(0.5), dither::Edge::Bottom))
-            .child(icon(glyph).size(px(13.)))
-            .when(!label.is_empty(), |b| b.child(label))
             .bg(kit::raised_fill(theme.control))
             .shadow(kit::raised_light(theme))
             .hover(move |s| {
@@ -2444,14 +2449,19 @@ impl Shell {
         label: impl Into<SharedString>,
         tone: Hsla,
     ) -> Button {
-        let theme = self.theme;
         let label = label.into();
+        self.tinted_surface(id, tone)
+            .child(icon(glyph).size(px(13.)))
+            .when(!label.is_empty(), |b| b.child(label))
+    }
+    /// Returns the surface of a tinted button without content, for buttons that lead with a
+    /// marker or carry other children of their own.
+    fn tinted_surface(&self, id: impl Into<ElementId>, tone: Hsla) -> Button {
+        let theme = self.theme;
         self.control(id)
             .overflow_hidden()
             .layer(kit::shade(tone.opacity(0.3), dither::Edge::Bottom))
             .layer(kit::glint(tone.opacity(0.6), dither::Edge::Bottom))
-            .child(icon(glyph).size(px(13.)))
-            .when(!label.is_empty(), |b| b.child(label))
             .bg(kit::tint_fill(tone, 0.09))
             .shadow(kit::tint_light(tone))
             .border_color(tone.opacity(0.45))
@@ -2607,19 +2617,21 @@ impl Render for Hint {
         div()
             .relative()
             .max_w(px(360.))
-            .child(dither::shadow(self.theme, 5., 3.))
+            .child(dither::shadow(self.theme, crate::theme::RADIUS_CONTROL, 3.))
+            // Glass with the floating light, but without the dots of a menu's bottom edge: a
+            // tooltip is one or two lines, so they would lie behind its text.
             .child(
-                div()
+                kit::glass(div(), self.theme.raised, kit::SURFACE_GLASS_FILL)
                     .font_family(crate::theme::mono())
                     .px(px(8.))
                     .py(px(5.))
                     .text_size(text_px(11.))
                     .line_height(relative(1.45))
-                    .bg(self.theme.raised)
                     .text_color(self.theme.text)
                     .border_1()
                     .border_color(self.theme.edge)
-                    .rounded(px(5.))
+                    .rounded(px(crate::theme::RADIUS_CONTROL))
+                    .shadow(self.theme.floating())
                     .child(kit::shortcut(self.text.clone())),
             )
     }

@@ -6,7 +6,7 @@ use gpui::{
     ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable, Font, GlobalElementId,
     Hsla, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     PaintQuad, Pixels, Point, SharedString, Style, TextRun, UTF16Selection, Window, actions, div,
-    fill, hsla, point, prelude::*, px, relative, rgb, size,
+    fill, point, prelude::*, px, relative, rgb, size,
 };
 
 use unicode_segmentation::*;
@@ -1204,19 +1204,31 @@ impl TextInput {
 
     // Returns the lines of the text at `width`, shaped again only when the text, a style or
     // the font changed. Streamed text changes its runs on every step of its reveal, so it is
-    // shaped each time.
+    // shaped each time. An empty field shows its placeholder in the muted color of the theme
+    // that the workspace publishes.
     fn lines(
         &mut self,
         style: &gpui::TextStyle,
         font_size: Pixels,
         width: Option<Pixels>,
         window: &mut Window,
+        cx: &App,
     ) -> Rc<Vec<(usize, super::inline_bubbles::TextLine)>> {
+        let placeholder = cx
+            .try_global::<crate::theme::Theme>()
+            .copied()
+            .unwrap_or_default()
+            .muted;
         if self.streaming.start().is_some() {
-            return Rc::new(shape(self, style, font_size, width, window));
+            return Rc::new(shape(self, style, font_size, width, placeholder, window));
         }
         let font = style.font();
-        let color = style.color;
+        // The color that the run is drawn in, so a change of theme shapes the placeholder again.
+        let color = if self.content.is_empty() {
+            placeholder
+        } else {
+            style.color
+        };
         let found = self.shaped.iter().position(|shaped| {
             shaped.revision == self.revision
                 && shaped.width == width
@@ -1234,7 +1246,7 @@ impl TextInput {
             self.shaped.insert(0, shaped);
             return lines;
         }
-        let lines = Rc::new(shape(self, style, font_size, width, window));
+        let lines = Rc::new(shape(self, style, font_size, width, placeholder, window));
         self.shaped.insert(
             0,
             Shaped {
@@ -1449,9 +1461,9 @@ impl Element for TextElement {
                     gpui::AvailableSpace::Definite(w) => Some(w),
                     _ => None,
                 });
-                let lines = input.update(cx, |input, _| {
+                let lines = input.update(cx, |input, cx| {
                     let width = if input.wrap { width } else { None };
-                    input.lines(&text_style, font_size, width, window)
+                    input.lines(&text_style, font_size, width, window, cx)
                 });
                 let input = input.read(cx);
                 let measured = lines
@@ -1495,13 +1507,14 @@ impl Element for TextElement {
         );
         let style = window.text_style();
         let height = window.line_height();
-        let lines = self.input.update(cx, |input, _| {
+        let lines = self.input.update(cx, |input, cx| {
             let width = input.wrap.then_some(bounds.size.width);
             input.lines(
                 &style,
                 style.font_size.to_pixels(window.rem_size()),
                 width,
                 window,
+                cx,
             )
         });
         let focused = self.input.read(cx).focus_handle.is_focused(window);
@@ -1933,6 +1946,7 @@ fn shape(
     style: &gpui::TextStyle,
     font_size: Pixels,
     width: Option<Pixels>,
+    placeholder: Hsla,
     window: &mut Window,
 ) -> Vec<(usize, super::inline_bubbles::TextLine)> {
     let text = if input.content.is_empty() {
@@ -1947,7 +1961,7 @@ fn shape(
         len: text.len(),
         font: style.font(),
         color: if input.content.is_empty() {
-            hsla(0., 0., 0.62, 1.)
+            placeholder
         } else {
             style.color
         },

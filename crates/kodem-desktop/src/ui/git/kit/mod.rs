@@ -27,7 +27,7 @@ pub use virtual_list::{VirtualListScrollHandle, v_virtual_list};
 pub use crate::components::Selectable;
 pub use crate::ui::git::theme::ActiveTheme;
 
-use gpui::{Div, ParentElement, Pixels, Styled, div};
+use gpui::{Div, Pixels, Styled, div};
 
 /// Returns a row that lays out its children horizontally and centers them vertically.
 pub fn h_flex() -> Div {
@@ -82,19 +82,3 @@ pub trait Disableable: Sized {
 pub fn ease_out_cubic(progress: f32) -> f32 {
     1. - (1. - progress).powi(3)
 }
-
-/// Styles a container as a floating surface: the popover fill, a hairline edge, rounded corners
-/// and the floating shadow.
-pub trait PopoverStyled: Styled + ParentElement + Sized {
-    /// Applies the popover surface style.
-    fn popover_style(self, cx: &gpui::App) -> Self {
-        let theme = cx.theme();
-        self.bg(theme.popover)
-            .border_1()
-            .border_color(theme.kodem.edge)
-            .rounded(theme.radius_lg)
-            .shadow(theme.kodem.floating())
-    }
-}
-
-impl<T: Styled + ParentElement> PopoverStyled for T {}

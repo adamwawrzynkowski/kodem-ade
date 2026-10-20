@@ -34,6 +34,8 @@ impl Shell {
             .when(!chosen, |row| {
                 row.hover(move |row| row.bg(t.selected).text_color(t.text))
             })
+            .active(move |row| row.bg(t.control_active))
+            .on_press(move |position, cx| fx::ripple(position, t.muted, cx))
     }
 
     fn check(&self, chosen: bool) -> AnyElement {
@@ -294,7 +296,8 @@ impl Shell {
             if runtime.access_modes.is_empty() {
                 content = content.child(
                     div()
-                        .p_2()
+                        .px(px(8.))
+                        .py(px(4.))
                         .text_size(text_px(11.5))
                         .text_color(t.muted)
                         .child("Refresh the provider to load its access modes."),
@@ -316,8 +319,8 @@ impl Shell {
         if disabled {
             content = content.child(
                 div()
-                    .px_2()
-                    .py_1()
+                    .px(px(8.))
+                    .py(px(4.))
                     .text_size(text_px(11.))
                     .text_color(t.muted)
                     .child("These controls unlock after pending work finishes and delivery is confirmed."),
@@ -326,8 +329,8 @@ impl Shell {
         if self.panel == Panel::Models && runtime.models.is_empty() {
             content = content.child(
                 div()
-                    .px_2()
-                    .py_1()
+                    .px(px(8.))
+                    .py(px(4.))
                     .child(kit::loader_row("Reading the provider's model catalog", t)),
             );
         }
@@ -373,13 +376,11 @@ impl Shell {
                 );
             }
             if let Some(error) = runtime.error {
-                content = content.child(
-                    div()
-                        .p_2()
-                        .text_size(text_px(11.))
-                        .text_color(t.removed)
-                        .child(error),
-                );
+                content = content.child(div().px(px(8.)).py(px(4.)).child(settings::error_block(
+                    "Provider error",
+                    error,
+                    t,
+                )));
             }
             content = content.child(self.agent_footer(&preferences, cx));
             return div()
@@ -388,11 +389,19 @@ impl Shell {
                 .child(rail)
                 .child(
                     content
+                        .relative()
                         .flex_1()
                         .min_w_0()
-                        .pl(px(4.))
-                        .border_l_1()
-                        .border_color(t.border),
+                        .pl(px(5.))
+                        // A split inside one surface is a dotted rule.
+                        .child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .bottom_0()
+                                .child(dither::DottedRule::vertical(t.subtle.opacity(0.4))),
+                        ),
                 )
                 .into_any_element();
         }

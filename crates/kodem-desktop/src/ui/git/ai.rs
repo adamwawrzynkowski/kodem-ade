@@ -13,10 +13,10 @@ use kodem_git::ai::{
 };
 
 use crate::components::text_input::TextInput;
-use crate::theme::{px, text_px};
+use crate::theme::{RADIUS_SMALL, RADIUS_SURFACE, px, text_px};
 use crate::ui::dither::{Dither, DitherField, Edge};
 use crate::ui::git::components::{button, dialog_header, mono_font, mono_label};
-use crate::ui::git::contextual_actions::open_liquid_dialog;
+use crate::ui::git::contextual_actions::{divider, open_liquid_dialog};
 use crate::ui::git::icons;
 use crate::ui::git::kit::{
     ActiveTheme as _, ButtonVariants as _, IconName, ScrollableElement as _, Sizable as _,
@@ -25,6 +25,7 @@ use crate::ui::git::kit::{
 use crate::ui::git::motion;
 use crate::ui::git::syntax::DiffSyntaxHighlighter;
 use crate::ui::git::theme;
+use crate::ui::kit;
 
 const MAX_LIVE_TEXT_BYTES: usize = 8_192;
 
@@ -147,7 +148,7 @@ impl AiResultDialogView {
                     .w_full()
                     .gap_2()
                     .p_3()
-                    .rounded(px(8.))
+                    .rounded(px(RADIUS_SURFACE))
                     .border_1()
                     .border_color(color.opacity(0.35))
                     .bg(color.opacity(0.08))
@@ -159,7 +160,7 @@ impl AiResultDialogView {
                                 div()
                                     .px_1p5()
                                     .py_0p5()
-                                    .rounded(px(4.))
+                                    .rounded(px(RADIUS_SMALL))
                                     .bg(color.opacity(0.18))
                                     .font_family(mono_font())
                                     .text_size(text_px(10.5))
@@ -260,7 +261,7 @@ impl AiResultDialogView {
                     .w_full()
                     .gap_2()
                     .p_3()
-                    .rounded(px(8.))
+                    .rounded(px(RADIUS_SURFACE))
                     .border_1()
                     .border_color(color.opacity(0.35))
                     .bg(color.opacity(0.08))
@@ -339,7 +340,7 @@ impl AiResultDialogView {
                         .relative()
                         .w_full()
                         .overflow_hidden()
-                        .rounded(px(8.))
+                        .rounded(px(RADIUS_SURFACE))
                         .border_1()
                         .border_color(cx.theme().primary.opacity(0.3))
                         .bg(cx.theme().primary.opacity(0.05))
@@ -359,7 +360,7 @@ impl AiResultDialogView {
                             .color(cx.theme().primary.opacity(0.45))
                             .grid(3.0, 2.0)
                             .animated()
-                            .corner_radius(8.0)
+                            .corner_radius(RADIUS_SURFACE)
                             .layer(),
                         )
                         .child(
@@ -375,18 +376,7 @@ impl AiResultDialogView {
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .child(status),
                                 )
-                                .child(
-                                    div()
-                                        .px_1p5()
-                                        .py_0p5()
-                                        .rounded(px(4.))
-                                        .bg(cx.theme().primary)
-                                        .font_family(mono_font())
-                                        .text_size(text_px(10.))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(cx.theme().primary_foreground)
-                                        .child("LIVE"),
-                                ),
+                                .child(kit::chip("LIVE", cx.theme().primary)),
                         ),
                     cx,
                 ))
@@ -431,7 +421,7 @@ impl Render for AiResultDialogView {
             AiResult::Error(error) => v_flex()
                 .w_full()
                 .p_3()
-                .rounded(px(8.))
+                .rounded(px(RADIUS_SURFACE))
                 .bg(colors.danger.opacity(0.12))
                 .text_size(text_px(11.5))
                 .text_color(colors.danger)
@@ -454,7 +444,6 @@ impl Render for AiResultDialogView {
             .w_full()
             .max_h(px(680.))
             .overflow_hidden()
-            .bg(cx.theme().popover)
             .child(dialog_header(
                 icons::sparkles(),
                 selectable_plain_text("ai-result-title", self.title.clone()),
@@ -462,7 +451,7 @@ impl Render for AiResultDialogView {
                 cx.theme().primary,
                 cx,
             ))
-            .child(div().h(px(1.)).w_full().bg(cx.theme().border))
+            .child(divider(cx))
             .child(
                 div()
                     .id("ai-result-scroll")
@@ -472,7 +461,7 @@ impl Render for AiResultDialogView {
                     .p_4()
                     .child(body),
             )
-            .child(div().h(px(1.)).w_full().bg(cx.theme().border))
+            .child(divider(cx))
             .child(
                 h_flex().w_full().justify_end().px_4().py_3().child(
                     button("close-ai-result")
@@ -539,7 +528,7 @@ fn summary_card(id_prefix: &'static str, headline: &str, overview: &str, cx: &Ap
         .w_full()
         .gap_1()
         .p_3()
-        .rounded(px(8.))
+        .rounded(px(RADIUS_SURFACE))
         .border_1()
         .border_color(cx.theme().border)
         .bg(theme::liquid_colors(cx).panel_secondary)
@@ -619,7 +608,7 @@ fn live_text_card(id: &'static str, label: &str, value: String, cx: &App) -> Div
         .w_full()
         .gap_1p5()
         .p_3()
-        .rounded(px(8.))
+        .rounded(px(RADIUS_SURFACE))
         .border_1()
         .border_color(cx.theme().border)
         .bg(theme::liquid_colors(cx).panel_secondary)

@@ -621,7 +621,7 @@ impl Shell {
                         block.child(div().flex().items_center().gap_2().mt_1().child(copy).when(
                             message_active,
                             |row| {
-                                row.child(div().text_size(text_px(10.)).text_color(t.subtle).child(
+                                row.child(div().text_size(text_px(11.)).text_color(t.muted).child(
                                     motion::gleam(
                                         if message.kind == MessageKind::Assistant {
                                             "Writing…"

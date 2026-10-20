@@ -15,14 +15,14 @@ use kodem_git::git::{CloneProgress, clone_repository, repository_name_from_url};
 use kodem_git::github::{self, RemoteRepository};
 use kodem_git::settings::Account;
 
-use crate::theme::{px, text_px};
-use crate::ui::dither::{Dither, DitherField, Edge};
+use crate::theme::{RADIUS_CONTROL, RADIUS_SURFACE, px, text_px};
+use crate::ui::dither::{Dither, DitherField};
 use crate::ui::git::account_link::{AccountLinkEvent, AccountLinkForm};
 use crate::ui::git::components::{
-    button, dialog_header, dither_empty_hint, dither_loader, mono_font, text_field,
+    self, button, dialog_header, dither_empty_hint, dither_loader, mono_font, text_field,
 };
 use crate::ui::git::contextual_actions::{
-    callout, divider, modal_footer, open_liquid_dialog, section_label,
+    callout, divider, modal_footer, open_liquid_dialog, row_rule, section_label,
 };
 use crate::ui::git::icons;
 use crate::ui::git::kit::{
@@ -351,7 +351,7 @@ impl CloneRepositoryDialog {
             .h(px(LIST_HEIGHT))
             .border_1()
             .border_color(cx.theme().border)
-            .rounded(px(8.))
+            .rounded(px(RADIUS_SURFACE))
             .overflow_hidden()
             .bg(colors.panel_secondary);
         let repositories = match &loaded.list {
@@ -422,24 +422,12 @@ impl CloneRepositoryDialog {
                     .gap_2p5()
                     .px_3()
                     .py_2()
-                    .when(ix > 0, |row| {
-                        row.border_t_1().border_color(cx.theme().border)
-                    })
-                    .when(selected, |row| {
-                        row.bg(accent.opacity(0.1)).child(
-                            Dither::new(DitherField::Fade {
-                                from: Edge::Left,
-                                start: 0.5,
-                                end: -0.1,
-                            })
-                            .color(accent.opacity(0.4))
-                            .grid(2.0, 1.0)
-                            .layer(),
-                        )
-                    })
+                    .when(selected, |row| components::selected_row(row, accent))
+                    .when(ix > 0, |row| row.child(row_rule(cx)))
                     .when(!selected && !cloning, |row| {
                         row.cursor_pointer()
                             .hover(|row| row.bg(cx.theme().list_hover))
+                            .active(|row| row.bg(cx.theme().button_active))
                     })
                     .when(!cloning, |row| {
                         row.on_click(cx.listener(move |this, _, _, cx| {
@@ -656,7 +644,7 @@ impl Render for CloneRepositoryDialog {
                             .gap_2()
                             .px_2p5()
                             .py_1p5()
-                            .rounded(px(6.))
+                            .rounded(px(RADIUS_CONTROL))
                             .border_1()
                             .border_color(cx.theme().border)
                             .bg(cx.theme().muted)
@@ -696,7 +684,6 @@ impl Render for CloneRepositoryDialog {
         v_flex()
             .w_full()
             .overflow_hidden()
-            .bg(cx.theme().popover)
             .child(dialog_header(
                 icons::pull(),
                 "Clone Repository",

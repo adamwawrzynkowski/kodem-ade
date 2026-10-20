@@ -223,15 +223,11 @@ impl Shell {
             .px(px(6.))
             .when(waiting > 0, |d| {
                 d.child(
-                    self.control("titlebar-waiting")
+                    self.tinted_surface("titlebar-waiting", t.warning)
                         .occlude()
                         .h(px(22.))
                         .px(px(7.))
                         .gap(px(6.))
-                        .bg(t.warning.opacity(0.09))
-                        .border_color(t.warning.opacity(0.45))
-                        .text_color(t.warning)
-                        .hover(move |s| s.bg(t.warning.opacity(0.16)))
                         .child(kit::marker(t.warning))
                         .child(format!("{waiting} NEED YOU"))
                         .tooltip(move |_, cx| {
@@ -306,6 +302,8 @@ impl Shell {
                     .justify_start()
                     .bg(t.inset)
                     .border_color(t.border)
+                    // It opens a field, so it is recessed as one.
+                    .shadow(kit::recessed_light(t))
                     .text_color(t.subtle)
                     .hover(move |s| s.border_color(t.accent.opacity(0.5)).text_color(t.muted))
                     .accessibility_label("Command palette")

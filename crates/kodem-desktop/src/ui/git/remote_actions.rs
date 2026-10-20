@@ -5,9 +5,9 @@ use gpui::prelude::*;
 use gpui::{App, ClickEvent, Entity, Hsla, SharedString, Window, div};
 use kodem_git::settings::{PullStrategy, Settings};
 
-use crate::theme::{px, text_px};
-use crate::ui::dither::{Dither, DitherField, Edge};
-use crate::ui::git::components::{button, mono_font, mono_label};
+use crate::theme::{RADIUS_CONTROL, RADIUS_SMALL, px, text_px};
+use crate::ui::dither::{Dither, DitherField, DottedRule, Edge};
+use crate::ui::git::components::{button, dither_icon_tile, mono_font, mono_label};
 use crate::ui::git::icons;
 use crate::ui::git::kit::{
     ActiveTheme as _, Disableable as _, Icon, IconName, LiquidButton, Sizable as _, h_flex, v_flex,
@@ -275,7 +275,7 @@ fn popup_header(kind: RemotePopupKind, branch: &str, cx: &App) -> gpui::Div {
         .relative()
         .w_full()
         .overflow_hidden()
-        .rounded_t(px(6.))
+        .rounded_t(px(RADIUS_CONTROL))
         .child(
             Dither::new(DitherField::Fade {
                 from: Edge::Right,
@@ -294,19 +294,7 @@ fn popup_header(kind: RemotePopupKind, branch: &str, cx: &App) -> gpui::Div {
                 .px_3()
                 .py_2()
                 .items_center()
-                .child(
-                    div()
-                        .size(px(26.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(7.))
-                        .border_1()
-                        .border_color(color.opacity(0.32))
-                        .bg(color.opacity(0.12))
-                        .child(icon.small().text_color(color)),
-                )
+                .child(dither_icon_tile(icon, color, 26., false))
                 .child(
                     v_flex()
                         .min_w_0()
@@ -350,7 +338,7 @@ fn option_row(
         .px_3()
         .py_1()
         .items_center()
-        .rounded(px(5.))
+        .rounded(px(RADIUS_CONTROL))
         .cursor_pointer()
         .when_some(tone, |row, tone| {
             row.hover(move |style| style.bg(tone.hover))
@@ -358,6 +346,7 @@ fn option_row(
         .when(!dangerous, |row| {
             row.hover(move |style| style.bg(standard_hover))
         })
+        .active(|style| style.bg(cx.theme().button_active))
         .on_click(move |_, _, cx| {
             workspace.update(cx, |workspace, cx| {
                 workspace.set_remote_option(option, !checked, cx)
@@ -370,7 +359,7 @@ fn option_row(
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(3.))
+                .rounded(px(RADIUS_SMALL))
                 .border_1()
                 .border_color(if checked {
                     accent
@@ -588,5 +577,7 @@ fn section_label(label: &'static str, cx: &App) -> gpui::Div {
 }
 
 fn divider(cx: &App) -> gpui::Div {
-    div().w_full().h(px(1.)).my_1().bg(cx.theme().border)
+    div().w_full().my_1().child(DottedRule::horizontal(
+        theme::liquid_colors(cx).text_tertiary.opacity(0.4),
+    ))
 }

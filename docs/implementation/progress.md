@@ -1385,3 +1385,25 @@ Recorded on 20 October 2026. The user reported that the update card could not up
 - The message that refuses an OpenCode 1 server, and `providers.md`, now name `opencode upgrade --major`.
 
 Read from the OpenCode sources at tags v1.18.35, v1.19.0 and v1.19.3 and from both install scripts. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` and `cargo fmt --check`. Not run: a real `opencode upgrade --major`, because the installed OpenCode was already 2.1.1 and the run would change the installed CLI.
+
+### Interface polish against the dithered rules
+
+Recorded on 20 October 2026. The user asked to find the parts of the interface that need polish and to redesign the clear cases. An audit of the four areas (navigation and floating surfaces, conversation, settings and dialogs, the Git workspace) compared the code with the rules of [dithered interface](../design/dithered-interface.md). The changes below bring the parts that did not follow the rules into line. No rule changed.
+
+| Area | Change |
+| --- | --- |
+| Floating surfaces | The command palette, the Git workspace's menus, dialogs and popovers, and the hover card of the usage meters are glass on `kit::floating_face` with the dithered contact shadow. The palette's footer takes `PANE_SHARE` of the header tone. The shared tooltip (`Hint`) is glass with the floating light and the control radius; it has no bottom dots, because they would lie behind its text |
+| Buttons | `Shell::raised` and `Shell::tinted_surface` are the surfaces of `button` and `tinted` without content. The chat header's commands and changes buttons are raised; the open commands menu tints its button. The composer's chips are ghost buttons with the plate under the pointer, a sinking press and a ripple; an open menu tints its chip. The title bar's "need you" button is a tinted button. The comment editor's main action is a glass key and Cancel is a ghost button. `kit::lit` lights a toggle that is on (fast mode, diff wrap, save) with the tint and depth of a chosen surface |
+| Git buttons | Secondary and tinted buttons have the raised and tinted depth and the sinking press of the main buttons; ghost buttons take the plate under the pointer. A filled button is a glass key. All take the control radius |
+| Fields | The sidebar search, the browser's address bar and the title bar's palette field are recessed |
+| Separators | Dotted rules replace solid lines inside surfaces: the inline diff's footer, the split of the model menu, the guide of a project command's steps and the Git workspace's dividers and row separators. The Git diff's hunk header has no accent lines |
+| Selection and badges | The current plan step, and the selected rows of the Git workspace (`components::selected_row`), carry the accent tint, edge and bottom dots. A Git settings card has no accent outline. The status letter of the change tree, a chosen project icon and the Git workspace's chips (`kit::chip`, `components::tinted_badge`) have tinted depth. A project command is a recessed well and its steps stand in it |
+| Diffs | A changed line in the Git diff has a solid two-point edge in its color |
+| Press feedback | Palette rows, model menu rows, thread rows and notification entries darken on press; the rows that are buttons or divs with a click ripple. Clickable Git rows darken on press, and its single-line tag, checkpoint and LFS rows are 26 points high |
+| Readability | A thread title, a tool call's title and an inline diff's path show in full in a tooltip. The "Writing…" status is 11 points in the muted color. An empty field's placeholder takes the theme's muted color instead of a fixed gray. The model menu's notes share one inset, and a provider error is an error block |
+| Radii and theme | Off-scale radii in the Git workspace use the theme's constants. The Git empty state is `kit::empty_state` with a still emblem. Unused `PopoverStyled` and `ThemeColor::list_active` were removed |
+| Settings | Theme cards stand off their surface and sink under a press. The project color swatch has the keyboard focus edge |
+
+Not changed after review: the prose table keeps its unboxed look, the switch keeps its text-colored focus edge (a checked track already has an accent edge), the bell count and the Git BETA tag keep their sizes, the Git toasts keep their place, and the delete dialog keeps the thread's name.
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not run: the Linux and Windows lint (the changes have no platform code). The look, the glass over tooltips and popovers, and the press feedback are not checked in the running app, under the no-visual-testing agreement.

@@ -293,6 +293,7 @@ impl Shell {
                     .gap(px(6.))
                     .rounded(px(crate::theme::RADIUS_CONTROL))
                     .bg(t.inset)
+                    .shadow(kit::recessed_light(t))
                     .border_1()
                     .border_color(t.border)
                     .font_family(crate::theme::mono())

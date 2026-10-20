@@ -44,8 +44,8 @@ use super::state::{
     RepositoryState,
 };
 use super::theme;
-use crate::theme::{px, text_px};
-use crate::ui::dither::{Dither, DitherField, Edge, checker};
+use crate::theme::{RADIUS_CONTROL, RADIUS_SURFACE, px, text_px};
+use crate::ui::dither::{Dither, DitherField, DottedRule, Edge, checker};
 use crate::ui::fx;
 
 /// Names the toast of each repository, so that a new result replaces the last one.
@@ -1587,7 +1587,7 @@ impl GitWorkspace {
             .w_full()
             .h(px(236.))
             .flex_shrink_0()
-            .rounded(px(14.))
+            .rounded(px(RADIUS_SURFACE))
             .overflow_hidden()
             .border_1()
             .border_color(cx.theme().border)
@@ -1602,7 +1602,7 @@ impl GitWorkspace {
                 .grid(4.0, 3.0)
                 .toned()
                 .animated()
-                .corner_radius(14.0)
+                .corner_radius(RADIUS_SURFACE)
                 .layer(),
             )
             .child(
@@ -1622,7 +1622,7 @@ impl GitWorkspace {
                 .color(colors.ink)
                 .grid(4.0, 3.0)
                 .animated()
-                .corner_radius(14.0)
+                .corner_radius(RADIUS_SURFACE)
                 .layer(),
             )
             .child(
@@ -1778,9 +1778,10 @@ impl GitWorkspace {
                     .px(px(8.))
                     .py(px(6.))
                     .gap(px(12.))
-                    .rounded(px(8.))
+                    .rounded(px(RADIUS_CONTROL))
                     .cursor_pointer()
                     .hover(move |style| style.bg(list_hover))
+                    .active(|style| style.bg(cx.theme().button_active))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if GitRepo::is_repository(&path) {
                             this.add_repository(path.clone(), window, cx);
@@ -1797,7 +1798,7 @@ impl GitWorkspace {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(7.))
+                            .rounded(px(RADIUS_CONTROL))
                             .overflow_hidden()
                             .border_1()
                             .border_color(tone.opacity(0.35))
@@ -1810,7 +1811,7 @@ impl GitWorkspace {
                                 })
                                 .color(tone.opacity(0.6))
                                 .grid(2.0, 1.0)
-                                .corner_radius(7.0)
+                                .corner_radius(RADIUS_CONTROL)
                                 .layer(),
                             )
                             .child(
@@ -2081,7 +2082,7 @@ fn popover_header(icon: Icon, title: &'static str, cx: &App) -> Div {
         .relative()
         .w_full()
         .overflow_hidden()
-        .rounded_t(px(6.))
+        .rounded_t(px(RADIUS_CONTROL))
         .child(
             Dither::new(DitherField::Fade {
                 from: Edge::Right,
@@ -2260,7 +2261,7 @@ fn notification_row(
         .px_2()
         .py(px(6.))
         .items_center()
-        .rounded(px(6.))
+        .rounded(px(RADIUS_CONTROL))
         .hover(move |style| style.bg(list_hover))
         .child(dither_icon_tile(icon, tone, 22.0, status.is_none()))
         .child(
@@ -2369,7 +2370,9 @@ fn operation_toast(
 }
 
 fn notification_divider(cx: &App) -> Div {
-    div().w_full().h(gpui::px(1.)).my_1().bg(cx.theme().border)
+    div().w_full().my_1().child(DottedRule::horizontal(
+        theme::liquid_colors(cx).text_tertiary.opacity(0.4),
+    ))
 }
 
 /// The floating card shown while a Git operation runs: a liquid level in

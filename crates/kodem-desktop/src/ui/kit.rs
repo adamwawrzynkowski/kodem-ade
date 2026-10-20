@@ -488,6 +488,15 @@ pub(super) fn tint_light(tone: Hsla) -> Vec<BoxShadow> {
     ]
 }
 
+/// Lights a toggle or ghost button that is on: the tint of its tone with the depth of a chosen
+/// surface, and its label in the tone.
+pub(super) fn lit<E: Styled>(element: E, tone: Hsla) -> E {
+    element
+        .bg(tint_fill(tone, 0.08))
+        .shadow(tint_light(tone))
+        .text_color(tone)
+}
+
 /// Returns the fill of a neutral raised surface with the same slight depth as `tint_fill`: the
 /// fill a little lighter at the top than at the bottom.
 pub(super) fn raised_fill(fill: Hsla) -> Background {

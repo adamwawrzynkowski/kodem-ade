@@ -16,9 +16,9 @@ use kodem_git::git::{
     RebaseOptions, RepoStatus, StatusEntry,
 };
 
-use crate::theme::{px, text_px};
+use crate::theme::{RADIUS_CONTROL, RADIUS_SURFACE, px, text_px};
 use crate::ui::controls::Switch;
-use crate::ui::dither::{Dither, DitherField, Edge};
+use crate::ui::dither::{Dither, DitherField, DottedRule, Edge};
 use crate::ui::git::components::{
     button, change_kind_chip, dialog_header, dither_loader, file_path_label, mono_font, mono_label,
     text_field,
@@ -67,14 +67,13 @@ pub fn open_liquid_dialog<V: Render + 'static>(
     window: &mut Window,
     cx: &mut App,
 ) {
-    window.open_dialog(cx, move |dialog, _, cx| {
+    window.open_dialog(cx, move |dialog, _, _| {
         dialog
             .w(width)
             .p_0()
             .gap_0()
             .close_button(false)
             .overlay_closable(false)
-            .bg(cx.theme().popover)
             .child(view.clone())
     });
 }
@@ -332,7 +331,7 @@ impl Render for CreateBranchDialogView {
                         v_flex()
                             .max_h(px(190.))
                             .overflow_y_scrollbar()
-                            .rounded(px(8.))
+                            .rounded(px(RADIUS_SURFACE))
                             .border_1()
                             .border_color(cx.theme().border)
                             .bg(cx.theme().muted)
@@ -347,10 +346,9 @@ impl Render for CreateBranchDialogView {
                                     .px_3()
                                     .py_2()
                                     .cursor_pointer()
-                                    .when(ix > 0, |row| {
-                                        row.border_t_1().border_color(cx.theme().border)
-                                    })
+                                    .when(ix > 0, |row| row.relative().child(row_rule(cx)))
                                     .hover(|row| row.bg(cx.theme().list_hover))
+                                    .active(|row| row.bg(cx.theme().button_active))
                                     .on_click(move |_, window, cx| {
                                         selected_input.update(cx, |input, cx| {
                                             input.set_value(selected_prefix.clone(), window, cx);
@@ -1008,7 +1006,7 @@ impl Render for RebaseDialogView {
                                 .overflow_y_scrollbar()
                                 .border_1()
                                 .border_color(cx.theme().border)
-                                .rounded(px(8.))
+                                .rounded(px(RADIUS_SURFACE))
                                 .bg(colors.panel_secondary)
                                 .children(items.iter().enumerate().map(|(ix, item)| {
                                     let action = item.action;
@@ -1020,9 +1018,7 @@ impl Render for RebaseDialogView {
                                         .gap_2()
                                         .px_2()
                                         .py_1p5()
-                                        .when(ix > 0, |row| {
-                                            row.border_t_1().border_color(cx.theme().border)
-                                        })
+                                        .when(ix > 0, |row| row.relative().child(row_rule(cx)))
                                         .when(dropped, |row| row.opacity(0.55))
                                         .child(
                                             button(("rebase-action", ix))
@@ -1238,7 +1234,7 @@ impl Render for StaleBranchesDialogView {
                         .overflow_y_scrollbar()
                         .border_1()
                         .border_color(cx.theme().border)
-                        .rounded(px(8.))
+                        .rounded(px(RADIUS_SURFACE))
                         .bg(colors.panel_secondary)
                         .children(self.branches.iter().enumerate().map(|(ix, branch)| {
                             h_flex()
@@ -1247,9 +1243,7 @@ impl Render for StaleBranchesDialogView {
                                 .gap_2()
                                 .px_3()
                                 .py_2()
-                                .when(ix > 0, |row| {
-                                    row.border_t_1().border_color(cx.theme().border)
-                                })
+                                .when(ix > 0, |row| row.relative().child(row_rule(cx)))
                                 .child(icons::git_branch().small().text_color(colors.danger))
                                 .child(
                                     div()
@@ -1412,7 +1406,7 @@ impl Render for WorktreeApplyDialogView {
                         .overflow_y_scrollbar()
                         .border_1()
                         .border_color(cx.theme().border)
-                        .rounded(px(8.))
+                        .rounded(px(RADIUS_SURFACE))
                         .bg(colors.panel_secondary)
                         .children(changes.iter().enumerate().map(|(ix, entry)| {
                             h_flex()
@@ -1421,9 +1415,7 @@ impl Render for WorktreeApplyDialogView {
                                 .gap_2()
                                 .px_3()
                                 .py_2()
-                                .when(ix > 0, |row| {
-                                    row.border_t_1().border_color(cx.theme().border)
-                                })
+                                .when(ix > 0, |row| row.relative().child(row_rule(cx)))
                                 .child(change_kind_chip(entry.kind, cx))
                                 .child(file_path_label(&entry.path, cx))
                         }))
@@ -1552,7 +1544,6 @@ pub(crate) fn modal_frame(
     v_flex()
         .w_full()
         .overflow_hidden()
-        .bg(cx.theme().popover)
         .child(header)
         .child(divider(cx))
         .child(body)
@@ -1607,7 +1598,7 @@ pub(crate) fn summary_row(label: &'static str, value: impl Into<SharedString>, c
         .px_2p5()
         .py_1p5()
         .items_center()
-        .rounded(px(6.))
+        .rounded(px(RADIUS_CONTROL))
         .border_1()
         .border_color(cx.theme().border)
         .bg(cx.theme().muted)
@@ -1635,7 +1626,7 @@ fn option_row(
         .gap_3()
         .px_2()
         .py_1p5()
-        .rounded(px(6.))
+        .rounded(px(RADIUS_CONTROL))
         .hover(|row| row.bg(cx.theme().list_hover))
         .child(
             v_flex()
@@ -1668,7 +1659,7 @@ pub(crate) fn callout(message: impl Into<SharedString>, color: Hsla) -> Div {
         .pl_3p5()
         .pr_2p5()
         .py_2()
-        .rounded(px(7.))
+        .rounded(px(RADIUS_CONTROL))
         .overflow_hidden()
         .border_1()
         .border_color(color.opacity(0.28))
@@ -1705,7 +1696,22 @@ fn callout_message(message: impl Into<SharedString>) -> Div {
         .child(message.into())
 }
 
-/// Returns a hairline that separates the parts of a dialog.
+/// Returns a dotted rule that separates the parts of a dialog.
 pub(crate) fn divider(cx: &App) -> Div {
-    div().w_full().h(px(1.)).bg(cx.theme().border)
+    div().w_full().child(DottedRule::horizontal(
+        theme::liquid_colors(cx).text_tertiary.opacity(0.4),
+    ))
+}
+
+/// Returns a dotted rule along the top edge of a list row, which separates the row from the one
+/// above it. The row must be relatively positioned.
+pub(crate) fn row_rule(cx: &App) -> Div {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .child(DottedRule::horizontal(
+            theme::liquid_colors(cx).text_tertiary.opacity(0.4),
+        ))
 }

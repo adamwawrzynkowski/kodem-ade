@@ -490,16 +490,15 @@ impl Shell {
                     .task_project()
                     .map_or(0, |project| project.commands.len());
                 d.child(
-                    self.control("task-commands")
+                    self.raised("task-commands")
                         .h(px(24.))
                         .px(px(7.))
                         .gap(px(6.))
-                        .bg(gpui::transparent_black())
-                        .border_color(t.border)
-                        .hover(move |s| s.bg(t.selected).border_color(t.accent.opacity(0.5)))
+                        // While its menu is open, the button takes the depth of a chosen surface.
                         .when(self.panel == Panel::ProjectCommands, |b| {
-                            b.bg(t.accent.opacity(0.14))
-                                .border_color(t.accent.opacity(0.5))
+                            b.bg(kit::tint_fill(t.accent, 0.1))
+                                .shadow(kit::tint_light(t.accent))
+                                .border_color(t.accent.opacity(0.36))
                         })
                         .accessibility_label("Run a project command")
                         .child(icon("play").size(px(12.)).text_color(t.muted))
@@ -522,13 +521,10 @@ impl Shell {
                 let files = summary.files;
                 let omitted = summary.omitted_files;
                 d.child(
-                    self.control("task-changes")
+                    self.raised("task-changes")
                         .h(px(24.))
                         .px(px(7.))
                         .gap(px(7.))
-                        .bg(gpui::transparent_black())
-                        .border_color(t.border)
-                        .hover(move |s| s.bg(t.selected).border_color(t.accent.opacity(0.5)))
                         .accessibility_label("Review this task's changes")
                         .child(icon("file-text").size(px(12.)).text_color(t.muted))
                         .child(figure(files.to_string(), t.muted))
@@ -1195,7 +1191,7 @@ impl Shell {
                         .w(px(24.))
                         .px_0()
                         .disabled(options_locked)
-                        .when(fast, |b| b.bg(t.accent.opacity(0.12)).text_color(t.accent))
+                        .when(fast, |b| kit::lit(b, t.accent))
                         .accessibility_label(if fast {
                             "Fast mode: on. Uses more usage. Click to turn it off"
                         } else {
@@ -1594,18 +1590,34 @@ impl Shell {
             )
     }
 
-    // A flat composer chip that opens one of the agent menus.
+    // A composer chip that opens one of the agent menus. It behaves as a ghost button: a plate
+    // under the pointer and a sinking press. While its menu is open, it takes the accent tint
+    // with the depth of a chosen surface.
     fn chip_button(&self, id: &'static str) -> Button {
         let t = self.theme;
         self.control(id)
             .h(px(24.))
             .px(px(7.))
             .gap(px(6.))
+            .overflow_hidden()
+            .layer(kit::glint(t.dot, dither::Edge::Bottom))
             .bg(gpui::transparent_black())
             .border_color(gpui::transparent_black())
             .text_color(t.muted)
-            .hover(move |s| s.bg(t.selected).text_color(t.text))
-            .styles(move |s| s.selected(|s| s.bg(t.accent.opacity(0.12)).text_color(t.text)))
+            .hover(move |s| {
+                s.bg(t.selected)
+                    .text_color(t.text)
+                    .shadow(kit::plate_light(t, false))
+            })
+            .active(move |s| s.bg(t.control_active).shadow(kit::recessed_light(t)))
+            .on_press(move |position, cx| fx::ripple(position, t.muted, cx))
+            .styles(move |s| {
+                s.selected(|s| {
+                    s.bg(kit::tint_fill(t.accent, 0.08))
+                        .shadow(kit::tint_light(t.accent))
+                        .text_color(t.text)
+                })
+            })
     }
 }
 

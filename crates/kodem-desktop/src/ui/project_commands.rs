@@ -184,14 +184,22 @@ impl Shell {
                     cx.notify();
                 })),
         );
+        // The steps hang from a dotted guide, as the branches of the settings navigation do.
         let mut branch = div()
+            .relative()
             .ml(px(10.))
-            .pl(px(12.))
-            .border_l_1()
-            .border_color(t.border)
+            .pl(px(13.))
             .flex()
             .flex_col()
-            .gap(px(4.));
+            .gap(px(4.))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(px(2.))
+                    .bottom(px(2.))
+                    .child(dither::DottedRule::vertical(t.subtle.opacity(0.45))),
+            );
         for (s, step) in command.steps.iter().enumerate() {
             branch = branch.child(self.step_tile(c, s, step, cx));
         }
@@ -210,6 +218,7 @@ impl Shell {
             .p(px(8.))
             .rounded(px(crate::theme::RADIUS_CONTROL))
             .bg(t.inset)
+            .shadow(kit::recessed_light(t))
             .border_1()
             .border_color(t.border)
             .child(header)
@@ -243,7 +252,9 @@ impl Shell {
             .pl(px(8.))
             .pr(px(2.))
             .rounded(px(crate::theme::RADIUS_CONTROL))
-            .bg(t.raised)
+            // A step stands in the recessed command like a key, so it reads as something to drag.
+            .bg(kit::raised_fill(t.raised))
+            .shadow(kit::raised_light(t))
             .border_1()
             .border_color(t.border)
             .cursor_grab()

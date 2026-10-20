@@ -208,6 +208,7 @@ impl Shell {
                 .gap(px(6.))
                 .rounded(px(crate::theme::RADIUS_CONTROL))
                 .bg(t.inset)
+                .shadow(kit::recessed_light(t))
                 .border_1()
                 .border_color(t.accent.opacity(0.5))
                 .font_family(crate::theme::mono())
@@ -1144,6 +1145,7 @@ impl Shell {
         let arriving = slide.filter(|_| selected);
         let leaving = slide.filter(|_| !selected && self.feed_slide.left() == Some(id.as_str()));
         let tint = arriving.unwrap_or(1.);
+        let full_title = task.title.clone();
         div()
             .id((ElementId::from("task"), SharedString::from(id.clone())))
             .relative()
@@ -1159,7 +1161,13 @@ impl Shell {
             .border_color(gpui::transparent_black())
             .when(selected, |row| row.bg(tone.opacity(0.1 * tint)))
             .cursor_pointer()
-            .when(!selected, |row| row.hover(move |d| d.bg(t.selected)))
+            .when(!selected, |row| {
+                row.hover(move |d| d.bg(t.selected))
+                    .active(move |d| d.bg(t.control_active))
+            })
+            .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+                fx::ripple(event.position, t.muted, cx)
+            })
             .when_some(leaving, |row, leaving| {
                 row.child(
                     div()
@@ -1208,8 +1216,17 @@ impl Shell {
                             .gap(px(6.))
                             .child(
                                 div()
+                                    .id("thread-title")
                                     .flex_1()
                                     .min_w_0()
+                                    // A long title keeps its size and shows in full on hover.
+                                    .tooltip(move |_, cx| {
+                                        cx.new(|_| Hint {
+                                            text: full_title.to_string(),
+                                            theme: t,
+                                        })
+                                        .into()
+                                    })
                                     .text_size(text_px(13.))
                                     .font_weight(if selected || unread || needs_input {
                                         FontWeight::MEDIUM

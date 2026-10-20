@@ -5,7 +5,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
-use gpui::ColorExt as _;
 use gpui::prelude::*;
 use gpui::{
     App, ClickEvent, ClipboardItem, Context, Div, Entity, FontWeight, IntoElement, Render,
@@ -13,12 +12,11 @@ use gpui::{
 };
 use kodem_git::git::{Branch, BranchCheckout, GitRepo};
 
-use crate::theme::{px, text_px};
-use crate::ui::dither::{Dither, DitherField, Edge};
+use crate::theme::{RADIUS_CONTROL, px, text_px};
 use crate::ui::fx;
 use crate::ui::git::components::{
-    count_badge, dither_empty_hint, mono_font, mono_label, section_header, tab_cell, tab_indicator,
-    tab_rail,
+    self, count_badge, dither_empty_hint, mono_font, mono_label, section_header, tab_cell,
+    tab_indicator, tab_rail,
 };
 use crate::ui::git::contextual_actions::{
     CheckoutDialogView, CreateBranchDialogView, MergeDialogView, RebaseDialogView,
@@ -37,6 +35,7 @@ use crate::ui::git::ref_drag::{
 use crate::ui::git::settings::GitSettings;
 use crate::ui::git::state::RepositoryState;
 use crate::ui::git::theme;
+use crate::ui::kit;
 
 /// A group of repository items that the sidebar lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -863,8 +862,9 @@ impl SidebarView {
                         .flex_row()
                         .items_center()
                         .gap_1()
-                        .rounded(px(5.))
+                        .rounded(px(RADIUS_CONTROL))
                         .hover(|s| s.bg(cx.theme().list_hover))
+                        .active(|s| s.bg(cx.theme().button_active))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if this.collapsed_folders.contains(&key_for_click) {
                                 this.collapsed_folders.remove(&key_for_click);
@@ -929,25 +929,16 @@ impl SidebarView {
                         .flex_row()
                         .items_center()
                         .gap_1p5()
-                        .rounded(px(5.))
+                        .rounded(px(RADIUS_CONTROL))
                         .overflow_hidden()
-                        .when(is_current, |s| {
-                            s.bg(accent.opacity(0.1)).child(
-                                Dither::new(DitherField::Fade {
-                                    from: Edge::Left,
-                                    start: 0.6,
-                                    end: -0.15,
-                                })
-                                .color(accent.opacity(0.4))
-                                .grid(2.0, 1.0)
-                                .corner_radius(5.0)
-                                .layer(),
-                            )
+                        .when(is_current, |s| components::selected_row(s, accent))
+                        .when(!is_current, |s| {
+                            s.hover(|s| s.bg(cx.theme().list_hover))
+                                .active(|s| s.bg(cx.theme().button_active))
                         })
-                        .when(!is_current, |s| s.hover(|s| s.bg(cx.theme().list_hover)))
                         .when(is_current, |s| s.child(fx::anchor(CURRENT_BRANCH_ANCHOR)))
                         .when(drag_role.lifted, |s| s.opacity(0.5))
-                        .children(drag_layer(drag_role, 5.0, true, cx))
+                        .children(drag_layer(drag_role, RADIUS_CONTROL, true, cx))
                         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                             if let Some(checkout) =
                                 branch_row_checkout(&checkout_branch, event.click_count())
@@ -1050,8 +1041,9 @@ impl SidebarView {
                     .px_2()
                     .py_1()
                     .gap_2()
-                    .rounded(px(5.))
+                    .rounded(px(RADIUS_CONTROL))
                     .hover(|s| s.bg(cx.theme().list_hover))
+                    .active(|s| s.bg(cx.theme().button_active))
                     .on_click(move |_, _, cx| {
                         cx.reveal_path(&path);
                     })
@@ -1079,16 +1071,7 @@ impl SidebarView {
                             ),
                     )
                     .when(is_current, |this| {
-                        this.child(
-                            div()
-                                .px_1()
-                                .rounded(px(3.))
-                                .bg(cx.theme().primary.opacity(0.14))
-                                .font_family(mono_font())
-                                .text_size(text_px(10.))
-                                .text_color(cx.theme().primary)
-                                .child("CURRENT"),
-                        )
+                        this.child(kit::chip("CURRENT", cx.theme().primary))
                     })
                     .context_menu(move |menu, _, _| {
                         let path_copy = path_copy.clone();
@@ -1210,8 +1193,9 @@ impl SidebarView {
                             .px_2()
                             .py_1()
                             .gap_2()
-                            .rounded(px(5.))
+                            .rounded(px(RADIUS_CONTROL))
                             .hover(|s| s.bg(cx.theme().list_hover))
+                            .active(|s| s.bg(cx.theme().button_active))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if this.collapsed_folders.contains(&group_key) {
                                     this.collapsed_folders.remove(&group_key);
@@ -1339,9 +1323,9 @@ impl SidebarView {
                     .id(("tag", ix))
                     .w_full()
                     .px_2()
-                    .py_1()
+                    .h(px(26.))
                     .gap_2()
-                    .rounded(px(5.))
+                    .rounded(px(RADIUS_CONTROL))
                     .hover(|s| s.bg(cx.theme().list_hover))
                     .child(icons::tag().small().text_color(cx.theme().muted_foreground))
                     .child(
@@ -1434,9 +1418,9 @@ impl SidebarView {
                     .id(("checkpoint", ix))
                     .w_full()
                     .px_2()
-                    .py_1()
+                    .h(px(26.))
                     .gap_2()
-                    .rounded(px(5.))
+                    .rounded(px(RADIUS_CONTROL))
                     .hover(|s| s.bg(cx.theme().list_hover))
                     .child(icons::clock().small().text_color(cx.theme().primary))
                     .child(
@@ -1511,9 +1495,9 @@ impl SidebarView {
                     .id(("lfs-pattern", ix))
                     .w_full()
                     .px_2()
-                    .py_1()
+                    .h(px(26.))
                     .gap_2()
-                    .rounded(px(5.))
+                    .rounded(px(RADIUS_CONTROL))
                     .hover(|s| s.bg(cx.theme().list_hover))
                     .child(
                         icons::file_text()
@@ -1601,7 +1585,7 @@ impl SidebarView {
                     .px_2()
                     .py_1()
                     .gap_2()
-                    .rounded(px(5.))
+                    .rounded(px(RADIUS_CONTROL))
                     .hover(|s| s.bg(cx.theme().list_hover))
                     .child(
                         icons::archive()

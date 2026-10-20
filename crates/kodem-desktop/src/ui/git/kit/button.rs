@@ -5,17 +5,17 @@ use std::rc::Rc;
 use gpui::ColorExt as _;
 use gpui::prelude::*;
 use gpui::{
-    Anchor, AnyElement, App, ClickEvent, Div, ElementId, Hsla, Interactivity, IntoElement,
-    RenderOnce, SharedString, Stateful, StyleRefinement, Window, div,
+    Anchor, AnyElement, App, Background, BoxShadow, ClickEvent, Div, ElementId, Hsla,
+    Interactivity, IntoElement, RenderOnce, SharedString, Stateful, StyleRefinement, Window, div,
 };
 
 use super::menu::{DropdownMenuElement, PopupMenu};
 use super::{Disableable, Icon, IconName, Selectable, Sizable, Size, h_flex};
-use crate::theme::{px, text_px};
+use crate::theme::{RADIUS_CONTROL, Theme, px, text_px};
 use crate::ui::dither::{Dither, DitherField, Edge};
 use crate::ui::fx;
 use crate::ui::git::theme::ActiveTheme;
-use crate::ui::kit::Layers as _;
+use crate::ui::kit::{self, Layers as _, Pose};
 
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
@@ -93,7 +93,7 @@ enum Look {
     Secondary,
     /// No surface until the pointer is over it.
     Ghost,
-    /// A solid fill in a tone color.
+    /// A glass key in a tone color.
     Filled,
     /// A tinted surface and border in a tone color.
     Tinted,
@@ -318,16 +318,42 @@ impl DropdownMenu for LiquidButton {
     }
 }
 
+/// How a button stands off its surface.
+#[derive(Clone, Copy, PartialEq)]
+enum Lift {
+    /// Flat on its surface.
+    Flat,
+    /// A neutral control with the depth of a badge.
+    Raised,
+    /// A control tinted in a tone with the depth of a badge.
+    Tinted(Hsla),
+    /// No surface at rest and a light line under its top edge under the pointer.
+    Ghost,
+}
+
+// Returns the light of a button with `lift`, under the pointer when `hovered`.
+fn lift_light(lift: Lift, theme: Theme, hovered: bool) -> Vec<BoxShadow> {
+    match lift {
+        Lift::Flat => Vec::new(),
+        Lift::Raised => kit::raised_light(theme),
+        Lift::Tinted(tone) => kit::tint_light(tone),
+        Lift::Ghost if hovered => kit::plate_light(theme, false),
+        Lift::Ghost => Vec::new(),
+    }
+}
+
 /// Colors for one painted state.
 #[derive(Clone, Copy)]
 struct Surface {
-    bg: Hsla,
+    bg: Background,
     border: Hsla,
     fg: Hsla,
-    hover_bg: Hsla,
+    hover_bg: Background,
     hover_border: Hsla,
     hover_fg: Hsla,
     active_bg: Hsla,
+    /// The depth of the surface. A press puts its light out and sinks the surface.
+    lift: Lift,
     /// Static dots that shade the bottom of the surface.
     shade: Option<Hsla>,
     /// Dots that appear while the pointer is over the button.
@@ -340,51 +366,53 @@ fn surface(look: Look, tone: Option<Hsla>, cx: &App) -> Surface {
     let accent = theme.primary;
     match look {
         Look::Secondary => Surface {
-            bg: theme.button,
+            bg: kit::raised_fill(theme.button),
             border: theme.input,
             fg: theme.foreground,
-            hover_bg: theme.button_hover,
+            hover_bg: kit::raised_fill(theme.button_hover),
             hover_border: accent.opacity(0.5),
             hover_fg: theme.foreground,
             active_bg: theme.button_active,
+            lift: Lift::Raised,
             shade: Some(colors.ink.opacity(0.9)),
             glint: Some((accent.opacity(0.5), Edge::Bottom)),
         },
         Look::Ghost => Surface {
-            bg: gpui::transparent_black(),
+            bg: gpui::transparent_black().into(),
             border: gpui::transparent_black(),
             fg: colors.text_secondary,
-            hover_bg: theme.list_hover,
+            hover_bg: theme.list_hover.into(),
             hover_border: gpui::transparent_black(),
             hover_fg: theme.foreground,
             active_bg: theme.button_active,
+            lift: Lift::Ghost,
             shade: None,
             glint: Some((colors.ink, Edge::Bottom)),
         },
-        Look::Filled => {
-            let tone = tone.unwrap_or(accent);
-            Surface {
-                bg: tone,
-                border: tone,
-                fg: theme.primary_foreground,
-                hover_bg: tone.opacity(0.9),
-                hover_border: tone,
-                hover_fg: theme.primary_foreground,
-                active_bg: tone.opacity(0.8),
-                shade: Some(gpui::black().opacity(0.2)),
-                glint: Some((gpui::white().opacity(0.3), Edge::Top)),
-            }
-        }
+        // The glass body draws the face, its dots and its rings, so the surface stays clear.
+        Look::Filled => Surface {
+            bg: gpui::transparent_black().into(),
+            border: gpui::transparent_black(),
+            fg: theme.primary_foreground,
+            hover_bg: gpui::transparent_black().into(),
+            hover_border: gpui::transparent_black(),
+            hover_fg: theme.primary_foreground,
+            active_bg: gpui::transparent_black(),
+            lift: Lift::Flat,
+            shade: None,
+            glint: None,
+        },
         Look::Tinted => {
             let tone = tone.unwrap_or(accent);
             Surface {
-                bg: tone.opacity(0.09),
+                bg: kit::tint_fill(tone, 0.09),
                 border: tone.opacity(0.45),
                 fg: tone,
-                hover_bg: tone.opacity(0.16),
+                hover_bg: kit::tint_fill(tone, 0.16),
                 hover_border: tone.opacity(0.7),
                 hover_fg: tone,
                 active_bg: tone.opacity(0.22),
+                lift: Lift::Tinted(tone),
                 shade: Some(tone.opacity(0.3)),
                 glint: Some((tone.opacity(0.6), Edge::Bottom)),
             }
@@ -403,13 +431,14 @@ impl RenderOnce for LiquidButton {
         let mut paint = surface(look, tone, cx);
         if self.selected && !self.disabled {
             paint = Surface {
-                bg: accent.opacity(0.16),
+                bg: kit::tint_fill(accent, 0.16),
                 border: accent.opacity(0.6),
                 fg: accent,
-                hover_bg: accent.opacity(0.22),
+                hover_bg: kit::tint_fill(accent, 0.22),
                 hover_border: accent.opacity(0.75),
                 hover_fg: accent,
                 active_bg: accent.opacity(0.26),
+                lift: Lift::Tinted(accent),
                 shade: Some(accent.opacity(0.4)),
                 glint: None,
             };
@@ -422,11 +451,11 @@ impl RenderOnce for LiquidButton {
             };
             paint = Surface {
                 bg: if look == Look::Filled {
-                    tone.unwrap_or(accent).opacity(0.14)
+                    tone.unwrap_or(accent).opacity(0.14).into()
                 } else if look == Look::Ghost {
-                    gpui::transparent_black()
+                    gpui::transparent_black().into()
                 } else {
-                    theme.muted
+                    theme.muted.into()
                 },
                 border: if look == Look::Ghost {
                     gpui::transparent_black()
@@ -434,10 +463,11 @@ impl RenderOnce for LiquidButton {
                     theme.border
                 },
                 fg,
-                hover_bg: gpui::transparent_black(),
+                hover_bg: gpui::transparent_black().into(),
                 hover_border: gpui::transparent_black(),
                 hover_fg: fg,
                 active_bg: gpui::transparent_black(),
+                lift: Lift::Flat,
                 shade: None,
                 glint: None,
             };
@@ -445,7 +475,10 @@ impl RenderOnce for LiquidButton {
 
         let interactive = !self.disabled && !self.loading;
         let icon_only = self.label.is_none() && self.children.is_empty();
-        let radius = if metrics.height <= 22.0 { 5.0 } else { 6.0 };
+        // The main action is a glass key in its tone, unless it is selected or disabled.
+        let glass = (look == Look::Filled && !self.selected && !self.disabled)
+            .then(|| tone.unwrap_or(accent));
+        let kodem = theme.kodem;
 
         let mut base = self.base;
         let instance_style = base.style().clone();
@@ -458,11 +491,12 @@ impl RenderOnce for LiquidButton {
             .h(px(metrics.height))
             .when(icon_only, |button| button.w(px(metrics.height)))
             .when(!icon_only, |button| button.px(px(metrics.padding)))
-            .rounded(px(radius))
+            .rounded(px(RADIUS_CONTROL))
             .overflow_hidden()
             .border_1()
             .border_color(paint.border)
             .bg(paint.bg)
+            .shadow(lift_light(paint.lift, kodem, false))
             .text_color(paint.fg)
             .font_family(crate::theme::mono())
             .text_size(text_px(metrics.text))
@@ -471,7 +505,7 @@ impl RenderOnce for LiquidButton {
             } else {
                 gpui::FontWeight::MEDIUM
             })
-            .when(interactive, |button| {
+            .when(interactive && glass.is_none(), |button| {
                 let hover = paint;
                 button
                     .cursor_pointer()
@@ -480,11 +514,35 @@ impl RenderOnce for LiquidButton {
                             .bg(hover.hover_bg)
                             .border_color(hover.hover_border)
                             .text_color(hover.hover_fg)
+                            .shadow(lift_light(hover.lift, kodem, true))
                     })
-                    .active(move |style| style.bg(hover.active_bg))
+                    // A pressed button sinks into the surface: its light goes out and the edge
+                    // above casts a shadow into it.
+                    .active(move |style| {
+                        style.bg(hover.active_bg).shadow(kit::recessed_light(kodem))
+                    })
+            })
+            .when_some(glass, |button, tone| {
+                button
+                    .group(kit::GLASS)
+                    .shadow(kit::glass_glow(tone, kodem, Pose::Rest))
+                    .when(interactive, |button| {
+                        button
+                            .cursor_pointer()
+                            .hover(move |style| {
+                                style.shadow(kit::glass_glow(tone, kodem, Pose::Hover))
+                            })
+                            .active(move |style| {
+                                style.shadow(kit::glass_glow(tone, kodem, Pose::Pressed))
+                            })
+                    })
             });
         // Caller styles (width, alignment, colors) win over the defaults.
         base.style().refine(&instance_style);
+
+        if let Some(tone) = glass {
+            base = base.layer(kit::glass_body(tone));
+        }
 
         if let Some(shade) = paint.shade {
             base = base.layer(
@@ -529,10 +587,12 @@ impl RenderOnce for LiquidButton {
                     .into_any_element(),
             )
         } else {
-            self.icon.map(|icon| {
-                icon.size(px(metrics.icon))
+            self.icon.map(|icon| match glass {
+                Some(tone) => engraved(icon, tone, paint.fg, metrics.icon).into_any_element(),
+                None => icon
+                    .size(px(metrics.icon))
                     .text_color(paint.fg)
-                    .into_any_element()
+                    .into_any_element(),
             })
         };
 
@@ -572,7 +632,8 @@ impl RenderOnce for LiquidButton {
         };
 
         let id = self.id;
-        let ripple_tone = paint.fg;
+        // A glass key ripples in its tone, as the main action of the window does.
+        let ripple_tone = glass.unwrap_or(paint.fg);
         base.child(content)
             .when(interactive, |button| {
                 // A dithered ring spreads from the press point.
@@ -588,4 +649,28 @@ impl RenderOnce for LiquidButton {
             })
             .debug_selector(move || format!("git-button-{id:?}"))
     }
+}
+
+// Returns `icon` engraved into a glass face of `tone`: a darker copy one point above it reads as
+// the edge of a cut.
+fn engraved(icon: Icon, tone: Hsla, color: Hsla, size: f32) -> Div {
+    div()
+        .relative()
+        .flex_shrink_0()
+        .size(px(size))
+        .child(
+            icon.clone()
+                .size(px(size))
+                .absolute()
+                .top(gpui::px(-1.))
+                .left_0()
+                .text_color(kit::toward(tone, 0., 0.55).opacity(0.75)),
+        )
+        .child(
+            icon.size(px(size))
+                .absolute()
+                .top_0()
+                .left_0()
+                .text_color(color),
+        )
 }

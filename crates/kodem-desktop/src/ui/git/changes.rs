@@ -19,9 +19,9 @@ use kodem_git::settings::{
     MIN_DIFF_PANEL_WIDTH,
 };
 
-use crate::theme::{px, text_px, ui_scale};
+use crate::theme::{RADIUS_CONTROL, px, text_px, ui_scale};
 use crate::ui::controls::Switch;
-use crate::ui::dither::{BarSegment, Dither, DitherBar, DitherField, Edge, checker};
+use crate::ui::dither::{BarSegment, Dither, DitherBar, DitherField, checker};
 use crate::ui::fx;
 use crate::ui::git::ai::{AiResult, open_ai_result_dialog, run_ai_result_task};
 use crate::ui::git::components::{
@@ -1225,22 +1225,13 @@ impl ChangesView {
             .flex_row()
             .items_center()
             .gap_2()
-            .rounded(px(5.))
+            .rounded(px(RADIUS_CONTROL))
             .overflow_hidden()
-            .when(selected, |s| {
-                s.bg(cx.theme().list_active).child(
-                    Dither::new(DitherField::Fade {
-                        from: Edge::Left,
-                        start: 0.5,
-                        end: -0.1,
-                    })
-                    .color(accent.opacity(0.35))
-                    .grid(2.0, 1.0)
-                    .corner_radius(5.0)
-                    .layer(),
-                )
+            .when(selected, |s| components::selected_row(s, accent))
+            .when(!selected, |s| {
+                s.hover(|s| s.bg(cx.theme().list_hover))
+                    .active(|s| s.bg(cx.theme().button_active))
             })
-            .when(!selected, |s| s.hover(|s| s.bg(cx.theme().list_hover)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_entry(&entry_for_click, cx);
             }))
@@ -1434,8 +1425,9 @@ impl ChangesView {
                         .flex_row()
                         .items_center()
                         .gap_1()
-                        .rounded(px(5.))
+                        .rounded(px(RADIUS_CONTROL))
                         .hover(|style| style.bg(cx.theme().list_hover))
+                        .active(|style| style.bg(cx.theme().button_active))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if this.collapsed_tree_folders.contains(&key_for_click) {
                                 this.collapsed_tree_folders.remove(&key_for_click);
@@ -1942,7 +1934,7 @@ impl ChangesView {
                     div()
                         .w_full()
                         .p_2()
-                        .rounded(px(5.))
+                        .rounded(px(RADIUS_CONTROL))
                         .bg(colors.danger.opacity(0.12))
                         .text_size(text_px(11.5))
                         .text_color(colors.danger)

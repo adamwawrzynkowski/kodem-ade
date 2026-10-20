@@ -478,9 +478,10 @@ fn context_fraction(usage: &ContextUsage) -> Option<f32> {
         .map(|window| usage.used as f32 / window as f32)
 }
 
-// A hover card: the surface of a menu at the size of a tooltip.
+// The content of a hover card, which `hint_surface` places on the glass of a menu.
 fn hint_card(theme: Theme) -> Div {
     div()
+        .relative()
         .w(px(304.))
         .p(px(12.))
         .flex()
@@ -489,11 +490,22 @@ fn hint_card(theme: Theme) -> Div {
         .font_family(crate::theme::sans())
         .text_size(text_px(12.))
         .text_color(theme.text)
-        .bg(theme.raised)
         .border_1()
-        .border_color(theme.edge)
+        .border_color(gpui::transparent_black())
         .rounded(px(crate::theme::RADIUS_SURFACE))
-        .shadow(theme.floating())
+}
+
+// A hover card: the glass, light and dithered shadow of a menu at the size of a tooltip.
+fn hint_surface(card: Div, theme: Theme) -> Div {
+    div()
+        .relative()
+        .child(dither::shadow(theme, crate::theme::RADIUS_SURFACE, 4.))
+        .child(kit::floating_face(
+            theme.raised,
+            crate::theme::RADIUS_SURFACE,
+            theme,
+        ))
+        .child(card)
 }
 
 // A paragraph that stands in for a readout the provider has not reported.
@@ -644,7 +656,8 @@ impl Render for MetersHint {
                     .child("Context usage has not been reported yet."),
             ),
         };
-        card.child(kit::section_header("Limits", None, t))
+        let card = card
+            .child(kit::section_header("Limits", None, t))
             .child(usage_details(self.usage.as_ref(), t))
             .when_some(self.usage.as_ref(), |card, usage| {
                 card.child(figure(
@@ -652,7 +665,8 @@ impl Render for MetersHint {
                     t.subtle,
                 ))
             })
-            .child(figure("CLICK FOR COMPACTION AND LIMIT ACTIONS", t.subtle))
+            .child(figure("CLICK FOR COMPACTION AND LIMIT ACTIONS", t.subtle));
+        hint_surface(card, t)
     }
 }
 

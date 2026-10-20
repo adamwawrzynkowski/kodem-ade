@@ -410,9 +410,7 @@ impl Shell {
                                 "Enable word wrap"
                             },
                         )
-                        .when(self.settings.wrap_diff, |button| {
-                            button.bg(t.accent.opacity(0.1)).text_color(t.accent)
-                        })
+                        .when(self.settings.wrap_diff, |button| kit::lit(button, t.accent))
                         .on_click(cx.listener(|s, _, _, cx| {
                             s.settings.wrap_diff = !s.settings.wrap_diff;
                             s.save_settings();

@@ -112,9 +112,10 @@ impl Shell {
             .border_color(if selected {
                 t.text
             } else {
-                hsla(0., 0., 0., 0.)
+                gpui::transparent_black()
             })
             .hover(move |b| b.border_color(t.edge))
+            .focus_visible(move |b| b.border_color(t.accent.opacity(0.7)))
             .cursor_pointer()
             .accessibility_label(label)
             .tooltip(move |_, cx| {
@@ -670,7 +671,8 @@ impl Shell {
             })
             .child(icon(choice.glyph().unwrap_or_default()).size(px(16.)))
             .when(chosen, |cell| {
-                cell.bg(tint.opacity(0.12))
+                cell.bg(kit::tint_fill(tint, 0.12))
+                    .shadow(kit::tint_light(tint))
                     .border_color(tint.opacity(0.6))
                     .text_color(tint)
             })

@@ -20,7 +20,7 @@ use kodem_git::settings::{
 use kodem_git::util;
 
 use crate::theme::{px, text_px};
-use crate::ui::dither::{Dither, DitherField, DottedRule, Edge, cell_threshold, checker};
+use crate::ui::dither::{Dither, DitherField, DottedRule, cell_threshold, checker};
 use crate::ui::git::ai::{AiResult, open_ai_result_dialog, run_ai_result_task};
 use crate::ui::git::components::{
     self, author_avatar, button, change_kind_chip, full_size, mono_font, ref_badge, stat_chips,
@@ -678,9 +678,10 @@ impl HistoryView {
             .when(!selected && !status.is_head && status.is_unpushed, |this| {
                 this.bg(colors.warning.opacity(0.06))
             })
-            .when(selected, |this| this.bg(cx.theme().list_active))
+            .when(selected, |this| components::selected_row(this, accent))
             .when(!selected, |this| {
                 this.hover(|s| s.bg(cx.theme().list_hover))
+                    .active(|s| s.bg(cx.theme().button_active))
             })
             .when(drag_role.lifted, |this| this.opacity(0.5))
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -700,27 +701,6 @@ impl HistoryView {
                     );
                 }),
             )
-            .when(selected, |this| {
-                this.child(
-                    Dither::new(DitherField::Fade {
-                        from: Edge::Left,
-                        start: 0.55,
-                        end: -0.1,
-                    })
-                    .color(accent.opacity(0.32))
-                    .grid(3.0, 2.0)
-                    .layer(),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(2.))
-                        .bg(accent),
-                )
-            })
             .when(!selected && status.is_head, |this| {
                 this.child(
                     div()
@@ -1345,9 +1325,12 @@ impl HistoryView {
                                             .flex_row()
                                             .items_center()
                                             .gap_2()
-                                            .when(is_selected, |s| s.bg(cx.theme().list_active))
+                                            .when(is_selected, |s| {
+                                                components::selected_row(s, cx.theme().primary)
+                                            })
                                             .when(!is_selected, |s| {
                                                 s.hover(|s| s.bg(cx.theme().list_hover))
+                                                    .active(|s| s.bg(cx.theme().button_active))
                                             })
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.select_detail_file(ix, cx);

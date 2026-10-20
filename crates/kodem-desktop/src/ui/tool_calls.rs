@@ -962,6 +962,17 @@ impl Shell {
             .text_color(t.muted)
             .when(fold.shown(), |row| row.bg(t.selected.opacity(0.5)))
             .hover(move |s| s.bg(t.selected).text_color(t.text))
+            // The title is cut to the row's width; the pointer shows its whole first line.
+            .when(!active && !title.is_empty(), |row| {
+                let hint = title.clone();
+                row.tooltip(move |_, cx| {
+                    cx.new(|_| Hint {
+                        text: hint.clone(),
+                        theme: t,
+                    })
+                    .into()
+                })
+            })
             .accessibility_label(format!(
                 "{} {}: {title}",
                 if expanded { "Collapse" } else { "Expand" },
@@ -1224,12 +1235,23 @@ impl Shell {
             .child(
                 kit::block_title(
                     div()
+                        .id("diff-path")
                         .flex_shrink(1.)
                         .min_w_0()
                         .text_ellipsis()
                         .font_family(crate::theme::mono())
                         .text_size(text_px(11.))
                         .text_color(t.text)
+                        .tooltip({
+                            let hint = path.clone();
+                            move |_, cx| {
+                                cx.new(|_| Hint {
+                                    text: hint.clone(),
+                                    theme: t,
+                                })
+                                .into()
+                            }
+                        })
                         .child(path),
                     t.info,
                     t,
@@ -1247,14 +1269,9 @@ impl Shell {
                     .child(rows),
             )
             .when(hidden > 0 || full, |card| {
-                card.child(
-                    div()
-                        .px(px(6.))
-                        .py(px(3.))
-                        .border_t_1()
-                        .border_color(t.border)
-                        .flex()
-                        .child(
+                card.child(dither::DottedRule::horizontal(t.subtle.opacity(0.4)))
+                    .child(
+                        div().px(px(6.)).py(px(3.)).flex().child(
                             self.ghost(
                                 SharedString::from(full_key.clone()),
                                 if full { "minus" } else { "plus" },
@@ -1275,7 +1292,7 @@ impl Shell {
                                 },
                             )),
                         ),
-                )
+                    )
             })
             .into_any_element()
     }

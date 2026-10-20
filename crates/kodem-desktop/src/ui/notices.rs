@@ -517,6 +517,7 @@ impl Shell {
                         entry
                             .cursor_pointer()
                             .hover(move |entry| entry.bg(t.selected))
+                            .active(move |entry| entry.bg(t.control_active))
                             .on_click(cx.listener(move |s, _, _, cx| {
                                 s.panel = Panel::None;
                                 s.close_git(cx);

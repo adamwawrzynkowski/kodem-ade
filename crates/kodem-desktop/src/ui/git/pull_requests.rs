@@ -7,7 +7,7 @@ use gpui::{App, Context, Entity, IntoElement, Render, SharedString, Window, div}
 use kodem_git::ai::{AiConfig, AiService, PullRequestContext};
 use kodem_git::github::{self, PullRequest};
 
-use crate::theme::{px, text_px};
+use crate::theme::{RADIUS_CONTROL, RADIUS_SURFACE, px, text_px};
 use crate::ui::dither::DitherField;
 use crate::ui::git::ai::{AiResult, open_ai_result_dialog, run_ai_result_task};
 use crate::ui::git::components::{
@@ -186,7 +186,7 @@ impl Render for PullRequestsView {
                         .m_3()
                         .px_3()
                         .py_2()
-                        .rounded(px(7.))
+                        .rounded(px(RADIUS_CONTROL))
                         .border_1()
                         .border_color(colors.danger.opacity(0.3))
                         .bg(colors.danger.opacity(0.08))
@@ -220,12 +220,13 @@ impl Render for PullRequestsView {
                                 .py_2p5()
                                 .gap_3()
                                 .items_center()
-                                .rounded(px(8.))
+                                .rounded(px(RADIUS_SURFACE))
                                 .border_1()
                                 .border_color(cx.theme().border)
                                 .bg(colors.panel_secondary)
                                 .cursor_pointer()
                                 .hover(|s| s.border_color(cx.theme().primary.opacity(0.45)))
+                                .active(|s| s.bg(cx.theme().button_active))
                                 .on_click(move |_, _, cx| {
                                     cx.open_url(&url);
                                 })
