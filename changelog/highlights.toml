@@ -53,7 +53,27 @@
 # the highlights fill six columns or more; widths that add up to 6, 10, 14… leave no gaps.
 # Visual data must be true: measured figures, real names and real shortcuts.
 
-reviewed = "798243f9f776ac924ec699b82bbe04b01bb4a932"
+reviewed = "ade89c19b7f27421709ac00a365105da8ca4fe00"
+
+[[headline]]
+id = "headline-opencode-2-update-and-polish"
+text = "OpenCode 1 now updates to OpenCode 2 from the update card, and buttons, menus and fields get a finer look."
+
+[[highlight]]
+id = "opencode-2-update"
+title = "OpenCode 1 updates to 2"
+text = "The update card now moves OpenCode 1.19.3 to OpenCode 2.1.0 instead of ending with the old version. Older OpenCode 1 versions first update to 1.19."
+wide = true
+tone = "green"
+visual = { kind = "figure", value = "2.1.0", label = "OpenCode 2", detail = "reached from OpenCode 1.19.3" }
+
+[[highlight]]
+id = "interface-polish"
+title = "A finer look for the interface"
+text = "Menus, tooltips and the palette are glass. Buttons sink when pressed, search fields are recessed, and placeholders use the theme's muted color."
+wide = true
+tone = "blue"
+visual = { kind = "glyph", icon = "sparkles" }
 
 [[headline]]
 id = "headline-macos-window-keys"
