@@ -53,7 +53,19 @@
 # the highlights fill six columns or more; widths that add up to 6, 10, 14… leave no gaps.
 # Visual data must be true: measured figures, real names and real shortcuts.
 
-reviewed = "0509b7d8fed454749a06f9d6068ca4952deb02eb"
+reviewed = "798243f9f776ac924ec699b82bbe04b01bb4a932"
+
+[[headline]]
+id = "headline-macos-window-keys"
+text = "On macOS, ⌘W and ⌘H work, and closing the window asks before Kodem quits."
+
+[[highlight]]
+id = "macos-window-management"
+title = "Close and hide, the Mac way"
+text = "⌘W or the red button asks before Kodem quits, and ⌘Q confirms. ⌘H and Hide Kodem in the menu hide the app."
+wide = true
+tone = "red"
+visual = { kind = "keys", keys = ["⌘", "W"], label = "Close window" }
 
 [[headline]]
 id = "headline-usage-panels"
