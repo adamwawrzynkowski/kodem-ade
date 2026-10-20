@@ -1376,3 +1376,12 @@ Recorded on 20 October 2026. The user found Settings messy and asked for categor
 - Other pages: Shortcuts are grouped into Navigation, Composer and Panels. Single-purpose groups get names that do not repeat the page title, such as "Task events" and "Rules".
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not run: the Linux and Windows lint (no platform code). Not checked in the running app, under the no-visual-testing agreement.
+
+### OpenCode 1 to OpenCode 2 update
+
+Recorded on 20 October 2026. The user reported that the update card could not update OpenCode 1.19.3 to 2.1.0: it ended with "OpenCode is still 1.19.3. └ Done". Kodem ran `opencode upgrade 2.1.0`. OpenCode 1 refuses a 2.x target by version (`Installation.upgrade` in 1.19.3, and the `opencode.ai/install` script exits for a 2.x `VERSION`), but it still prints "Done" and exits with success. OpenCode 1 installs OpenCode 2 only with `opencode upgrade --major`, added in 1.19.0: the curl install runs `opencode.ai/v2/install` into the same `~/.opencode/bin`, Homebrew swaps to `anomalyco/tap/opencode-v2`, and npm, pnpm, bun and yarn swap `opencode-ai` for `@opencode/cli`. OpenCode 1.18 parses its options strictly, so it rejects `--major`.
+
+- `harness.rs`: `update_opencode` runs `opencode upgrade --major` when OpenCode 1 is installed and the newest release is 2 or later. An OpenCode 1 older than 1.19.0 first runs `opencode upgrade <version>` with the last OpenCode 1 release from npm's `opencode-ai` (1.19.3), and stops with its last line if the version is still older afterwards. Other updates still run `opencode upgrade <version>`. The final version check is unchanged.
+- The message that refuses an OpenCode 1 server, and `providers.md`, now name `opencode upgrade --major`.
+
+Read from the OpenCode sources at tags v1.18.35, v1.19.0 and v1.19.3 and from both install scripts. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` and `cargo fmt --check`. Not run: a real `opencode upgrade --major`, because the installed OpenCode was already 2.1.1 and the run would change the installed CLI.

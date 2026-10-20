@@ -173,7 +173,7 @@ The installed Codex schema also confirmed reasoning options and image modalities
 
 ## OpenCode (beta)
 
-`providers/opencode.rs` drives `opencode serve` over the HTTP API of OpenCode 2 (`/api`) and its event stream (`/api/event`); `opencode_transcript.rs` maps events and stored messages to transcript items, and `opencode_import.rs` reads stored sessions. `kodem-core/src/providers/opencode.rs` owns the process, the loopback requests and the stream. OpenCode 1.x serves another API; Kodem refuses it and asks for `opencode upgrade`.
+`providers/opencode.rs` drives `opencode serve` over the HTTP API of OpenCode 2 (`/api`) and its event stream (`/api/event`); `opencode_transcript.rs` maps events and stored messages to transcript items, and `opencode_import.rs` reads stored sessions. `kodem-core/src/providers/opencode.rs` owns the process, the loopback requests and the stream. OpenCode 1.x serves another API; Kodem refuses it and asks for `opencode upgrade --major`.
 
 One server per task owner holds the conversation, an OpenCode session. The server runs under `kodem-host opencode-guard`, which stops it when the host's end of its standard input closes, because `opencode serve` does not stop when its parent ends. Every request carries a random password of that server. `OPENCODE_CONFIG_CONTENT` adds `update: disable`, `compaction.auto: false` when the task's rule is off, and the `kodem` MCP server. Changing the account or the compaction rule starts a new server for the same session. The model, the reasoning variant (OpenCode's model variants), the agent and the approval rules are set on the session between turns. The standing instructions of the task's kind are a session instruction entry named `kodem`.
 

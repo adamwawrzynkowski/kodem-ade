@@ -27,8 +27,7 @@ const BODY_LIMIT: usize = 64 * 1024 * 1024;
 /// The line on which a new server reports its address.
 const LISTENING: &str = "listening on http://";
 /// What Kodem says when the installed CLI does not serve the API of OpenCode 2.
-const UPDATE: &str =
-    "Kodem supports OpenCode 2 or later. Update OpenCode with `opencode upgrade`, then try again.";
+const UPDATE: &str = "Kodem supports OpenCode 2 or later. Update OpenCode with `opencode upgrade --major`, then try again.";
 /// The argument that starts Kodem's host as the guard of one server.
 pub const GUARD: &str = "opencode-guard";
 

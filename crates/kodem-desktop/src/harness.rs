@@ -24,6 +24,8 @@ use std::{
 
 /// How long the update command of a CLI may run before Kodem stops it.
 const UPDATE_LIMIT: Duration = Duration::from_secs(15 * 60);
+/// The first OpenCode 1 release whose `upgrade --major` replaces it with OpenCode 2.
+const OPENCODE_MAJOR_UPGRADE: Version = Version::new(1, 19, 0);
 /// The Codex package that matches this computer, as named in Codex's GitHub releases.
 #[cfg(target_os = "macos")]
 const CODEX_SYSTEM: &str = "apple-darwin";
@@ -100,9 +102,7 @@ pub fn update(provider: Provider, latest: Version, events: mpsc::Sender<Event>) 
         };
         let result = match provider {
             Provider::Claude => run_update(claude::executable(), &["update"], &progress),
-            Provider::OpenCode => opencode::executable().and_then(|executable| {
-                run_update(executable, &["upgrade", &latest.to_string()], &progress)
-            }),
+            Provider::OpenCode => update_opencode(&latest, &progress),
             Provider::Codex => update_codex(&progress).map(|()| String::new()),
         }
         .and_then(|last| {
@@ -325,6 +325,35 @@ fn plain(line: &str) -> String {
 fn stop(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
+}
+
+// Updates OpenCode with its own `upgrade` command. OpenCode 1 refuses to upgrade to an
+// OpenCode 2 release by version and installs OpenCode 2 only with `upgrade --major`, which
+// OpenCode 1.19.0 introduced, so an older OpenCode 1 first upgrades to the last OpenCode 1
+// release.
+fn update_opencode(latest: &Version, progress: &dyn Fn(String, Option<f32>)) -> Result<String> {
+    let installed = installed_of(Provider::OpenCode)?;
+    if installed.major != 1 || latest.major < 2 {
+        return run_update(
+            opencode::executable()?,
+            &["upgrade", &latest.to_string()],
+            progress,
+        );
+    }
+    if installed < OPENCODE_MAJOR_UPGRADE {
+        // `opencode-ai` is the package of OpenCode 1; OpenCode 2 is published as another one.
+        let last = serde_json::from_slice::<Package>(&fetch(
+            "https://registry.npmjs.org/opencode-ai/latest",
+        )?)?
+        .version;
+        let output = run_update(opencode::executable()?, &["upgrade", &last], progress)?;
+        progress("Checking the installed version…".into(), None);
+        let installed = installed_of(Provider::OpenCode)?;
+        if installed < OPENCODE_MAJOR_UPGRADE {
+            bail!("OpenCode is still {installed}. {output}");
+        }
+    }
+    run_update(opencode::executable()?, &["upgrade", "--major"], progress)
 }
 
 // Installs the latest Codex release from GitHub into Kodem's runtimes folder, where Kodem
