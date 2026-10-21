@@ -1,17 +1,15 @@
 //! The diff viewer: one file's changes as a virtual list of rows with syntax colors, line
 //! numbers, whitespace markers and optional word wrap, an overview ruler beside the text, and
 //! side-by-side comparisons of images, binary files and Git LFS objects.
-use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::ColorExt as _;
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, DispatchPhase, Div, EventEmitter, Hsla, Image,
-    ImageFormat, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit,
-    Pixels, Render, ScrollStrategy, ScrollWheelEvent, SharedString, Stateful, StyledText, TextRun,
-    WeakEntity, Window, canvas, div, fill, font, img, point, size,
+    App, Bounds, ClipboardItem, Context, Div, EventEmitter, Hsla, Image, ImageFormat, IntoElement,
+    ObjectFit, Pixels, Render, ScrollStrategy, ScrollWheelEvent, SharedString, StyledText, TextRun,
+    Window, canvas, div, fill, font, img, point, size,
 };
 use kodem_core::Settings;
 use kodem_git::git::{
@@ -19,9 +17,7 @@ use kodem_git::git::{
 };
 
 use crate::theme::{RADIUS_CONTROL, code_px, px, text_px};
-use crate::ui::dither::{
-    BarSegment, Dither, DitherBar, DitherField, DottedRule, Edge, cell_threshold,
-};
+use crate::ui::dither::{BarSegment, Dither, DitherBar, DitherField, DottedRule, Edge};
 use crate::ui::git::components::{
     button, dither_empty_hint, dither_empty_state, file_path_label, mono_font, mono_label,
     tinted_badge,
@@ -35,6 +31,9 @@ use crate::ui::git::settings::GitSettings;
 use crate::ui::git::syntax::{DiffSyntaxHighlighter, SyntaxSpan};
 use crate::ui::git::theme;
 use crate::ui::kit;
+use crate::ui::overview_ruler::{
+    OverviewRuler, RowMark, RulerPalette, RulerScroll, ScrollMetrics, render_ruler,
+};
 
 /// Returns the size of diff text: Kodem's code size.
 fn diff_font_size() -> Pixels {
@@ -185,8 +184,6 @@ impl PreviewComparison {
 
 /// Extra height that gives hunk headers room to breathe.
 const HUNK_HEADER_EXTRA_HEIGHT: f32 = 10.0;
-/// Width of the overview ruler next to the diff text.
-const OVERVIEW_RULER_WIDTH: f32 = 20.0;
 
 /// The parts of a `@@ -a,b +c,d @@ context` hunk header.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,15 +206,6 @@ fn parse_hunk_header(header: &str) -> Option<HunkHeaderParts> {
         new_range,
         context: context.trim().to_string(),
     })
-}
-
-/// What one diff row shows, for the overview ruler and the file stats.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RowMark {
-    Context,
-    Added,
-    Removed,
-    Hunk,
 }
 
 /// One visual row in the flattened diff.
@@ -359,12 +347,28 @@ pub struct DiffView {
     scroll_x: Pixels,
     /// The width of the longest unwrapped row, which bounds `scroll_x`.
     content_width: Pixels,
-    /// Bounds of the overview ruler from the last paint, used to map
-    /// clicks to rows.
-    ruler_bounds: Rc<Cell<Bounds<Pixels>>>,
-    /// While the ruler is dragged, how far the pointer sits from the
-    /// center of the viewport frame, so grabbing the frame does not jump.
-    ruler_drag: Rc<Cell<Option<f32>>>,
+    /// The overview ruler beside the text.
+    ruler: OverviewRuler,
+}
+
+impl RulerScroll for DiffView {
+    fn ruler(&self) -> &OverviewRuler {
+        &self.ruler
+    }
+
+    fn scroll_metrics(&self) -> ScrollMetrics {
+        ScrollMetrics {
+            offset: -f32::from(self.scroll.offset().y),
+            max: f32::from(self.scroll.max_offset().y),
+            viewport: f32::from(self.scroll.bounds().size.height),
+        }
+    }
+
+    fn set_scroll_offset(&mut self, offset: f32, cx: &mut Context<Self>) {
+        let current = self.scroll.offset();
+        self.scroll.set_offset(point(current.x, gpui::px(-offset)));
+        cx.notify();
+    }
 }
 
 impl DiffView {
@@ -588,93 +592,6 @@ impl DiffView {
         } else {
             row
         }
-    }
-
-    /// The visible part of the file as `(start, length)` fractions of its
-    /// full height.
-    fn viewport_fraction(&self) -> Option<(f32, f32)> {
-        let offset = -f32::from(self.scroll.offset().y);
-        let max = f32::from(self.scroll.max_offset().y);
-        let height = f32::from(self.scroll.bounds().size.height);
-        let total = max + height;
-        (total > 0.0 && height > 0.0).then(|| (offset / total, height / total))
-    }
-
-    /// Starts a ruler drag. Pressing inside the viewport frame grabs it
-    /// where it was pressed; pressing elsewhere centers the frame there.
-    fn begin_ruler_drag(&mut self, y: Pixels, cx: &mut Context<Self>) {
-        let bounds = self.ruler_bounds.get();
-        let height = f32::from(bounds.size.height);
-        let pointer = f32::from(y) - f32::from(bounds.origin.y);
-        let anchor = self
-            .viewport_fraction()
-            .map(|(start, length)| (start * height, length * height))
-            .filter(|(top, length)| pointer >= *top && pointer <= top + length)
-            .map_or(0.0, |(top, length)| pointer - (top + length / 2.0));
-        self.ruler_drag.set(Some(anchor));
-        self.scroll_to_ruler_position(y, cx);
-    }
-
-    /// Scrolls so the viewport frame centers on a ruler position, keeping
-    /// the grab offset of the current drag.
-    fn scroll_to_ruler_position(&mut self, y: Pixels, cx: &mut Context<Self>) {
-        let bounds = self.ruler_bounds.get();
-        let height = f32::from(bounds.size.height);
-        let max = f32::from(self.scroll.max_offset().y);
-        let viewport = f32::from(self.scroll.bounds().size.height);
-        if height <= 0.0 || self.rows.is_empty() {
-            return;
-        }
-        let anchor = self.ruler_drag.get().unwrap_or(0.0);
-        let center = (f32::from(y) - anchor - f32::from(bounds.origin.y)) / height;
-        let offset = (center * (max + viewport) - viewport / 2.0).clamp(0.0, max.max(0.0));
-        let current = self.scroll.offset();
-        self.scroll.set_offset(point(current.x, gpui::px(-offset)));
-        cx.notify();
-    }
-
-    /// The overview ruler: a dithered strip that maps every row of the
-    /// file, with removed lines on the left, added lines on the right,
-    /// and a frame around the visible part.
-    fn render_overview_ruler(&self, marks: Rc<[RowMark]>, cx: &mut Context<Self>) -> Stateful<Div> {
-        let colors = theme::liquid_colors(cx);
-        let accent = cx.theme().primary;
-        let viewport = self.viewport_fraction();
-        let ruler_bounds = self.ruler_bounds.clone();
-        let ruler_drag = self.ruler_drag.clone();
-        let diff_view = cx.entity().downgrade();
-        let palette = RulerPalette {
-            added: colors.success,
-            removed: colors.danger,
-            hunk: accent,
-            context: colors.ink,
-            viewport: cx.theme().foreground,
-        };
-        div()
-            .id("diff-overview-ruler")
-            .flex_shrink_0()
-            .w(px(OVERVIEW_RULER_WIDTH))
-            .h_full()
-            .border_l_1()
-            .border_color(cx.theme().border)
-            .bg(colors.panel_secondary)
-            .cursor_pointer()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    this.begin_ruler_drag(event.position.y, cx);
-                }),
-            )
-            .child(
-                canvas(
-                    move |bounds, _, _| ruler_bounds.set(bounds),
-                    move |bounds, _, window, _| {
-                        paint_overview_ruler(bounds, &marks, viewport, palette, window);
-                        track_ruler_drag(ruler_drag, diff_view, window);
-                    },
-                )
-                .size_full(),
-            )
     }
 
     /// Returns what each row shows, in order.
@@ -1224,121 +1141,6 @@ impl DiffView {
     }
 }
 
-/// Follows an active ruler drag with window-wide listeners, so the drag
-/// keeps scrolling while the pointer is outside the ruler.
-fn track_ruler_drag(
-    drag: Rc<Cell<Option<f32>>>,
-    diff_view: WeakEntity<DiffView>,
-    window: &mut Window,
-) {
-    let move_drag = drag.clone();
-    let move_view = diff_view;
-    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-        if phase != DispatchPhase::Bubble || move_drag.get().is_none() {
-            return;
-        }
-        if event.pressed_button != Some(MouseButton::Left) {
-            // The button was released outside the window.
-            move_drag.set(None);
-            return;
-        }
-        _ = move_view.update(cx, |this, cx| {
-            this.scroll_to_ruler_position(event.position.y, cx);
-        });
-    });
-    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, _| {
-        if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-            drag.set(None);
-        }
-    });
-}
-
-/// Colors for the overview ruler.
-#[derive(Clone, Copy)]
-struct RulerPalette {
-    added: Hsla,
-    removed: Hsla,
-    hunk: Hsla,
-    context: Hsla,
-    viewport: Hsla,
-}
-
-fn paint_overview_ruler(
-    bounds: Bounds<Pixels>,
-    marks: &[RowMark],
-    viewport: Option<(f32, f32)>,
-    palette: RulerPalette,
-    window: &mut Window,
-) {
-    let cell = 3.0;
-    let dot = 2.0;
-    let width = f32::from(bounds.size.width);
-    let height = f32::from(bounds.size.height);
-    let columns = (width / cell).floor() as i32;
-    let rows = (height / cell).floor() as i32;
-    if marks.is_empty() || columns < 2 || rows <= 0 {
-        return;
-    }
-    let scale = window.scale_factor();
-    let left = ((f32::from(bounds.origin.x) + (width - columns as f32 * cell) / 2.0) * scale)
-        .round()
-        / scale;
-    let top = (f32::from(bounds.origin.y) * scale).round() / scale;
-    let half = columns / 2;
-
-    for row in 0..rows {
-        let start = row as usize * marks.len() / rows as usize;
-        let end = ((row as usize + 1) * marks.len() / rows as usize)
-            .max(start + 1)
-            .min(marks.len());
-        let bin = &marks[start.min(marks.len() - 1)..end];
-        let added = bin.contains(&RowMark::Added);
-        let removed = bin.contains(&RowMark::Removed);
-        let hunk = bin.contains(&RowMark::Hunk);
-        for column in 0..columns {
-            let color = if column < half && removed {
-                Some(palette.removed)
-            } else if column >= half && added {
-                Some(palette.added)
-            } else if hunk && !added && !removed {
-                Some(palette.hunk.opacity(0.6))
-            } else if column == half && cell_threshold(column, row) < 0.5 {
-                Some(palette.context)
-            } else {
-                None
-            };
-            if let Some(color) = color {
-                let origin = point(
-                    gpui::px(left + column as f32 * cell),
-                    gpui::px(top + row as f32 * cell),
-                );
-                window.paint_quad(fill(
-                    Bounds::new(origin, size(gpui::px(dot), gpui::px(dot))),
-                    color,
-                ));
-            }
-        }
-    }
-
-    if let Some((start, length)) = viewport {
-        let frame = Bounds::new(
-            point(
-                bounds.origin.x,
-                bounds.origin.y + gpui::px(height * start.clamp(0.0, 1.0)),
-            ),
-            size(
-                bounds.size.width,
-                gpui::px((height * length).clamp(6.0, height)),
-            ),
-        );
-        window.paint_quad(
-            fill(frame, palette.viewport.opacity(0.07))
-                .border_widths(gpui::px(1.))
-                .border_color(palette.viewport.opacity(0.28)),
-        );
-    }
-}
-
 /// A mono chip with one side of a hunk range, for example `+12,9`.
 fn hunk_range_chip(label: String, color: Hsla) -> Div {
     tinted_badge(div().flex_shrink_0().px_1(), color, 0.1).child(label)
@@ -1461,7 +1263,19 @@ impl Render for DiffView {
                 )
                 .into_any_element(),
         };
-        let ruler = show_text_tools.then(|| self.render_overview_ruler(marks.clone(), cx));
+        let ruler = show_text_tools.then(|| {
+            let colors = theme::liquid_colors(cx);
+            let palette = RulerPalette {
+                added: colors.success,
+                removed: colors.danger,
+                hunk: cx.theme().primary,
+                context: colors.ink,
+                viewport: cx.theme().foreground,
+                background: colors.panel_secondary,
+                border: cx.theme().border,
+            };
+            render_ruler(self, marks.clone(), palette, cx)
+        });
 
         v_flex()
             .size_full()

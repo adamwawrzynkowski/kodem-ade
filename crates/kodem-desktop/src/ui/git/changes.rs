@@ -1969,12 +1969,15 @@ impl ChangesView {
                                     .item(PopupMenuItem::element(move |_, cx| {
                                         let include_unstaged =
                                             GitSettings::get(cx).ai_include_unstaged;
+                                        let foreground = cx.theme().foreground;
                                         h_flex()
                                             .id("ai-include-unstaged-row")
                                             .w_full()
                                             .min_h(px(32.))
                                             .items_center()
                                             .justify_between()
+                                            .cursor_pointer()
+                                            .hover(move |row| row.text_color(foreground))
                                             .child("Include unstaged")
                                             .child(
                                                 Switch::new(

@@ -101,6 +101,7 @@ pub(crate) fn popover_surface(
                     .rounded(px(RADIUS_FLOATING))
                     .border_1()
                     .border_color(gpui::transparent_black())
+                    .text_color(t.text)
                     .child(content),
             ),
     )

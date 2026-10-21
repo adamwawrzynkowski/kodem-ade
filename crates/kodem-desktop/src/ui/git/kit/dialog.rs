@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    Anchor, AnyElement, AnyView, App, FocusHandle, Global, KeyDownEvent, MouseButton,
-    ParentElement, SharedString, StyleRefinement, Styled, Window, deferred, div,
+    Anchor, AnyElement, AnyView, App, FocusHandle, FontWeight, Global, KeyDownEvent, MouseButton,
+    ParentElement, SharedString, StyleRefinement, Styled, Window, deferred, div, relative,
 };
 
-use crate::theme::px;
+use crate::theme::{px, sans, text_px};
 use crate::ui::dither;
 use crate::ui::git::theme::ActiveTheme;
 use crate::ui::kit;
@@ -387,10 +387,17 @@ pub fn overlays(window: &mut Window, cx: &mut App) -> AnyElement {
         }
     });
     let toast_layer = div().absolute().inset_0().size_full().children(toasts);
+    // The layer lies beside the workspace, not inside it, so it sets the workspace's text style
+    // itself: dialogs and toasts would otherwise take GPUI's black system text.
     div()
         .absolute()
         .inset_0()
         .size_full()
+        .font_family(sans())
+        .text_size(text_px(13.))
+        .line_height(relative(1.5))
+        .font_weight(FontWeight::NORMAL)
+        .text_color(t.text)
         .child(deferred(toast_layer).with_priority(NOTIFICATION_PRIORITY))
         .when(count > 0, |root| {
             root.child(deferred(layer).with_priority(DIALOG_PRIORITY))

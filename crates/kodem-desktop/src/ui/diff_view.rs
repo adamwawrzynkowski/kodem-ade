@@ -2,9 +2,13 @@
 //! file's working-tree text is loaded, every line of it in the diff is editable, and the hunks
 //! follow each edit.
 use super::file_edit::{Caret, FileEdit};
+use super::overview_ruler::{
+    OverviewRuler, RowMark, RulerPalette, RulerScroll, ScrollMetrics, render_ruler,
+};
 use super::*;
 use crate::components::text_input::{Redo, RowEdit, SelectionInput, TextInput, Undo};
 use std::ops::Range;
+use std::rc::Rc;
 
 actions!(diff_view, [SaveEdits]);
 
@@ -179,8 +183,27 @@ pub(super) struct DiffView {
     editors: HashMap<u64, (Entity<TextInput>, Subscription)>,
     /// The line, by id, and byte that the caret moves to in the next frame.
     pending_focus: Option<(u64, usize)>,
+    /// The overview ruler beside the rows.
+    ruler: OverviewRuler,
 }
 impl EventEmitter<ContextRequested> for DiffView {}
+impl RulerScroll for DiffView {
+    fn ruler(&self) -> &OverviewRuler {
+        &self.ruler
+    }
+    fn scroll_metrics(&self) -> ScrollMetrics {
+        ScrollMetrics {
+            offset: -f32::from(self.list.scroll_px_offset_for_scrollbar().y),
+            max: f32::from(self.list.max_offset_for_scrollbar().y),
+            viewport: f32::from(self.list.viewport_bounds().size.height),
+        }
+    }
+    fn set_scroll_offset(&mut self, offset: f32, cx: &mut Context<Self>) {
+        self.list
+            .set_offset_from_scrollbar(point(Pixels::ZERO, gpui::px(-offset)));
+        cx.notify();
+    }
+}
 impl DiffView {
     /// Creates a virtual document without constructing inputs for off-screen rows. With
     /// `edit`, its rows are the hunks of that edited working-tree text.
@@ -231,6 +254,7 @@ impl DiffView {
             line_ids,
             editors: HashMap::new(),
             pending_focus: None,
+            ruler: OverviewRuler::default(),
         }
     }
     /// Reports whether this view shows the immutable file, or edits with the given edit.
@@ -1255,6 +1279,29 @@ impl Render for DiffView {
         } else {
             text_width + f32::from(px(102.))
         };
+        let ruler = (!self.lines.is_empty()).then(|| {
+            let marks: Rc<[RowMark]> = self
+                .lines
+                .iter()
+                .map(|line| match line.kind {
+                    LineKind::Header => RowMark::Hunk,
+                    LineKind::Added => RowMark::Added,
+                    LineKind::Removed => RowMark::Removed,
+                    LineKind::Context => RowMark::Context,
+                })
+                .collect();
+            let t = self.theme;
+            let palette = RulerPalette {
+                added: t.added,
+                removed: t.removed,
+                hunk: t.accent,
+                context: t.dot,
+                viewport: t.text,
+                background: t.header,
+                border: t.border,
+            };
+            render_ruler(self, marks, palette, cx)
+        });
         div()
             .id("diff-document")
             .w_full()
@@ -1262,6 +1309,7 @@ impl Render for DiffView {
             .key_context("DiffDocument")
             .track_focus(&self.focus)
             .relative()
+            .flex()
             .flex_1()
             .min_h_0()
             .overflow_hidden()
@@ -1312,7 +1360,9 @@ impl Render for DiffView {
             .child(
                 div()
                     .id("diff-horizontal")
-                    .size_full()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
                     .when(!self.wrap, |d| d.overflow_x_scroll())
                     .restrict_scroll_to_axis()
                     .track_scroll(&self.horizontal)
@@ -1325,5 +1375,6 @@ impl Render for DiffView {
                         .h_full(),
                     ),
             )
+            .children(ruler)
     }
 }

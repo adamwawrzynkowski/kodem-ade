@@ -29,6 +29,7 @@ mod model_picker;
 mod motion;
 mod notices;
 mod onboarding;
+mod overview_ruler;
 mod palette;
 mod panels;
 mod project_commands;
