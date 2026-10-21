@@ -38,8 +38,11 @@ pub(super) fn start(host: Shared, task_id: &str) -> Result<()> {
     let (task, account, fallback, input) = {
         let h = host.lock().unwrap();
         let task = h.store.task(task_id)?;
-        // OpenCode names its conversations itself; its session owner names one it did not.
-        if !task.title_pending || task.provider == Provider::OpenCode {
+        // OpenCode and the Antigravity CLI name their conversations themselves; their session
+        // owners name one that they did not.
+        if !task.title_pending
+            || matches!(task.provider, Provider::OpenCode | Provider::Antigravity)
+        {
             return Ok(());
         }
         let Some(message) = h.store.outgoing(task_id)?.into_iter().next() else {
@@ -90,7 +93,9 @@ pub(super) fn review(host: Shared, task_id: &str) -> Result<()> {
     let (task, account, input) = {
         let h = host.lock().unwrap();
         let task = h.store.task(task_id)?;
-        if task.title_review.is_none() || task.provider == Provider::OpenCode {
+        if task.title_review.is_none()
+            || matches!(task.provider, Provider::OpenCode | Provider::Antigravity)
+        {
             return Ok(());
         }
         let (messages, _) = h.store.messages(task_id, None)?;

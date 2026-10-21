@@ -2,12 +2,12 @@
 //! outside the UI thread and report their progress.
 //!
 //! Each CLI is compared with the channel that its own update follows: Claude Code's configured
-//! release channel, Codex's latest GitHub release, which Kodem installs as a package, and
-//! OpenCode's update service.
+//! release channel, Codex's latest GitHub release, which Kodem installs as a package,
+//! OpenCode's update service, and the Antigravity CLI's published changelog.
 use anyhow::{Context, Result, bail, ensure};
 use kodem_core::{
     Provider, git, platform,
-    providers::{claude, codex, opencode},
+    providers::{antigravity, claude, codex, opencode},
 };
 use semver::Version;
 use serde::Deserialize;
@@ -104,6 +104,8 @@ pub fn update(provider: Provider, latest: Version, events: mpsc::Sender<Event>) 
             Provider::Claude => run_update(claude::executable(), &["update"], &progress),
             Provider::OpenCode => update_opencode(&latest, &progress),
             Provider::Codex => update_codex(&progress).map(|()| String::new()),
+            Provider::Antigravity => antigravity::executable()
+                .and_then(|executable| run_update(executable, &["update"], &progress)),
         }
         .and_then(|last| {
             progress("Checking the installed version…".into(), None);
@@ -119,7 +121,7 @@ pub fn update(provider: Provider, latest: Version, events: mpsc::Sender<Event>) 
 }
 
 /// Reads the release from the version text that a provider's CLI reports, such as
-/// `codex-cli 0.47.0`, `2.1.300 (Claude Code)` or `opencode v2.0.32`.
+/// `codex-cli 0.47.0`, `2.1.300 (Claude Code)`, `opencode v2.0.32` or `1.4.3` (Antigravity).
 fn parse_installed(reported: &str) -> Option<Version> {
     reported
         .split_whitespace()
@@ -132,6 +134,7 @@ fn installed_of(provider: Provider) -> Result<Version> {
         Provider::Claude => claude::version()?,
         Provider::Codex => codex::version()?,
         Provider::OpenCode => opencode::version()?,
+        Provider::Antigravity => antigravity::version()?,
     };
     parse_installed(&reported)
         .with_context(|| format!("{} reported no release: {reported}", provider.label()))
@@ -160,6 +163,15 @@ fn latest_of(provider: Provider) -> Result<Version> {
             )?)?
             .version
         }
+        // The changelog that `agy changelog` reads lists the newest release first, as
+        // `## 1.4.4`.
+        Provider::Antigravity => String::from_utf8(fetch(
+            "https://raw.githubusercontent.com/google-antigravity/antigravity-cli/refs/heads/main/CHANGELOG.md",
+        )?)?
+        .lines()
+        .find_map(|line| line.strip_prefix("## "))
+        .map(|heading| heading.trim().to_owned())
+        .context("The Antigravity CLI changelog names no release")?,
     };
     let version = Version::parse(&version)?;
     ensure!(

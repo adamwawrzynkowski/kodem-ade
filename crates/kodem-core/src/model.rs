@@ -13,6 +13,7 @@ pub enum Tool {
     Claude,
     Codex,
     OpenCode,
+    Antigravity,
     Git,
     GitLfs,
     GitHub,
@@ -26,6 +27,7 @@ impl Tool {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
             Self::OpenCode => "OpenCode",
+            Self::Antigravity => "Antigravity CLI",
             Self::Git => "Git",
             Self::GitLfs => "Git LFS",
             Self::GitHub => "GitHub CLI",
@@ -37,6 +39,7 @@ impl Tool {
             Provider::Claude => Self::Claude,
             Provider::Codex => Self::Codex,
             Provider::OpenCode => Self::OpenCode,
+            Provider::Antigravity => Self::Antigravity,
         }
     }
 }
@@ -54,15 +57,17 @@ pub enum Provider {
     Codex,
     Claude,
     OpenCode,
+    Antigravity,
 }
 impl Provider {
-    pub const ALL: [Self; 3] = [Self::Claude, Self::Codex, Self::OpenCode];
+    pub const ALL: [Self; 4] = [Self::Claude, Self::Codex, Self::OpenCode, Self::Antigravity];
     /// Returns the integration's display name.
     pub fn label(self) -> &'static str {
         match self {
             Self::Codex => "Codex",
             Self::Claude => "Claude Code",
             Self::OpenCode => "OpenCode",
+            Self::Antigravity => "Antigravity",
         }
     }
     /// Returns the bundled provider logo asset.
@@ -71,33 +76,50 @@ impl Provider {
             Self::Codex => "openai",
             Self::Claude => "claude",
             Self::OpenCode => "opencode",
+            Self::Antigravity => "antigravity",
         }
     }
     /// Returns the CLI command used to authenticate this integration.
+    ///
+    /// The Antigravity CLI has no sign-in command: started without arguments, it asks for a
+    /// sign-in when it has none.
     pub fn login_command(self) -> &'static str {
         match self {
             Self::Codex => "codex login",
             Self::Claude => "claude auth login",
             Self::OpenCode => "opencode auth login",
+            Self::Antigravity => "agy",
         }
     }
     /// Returns the CLI command that removes this integration's saved sign-in.
+    ///
+    /// The Antigravity CLI signs out only with `/logout` in its interactive session, so its
+    /// command opens that session with `/logout` as the first prompt.
     pub fn logout_command(self) -> &'static str {
         match self {
             Self::Codex => "codex logout",
             Self::Claude => "claude auth logout",
             Self::OpenCode => "opencode auth logout",
+            Self::Antigravity => "agy -i /logout",
         }
+    }
+    /// Reports a sign-out that runs in a terminal window, because the CLI signs out only in
+    /// its interactive session.
+    pub fn interactive_logout(self) -> bool {
+        self == Self::Antigravity
     }
     /// Returns the environment variable that moves the CLI to another configuration directory.
     ///
     /// OpenCode keeps its credentials and conversations in the data directory of the XDG base
-    /// directories, so an added account moves only that one and shares the configuration.
+    /// directories, so an added account moves only that one and shares the configuration. The
+    /// Antigravity CLI keeps its sign-in in the system's credential store and has no such
+    /// variable, so it has one account.
     pub fn home_variable(self) -> Option<&'static str> {
         match self {
             Self::Codex => Some("CODEX_HOME"),
             Self::Claude => Some("CLAUDE_CONFIG_DIR"),
             Self::OpenCode => Some("XDG_DATA_HOME"),
+            Self::Antigravity => None,
         }
     }
     /// Reports whether the default account clears `home_variable`. A general variable, as
@@ -185,6 +207,54 @@ pub fn now() -> u64 {
 /// Returns a new opaque local identity.
 pub fn new_id() -> String {
     Uuid::new_v4().to_string()
+}
+/// Parses an RFC 3339 timestamp, such as `2026-10-21T06:48:41.5Z`, into Unix seconds without a
+/// date dependency. A space may separate the date and the time, as SQLite writes it.
+pub fn unix_seconds(timestamp: &str) -> Option<u64> {
+    let (date, rest) = timestamp.split_once(['T', ' '])?;
+    let mut date = date.split('-').map(str::parse::<i64>);
+    let (year, month, day) = (date.next()?.ok()?, date.next()?.ok()?, date.next()?.ok()?);
+    let zone = rest.rfind(['+', '-', 'Z'])?;
+    let mut clock = rest[..zone].split(':');
+    let hours: i64 = clock.next()?.parse().ok()?;
+    let minutes: i64 = clock.next()?.parse().ok()?;
+    let seconds: i64 = clock.next()?.split('.').next()?.parse().ok()?;
+    let offset = match &rest[zone..] {
+        "Z" => 0,
+        zone => {
+            let (zone_hours, zone_minutes) = zone[1..].split_once(':')?;
+            let amount =
+                zone_hours.parse::<i64>().ok()? * 3600 + zone_minutes.parse::<i64>().ok()? * 60;
+            if zone.starts_with('-') {
+                -amount
+            } else {
+                amount
+            }
+        }
+    };
+    // Days since 1970-01-01 in the proleptic Gregorian calendar.
+    let shifted_year = if month <= 2 { year - 1 } else { year };
+    let era = shifted_year.div_euclid(400);
+    let year_of_era = shifted_year.rem_euclid(400);
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    u64::try_from(days * 86_400 + hours * 3600 + minutes * 60 + seconds - offset).ok()
+}
+/// Parses an RFC 3339 timestamp into Unix milliseconds, keeping the milliseconds of its fraction.
+pub fn unix_millis(timestamp: &str) -> Option<u64> {
+    let fraction = timestamp
+        .split_once('.')
+        .map(|(_, rest)| {
+            rest.chars()
+                .take_while(char::is_ascii_digit)
+                .chain(std::iter::repeat('0'))
+                .take(3)
+                .collect::<String>()
+        })
+        .and_then(|digits| digits.parse::<u64>().ok())
+        .unwrap_or(0);
+    Some(unix_seconds(timestamp)? * 1000 + fraction)
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Project {
@@ -699,6 +769,10 @@ pub struct UsageWindow {
     pub used_percent: i32,
     pub window_duration_mins: Option<u64>,
     pub resets_at: Option<u64>,
+    /// What the window limits, where a provider has windows of the same length for different
+    /// models, such as the Antigravity CLI's Gemini and third-party model groups.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 /// Provider-reported credits. The decimal balance is preserved without currency assumptions.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2333,8 +2407,8 @@ pub enum TaskEdit {
     /// Turns the provider's fast mode on or off for the task's model.
     Fast(bool),
 }
-/// A conversation that Claude Code, Codex or OpenCode stored on this computer for another app,
-/// in the folder of a project.
+/// A conversation that Claude Code, Codex, OpenCode or Antigravity stored on this computer for
+/// another app, in the folder of a project.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalThread {
     pub provider: Provider,
@@ -2688,6 +2762,15 @@ pub enum Request {
     DelegateCancel {
         parent: String,
         task_id: String,
+    },
+    /// Asks whether the Antigravity CLI of a task may run one tool call. The CLI's pre-tool
+    /// hook sends the call as `payload`. An answer that holds a `ticket` waits for the user, and
+    /// the hook asks again with that ticket and no payload. Answers with `Response::Text`, which
+    /// holds the hook's decision as JSON.
+    AntigravityHook {
+        task_id: String,
+        payload: serde_json::Value,
+        ticket: Option<String>,
     },
     /// Starts a new coding task in a worktree of its own, with the files that the last turn of
     /// the given task left and with its conversation as context for the first message.

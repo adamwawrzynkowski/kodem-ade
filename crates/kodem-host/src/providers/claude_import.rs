@@ -96,19 +96,7 @@ fn prompt(entry: &Value) -> Option<String> {
 
 // Returns the wall-clock milliseconds of a stored entry.
 fn milliseconds(entry: &Value) -> Option<u64> {
-    let stamp = entry["timestamp"].as_str()?;
-    let fraction = stamp
-        .split_once('.')
-        .map(|(_, rest)| {
-            rest.chars()
-                .take_while(char::is_ascii_digit)
-                .chain(std::iter::repeat('0'))
-                .take(3)
-                .collect::<String>()
-        })
-        .and_then(|digits| digits.parse::<u64>().ok())
-        .unwrap_or(0);
-    Some(unix_seconds(stamp)? * 1000 + fraction)
+    unix_millis(entry["timestamp"].as_str()?)
 }
 
 // Returns the wall-clock milliseconds of a file's last change.

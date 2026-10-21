@@ -547,7 +547,7 @@ impl Shell {
             Panel::Quit => Some(("log-out", "Closes the window and ends the app")),
             Panel::ImportThreads => Some((
                 "arrow-down-to-line",
-                "Conversations of Claude Code, Codex and OpenCode in your projects",
+                "Conversations of Claude Code, Codex, OpenCode and Antigravity in your projects",
             )),
             _ => None,
         };

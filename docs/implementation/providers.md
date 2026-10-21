@@ -2,7 +2,7 @@
 
 The host binds every conversation to a provider before starting its owner. Old task records and saved preferences default to Codex. A task can change its provider between turns, while no message is queued. The conversation of the earlier provider cannot move, so the task leaves it: the next message starts a conversation with the new provider and carries the earlier messages of the user and the replies as context. The transcript shows the change as a transfer row that names both agents. [Phase 7](progress.md) records the rules.
 
-The providers are Codex, Claude Code and OpenCode. The Devin integration was removed on 12 October 2026; the store moves its old tasks aside when it opens.
+The providers are Codex, Claude Code, OpenCode and Antigravity. Antigravity replaced the "Google" placeholder on 21 October 2026. The Devin integration was removed on 12 October 2026; the store moves its old tasks aside when it opens.
 
 ## Caller and ownership
 
@@ -201,6 +201,49 @@ OpenCode loads the commands and skills of a folder when it first opens that fold
 Checked on 18 October 2026 against OpenCode 2.0.32 with free OpenCode models, through a host on a scratch data folder: the catalog (12 models, variants, windows, the folder's default model), account status, commands, skills, agents and instruction files; a turn with an edit approval and its patch, a command approval, a question, a subagent with its own transcript, a title and context usage; a second turn on the same session; steering; Stop during a command and a turn after it; a manual compaction (20,768 → 269 tokens) and a turn after it; a declined command with the user's reason; Plan mode, which asked before a command and changed no file; a host killed with `SIGKILL` during a turn, after which its server stopped within 4 seconds and reconciliation restored the stored output as Interrupted; an import with a question and a subagent, a refused second import, and a resumed turn of the imported session. The scratch sessions were deleted from OpenCode afterwards.
 
 Not covered: image input, a slash command, a second account, a compaction that OpenCode starts by itself, a provider that needs a sign-in, `aarch64` Windows, and the desktop in the running app.
+
+## Antigravity
+
+`providers/antigravity.rs` drives the Antigravity CLI (`agy`) in its headless stream-json mode: `agy --input-format stream-json --output-format stream-json -p=`, one prompt per input line and one `result` event per turn. `antigravity_transcript.rs` maps the stream's `step_update` events and the conversation's stored `transcript_full.jsonl` to transcript items, and `antigravity_import.rs` reads stored conversations. `kodem-core/src/providers/antigravity.rs` finds the CLI (`~/.local/bin/agy`, `%LOCALAPPDATA%\agy\bin` on Windows) and reads the CLI's conversation index, `~/.gemini/antigravity-cli/conversation_summaries.db`, read-only.
+
+One process per task owner holds the conversation. The CLI has no control messages in this mode, so the model, the reasoning level, plan mode and Kodem's additions are fixed when a process starts; a change starts a new process that continues the conversation with `--conversation <id>`. Stop sends SIGINT, which the CLI reports as an interrupted turn before it ends. The next turn starts a new process.
+
+The CLI asks nobody in headless mode: a tool that needs approval is refused. Kodem therefore adds a session folder to the workspaces with `--add-dir`, and the CLI reads `.agents/hooks.json`, `.agents/mcp_config.json` and `.agents/rules/*.md` of every workspace:
+
+- `hooks.json` runs `kodem-host antigravity-hook --root <data dir> --task <task>` before every tool call (`PreToolUse`, matcher `*`, timeout six hours). The hook sends the call to the host (`Request::AntigravityHook`). The session owner answers at once (`auto_approve`, `deny` with a reason, or `allow`, which leaves the call to the CLI's own rules), or with a ticket while the user decides; the hook asks again with the ticket every 400 ms. The CLI runs the hook through a shell, so its words are quoted.
+- `mcp_config.json` adds the `kodem` MCP server. A delegated task gets none.
+- `rules/kodem.md` is an `always_on` rule with the standing instructions of the task's kind and the plan rules.
+
+The CLI orders the workspaces of a conversation by path and starts a subagent in the first one, so the session folder must sort after the task's folder. It is `<temp>/kodem-antigravity/<task>` when that path sorts after the task's folder, which it does on macOS (`/var/folders/...`) and Linux (`/tmp`), else `<data dir>/kodem-antigravity/<task>`. The owner deletes the folder when it ends. The system can clear old files of its temporary folder, so a turn starts a new process when the folder's `hooks.json` is missing.
+
+| Feature | Antigravity |
+| --- | --- |
+| Delivery proof | The stream's `user_input` step of the task's conversation. Reconciliation finds the latest stored prompt that starts with the submission's text, because a stored prompt carries no identity of Kodem's. |
+| Steering | Not available. The CLI runs a line that arrives during a turn as the next turn, so a message waits in the queue. |
+| Turn end | The `result` event: `SUCCESS`, `ERROR` with `interrupted`, or another error. `denied_actions` (calls that the CLI's own rules refused) become a notice. |
+| Approvals | Modes `ask`, `edits`, `plan` (`--mode plan`; edits of project files are refused) and `allow`, decided in the hook. Reads inside the project and the CLI's own artifact folder, subagent tools and Kodem's own MCP tools run without asking; edits, commands, other MCP tools, web access, the CLI's browser and reads outside the project ask, by mode. A chat may use the web. Reviews and tasks that read the parent's checkout refuse edits and the commands that a review blocks. `antigravity/requestApproval`: once, always for the session (all edits, one program's commands, one MCP tool, the web, the browser or reads outside the project), deny with the user's reason, or deny and stop. |
+| Questions | `ask_question` → `antigravity/requestUserInput`. The hook refuses the call with the user's answers as its reason, which the model reads as the answer. |
+| Plan | The task list artifact `task.md` in the conversation's artifact folder, a Markdown checklist (`[ ]`, `[/]`, `[x]`), becomes `Task.plan` whenever it changes. The plan rules ask the agent to keep it. |
+| Subagents | `invoke_subagent` reports the subagent's conversation. The owner follows the subagent's stored file, which the stream does not report, into its own transcript. Its calls pass the same hook, so its approvals and questions name it. |
+| Thinking | The stream has no thinking text. A response's thinking row is reserved when the response starts and filled from the stored step, or removed when there was none. |
+| Edits | The stream reports only the path of an edit; the hook's full arguments give the diff of `write_file`, `edit_file` and the replace tools, without line numbers. |
+| Compaction | Not available: the CLI compacts by itself and refuses `/compact` in this mode. Settings has no Compaction page for Antigravity. |
+| Images | The prompt names the attachment's local copy, which the agent views with its file tool; stream-json input takes text only. |
+| Slash commands | None: the CLI ends a stream-json session on a slash command. Skills are listed with `-p /skills` and attached as files. |
+| Models | `agy models`; the variants of one model at several levels (`gemini-3.8-flash-low`, `-medium`, `-high`) become one model with those reasoning levels (`Model.effort_models`). The CLI's default is `-p /model`. |
+| Titles | The CLI's title of the conversation from its index, else the first prompt line, after the first turn. |
+| Usage | Context from each response's input and output tokens; the CLI reports no window. Quotas from `-p /usage` (one weekly bucket per model group: Gemini, and Claude with GPT, named by `UsageWindow.name`) and credits from `-p /credits`. These commands start no turn and use no quota. |
+| Accounts | One. The CLI keeps its sign-in in the system's credential store and has no variable that moves it. Sign-in runs `agy` in Terminal, which asks for a sign-in when it has none. Sign-out runs `agy -i /logout` in Terminal, because `/logout` exists only in the interactive session. "Signed in" means that `agy models` lists models; it fails at once without a sign-in, while `-p` waits for an authorization code, so status never uses `-p` before it. |
+| Import | The index's top-level conversations, with the first folder that is not a Kodem session folder as the conversation's folder; a conversation with a Kodem session folder is Kodem's own. The stored steps and the subagents' files replay through the same transcript code. |
+| Updates | The installed release is `agy --version`; the newest is the first heading of the CLI's published changelog. `agy update` updates it. The CLI also updates itself in the background, and it has no documented switch to stop that. |
+
+The provider icon is the Google drawing that the placeholder used.
+
+## Antigravity evidence
+
+Checked on 21 October 2026 against `agy` 1.4.3, which updated itself to 1.4.4 during the work, with `gemini-3.8-flash-low`, through a host on a scratch data folder: the catalog (the Gemini levels folded into one model, the CLI's default model), account status, skills; a turn with an edit approval and a command approval; a plan from `task.md`; the CLI's title; thinking rows before the tools of their response; a question and its answer row; context usage with cached input; Stop during a turn and a next turn in a new process on the same conversation; an import of the probe conversations, with a subagent's file replayed; the exclusion of Kodem's own conversations from the import list; usage (Gemini 13% used, Claude with GPT 0%, weekly windows with their names) and credits; the removal of the session folder when the task is deleted. The probe conversations were deleted from the CLI's folder afterwards.
+
+Not covered: Plan mode in a turn, a sign-in and a sign-out through Terminal, `agy update` from Kodem, image input, the CLI's browser tools, Windows and Linux at run time, and the desktop in the running app.
 
 ## Verification
 

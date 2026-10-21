@@ -149,6 +149,8 @@ impl ProviderPage {
         Self::ALL
             .into_iter()
             .filter(move |page| *page != Self::Features || provider == Provider::Claude)
+            // The Antigravity CLI compacts by its own rule, which Kodem cannot set.
+            .filter(move |page| *page != Self::Compaction || provider != Provider::Antigravity)
     }
 
     // Returns the name of the page in the navigation and over its content.
@@ -1612,7 +1614,7 @@ impl Shell {
             .child(
                 setting_group("Threads", None, self.theme).child(
                     self.setting_row(
-                        "Threads from Claude Code, Codex and OpenCode",
+                        "Threads from Claude Code, Codex, OpenCode and Antigravity",
                         "Import conversations that you had in those apps in the folders of your projects. Each one keeps its history and continues the same conversation.",
                         self.button("open-thread-import", "arrow-down-to-line", "Import threads…")
                             .on_click(cx.listener(|s, _, _, cx| {
@@ -2698,5 +2700,9 @@ pub(super) fn install_guide(provider: Provider) -> Option<(&'static str, &'stati
         )),
         Provider::Codex => None,
         Provider::OpenCode => Some(("OpenCode installation guide", "https://opencode.ai/docs/")),
+        Provider::Antigravity => Some((
+            "Antigravity CLI installation guide",
+            "https://antigravity.google/docs/getting-started/",
+        )),
     }
 }

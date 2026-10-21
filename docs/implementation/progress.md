@@ -1466,3 +1466,17 @@ Recorded on 21 October 2026. The user asked to resize the terminal below the cha
 - `platform::program_sequence` sets `KODEM_NONINTERACTIVE=1` for the steps of a project command: through `env` for each step on macOS and Linux, and for the session while the steps run in PowerShell. The Build command files already skip their final "Press Return" prompt and `pause` when it is set. The project dialog tells the user about the variable, for their own scripts.
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary test, since removed, ran the line that `program_sequence` builds through zsh for a script with a space in its name, and the script saw `KODEM_NONINTERACTIVE=1`. Not run: the Linux and Windows lint and the PowerShell line on Windows. Not checked in the running app, under the no-visual-testing agreement.
+
+### Antigravity provider
+
+Recorded on 21 October 2026. The user asked for Antigravity support through the CLI's own sign-in, with the features that the other providers have, after the way OpenCode was added, and to rename the Google placeholder to Antigravity.
+
+- `Provider::Antigravity` (label "Antigravity"), with `Tool::Antigravity` ("Antigravity CLI") and its installer (`antigravity.google/cli/install.sh` on macOS and Linux, `install.ps1` on Windows). The coming-soon Google row and its icon are gone; the provider uses the same Google drawing as `antigravity.svg`, noted in `assets/THIRD_PARTY.md`.
+- The driver, the transcript, reconciliation, the catalog, resources, the composer catalog, usage and the import are in `providers/antigravity*.rs`; [providers.md](providers.md) has the feature list and the evidence. `kodem-host antigravity-hook` is the CLI's `PreToolUse` hook that sends tool calls to the host for approvals and questions (`Request::AntigravityHook`). Kodem's MCP tools accept `antigravity` as a provider.
+- `UsageWindow.name` names a usage window, because the CLI reports one weekly window per model group. `unix_seconds` and `unix_millis` moved to `kodem-core` for both Claude Code and Antigravity.
+- Accounts: one, in the system's credential store. Sign-in runs `agy` in Terminal and sign-out `agy -i /logout` (`Provider::interactive_logout`). Settings has no Compaction page for Antigravity, and the usage panel says that the CLI compacts by itself.
+- The CLI updated itself from 1.4.3 to 1.4.4 during the work; it has no documented switch to stop that.
+
+Not available with the CLI's headless mode: steering, manual compaction, slash commands, and image input other than by path.
+
+Checked with a temporary IPC client and scratch hosts, not kept, as [providers.md](providers.md) lists. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Through zig, `cargo clippy --workspace --all-targets -D warnings` for `x86_64-unknown-linux-gnu` and `cargo clippy -p kodem-host -p kodem-core --all-targets -D warnings` for it and `x86_64-pc-windows-msvc` found nothing; the whole-workspace Windows run reports only the older `large_enum_variant` on Codex's `Catalog`. Not checked in the running app, under the no-visual-testing agreement.

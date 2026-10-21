@@ -1490,39 +1490,6 @@ fn input(message: &OutgoingMessage) -> Result<Vec<Value>> {
     Ok(content)
 }
 
-// Parses the RFC 3339 timestamps of the usage report without a date dependency.
-fn unix_seconds(timestamp: &str) -> Option<u64> {
-    let (date, rest) = timestamp.split_once('T')?;
-    let mut date = date.split('-').map(str::parse::<i64>);
-    let (year, month, day) = (date.next()?.ok()?, date.next()?.ok()?, date.next()?.ok()?);
-    let zone = rest.rfind(['+', '-', 'Z'])?;
-    let mut clock = rest[..zone].split(':');
-    let hours: i64 = clock.next()?.parse().ok()?;
-    let minutes: i64 = clock.next()?.parse().ok()?;
-    let seconds: i64 = clock.next()?.split('.').next()?.parse().ok()?;
-    let offset = match &rest[zone..] {
-        "Z" => 0,
-        zone => {
-            let (zone_hours, zone_minutes) = zone[1..].split_once(':')?;
-            let amount =
-                zone_hours.parse::<i64>().ok()? * 3600 + zone_minutes.parse::<i64>().ok()? * 60;
-            if zone.starts_with('-') {
-                -amount
-            } else {
-                amount
-            }
-        }
-    };
-    // Days since 1970-01-01 in the proleptic Gregorian calendar.
-    let shifted_year = if month <= 2 { year - 1 } else { year };
-    let era = shifted_year.div_euclid(400);
-    let year_of_era = shifted_year.rem_euclid(400);
-    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    let days = era * 146_097 + day_of_era - 719_468;
-    u64::try_from(days * 86_400 + hours * 3600 + minutes * 60 + seconds - offset).ok()
-}
-
 fn limit_reason(window: &str) -> String {
     match window {
         "five_hour" => "Five-hour limit reached".into(),
@@ -1567,6 +1534,7 @@ fn usage_report(report: &Value) -> Result<UsageLimits> {
             used_percent: entry["utilization"].as_f64()?.round() as i32,
             window_duration_mins: Some(minutes),
             resets_at: entry["resets_at"].as_str().and_then(unix_seconds),
+            name: None,
         })
     };
     let primary = window("five_hour", 300);
@@ -1607,6 +1575,7 @@ fn merge_rate_limit(current: &mut Option<UsageLimits>, info: &Value) {
             used_percent: (entry["utilization"].as_f64()? * 100.0).round() as i32,
             window_duration_mins: Some(minutes),
             resets_at: entry["resetsAt"].as_u64(),
+            name: None,
         })
     };
     let mut usage = current.take().unwrap_or_default();

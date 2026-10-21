@@ -65,6 +65,20 @@ fn main() {
         };
         std::process::exit(code);
     }
+    // The Antigravity CLI runs this executable as the pre-tool hook of one task's session.
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == provider::antigravity::HOOK)
+    {
+        let code = match provider::antigravity::serve_hook(&arguments) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("Kodem Antigravity hook: {error:#}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
     // An OpenCode server runs under this executable, which stops it when the host ends.
     if arguments
         .first()
@@ -150,6 +164,10 @@ fn run() -> Result<()> {
             (
                 Provider::OpenCode,
                 provider::initial_runtime(Provider::OpenCode),
+            ),
+            (
+                Provider::Antigravity,
+                provider::initial_runtime(Provider::Antigravity),
             ),
         ]),
         accounts: BTreeMap::new(),
@@ -452,7 +470,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             Ok(Response::Ok)
         }
         Request::SignOutAccount { provider, id } => {
-            accounts::sign_out(host, provider, &id)?;
+            accounts::sign_out(host, root, provider, &id)?;
             Ok(Response::Ok)
         }
         Request::RefreshAccount { provider, id } => {
@@ -683,6 +701,13 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         )?)),
         Request::DelegateCancel { parent, task_id } => Ok(Response::Delegated(delegation::cancel(
             host, &parent, &task_id,
+        )?)),
+        Request::AntigravityHook {
+            task_id,
+            payload,
+            ticket,
+        } => Ok(Response::Text(provider::antigravity::hook(
+            host, &task_id, payload, ticket,
         )?)),
         Request::ForkTask { task_id } => {
             let (source, run, from) = {

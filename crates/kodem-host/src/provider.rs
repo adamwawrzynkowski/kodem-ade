@@ -3,6 +3,8 @@ use crate::{
     Shared, accounts,
     orchestrator::{self, Command, Input, Signal},
 };
+#[path = "providers/antigravity.rs"]
+pub(crate) mod antigravity;
 #[path = "providers/claude.rs"]
 mod claude;
 #[path = "providers/codex.rs"]
@@ -482,6 +484,7 @@ fn ensure_owner(host: Shared, task_id: String) {
             Provider::Codex => codex::run(host.clone(), &task_id, rx),
             Provider::Claude => claude::run(host.clone(), &task_id, rx),
             Provider::OpenCode => opencode::run(host.clone(), &task_id, rx),
+            Provider::Antigravity => antigravity::run(host.clone(), &task_id, rx),
         });
         if let Err(error) = result {
             let mut h = host.lock().unwrap();
@@ -579,6 +582,17 @@ Rules:
 const BROWSER_RULES: &str = "\
 When the user asks you to test, check, preview or debug something in a browser, use Kodem's browser: the `browser_*` tools of the `kodem` MCP server. It is the browser in the side pane of the Kodem window, which the user sees. Use another browser, browser automation tool or method only when the user names it.";
 
+/// How an Antigravity session keeps the plan, in the CLI's task list artifact.
+const ANTIGRAVITY_PLAN_RULES: &str = "\
+Kodem shows your plan to the user beside the prompt and updates it live while you work. Keep the plan in your task list artifact: the file `task.md` in your artifact directory, as a Markdown checklist with one step per line: `- [ ]` for a step to do, `- [/]` for the step in progress and `- [x]` for a finished step.
+
+Rules:
+- Every request with two or more steps gets a plan, also a short one, such as a search followed by an answer. Skip the plan only when one step answers the request.
+- Write the plan before any other work: short steps, in the order you will do them.
+- Mark a step `[/]` when you start it, and `[x]` as soon as it is done, before you start the next step. Keep only one step `[/]`. Do not mark several steps done at the end.
+- When the work changes, change the plan: add, remove or rewrite steps, so that it always shows what you actually do.
+- Before you end your turn, mark every finished step `[x]`. Leave a step `[ ]` only when it is not done, and say why.";
+
 /// Returns the standing instructions of a task's provider session: the plan rules, the rules
 /// that its kind adds, and which browser to use when the session has Kodem's tools.
 ///
@@ -589,6 +603,7 @@ pub(crate) fn instructions(task: &Task) -> String {
         Provider::Codex => Some(CODEX_PLAN_RULES),
         // OpenCode 2 has no tool that keeps a plan.
         Provider::OpenCode => None,
+        Provider::Antigravity => Some(ANTIGRAVITY_PLAN_RULES),
     };
     let rules = match task.kind {
         TaskKind::Coding => None,
@@ -806,6 +821,7 @@ pub(super) fn discover(
         Provider::Codex => codex::discover(host.clone(), &account, cwd),
         Provider::Claude => claude::discover(host.clone(), &account, cwd),
         Provider::OpenCode => opencode::discover(host.clone(), &account, cwd),
+        Provider::Antigravity => antigravity::discover(host.clone(), &account, cwd),
     });
     if let Err(error) = &result {
         let mut h = host.lock().unwrap();
@@ -821,6 +837,7 @@ pub(super) fn initial_runtime(provider: Provider) -> RuntimeInfo {
         Provider::Claude => claude::initial_runtime(),
         Provider::Codex => RuntimeInfo::default(),
         Provider::OpenCode => opencode::initial_runtime(),
+        Provider::Antigravity => antigravity::initial_runtime(),
     }
 }
 
@@ -831,6 +848,7 @@ pub(super) fn reconcile(host: &Shared, task_id: &str) -> Result<()> {
         Provider::Codex => codex::reconcile(host, task_id),
         Provider::Claude => claude::reconcile(host, task_id),
         Provider::OpenCode => opencode::reconcile(host, task_id),
+        Provider::Antigravity => antigravity::reconcile(host, task_id),
     }
 }
 
@@ -843,6 +861,7 @@ pub(crate) fn stored_threads(
         Provider::Codex => codex::stored_threads(account),
         Provider::Claude => claude::stored_threads(account),
         Provider::OpenCode => opencode::stored_threads(account),
+        Provider::Antigravity => antigravity::stored_threads(account),
     }
 }
 
@@ -856,6 +875,7 @@ pub(crate) fn stored_thread(
         Provider::Codex => codex::stored_thread(account, thread),
         Provider::Claude => claude::stored_thread(account, thread),
         Provider::OpenCode => opencode::stored_thread(account, thread),
+        Provider::Antigravity => antigravity::stored_thread(account, thread),
     }
 }
 
@@ -865,6 +885,7 @@ pub(crate) fn import_history(host: &Shared, task: &Task, account: &Account) -> R
         Provider::Codex => codex::import_history(host, task, account),
         Provider::Claude => claude::import_history(host, task, account),
         Provider::OpenCode => opencode::import_history(host, task, account),
+        Provider::Antigravity => antigravity::import_history(host, task, account),
     }
 }
 
@@ -874,6 +895,7 @@ pub(crate) fn executable(provider: Provider) -> Result<PathBuf> {
         Provider::Codex => kodem_core::providers::codex::executable(),
         Provider::Claude => Ok(claude::executable()),
         Provider::OpenCode => kodem_core::providers::opencode::executable(),
+        Provider::Antigravity => kodem_core::providers::antigravity::executable(),
     }
 }
 
@@ -881,7 +903,7 @@ pub(crate) fn executable(provider: Provider) -> Result<PathBuf> {
 pub(crate) fn generate_title(account: &Account, instructions: &str, input: &str) -> Result<String> {
     match account.provider {
         Provider::Claude => claude::generate_title(account, instructions, input),
-        Provider::Codex | Provider::OpenCode => {
+        Provider::Codex | Provider::OpenCode | Provider::Antigravity => {
             anyhow::bail!("This provider titles its conversations itself")
         }
     }
@@ -897,6 +919,7 @@ pub(crate) fn account_status(
         Provider::Codex => codex::account_status(host, account, usage),
         Provider::Claude => claude::account_status(host, account, usage),
         Provider::OpenCode => opencode::account_status(host, account, usage),
+        Provider::Antigravity => antigravity::account_status(host, account, usage),
     }
 }
 
@@ -912,6 +935,7 @@ pub(super) fn account_usage(
         Provider::Codex => codex::account_usage(host, &account, key),
         Provider::Claude => claude::account_usage(host, &account, key),
         Provider::OpenCode => opencode::account_usage(host, &account, key),
+        Provider::Antigravity => antigravity::account_usage(host, &account, key),
     }
 }
 
@@ -953,6 +977,9 @@ pub(super) fn composer_catalog(
         Provider::Codex => codex::composer_catalog(host, &account, task_id, project_id)?,
         Provider::Claude => claude::composer_catalog(host, &account, task_id, project_id)?,
         Provider::OpenCode => opencode::composer_catalog(host, &account, task_id, project_id)?,
+        Provider::Antigravity => {
+            antigravity::composer_catalog(host, &account, task_id, project_id)?
+        }
     };
     if !catalog.commands.contains(&ComposerCommand::Provider) {
         catalog.commands.insert(0, ComposerCommand::Provider);
@@ -1291,6 +1318,7 @@ pub(super) fn resources(
         Provider::Codex => codex::resources(host, &account, task_id, project_id),
         Provider::Claude => claude::resources(host, &account, task_id, project_id),
         Provider::OpenCode => opencode::resources(host, &account, task_id, project_id),
+        Provider::Antigravity => antigravity::resources(host, &account, task_id, project_id),
     }
 }
 

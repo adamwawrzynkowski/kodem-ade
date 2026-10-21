@@ -187,37 +187,45 @@ impl Shell {
                 t,
             ),
         };
-        let footer = block_footer(t)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .child(
-                        self.button("compact-now", "layers", "Compact now")
-                            .disabled(busy || !started)
-                            .when(over && !busy, |b| {
-                                b.border_color(t.warning.opacity(0.5)).text_color(t.warning)
-                            })
-                            .on_click(cx.listener(|s, _, _, cx| {
-                                s.panel = Panel::None;
-                                s.compact_task(cx);
-                            })),
-                    )
-                    .child(div().flex_1())
-                    .child(self.ghost("compact-rules", "settings-2", "Rules").on_click(
-                        cx.listener(|s, _, _, cx| {
-                            s.open_provider_settings(settings::ProviderPage::Compaction);
-                            cx.notify();
-                        }),
-                    )),
-            )
-            .when(busy, |footer| {
-                footer.child(caption(
-                    "Compact now is available when the current turn finishes.",
-                    t,
-                ))
-            });
+        // The Antigravity CLI compacts by its own rule and offers no command for it.
+        let footer = if view.task.provider == Provider::Antigravity {
+            block_footer(t).child(caption(
+                "The Antigravity CLI compacts the context by itself, so Kodem has no compaction rule or command for it.",
+                t,
+            ))
+        } else {
+            block_footer(t)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(
+                            self.button("compact-now", "layers", "Compact now")
+                                .disabled(busy || !started)
+                                .when(over && !busy, |b| {
+                                    b.border_color(t.warning.opacity(0.5)).text_color(t.warning)
+                                })
+                                .on_click(cx.listener(|s, _, _, cx| {
+                                    s.panel = Panel::None;
+                                    s.compact_task(cx);
+                                })),
+                        )
+                        .child(div().flex_1())
+                        .child(self.ghost("compact-rules", "settings-2", "Rules").on_click(
+                            cx.listener(|s, _, _, cx| {
+                                s.open_provider_settings(settings::ProviderPage::Compaction);
+                                cx.notify();
+                            }),
+                        )),
+                )
+                .when(busy, |footer| {
+                    footer.child(caption(
+                        "Compact now is available when the current turn finishes.",
+                        t,
+                    ))
+                })
+        };
         Some(
             kit::block(t)
                 .child(kit::block_header("Context", tone, t))
@@ -683,8 +691,15 @@ fn usage_details(usage: Option<&UsageLimits>, t: Theme) -> AnyElement {
         if let Some(window) = window {
             let used = window.used_percent.clamp(0, 100);
             let progress = used as f32 / 100.;
+            let title = match &window.name {
+                Some(name) => format!(
+                    "{name} · {}",
+                    window_name(label, window.window_duration_mins).to_lowercase()
+                ),
+                None => window_name(label, window.window_duration_mins),
+            };
             details = details.child(meter_block(
-                &window_name(label, window.window_duration_mins),
+                &title,
                 format!("{used}% used"),
                 progress,
                 kit::usage_tone(progress, t),
@@ -761,7 +776,7 @@ pub(super) fn limit_meters(usage: &UsageLimits) -> Vec<(String, f32)> {
         .flatten()
         .map(|window| {
             (
-                window_short(window.window_duration_mins),
+                window_caption(window),
                 window.used_percent.clamp(0, 100) as f32 / 100.,
             )
         })
@@ -851,6 +866,16 @@ fn wide_meter(fraction: f32, color: Hsla, t: Theme) -> Div {
             color,
             t.subtle.opacity(0.55),
         ))
+}
+
+/// Returns the short caption of a limit window: the first word of its name, such as `Gemini`,
+/// where a provider names its windows, else its length.
+pub(super) fn window_caption(window: &UsageWindow) -> String {
+    window
+        .name
+        .as_deref()
+        .and_then(|name| name.split_whitespace().next())
+        .map_or_else(|| window_short(window.window_duration_mins), str::to_owned)
 }
 
 /// Returns a two- or three-character caption for a limit window, such as `5H` or `7D`.

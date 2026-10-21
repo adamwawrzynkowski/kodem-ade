@@ -48,6 +48,7 @@ impl Shell {
             Provider::Claude => "Anthropic",
             Provider::Codex => "OpenAI",
             Provider::OpenCode => "A provider that you connect to OpenCode",
+            Provider::Antigravity => "Google",
         };
         kit::block(t)
             .child(kit::block_header("Provider terms", t.warning, t))
@@ -301,7 +302,7 @@ impl Shell {
                 .flatten()
             {
                 windows = windows.child(limit_column(
-                    format!("{} limit", usage::window_short(window.window_duration_mins)),
+                    format!("{} limit", usage::window_caption(window)),
                     Some(window.used_percent),
                     usage::reset_time(window.resets_at),
                     t,

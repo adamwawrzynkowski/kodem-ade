@@ -39,6 +39,7 @@ impl AssetSource for Assets {
         }
         Ok(embedded_icons!(
             path,
+            "antigravity",
             "archive",
             "arrow-down",
             "arrow-down-to-line",
@@ -84,7 +85,6 @@ impl AssetSource for Assets {
             "git-pull-request",
             "github",
             "globe",
-            "google",
             "info",
             "keyboard",
             "kodem",

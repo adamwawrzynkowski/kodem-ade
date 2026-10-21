@@ -2620,11 +2620,7 @@ struct UpcomingProvider {
     icon: &'static str,
 }
 impl UpcomingProvider {
-    const ALL: [Self; 3] = [
-        Self {
-            label: "Google",
-            icon: "google",
-        },
+    const ALL: [Self; 2] = [
         Self {
             label: "xAI",
             icon: "xai",
