@@ -1512,3 +1512,13 @@ Recorded on 21 October 2026. The user reported that the context occupancy of a t
 - Antigravity: a finished response in the stream or in the CLI's conversation file writes the occupancy when it changed it.
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not checked with a live provider or in the running app, under the no-visual-testing agreement.
+
+### Pace of usage limits
+
+Recorded on 21 October 2026. The user asked for pacing on the usage trackers: where and when the current pace of work reaches a limit, as a vertical line on the bar of each limit window.
+
+- The method follows usage trackers such as CodexBar's `UsagePace`: even use over a window would have used the share of the window that has passed. The difference from the used share is the pace, and the rate since the window started projects the use to the reset.
+- Each limit window with a length and a reset in its span (5-hour, weekly, daily and named windows such as Antigravity's) shows a tick at the even-use point on its meter in the usage panel and in the hover card of the composer's meters. A line under the meter reads "On pace" (within 2 points), "N% in deficit" (warning; removed tone beyond 12 points) or "N% in reserve", and on its right "Runs out in …", "Limit reached" or "≈N% at reset".
+- Pace is hidden in the first 3% of a window, where a few requests make the rate meaningless. Usage credits have no window and no pace.
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary desktop test, since removed, measured the windows of the user's screenshot (5-hour 50% used with 2h 44m left: 4.7 points in deficit, runs out in 2h 16m; weekly 34% used with 1d 22h 24m left: 38 points in reserve, ≈47% at reset), a window in its first 3%, a window without a reset, a full limit and an unused window. Not checked in the running app, under the no-visual-testing agreement.

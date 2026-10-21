@@ -684,6 +684,7 @@ fn usage_details(usage: Option<&UsageLimits>, t: Theme) -> AnyElement {
         return note("Usage has not been reported yet.", t).into_any_element();
     };
     let mut details = div().flex().flex_col().gap(px(12.));
+    let seconds = now() / 1000;
     for (label, window) in [
         ("Primary window", &usage.primary),
         ("Secondary window", &usage.secondary),
@@ -698,18 +699,22 @@ fn usage_details(usage: Option<&UsageLimits>, t: Theme) -> AnyElement {
                 ),
                 None => window_name(label, window.window_duration_mins),
             };
-            details = details.child(meter_block(
-                &title,
-                format!("{used}% used"),
-                progress,
-                kit::usage_tone(progress, t),
-                None,
-                (
-                    reset_time(window.resets_at),
-                    Some(format!("{}% left", 100 - used)),
-                ),
-                t,
-            ));
+            let pace = pace(window, seconds);
+            details = details.child(
+                meter_block(
+                    &title,
+                    format!("{used}% used"),
+                    progress,
+                    kit::usage_tone(progress, t),
+                    pace.as_ref().map(|pace| pace.expected),
+                    (
+                        reset_time(window.resets_at),
+                        Some(format!("{}% left", 100 - used)),
+                    ),
+                    t,
+                )
+                .when_some(pace, |block, pace| block.child(pace_line(&pace, t))),
+            );
         }
     }
     if let Some(spend) = usage.spend.as_ref() {
@@ -746,6 +751,88 @@ fn usage_details(usage: Option<&UsageLimits>, t: Theme) -> AnyElement {
         );
     }
     details.into_any_element()
+}
+
+// Pace is hidden in the first 3% of a window, where a few requests make the rate meaningless.
+const PACE_START: f32 = 0.03;
+// Use within this many percentage points of the even rate counts as on pace.
+const ON_PACE: f32 = 2.;
+// Use this many points beyond the even rate is far ahead of it.
+const FAR_AHEAD: f32 = 12.;
+
+// A limit window's use against an even rate over the whole window, and where the current rate
+// takes it by the reset.
+struct Pace {
+    // Share of the window that has passed, which is where even use would stand by now.
+    expected: f32,
+    // Percentage points used beyond even use; negative below it.
+    delta: f32,
+    // Seconds until the current rate reaches the limit, when that comes before the reset.
+    runs_out: Option<u64>,
+    // Used percentage at the reset at the current rate.
+    projected: f32,
+}
+
+// Measures the pace of a window from its length, its reset and its used share, at `now` in Unix
+// seconds. A window without a length or a reset in its span has no pace.
+fn pace(window: &UsageWindow, now: u64) -> Option<Pace> {
+    let length = window.window_duration_mins.filter(|minutes| *minutes > 0)? * 60;
+    let left = window
+        .resets_at?
+        .checked_sub(now)
+        .filter(|left| (1..=length).contains(left))?;
+    let elapsed = length - left;
+    let expected = elapsed as f32 / length as f32;
+    if expected < PACE_START {
+        return None;
+    }
+    let used = window.used_percent.clamp(0, 100) as f32;
+    // Percent per second since the window started.
+    let rate = used / elapsed as f32;
+    let runs_out = if used >= 100. {
+        Some(0)
+    } else {
+        Some((100. - used) / rate)
+            .filter(|seconds| seconds.is_finite() && *seconds < left as f32)
+            .map(|seconds| seconds as u64)
+    };
+    Some(Pace {
+        expected,
+        delta: used - expected * 100.,
+        runs_out,
+        projected: used + rate * left as f32,
+    })
+}
+
+// How the use compares with even use, and when the current rate reaches the limit or how much
+// of it the window uses by its reset.
+fn pace_line(pace: &Pace, t: Theme) -> Div {
+    let points = pace.delta.abs().round();
+    let (state, tone) = if pace.delta.abs() <= ON_PACE {
+        ("On pace".to_owned(), t.subtle)
+    } else if pace.delta > 0. {
+        (
+            format!("{points:.0}% in deficit"),
+            if pace.delta > FAR_AHEAD {
+                t.removed
+            } else {
+                t.warning
+            },
+        )
+    } else {
+        (format!("{points:.0}% in reserve"), t.subtle)
+    };
+    let outlook = match pace.runs_out {
+        Some(0) => "Limit reached".to_owned(),
+        Some(seconds) => format!("Runs out in {}", duration(seconds)),
+        None => format!("≈{:.0}% at reset", pace.projected),
+    };
+    div()
+        .flex()
+        .justify_between()
+        .gap(px(8.))
+        .child(figure(state, tone))
+        .child(figure(outlook, tone))
 }
 
 /// Reports that the provider refused further use of this account until a reset.
