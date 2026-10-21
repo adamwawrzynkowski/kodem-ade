@@ -64,6 +64,9 @@ impl Shell {
                 } else {
                     0.
                 },
+                self.settings.click_waves,
+                self.settings.dot_screen,
+                self.settings.wallpaper.clone(),
             ));
         // The snapshot is taken before the view is borrowed for the rest of the frame.
         let latest_shown = self.latest_wanted();
@@ -398,6 +401,22 @@ impl Shell {
                     .min_h_0()
                     .id("new-task-scroll")
                     .overflow_y_scroll()
+                    // A secondary press on the background around the start screen opens the
+                    // background's menu at the pointer. The composer keeps its own press.
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|s, event: &MouseDownEvent, _, cx| {
+                            let over_composer = fx::anchor_bounds(COMPOSER_ANCHOR, cx)
+                                .is_some_and(|bounds| bounds.contains(&event.position));
+                            if over_composer {
+                                return;
+                            }
+                            cx.stop_propagation();
+                            s.backdrop_menu = Some(event.position);
+                            s.panel = Panel::BackdropMenu;
+                            cx.notify();
+                        }),
+                    )
                     .child(motion::vanish(
                         column,
                         launch.map_or(0., |(_, vanished)| vanished),

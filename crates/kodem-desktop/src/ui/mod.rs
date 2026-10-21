@@ -131,6 +131,8 @@ enum Panel {
     ProjectCommands,
     ThreadMenu,
     SelectionMenu,
+    /// The menu of the chat background, which leads to its wallpaper.
+    BackdropMenu,
     DeleteTask,
     Sort,
     Comparison,
@@ -216,6 +218,11 @@ pub struct Shell {
     thread_menu: Option<ThreadMenu>,
     /// Where the pointer opened the menu of the conversation's text selection.
     selection_menu: Option<Point<Pixels>>,
+    /// Where the pointer opened the menu of the chat background.
+    backdrop_menu: Option<Point<Pixels>>,
+    /// The scroll of the Theme page in preferences, which the background menu moves to the
+    /// wallpaper at the end of the page.
+    theme_scroll: ScrollHandle,
     deleting_task: Option<String>,
     error: Option<String>,
     notices: notices::Notices,
@@ -681,6 +688,8 @@ impl Shell {
             usage_actions: std::collections::BTreeMap::new(),
             thread_menu: None,
             selection_menu: None,
+            backdrop_menu: None,
+            theme_scroll: ScrollHandle::new(),
             deleting_task: None,
             error: None,
             notices: notices::Notices::default(),
@@ -2246,6 +2255,8 @@ impl Shell {
         if previous != Some(page) {
             // A half-done account form belongs to the page that it was started on.
             self.accounts = accounts::AccountsView::default();
+            // The Theme page opens at its top, like every other page.
+            self.theme_scroll = ScrollHandle::new();
         }
         if let Some(provider) = page.provider()
             && previous.and_then(settings::SettingsPage::provider) != Some(provider)

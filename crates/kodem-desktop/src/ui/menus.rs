@@ -18,6 +18,17 @@ fn menu_title(label: &str, count: Option<usize>, theme: Theme) -> Div {
 }
 
 impl Shell {
+    // The menu item that opens the wallpaper of the chat background in preferences.
+    fn wallpaper_item(&self, cx: &mut Context<Self>) -> Button {
+        self.ghost("menu-wallpaper", "palette", "Wallpaper…")
+            .w_full()
+            .justify_start()
+            .on_click(cx.listener(|s, _, _, cx| {
+                s.open_wallpaper_settings();
+                cx.notify();
+            }))
+    }
+
     // A menu item: an icon and a mono label. The chosen item of a set carries the accent tint,
     // wash, edge and a trailing check in place of a grey fill.
     fn menu_row(
@@ -363,7 +374,16 @@ impl Shell {
                                 s.panel = Panel::None;
                                 cx.notify();
                             })),
-                    );
+                    )
+                    // The conversation covers the background, so its menu leads there too.
+                    .child(separator(t))
+                    .child(self.wallpaper_item(cx));
+            }
+            Panel::BackdropMenu => {
+                width = 212.;
+                menu = menu
+                    .child(menu_title("Background", None, t))
+                    .child(self.wallpaper_item(cx));
             }
             Panel::TaskMenu => {
                 width = 236.;
@@ -480,6 +500,7 @@ impl Shell {
         let pointer = match self.panel {
             Panel::ThreadMenu => self.thread_menu.as_ref().map(|context| context.position),
             Panel::SelectionMenu => self.selection_menu,
+            Panel::BackdropMenu => self.backdrop_menu,
             _ => None,
         };
         // A menu opens above its trigger, as the composer's menus do, unless the trigger sits in

@@ -1407,3 +1407,26 @@ Recorded on 20 October 2026. The user asked to find the parts of the interface t
 Not changed after review: the prose table keeps its unboxed look, the switch keeps its text-colored focus edge (a checked track already has an accent edge), the bell count and the Git BETA tag keep their sizes, the Git toasts keep their place, and the delete dialog keeps the thread's name.
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not run: the Linux and Windows lint (the changes have no platform code). The look, the glass over tooltips and popovers, and the press feedback are not checked in the running app, under the no-visual-testing agreement.
+
+### Background wallpaper and click waves switch
+
+Recorded on 21 October 2026. The user asked for a wallpaper behind the chat background's effects, chosen in Settings › Appearance › Theme and reached with a secondary press on the background, kept as Kodem's own copy, and for a switch on the same page that turns off the click waves, on by default.
+
+- `Settings` has `wallpaper` (the path of Kodem's copy) and `click_waves` (on by default).
+- `wallpaper.rs` copies the chosen image into `<data dir>/wallpaper/`, named by the SHA-256 of its bytes, and removes the earlier copies. It refuses a file larger than 64 MB or one that the `image` crate cannot read. A replaced or removed wallpaper is released from GPUI's asset cache and the sprite atlas.
+- The backdrop draws the wallpaper with `ObjectFit::Cover` beneath the field and paints the surface color over it at `WALLPAPER_VEIL` (0.6) instead of fully. The calm column's veil still applies.
+- The Theme page has a Background group: Wallpaper (thumbnail, Remove, Choose…) and Click waves. With the switch off, a press does not start a wave; a sent message still does.
+- A secondary press on the start screen's background, outside the composer, opens a Background menu. The conversation's text menu has the same Wallpaper… item. Both open the Theme page scrolled to its end.
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary test, since removed, checked that a copy survives the deletion of the original, that a new image replaces the earlier copy, that choosing the same image again keeps one copy, that a file which is not an image is refused, and that removal clears the folder. Not run: the Linux and Windows lint (the changes have no platform code). The look is not checked in the running app, under the no-visual-testing agreement.
+
+### Background dot screen
+
+Recorded on 21 October 2026. The user asked for a dithered dot layer in the chat background, with or without a wallpaper, after a screenshot of a halftone over a sky.
+
+- `Settings::dot_screen`, on by default, has a "Dot screen" switch in the Background group of the Theme page.
+- `ui/backdrop/screen.rs` bakes a still halftone: square dots on a three-point pitch, lit in Bayer order (`crate::bayer::threshold`). The density is 0.65 at the top of the window and fades out over 70% of its height, and fractal noise leaves open patches. Without a wallpaper the dots take `theme.dot`. With one, each dot takes 70% of the wallpaper's color under it, read from a 480-pixel sample mapped with the same cover fit as the wallpaper.
+- The sprite is baked at device resolution on the background executor and cropped to the rows the screen reaches. It is baked again when the window's device size, the scale, the theme's dot color or the wallpaper changes. While a bake runs, the last one shows, so a live resize bakes only as often as bakes end. A replaced sprite is dropped from the atlas.
+- The backdrop paints it over the surface veil and beneath the lights, so the calm column's veil keeps it faint behind the reading text.
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary test, since removed, baked a 3024 × 1964 window at scale 2 in about 2 ms (release), checked the sprite's size and crop, that the lit share falls from the top to none at the reach, the neutral dot texel, and a dot's shade from a wallpaper sample. The look is not checked in the running app, under the no-visual-testing agreement.

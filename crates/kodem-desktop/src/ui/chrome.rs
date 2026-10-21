@@ -776,6 +776,7 @@ impl Render for Shell {
                 | Panel::ProjectCommands
                 | Panel::ThreadMenu
                 | Panel::SelectionMenu
+                | Panel::BackdropMenu
                 | Panel::Sort
                 | Panel::Comparison
         ) {

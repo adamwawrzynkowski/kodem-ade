@@ -1713,6 +1713,13 @@ pub struct Settings {
     pub skater: bool,
     pub theme: ThemeId,
     pub accent: AccentColor,
+    /// The image behind the chat background's effects: Kodem's own copy in its data
+    /// directory, so the chosen file can move or go.
+    pub wallpaper: Option<PathBuf>,
+    /// Starts a wave in the chat background where a press lands on it.
+    pub click_waves: bool,
+    /// Lays a dithered dot screen over the top of the chat background.
+    pub dot_screen: bool,
     pub sort: Sort,
     pub collapsed_projects: std::collections::HashSet<String>,
     pub selected_task: Option<String>,
@@ -1753,6 +1760,9 @@ impl Default for Settings {
             skater: true,
             theme: ThemeId::default(),
             accent: AccentColor::default(),
+            wallpaper: None,
+            click_waves: true,
+            dot_screen: true,
             sort: Sort::Recent,
             collapsed_projects: Default::default(),
             selected_task: None,

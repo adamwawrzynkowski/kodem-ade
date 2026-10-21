@@ -47,7 +47,9 @@ impl SettingsPage {
     // Returns the description under the page's title.
     fn detail(self) -> &'static str {
         match self {
-            Self::Theme => "Choose the colors of the workspace and its accent.",
+            Self::Theme => {
+                "Choose the colors of the workspace and its accent, and the background behind the chat."
+            }
             Self::Typography => "Set the typefaces and the sizes of text and code.",
             Self::Interface => "Set the size of the controls and the spacing of the task list.",
             Self::Tasks => "Choose where new tasks work and how the task list sorts them.",
@@ -372,6 +374,21 @@ const ARTIFACTS_DETAIL: &str = "Claude Code keeps Artifacts off in sessions that
 const AWAKE_LABEL: &str = "Keep the computer awake";
 /// What the switch that keeps the computer awake does.
 const AWAKE_DETAIL: &str = "While an agent works, the computer does not go to sleep on its own, also with the window closed. The display can still turn off. Closing the lid still puts a laptop to sleep.";
+/// Name of the wallpaper setting.
+const WALLPAPER_LABEL: &str = "Wallpaper";
+/// What the wallpaper setting shows and where Kodem keeps the image.
+const WALLPAPER_DETAIL: &str = "An image behind the background effects of the chat. Kodem keeps its own copy, so the original file can move or go.";
+/// Name of the switch that starts a wave where a press lands on the chat background.
+const CLICK_WAVES_LABEL: &str = "Click waves";
+/// What the click waves switch does.
+const CLICK_WAVES_DETAIL: &str =
+    "A click on the chat background starts a wave of characters there.";
+/// Name of the switch that lays the dot screen over the chat background.
+const DOT_SCREEN_LABEL: &str = "Dot screen";
+/// What the dot screen switch shows.
+const DOT_SCREEN_DETAIL: &str = "A dithered dot screen over the top of the chat background. With a wallpaper, the dots take its colors.";
+/// Size of the wallpaper's thumbnail beside its buttons.
+const WALLPAPER_THUMBNAIL: (f32, f32) = (48., 30.);
 /// Name of the switch that shows the skater on the composer.
 const SKATER_LABEL: &str = "Composer skater";
 /// What the skater switch shows.
@@ -729,6 +746,9 @@ impl Shell {
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scroll()
+                            .when(page == SettingsPage::Theme, |scroll| {
+                                scroll.track_scroll(&self.theme_scroll)
+                            })
                             .px(px(PAGE_INSET))
                             .pt(px(16.))
                             .pb(px(24.))
@@ -1213,12 +1233,151 @@ impl Shell {
         )
     }
 
-    // Builds the Theme page: the theme picker and the accent.
+    // Builds the Theme page: the theme picker, the accent and the chat background.
     fn theme_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         page_column()
             .child(self.theme_choices(cx))
             .child(self.accent_choices(cx))
+            .child(self.background_settings(cx))
             .into_any_element()
+    }
+
+    // Builds the Background group of the Theme page: the wallpaper, with its thumbnail when it
+    // is set, and the switches of the dot screen and the click waves.
+    fn background_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let (width, height) = WALLPAPER_THUMBNAIL;
+        let wallpaper = div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .when_some(self.settings.wallpaper.clone(), |control, path| {
+                control
+                    .child(
+                        img(path)
+                            .w(px(width))
+                            .h(px(height))
+                            .flex_shrink_0()
+                            .rounded(px(crate::theme::RADIUS_CONTROL))
+                            .border_1()
+                            .border_color(t.border)
+                            .object_fit(ObjectFit::Cover),
+                    )
+                    .child(
+                        self.button("wallpaper-remove", "trash-2", "Remove")
+                            .on_click(cx.listener(|s, _, _, cx| s.remove_wallpaper(cx))),
+                    )
+            })
+            .child(
+                self.button("wallpaper-choose", "folder-open", "Choose…")
+                    .on_click(cx.listener(|s, _, _, cx| s.choose_wallpaper(cx))),
+            );
+        setting_group("Background", None, t)
+            .child(self.setting_row(
+                WALLPAPER_LABEL,
+                WALLPAPER_DETAIL,
+                wallpaper.into_any_element(),
+            ))
+            .child(
+                self.setting_row(
+                    DOT_SCREEN_LABEL,
+                    DOT_SCREEN_DETAIL,
+                    controls::Switch::new("dot-screen", self.settings.dot_screen)
+                        .label(DOT_SCREEN_LABEL)
+                        .on_click(cx.listener(|s, enabled: &bool, _, cx| {
+                            s.settings.dot_screen = *enabled;
+                            s.save_settings();
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                ),
+            )
+            .child(
+                self.setting_row(
+                    CLICK_WAVES_LABEL,
+                    CLICK_WAVES_DETAIL,
+                    controls::Switch::new("click-waves", self.settings.click_waves)
+                        .label(CLICK_WAVES_LABEL)
+                        .on_click(cx.listener(|s, enabled: &bool, _, cx| {
+                            s.settings.click_waves = *enabled;
+                            s.save_settings();
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                ),
+            )
+            .into_any_element()
+    }
+
+    /// Opens the Theme page of preferences at the wallpaper, at the end of the page.
+    pub(super) fn open_wallpaper_settings(&mut self) {
+        self.open_settings(SettingsPage::Theme);
+        self.theme_scroll.scroll_to_bottom();
+    }
+
+    // Asks for an image, copies it into Kodem's data directory and makes the copy the
+    // wallpaper. The copy is made away from the window, which keeps the earlier wallpaper until
+    // it is done.
+    fn choose_wallpaper(&mut self, cx: &mut Context<Self>) {
+        let selected = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose wallpaper".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = selected.await else {
+                return;
+            };
+            let Some(source) = paths.into_iter().next() else {
+                return;
+            };
+            let cached = cx
+                .background_executor()
+                .spawn(async move { crate::wallpaper::cache(&source) })
+                .await;
+            let _ = this.update(cx, |s, cx| match cached {
+                Ok(path) => {
+                    if let Some(previous) = s.settings.wallpaper.replace(path)
+                        && s.settings.wallpaper.as_ref() != Some(&previous)
+                    {
+                        crate::wallpaper::release(&previous, cx);
+                    }
+                    s.save_settings();
+                    cx.notify();
+                }
+                Err(error) => s.report_error(
+                    format!("Could not use the image as wallpaper: {error:#}"),
+                    cx,
+                ),
+            });
+        })
+        .detach();
+    }
+
+    // Removes the wallpaper and deletes Kodem's copy of it.
+    fn remove_wallpaper(&mut self, cx: &mut Context<Self>) {
+        let Some(previous) = self.settings.wallpaper.take() else {
+            return;
+        };
+        crate::wallpaper::release(&previous, cx);
+        self.save_settings();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let cleared = cx
+                .background_executor()
+                .spawn(async move { crate::wallpaper::clear(None) })
+                .await;
+            if let Err(error) = cleared {
+                let _ = this.update(cx, |s, cx| {
+                    s.report_error(
+                        format!("Could not delete the wallpaper's copy: {error:#}"),
+                        cx,
+                    )
+                });
+            }
+        })
+        .detach();
     }
 
     // Builds the Typography page: the typeface and size of text, then of code.

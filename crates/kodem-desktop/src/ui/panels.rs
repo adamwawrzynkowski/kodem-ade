@@ -64,6 +64,7 @@ impl Shell {
             | Panel::ProjectCommands
             | Panel::ThreadMenu
             | Panel::SelectionMenu
+            | Panel::BackdropMenu
             | Panel::Sort
             | Panel::Palette
             | Panel::Comparison => "",
@@ -499,6 +500,7 @@ impl Shell {
             | Panel::ProjectCommands
             | Panel::ThreadMenu
             | Panel::SelectionMenu
+            | Panel::BackdropMenu
             | Panel::Sort
             | Panel::Palette
             | Panel::Comparison => {}

@@ -13,7 +13,7 @@
 //! own. The ring is bent by a few slow lobes that turn while it spreads, so no two waves look
 //! alike. The characters under its edge scramble, a fainter wake fills the ring behind the
 //! edge, and the wave fades as it spreads. Presses on selectable text, in fields and on the
-//! composer do not start one.
+//! composer do not start one, and no press starts one while click waves are off.
 //!
 //! The reading column stays calm: the drifting streaks keep a quarter of their strength behind
 //! it, and waves half. The field follows the open task: quiet while idle; denser, faster and
@@ -22,7 +22,9 @@
 //! nothing jumps.
 //!
 //! The field covers the whole window. The panels at its sides are glass that blurs it; the calm
-//! column and the composer belong to the chat.
+//! column and the composer belong to the chat. A wallpaper, when the user chose one, lies
+//! beneath the field under a veil of the surface color. A still dot screen lies over the veil
+//! and beneath the lights; [`screen`] describes it.
 //!
 //! Each light is one blurred shape that the GPU draws. Each lit cell is one glyph sprite from
 //! GPUI's atlas. The grid lies on whole device pixels,
@@ -34,7 +36,9 @@
 use super::*;
 // The field is painted in window pixels over the measured chat surface.
 use gpui::px;
-use std::{cell::RefCell, f32::consts::TAU, rc::Rc, time::Instant};
+use std::{cell::RefCell, f32::consts::TAU, rc::Rc, sync::Arc, time::Instant};
+
+mod screen;
 
 /// Seconds in which the field closes most of the distance to a new mood.
 const BLEND: f32 = 0.6;
@@ -101,6 +105,9 @@ const TWINKLE_DEPTH: f32 = 0.3;
 const SCRAMBLE: f64 = 14.;
 /// Speed of the breath of a waiting task, in radians per second.
 const BREATH_SPEED: f32 = 1.85;
+/// Share of the surface color that veils a wallpaper, so that the field and the text stay
+/// clear over it.
+const WALLPAPER_VEIL: f32 = 0.6;
 
 /// What the open task is doing, as the background shows it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -330,6 +337,10 @@ struct Wave {
     bends: [(f32, f32, f32, f32); 3],
 }
 
+// What one frame of the background showed: the chat surface, the mood, the width of the calm
+// column, the height of the composer, the dot screen's switch and the wallpaper.
+type Painted = (Bounds<Pixels>, Mood, f32, f32, bool, Option<PathBuf>);
+
 // What the workspace last asked for, what the background last painted, and the running waves.
 #[derive(Default)]
 struct BackdropState {
@@ -339,7 +350,11 @@ struct BackdropState {
     column: f32,
     /// Height at the bottom of the surface that the composer covers, in window pixels.
     composer: f32,
-    painted: Option<(Bounds<Pixels>, Mood, f32, f32)>,
+    /// The dot screen is on.
+    dot_screen: bool,
+    /// The image beneath the field.
+    wallpaper: Option<PathBuf>,
+    painted: Option<Painted>,
     waves: Vec<Wave>,
     /// Counts the waves, so that each one takes a different shape.
     seed: u32,
@@ -370,9 +385,16 @@ pub(super) fn begin_frame(window: &mut Window, cx: &mut App) {
             let state = state.borrow();
             (
                 state.painted
-                    != state
-                        .bounds
-                        .map(|bounds| (bounds, state.mood, state.column, state.composer)),
+                    != state.bounds.map(|bounds| {
+                        (
+                            bounds,
+                            state.mood,
+                            state.column,
+                            state.composer,
+                            state.dot_screen,
+                            state.wallpaper.clone(),
+                        )
+                    }),
                 state.layer.clone(),
             )
         };
@@ -435,14 +457,23 @@ fn bend(seed: u32, index: u32) -> (f32, f32, f32, f32) {
 }
 
 /// An invisible element that marks its parent as the surface the background fills, in `mood`.
-/// The parent must be positioned and must not paint a background of its own. A press on the
-/// surface that no text or field takes, outside the composer, starts a wave there.
+/// The parent must be positioned and must not paint a background of its own. When `waves` is
+/// on, a press on the surface that no text or field takes, outside the composer, starts a
+/// wave there.
 ///
 /// `column` is the width of the centered column that holds the text, in points. The field is
 /// calmer behind it. `composer` is the height at the bottom of the surface that the composer
 /// covers, in window pixels; the calm column ends there and leaves the field around the
-/// composer.
-pub(super) fn surface(mood: Mood, column: f32, composer: f32) -> impl IntoElement {
+/// composer. `dot_screen` lays the dot screen over the surface, and `wallpaper` is the image
+/// beneath the field.
+pub(super) fn surface(
+    mood: Mood,
+    column: f32,
+    composer: f32,
+    waves: bool,
+    dot_screen: bool,
+    wallpaper: Option<PathBuf>,
+) -> impl IntoElement {
     let column = column * crate::theme::ui_scale();
     canvas(
         move |bounds, window, cx| {
@@ -452,9 +483,14 @@ pub(super) fn surface(mood: Mood, column: f32, composer: f32) -> impl IntoElemen
             state.mood = mood;
             state.column = column;
             state.composer = composer;
+            state.dot_screen = dot_screen;
+            state.wallpaper = wallpaper;
             window.insert_hitbox(bounds, HitboxBehavior::Normal)
         },
-        |_, hitbox, window, _| {
+        move |_, hitbox, window, _| {
+            if !waves {
+                return;
+            }
             // The surface is painted first, so this listener runs after every element above
             // it. A text or a field that takes focus on the press prevents the default.
             window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
@@ -537,6 +573,7 @@ pub(super) struct Backdrop {
     glyphs: Option<Glyphs>,
     /// The cells of the last grid, kept while its size stays the same.
     cells: Option<(u32, u32, Rc<[Cell]>)>,
+    screen: screen::Screen,
 }
 
 impl Backdrop {
@@ -554,6 +591,7 @@ impl Backdrop {
             waiting: false,
             glyphs: None,
             cells: None,
+            screen: screen::Screen::default(),
         }
     }
 
@@ -628,16 +666,31 @@ impl Render for Backdrop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.try_global::<Theme>().copied().unwrap_or_default();
         let state = shared(cx);
-        let (bounds, mood, column, composer) = {
+        let (bounds, mood, column, composer, dot_screen, wallpaper) = {
             let state = state.borrow();
-            (state.bounds, state.mood, state.column, state.composer)
+            (
+                state.bounds,
+                state.mood,
+                state.column,
+                state.composer,
+                state.dot_screen,
+                state.wallpaper.clone(),
+            )
         };
         let layer = div().absolute().top_0().left_0().size_full();
         let Some(bounds) = bounds else {
             state.borrow_mut().painted = None;
             return layer;
         };
-        state.borrow_mut().painted = Some((bounds, mood, column, composer));
+        state.borrow_mut().painted = Some((
+            bounds,
+            mood,
+            column,
+            composer,
+            dot_screen,
+            wallpaper.clone(),
+        ));
+        let screen = self.screen(dot_screen, wallpaper.as_ref(), theme.dot, window, cx);
         // The field covers the whole window, beneath the panels at its sides, which blur it.
         // The calm column and the composer belong to the chat surface.
         let chat = bounds;
@@ -710,18 +763,37 @@ impl Render for Backdrop {
                 * (1. + field.breath * self.breath.sin()),
             lights: [rgb_to_hsla(field.tone), rgb_to_hsla(field.second)],
             surface: theme.canvas,
+            veil: if wallpaper.is_some() {
+                WALLPAPER_VEIL
+            } else {
+                1.
+            },
+            screen,
             grid,
             set,
             size,
             rings,
         };
-        layer.child(
-            canvas(|_, _, _| {}, move |_, _, window, _| paint(&frame, window))
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full(),
-        )
+        // The wallpaper covers the window beneath the field. It is decoded once and cached by
+        // its path; the view renders again when it has loaded.
+        layer
+            .when_some(wallpaper, |layer, wallpaper| {
+                layer.child(
+                    img(wallpaper)
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .object_fit(ObjectFit::Cover),
+                )
+            })
+            .child(
+                canvas(|_, _, _| {}, move |_, _, window, _| paint(&frame, window))
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+            )
     }
 }
 
@@ -861,6 +933,10 @@ struct Frame {
     glow: f32,
     lights: [Hsla; 2],
     surface: Hsla,
+    /// Share of the surface color painted over the window: whole, or a veil over a wallpaper.
+    veil: f32,
+    /// The dot screen's sprite, at the top-left corner of the window.
+    screen: Option<Arc<RenderImage>>,
     set: Rc<[(FontId, GlyphId)]>,
     size: Pixels,
     rings: Vec<Ring>,
@@ -1008,10 +1084,14 @@ struct Lit {
     glyph: usize,
 }
 
-// Paints the surface, the glow and the lit cells of one frame, clipped to the chat surface.
+// Paints the surface, the dot screen, the glow and the lit cells of one frame, clipped to the
+// chat surface.
 fn paint(frame: &Frame, window: &mut Window) {
     let bounds = frame.bounds;
-    window.paint_quad(fill(bounds, frame.surface));
+    window.paint_quad(fill(bounds, frame.surface.opacity(frame.veil)));
+    if let Some(sprite) = &frame.screen {
+        screen::paint(sprite, bounds, window);
+    }
     if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) || frame.set.is_empty() {
         return;
     }
