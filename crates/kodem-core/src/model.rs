@@ -1718,6 +1718,9 @@ pub struct Settings {
     pub dot_screen: bool,
     pub sort: Sort,
     pub collapsed_projects: std::collections::HashSet<String>,
+    /// The order of the project groups in the thread feed, as the user arranged them. A project
+    /// that is not listed follows the listed ones.
+    pub project_order: Vec<String>,
     pub selected_task: Option<String>,
     /// The project that a new task starts in, as it was chosen last.
     pub selected_project: Option<String>,
@@ -1761,6 +1764,7 @@ impl Default for Settings {
             dot_screen: true,
             sort: Sort::Recent,
             collapsed_projects: Default::default(),
+            project_order: Vec::new(),
             selected_task: None,
             selected_project: None,
             mode: TaskKind::default(),

@@ -130,6 +130,8 @@ enum Panel {
     TaskMenu,
     ProjectCommands,
     ThreadMenu,
+    /// The menu of a project group in the thread feed.
+    ProjectMenu,
     SelectionMenu,
     /// The menu of the chat background, which leads to its wallpaper.
     BackdropMenu,
@@ -160,6 +162,12 @@ enum PanePage {
 }
 struct ThreadMenu {
     task_id: String,
+    position: Point<Pixels>,
+}
+struct ProjectMenu {
+    project_id: String,
+    /// How many tasks the project's group lists, which its fold moves.
+    tasks: usize,
     position: Point<Pixels>,
 }
 struct PendingSubmission {
@@ -216,6 +224,7 @@ pub struct Shell {
     /// Bounds of the control that opened the current menu. The menu opens above or below it.
     menu_anchor: Option<Bounds<Pixels>>,
     thread_menu: Option<ThreadMenu>,
+    project_menu: Option<ProjectMenu>,
     /// Where the pointer opened the menu of the conversation's text selection.
     selection_menu: Option<Point<Pixels>>,
     /// Where the pointer opened the menu of the chat background.
@@ -368,6 +377,8 @@ pub struct Shell {
     entering_tasks: HashMap<String, motion::Entrance>,
     feed_slide: sidebar::FeedSlide,
     group_folds: HashMap<String, sidebar::GroupFold>,
+    /// The project group that a drag carries over the feed.
+    feed_drag: Option<sidebar::FeedDrag>,
     settled_fold: Option<sidebar::GroupFold>,
     /// How far each row of a folding project group is open in this frame, by task.
     fold_rows: HashMap<String, f32>,
@@ -687,6 +698,7 @@ impl Shell {
             menu_anchor: None,
             usage_actions: std::collections::BTreeMap::new(),
             thread_menu: None,
+            project_menu: None,
             selection_menu: None,
             backdrop_menu: None,
             theme_scroll: ScrollHandle::new(),
@@ -798,6 +810,7 @@ impl Shell {
             entering_tasks: HashMap::new(),
             feed_slide: sidebar::FeedSlide::default(),
             group_folds: HashMap::new(),
+            feed_drag: None,
             settled_fold: None,
             fold_rows: HashMap::new(),
             composer_height: 170.,

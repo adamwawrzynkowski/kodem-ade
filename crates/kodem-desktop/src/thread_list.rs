@@ -7,7 +7,7 @@
 //! those states instead. Settled work leaves the feed for one list of its own, and a project
 //! without open tasks has no group. A feed holds the tasks of one workspace: agentic coding,
 //! chats or reviews.
-use kodem_core::{Settings, Task, TaskKind, Workspace};
+use kodem_core::{Project, Settings, Task, TaskKind, Workspace};
 use std::collections::HashMap;
 
 /// A group of tasks that share a state the user acts on, from the most urgent.
@@ -207,8 +207,19 @@ fn collapses(task: &Task) -> bool {
     task.is_settled() && !(task.settled.is_none() && task.pinned)
 }
 
-// One group per project with open tasks: pinned projects first, then by name. A folded group
-// keeps its header, unless a search unfolds it.
+/// Returns the sort key of a project's group: the place the user gave it, then pinned projects
+/// first, then by name. A project that the user never placed follows the placed ones.
+pub fn project_rank(project: &Project, settings: &Settings) -> (usize, bool, String) {
+    let placed = settings
+        .project_order
+        .iter()
+        .position(|id| *id == project.id)
+        .unwrap_or(usize::MAX);
+    (placed, !project.pinned, project.name.to_lowercase())
+}
+
+// One group per project with open tasks, in the order of `project_rank`. A folded group keeps
+// its header, unless a search unfolds it.
 fn project_groups<'a>(
     rows: &mut Vec<Row>,
     workspace: &Workspace,
@@ -223,10 +234,7 @@ fn project_groups<'a>(
         }
     }
     let mut order: Vec<_> = groups.keys().copied().collect();
-    order.sort_by_key(|index| {
-        let project = &workspace.projects[*index];
-        (!project.pinned, project.name.to_lowercase())
-    });
+    order.sort_by_key(|index| project_rank(&workspace.projects[*index], settings));
     for index in order {
         let Some(mut tasks) = groups.remove(&index) else {
             continue;

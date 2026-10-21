@@ -63,6 +63,7 @@ impl Shell {
             | Panel::TaskMenu
             | Panel::ProjectCommands
             | Panel::ThreadMenu
+            | Panel::ProjectMenu
             | Panel::SelectionMenu
             | Panel::BackdropMenu
             | Panel::Sort
@@ -499,6 +500,7 @@ impl Shell {
             | Panel::TaskMenu
             | Panel::ProjectCommands
             | Panel::ThreadMenu
+            | Panel::ProjectMenu
             | Panel::SelectionMenu
             | Panel::BackdropMenu
             | Panel::Sort

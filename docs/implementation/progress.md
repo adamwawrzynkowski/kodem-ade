@@ -1445,3 +1445,14 @@ Recorded on 21 October 2026. The user reported that a chosen wallpaper sometimes
 - The backdrop releases the image it showed when its wallpaper changes, on the frame after the workspace reported the change, instead of the settings releasing it at once. `wallpaper::release` takes the window, because the window that renders is out of the application's list of windows.
 
 Checked with a locked macOS `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary test, since removed, checked that the same image chosen twice, and again after a removal, gets a new path each time and leaves one copy. Not checked in the running app, under the no-visual-testing agreement.
+
+### Project group order and menu
+
+Recorded on 21 October 2026. The user asked to reorder the project groups of the thread feed by dragging them with the left button, with the feed scrolling near its ends, and for a secondary-click menu on a project group like the one on a thread, with Move up and Move down that are unavailable at the ends.
+
+- `Settings::project_order` keeps the order that the user gave the projects. `thread_list::project_rank` sorts the groups by it, then pinned first, then by name, so a project that was never placed follows the placed ones.
+- A press on a group header that moves drags the group (`sidebar::ProjectDrag`). Its preview shows the project's tile and name, and its header dims until the drop. A drop on another group's header or on one of its task rows puts the group in that group's place. `Shell::move_project` saves the order of every project, so projects without a group in the feed keep their places among the others.
+- While a group is dragged, the feed scrolls when the pointer is within 48 points of its top or bottom edge, up to 900 pixels per second at the edge.
+- A secondary click on a group header opens the Project menu: New task (New review in the review workspace) in that project, Expand or Collapse, Move up, Move down, Reveal in Finder, Copy path, Customize… and Remove…. Move up and Move down move the group past the group above or below it in the feed, and are unavailable when there is none.
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary test, since removed, checked that `project_rank` puts placed projects first in their saved order, then pinned projects, then the rest by name, and ignores a saved project that no longer exists. Not run: the Linux and Windows lint (the changes have no platform code). Not checked in the running app, under the no-visual-testing agreement.

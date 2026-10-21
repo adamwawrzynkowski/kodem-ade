@@ -175,13 +175,13 @@ const CURRENT_BRANCH_ANCHOR: &str = "branch-current";
 
 /// The name of the command that shows a folder in the system file manager.
 #[cfg(target_os = "macos")]
-const REVEAL_LABEL: &str = "Reveal in Finder";
+pub(crate) const REVEAL_LABEL: &str = "Reveal in Finder";
 /// The name of the command that shows a folder in the system file manager.
 #[cfg(target_os = "windows")]
-const REVEAL_LABEL: &str = "Show in Explorer";
+pub(crate) const REVEAL_LABEL: &str = "Show in Explorer";
 /// The name of the command that shows a folder in the system file manager.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-const REVEAL_LABEL: &str = "Show in File Manager";
+pub(crate) const REVEAL_LABEL: &str = "Show in File Manager";
 
 fn branch_checkout(branch: &Branch) -> Option<BranchCheckout> {
     if branch.is_current {

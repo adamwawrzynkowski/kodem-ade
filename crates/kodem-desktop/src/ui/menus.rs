@@ -345,6 +345,152 @@ impl Shell {
                     }
                 }
             }
+            Panel::ProjectMenu => {
+                if let Some(context) = &self.project_menu {
+                    width = 236.;
+                    if let Some(project) = self
+                        .workspace
+                        .as_ref()
+                        .and_then(|workspace| {
+                            workspace
+                                .projects
+                                .iter()
+                                .find(|project| project.id == context.project_id)
+                        })
+                        .cloned()
+                    {
+                        let tasks = context.tasks;
+                        let new_id = project.id.clone();
+                        menu = menu.child(menu_title("Project", None, t)).child(
+                            self.ghost(
+                                "project-new-task",
+                                "plus",
+                                match self.mode {
+                                    TaskKind::Review => "New review",
+                                    TaskKind::Coding | TaskKind::Chat => "New task",
+                                },
+                            )
+                            .w_full()
+                            .justify_start()
+                            .on_click(cx.listener(
+                                move |s, _, window, cx| {
+                                    if s.selected_project.as_ref() != Some(&new_id) {
+                                        // The next task starts from the chosen project's defaults.
+                                        s.new_preferences = None;
+                                    }
+                                    s.selected_project = Some(new_id.clone());
+                                    s.save_settings();
+                                    s.panel = Panel::None;
+                                    s.new_task(&NewTask, window, cx);
+                                    if s.selected_runtime().models.is_empty() {
+                                        s.connect_runtime();
+                                    }
+                                },
+                            )),
+                        );
+                        let folded = self.project_folded(&project.id, cx);
+                        let fold_id = project.id.clone();
+                        menu = menu.child(
+                            self.ghost(
+                                "project-fold",
+                                if folded { "chevron-down" } else { "chevron-up" },
+                                if folded { "Expand" } else { "Collapse" },
+                            )
+                            .w_full()
+                            .justify_start()
+                            .on_click(cx.listener(
+                                move |s, _, _, cx| {
+                                    s.panel = Panel::None;
+                                    s.toggle_project_group(fold_id.clone(), tasks, cx);
+                                },
+                            )),
+                        );
+                        // A group moves among the groups that the feed shows.
+                        let (above, below) = self.project_neighbors(&project.id);
+                        for (key, glyph, label, neighbor) in [
+                            ("project-move-up", "arrow-up", "Move up", above),
+                            ("project-move-down", "arrow-down", "Move down", below),
+                        ] {
+                            let move_id = project.id.clone();
+                            menu = menu.child(
+                                self.ghost(key, glyph, label)
+                                    .w_full()
+                                    .justify_start()
+                                    .disabled(neighbor.is_none())
+                                    .on_click(cx.listener(move |s, _, _, cx| {
+                                        s.panel = Panel::None;
+                                        if let Some(target) = &neighbor {
+                                            s.move_project(&move_id, target, cx);
+                                        }
+                                        cx.notify();
+                                    })),
+                            );
+                        }
+                        let reveal = project.path.clone();
+                        let path = project.path.display().to_string();
+                        let editing = project.clone();
+                        menu = menu
+                            .child(separator(t))
+                            .child(
+                                self.ghost(
+                                    "project-reveal",
+                                    "folder-open",
+                                    git::sidebar::REVEAL_LABEL,
+                                )
+                                .w_full()
+                                .justify_start()
+                                .on_click(cx.listener(
+                                    move |s, _, _, cx| {
+                                        cx.reveal_path(&reveal);
+                                        s.panel = Panel::None;
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                self.ghost("project-copy-path", "copy", "Copy path")
+                                    .w_full()
+                                    .justify_start()
+                                    .on_click(cx.listener(move |s, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            path.clone(),
+                                        ));
+                                        s.panel = Panel::None;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                self.ghost("project-customize", "edit", "Customize…")
+                                    .w_full()
+                                    .justify_start()
+                                    .on_click(cx.listener(move |s, _, window, cx| {
+                                        s.open_project_editor(editing.clone(), cx);
+                                        window.focus(&s.aux.read(cx).focus_handle(cx), cx);
+                                    })),
+                            );
+                        menu = menu.child(separator(t)).child(
+                            // Built from the bare control: `ghost` already sets a hover style,
+                            // and GPUI allows one hover style per element.
+                            self.control("project-remove-menu")
+                                .w_full()
+                                .justify_start()
+                                .border_color(gpui::transparent_black())
+                                .bg(gpui::transparent_black())
+                                .text_color(t.removed)
+                                .child(icon("trash-2").size(px(13.)))
+                                .child("Remove…")
+                                .hover(move |b| b.bg(t.removed.opacity(0.1)))
+                                .active(move |b| b.bg(t.removed.opacity(0.16)))
+                                .on_click(cx.listener(move |s, _, _, cx| {
+                                    s.editing_project = Some(project.clone());
+                                    s.error = None;
+                                    s.panel = Panel::RemoveProject;
+                                    cx.notify();
+                                })),
+                        );
+                    }
+                }
+            }
             Panel::SelectionMenu => {
                 width = 212.;
                 let selected = self.chat_selection.read(cx).selected_text(cx).is_some();
@@ -499,6 +645,7 @@ impl Shell {
         // A menu that the pointer opened, rather than a control, opens at the pointer.
         let pointer = match self.panel {
             Panel::ThreadMenu => self.thread_menu.as_ref().map(|context| context.position),
+            Panel::ProjectMenu => self.project_menu.as_ref().map(|context| context.position),
             Panel::SelectionMenu => self.selection_menu,
             Panel::BackdropMenu => self.backdrop_menu,
             _ => None,

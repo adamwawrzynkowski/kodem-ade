@@ -1,6 +1,7 @@
 use super::*;
 use crate::thread_list::{Attention, Row, Section};
 use dither::{Dither, DitherField, Edge};
+use std::any::Any;
 use std::time::Instant;
 
 /// Returns the effect anchor name of one thread row.
@@ -36,6 +37,77 @@ const FOLD_ROW: Duration = Duration::from_millis(260);
 const FOLD_STEP: Duration = Duration::from_millis(35);
 /// Rows after this many share the last wait, so a long group folds as quickly as a short one.
 const FOLD_STAGGER: usize = 8;
+/// Height of the band at each end of the feed where a dragged project group scrolls the feed.
+const DRAG_SCROLL_EDGE: f32 = 48.;
+/// How fast the feed scrolls under a dragged project group at the very end of the feed, in
+/// window pixels per second.
+const DRAG_SCROLL_SPEED: f32 = 900.;
+
+/// What a drag of a project group carries: the project, which the drag's preview shows.
+#[derive(Clone)]
+pub(super) struct ProjectDrag {
+    project: Project,
+    theme: Theme,
+}
+
+impl Render for ProjectDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme;
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .h(px(GROUP_HEADER))
+            .px(px(8.))
+            .rounded(px(crate::theme::RADIUS_SURFACE))
+            .bg(t.raised)
+            .border_1()
+            .border_color(project_tint(&self.project, t).opacity(0.6))
+            .shadow(t.floating())
+            .font_family(crate::theme::sans())
+            .text_size(text_px(13.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(t.text)
+            .child(project_tile(&self.project, t, GROUP_TILE, GROUP_TILE_GLYPH))
+            .child(self.project.name.clone())
+    }
+}
+
+/// A project group on its way to another place in the feed. Near an end of the feed, the feed
+/// scrolls under it.
+pub(super) struct FeedDrag {
+    project: String,
+    /// How fast the feed scrolls, in window pixels per second. A negative speed scrolls up.
+    speed: f32,
+    /// When the feed last scrolled under the drag.
+    scrolled: Instant,
+}
+
+// Tells whether a drag carries the group of a project other than `project`, which a drop on
+// `project`'s group moves into its place.
+fn carries_other_project(value: &dyn Any, project: &str) -> bool {
+    value
+        .downcast_ref::<ProjectDrag>()
+        .is_some_and(|drag| drag.project.id != project)
+}
+
+// Returns where a menu that the pointer opens at `position` stands, so that a menu of `size`
+// stays in the window.
+fn pointer_menu_position(
+    position: Point<Pixels>,
+    size: Size<Pixels>,
+    window: &Window,
+) -> Point<Pixels> {
+    let viewport = window.viewport_size();
+    point(
+        position
+            .x
+            .clamp(px(8.), (viewport.width - size.width).max(px(8.))),
+        position
+            .y
+            .clamp(px(8.), (viewport.height - size.height).max(px(8.))),
+    )
+}
 
 /// The slide of the feed's selection edge from the row that was open to the row that opened.
 #[derive(Default)]
@@ -182,6 +254,7 @@ impl Shell {
             self.group_folds.retain(|_, fold| !fold.done());
         }
         self.sync_feed_slide(cx);
+        self.scroll_feed_drag(cx);
         // A closed sidebar draws nothing; the workspace rail holds its quick actions. While it
         // slides, the full sidebar is drawn and clipped.
         if self.reveals.sidebar <= 0. {
@@ -378,6 +451,9 @@ impl Shell {
                     .min_h(px(96.))
                     .flex()
                     .flex_col()
+                    .on_drag_move(cx.listener(|s, event: &DragMoveEvent<ProjectDrag>, _, cx| {
+                        s.drag_feed(event, cx)
+                    }))
                     .child(feed),
                 t.sidebar,
                 4.,
@@ -441,7 +517,8 @@ impl Shell {
             );
         let moving = self.feed_slide.progress().is_some()
             || !self.group_folds.is_empty()
-            || self.settled_fold.is_some();
+            || self.settled_fold.is_some()
+            || self.feed_drag.as_ref().is_some_and(|drag| drag.speed != 0.);
         panel
             .children(self.slide_edge(cx))
             // Rows out of view still finish their folds.
@@ -529,9 +606,17 @@ impl Shell {
         }
     }
 
-    // Folds or unfolds a project group of `rows` tasks. Its rows move one after another; a
-    // group that folds leaves the feed when its last row has folded.
-    fn toggle_project_group(&mut self, id: String, rows: usize, cx: &mut Context<Self>) {
+    /// Tells whether a project's group is folded or folding, as its header shows it. A search
+    /// unfolds every group.
+    pub(super) fn project_folded(&self, id: &str, cx: &App) -> bool {
+        (self.settings.collapsed_projects.contains(id)
+            || self.group_folds.get(id).is_some_and(|fold| !fold.opening))
+            && self.search.read(cx).text().is_empty()
+    }
+
+    /// Folds or unfolds a project group of `rows` tasks. Its rows move one after another; a
+    /// group that folds leaves the feed when its last row has folded.
+    pub(super) fn toggle_project_group(&mut self, id: String, rows: usize, cx: &mut Context<Self>) {
         let animate = !cx.reduce_motion() && self.search.read(cx).text().is_empty();
         let folding = self.group_folds.get(&id).is_some_and(|fold| !fold.opening);
         if folding {
@@ -567,6 +652,119 @@ impl Shell {
             self.settled_fold = None;
         }
         cx.notify();
+    }
+
+    /// Moves a project's group into the place of another project's group and saves the order of
+    /// every project. Projects without a group in the feed keep their places among the others.
+    pub(super) fn move_project(&mut self, id: &str, target: &str, cx: &mut Context<Self>) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let mut projects: Vec<&Project> = workspace.projects.iter().collect();
+        projects.sort_by_key(|project| crate::thread_list::project_rank(project, &self.settings));
+        let mut order: Vec<String> = projects
+            .into_iter()
+            .map(|project| project.id.clone())
+            .collect();
+        let (Some(from), Some(to)) = (
+            order.iter().position(|project| project == id),
+            order.iter().position(|project| project == target),
+        ) else {
+            return;
+        };
+        if from == to {
+            return;
+        }
+        // The target shifts up when the moved project leaves above it, so a project that moves
+        // down lands under the target and one that moves up lands over it.
+        let moved = order.remove(from);
+        order.insert(to, moved);
+        self.settings.project_order = order;
+        self.sidebar_dirty = true;
+        self.save_settings();
+        cx.notify();
+    }
+
+    /// Returns the project groups of the feed above and below a project's group.
+    pub(super) fn project_neighbors(&self, id: &str) -> (Option<String>, Option<String>) {
+        let groups: Vec<&str> = self
+            .sidebar_rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Project { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let Some(index) = groups.iter().position(|group| *group == id) else {
+            return (None, None);
+        };
+        (
+            index.checked_sub(1).map(|above| groups[above].to_owned()),
+            groups.get(index + 1).map(|below| (*below).to_owned()),
+        )
+    }
+
+    // Follows a project group that a drag carries: its header dims, and the feed scrolls while
+    // the pointer is near one of the feed's ends, the faster the nearer.
+    fn drag_feed(&mut self, event: &DragMoveEvent<ProjectDrag>, cx: &mut Context<Self>) {
+        let edge = DRAG_SCROLL_EDGE * crate::theme::ui_scale();
+        let position = event.event.position;
+        let above = f32::from(position.y - event.bounds.top());
+        let below = f32::from(event.bounds.bottom() - position.y);
+        let beside = position.x >= event.bounds.left() && position.x <= event.bounds.right();
+        let speed = if !beside {
+            0.
+        } else if above < edge {
+            -DRAG_SCROLL_SPEED * (1. - above.max(0.) / edge)
+        } else if below < edge {
+            DRAG_SCROLL_SPEED * (1. - below.max(0.) / edge)
+        } else {
+            0.
+        };
+        let project = &event.drag(cx).project.id;
+        let changed = match self
+            .feed_drag
+            .as_mut()
+            .filter(|drag| drag.project == *project)
+        {
+            Some(drag) => {
+                let started = (drag.speed == 0.) != (speed == 0.);
+                drag.speed = speed;
+                started
+            }
+            None => {
+                self.feed_drag = Some(FeedDrag {
+                    project: project.clone(),
+                    speed,
+                    scrolled: Instant::now(),
+                });
+                true
+            }
+        };
+        // A speed that changes while the feed scrolls takes effect on the next frame anyway.
+        if changed {
+            cx.notify();
+        }
+    }
+
+    // Scrolls the feed under a dragged project group by the time since the last frame. A drag
+    // that ended leaves no state behind.
+    fn scroll_feed_drag(&mut self, cx: &App) {
+        if !cx.has_active_drag() {
+            self.feed_drag = None;
+            return;
+        }
+        let Some(drag) = &mut self.feed_drag else {
+            return;
+        };
+        let now = Instant::now();
+        // A long frame does not throw the feed far.
+        let elapsed = now.duration_since(drag.scrolled).as_secs_f32().min(0.05);
+        drag.scrolled = now;
+        if drag.speed != 0. {
+            self.sidebar_scroll
+                .scroll_by(gpui::px(drag.speed * elapsed));
+        }
     }
 
     // Rebuilds the rows of the open workspace's feed after its tasks, filter or order changed.
@@ -747,9 +945,7 @@ impl Shell {
         let tint = project_tint(project, t);
         let searching = !self.search.read(cx).text().is_empty();
         let fold = self.group_folds.get(&id);
-        let collapsed = (self.settings.collapsed_projects.contains(&id)
-            || fold.is_some_and(|fold| !fold.opening))
-            && !searching;
+        let collapsed = self.project_folded(&id, cx);
         // A group that folds keeps its rows until the last has folded, so the header closes the
         // group's surface only then.
         let closed = self.settings.collapsed_projects.contains(&id) && !searching;
@@ -761,6 +957,17 @@ impl Shell {
             if collapsed { "Expand" } else { "Collapse" },
             project.name
         );
+        // A press that moves drags the group to another place; the group stays dim until the
+        // drop.
+        let dragged = self
+            .feed_drag
+            .as_ref()
+            .is_some_and(|drag| drag.project == id);
+        let drag = ProjectDrag {
+            project: project.clone(),
+            theme: t,
+        };
+        let (drop_id, target, menu_id) = (id.clone(), id.clone(), id.clone());
         self.control(SharedString::from(format!("project-group:{id}")))
             .w_full()
             .min_w_0()
@@ -775,6 +982,17 @@ impl Shell {
             .when(closed, |header| header.rounded(radius))
             .when(!closed, |header| header.rounded_t(radius).rounded_b(px(0.)))
             .hover(move |s| s.bg(tint.opacity(GROUP_FILL * 2.)))
+            .when(dragged, |header| header.opacity(0.45))
+            .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+            .can_drop(move |value, _, _| carries_other_project(value, &drop_id))
+            .drag_over::<ProjectDrag>(move |style, _, _, _| {
+                style
+                    .border_color(tint.opacity(0.7))
+                    .bg(tint.opacity(GROUP_FILL * 3.))
+            })
+            .on_drop(cx.listener(move |s, drag: &ProjectDrag, _, cx| {
+                s.move_project(&drag.project.id, &target, cx)
+            }))
             // The glow behind the tile runs on down the group as its spine.
             .layer(
                 Dither::new(
@@ -837,6 +1055,24 @@ impl Shell {
             .children(attention_badges(attention, reduce_motion, t))
             .child(figure(count.to_string(), t.subtle))
             .child(fold_chevron(openness, 12.).text_color(t.subtle))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |s, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    s.project_menu = Some(ProjectMenu {
+                        project_id: menu_id.clone(),
+                        tasks: count,
+                        position: pointer_menu_position(
+                            event.position,
+                            size(px(244.), px(330.)),
+                            window,
+                        ),
+                    });
+                    s.panel = Panel::ProjectMenu;
+                    window.focus(&s.focus, cx);
+                    cx.notify();
+                }),
+            )
             .on_click(cx.listener(move |s, _, _, cx| s.toggle_project_group(id.clone(), count, cx)))
             .into_any_element()
     }
@@ -870,9 +1106,21 @@ impl Shell {
         };
         // The spine of the group stays beside a row while it folds, so the group shrinks as one.
         match project.filter(|_| grouped) {
-            Some(project) => group_body(project_tint(project, self.theme), last)
-                .child(row)
-                .into_any_element(),
+            Some(project) => {
+                let tint = project_tint(project, self.theme);
+                let (drop_id, target) = (project.id.clone(), project.id.clone());
+                group_body(tint, last)
+                    // A dropped project group takes this group's place, as on its header.
+                    .can_drop(move |value, _, _| carries_other_project(value, &drop_id))
+                    .drag_over::<ProjectDrag>(move |style, _, _, _| {
+                        style.bg(tint.opacity(GROUP_FILL * 3.))
+                    })
+                    .on_drop(cx.listener(move |s, drag: &ProjectDrag, _, cx| {
+                        s.move_project(&drag.project.id, &target, cx)
+                    }))
+                    .child(row)
+                    .into_any_element()
+            }
             None => row,
         }
     }
@@ -1252,18 +1500,12 @@ impl Shell {
                 MouseButton::Right,
                 cx.listener(move |s, event: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
-                    let viewport = window.viewport_size();
                     s.thread_menu = Some(ThreadMenu {
                         task_id: menu_id.clone(),
-                        position: point(
-                            event
-                                .position
-                                .x
-                                .clamp(px(8.), (viewport.width - px(244.)).max(px(8.))),
-                            event
-                                .position
-                                .y
-                                .clamp(px(8.), (viewport.height - px(192.)).max(px(8.))),
+                        position: pointer_menu_position(
+                            event.position,
+                            size(px(244.), px(192.)),
+                            window,
                         ),
                     });
                     s.panel = Panel::ThreadMenu;
