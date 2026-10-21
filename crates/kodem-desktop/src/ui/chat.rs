@@ -166,20 +166,6 @@ impl Shell {
                     .child(self.review(cx, true))
                     .child(div().h(gpui::px(self.composer_height)).flex_shrink_0());
             } else {
-                if let Some(before) = view.before {
-                    let id = view.task.id.clone();
-                    timeline =
-                        timeline.child(div().px_5().pb_2().child(
-                            self.earlier_messages("older").on_click(cx.listener(
-                                move |s, _, _, _| {
-                                    s.send(core::Request::Task {
-                                        task_id: id.clone(),
-                                        before: Some(before),
-                                    })
-                                },
-                            )),
-                        ));
-                }
                 if view.messages.is_empty() {
                     timeline = timeline.child(
                         div()
@@ -265,7 +251,12 @@ impl Shell {
                                         .h_full()
                                         // At its end the last message rests above the box,
                                         // and above the lane of the composer's skater.
-                                        .pb(list_end),
+                                        .pb(list_end)
+                                        // At its start the first message rests below the
+                                        // control for earlier messages.
+                                        .when(view.before.is_some(), |list| {
+                                            list.pt(px(EARLIER_ROOM))
+                                        }),
                                     )
                                     // The history rail and its preview lie over the list,
                                     // above the box.
@@ -282,6 +273,28 @@ impl Shell {
                     );
                 }
                 timeline = timeline.child(dither::fade(t.canvas, 14., false).top_0());
+                // The control for earlier messages floats centered over the top of the
+                // conversation, clear of the header, so it reads as part of the transcript.
+                if let Some(before) = view.before {
+                    let id = view.task.id.clone();
+                    timeline = timeline.child(
+                        div()
+                            .absolute()
+                            .top(px(EARLIER_INSET))
+                            .left_0()
+                            .right_0()
+                            .flex()
+                            .justify_center()
+                            .child(self.earlier_messages("older").on_click(cx.listener(
+                                move |s, _, _, _| {
+                                    s.send(core::Request::Task {
+                                        task_id: id.clone(),
+                                        before: Some(before),
+                                    })
+                                },
+                            ))),
+                    );
+                }
             }
             let bounds_entity = cx.entity();
             // The jump shows only while the user has scrolled away from the end, centered over
@@ -1586,27 +1599,13 @@ impl Shell {
             .into_any_element()
     }
 
-    /// Returns the control that loads an earlier page of a conversation. It reads as a section
-    /// header: an arrow, a mono label, then a dotted rule.
+    /// Returns the control that loads an earlier page of a conversation. It is a raised pill
+    /// over blurred glass, the counterpart of the jump to the latest message.
     pub(super) fn earlier_messages(&self, id: &'static str) -> Button {
-        let t = self.theme;
-        self.control(id)
-            .w_full()
-            .px(px(6.))
-            .gap(px(8.))
-            .justify_start()
-            .bg(gpui::transparent_black())
-            .border_color(gpui::transparent_black())
-            .hover(move |s| s.bg(t.selected))
-            .accessibility_label("Earlier messages")
-            .child(icon("arrow-up").size(px(12.)).text_color(t.subtle))
-            .child(caps("Earlier messages", t).text_color(t.muted))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(8.))
-                    .child(dither::DottedRule::horizontal(t.subtle.opacity(0.4))),
-            )
+        self.button(id, "arrow-up", "Earlier messages")
+            .h(px(24.))
+            .backdrop_blur(px(kit::GLASS_BLUR))
+            .accessibility_label("Load earlier messages")
     }
 
     // A composer chip that opens one of the agent menus. It behaves as a ghost button: a plate
@@ -1662,6 +1661,11 @@ fn fast_hint(on: bool, detail: &str) -> String {
 /// Height of the strip above the floating composer that holds the jump-to-latest button. The
 /// conversation runs beneath it.
 pub(super) const COMPOSER_LEAD: f32 = 28.;
+
+/// Distance of the control for earlier messages from the top of the conversation, and the room
+/// above the first message that keeps the control clear of it at the start of the list.
+const EARLIER_INSET: f32 = 12.;
+const EARLIER_ROOM: f32 = EARLIER_INSET + 24. + 8.;
 
 /// Height of the meter tab on the composer's top edge, and the run of its slanted side.
 const METER_TAB_HEIGHT: f32 = 24.;

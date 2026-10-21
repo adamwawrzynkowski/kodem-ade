@@ -510,9 +510,13 @@ impl Shell {
             );
         }
         if let Some(before) = before {
-            body =
-                body.child(div().flex_shrink_0().px_5().pt_2().child(
-                    self.earlier_messages("agent-earlier").on_click(cx.listener(
+            body = body.child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .justify_center()
+                    .pt(px(12.))
+                    .child(self.earlier_messages("agent-earlier").on_click(cx.listener(
                         move |s, _, _, _| {
                             s.send(core::Request::SubagentThread {
                                 task_id: task.id.clone(),
@@ -520,8 +524,8 @@ impl Shell {
                                 before: Some(before),
                             })
                         },
-                    )),
-                ));
+                    ))),
+            );
         }
         body = if loaded {
             body.child(
