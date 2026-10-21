@@ -1480,7 +1480,9 @@ impl Owner<'_> {
             self.transcript.write_due(self.host)?;
             if self.followed.elapsed() >= FOLLOW_INTERVAL {
                 self.followed = Instant::now();
+                let used = self.transcript.used;
                 self.transcript.follow(self.host)?;
+                self.reported(used)?;
                 self.read_plan()?;
             }
             if branch_refresh.elapsed() >= Duration::from_secs(5) {
@@ -1526,7 +1528,9 @@ impl Owner<'_> {
                 if ours && update["step_type"] == "user_input" && update["state"] == "DONE" {
                     self.delivered()?;
                 }
+                let used = self.transcript.used;
                 self.transcript.update(self.host, update)?;
+                self.reported(used)?;
             }
             "result" => self.result(&event["result"])?,
             _ => {}
@@ -1710,6 +1714,15 @@ impl Owner<'_> {
             h.store.save_task(&task)?;
         }
         Ok(())
+    }
+
+    // Each request of a turn reports its tokens as it ends, in the stream or in the CLI's file.
+    // `before` is the occupancy that the transcript held before it took the latest step.
+    fn reported(&self, before: Option<u64>) -> Result<()> {
+        if self.transcript.used == before {
+            return Ok(());
+        }
+        self.context_usage()
     }
 
     fn context_usage(&self) -> Result<()> {

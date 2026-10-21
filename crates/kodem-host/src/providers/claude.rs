@@ -652,6 +652,11 @@ impl Owner<'_> {
                     self.follow_up()?;
                 }
                 self.transcript.ingest(self.host, event)?;
+                // The result names the window and the cost; until then the latest request's
+                // counts update the occupancy and keep the earlier window and cost.
+                if std::mem::take(&mut self.transcript.usage_changed) {
+                    self.context_usage(&Value::Null)?;
+                }
             }
             _ => {}
         }

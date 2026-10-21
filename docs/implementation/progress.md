@@ -1501,3 +1501,14 @@ Recorded on 21 October 2026. The user asked for a prettier question card in the 
 - OpenCode's choice fields take only the values of their options, so their questions keep the earlier behavior: no note, no attachments, and "Write my own answer".
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary host test, since removed, imported a file, an image and a folder for three answers and checked the merged references, the refusal of an unknown question, the removal of the copies and an untouched approval. Not checked with a live provider or in the running app, under the no-visual-testing agreement.
+
+### Context usage during a turn
+
+Recorded on 21 October 2026. The user reported that the context occupancy of a task refreshed only after its turn finished, and asked for a fix for all providers.
+
+- Cause: the Claude Code, OpenCode and Antigravity drivers kept each request's token counts in their transcript during the turn, but wrote them to the task only when the turn ended. Codex already wrote every `thread/tokenUsage/updated`. The desktop's watcher sends a changed task at once, so it needed no change.
+- Claude Code: the main conversation's `message_start` now also gives the request's counts, so the occupancy updates as each request starts and again at its `message_delta`. The driver writes them through `context_usage` with the earlier window and cost; the turn's result still adds both.
+- OpenCode: `session.step.ended`, `session.step.failed` and `session.usage.updated` of the main session write the occupancy and the cost, except while a compaction that Kodem requested runs, whose summary sets the occupancy when it ends.
+- Antigravity: a finished response in the stream or in the CLI's conversation file writes the occupancy when it changed it.
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not checked with a live provider or in the running app, under the no-visual-testing agreement.

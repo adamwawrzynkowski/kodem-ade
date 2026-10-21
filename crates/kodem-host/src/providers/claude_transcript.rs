@@ -366,6 +366,8 @@ pub(super) struct Transcript {
     steps: Vec<String>,
     /// Token counts of the main conversation's latest model request.
     pub(super) usage: Option<Value>,
+    /// `usage` changed since the session last saved it as the task's context occupancy.
+    pub(super) usage_changed: bool,
     pub(super) model: Option<String>,
     /// A background agent reported during this turn, so the CLI may continue on its own.
     pub(super) agent_reported: bool,
@@ -397,6 +399,7 @@ impl Transcript {
             agents: HashMap::new(),
             steps: Vec::new(),
             usage: None,
+            usage_changed: false,
             model: None,
             agent_reported: false,
             clock: None,
@@ -539,6 +542,12 @@ impl Transcript {
                 if main {
                     self.model = inner["message"]["model"].as_str().map(str::to_owned);
                     self.clear_activity(host, RETRYING);
+                    // The request's input is known before it writes, so the occupancy updates
+                    // as each request starts and again as it ends.
+                    if inner["message"]["usage"].is_object() {
+                        self.usage = Some(inner["message"]["usage"].clone());
+                        self.usage_changed = true;
+                    }
                 }
             }
             Some("content_block_start") => {
@@ -627,6 +636,7 @@ impl Transcript {
             }
             Some("message_delta") if main && inner["usage"].is_object() => {
                 self.usage = Some(inner["usage"].clone());
+                self.usage_changed = true;
             }
             _ => {}
         }

@@ -1115,6 +1115,16 @@ impl Owner<'_> {
                 {
                     self.cost = Some(cost);
                 }
+                if self.compacting.is_none() {
+                    self.context_usage()?;
+                }
+            }
+            // Each model request of a turn reports its tokens as it ends. The summary of a
+            // compaction sets the occupancy once the compaction ends.
+            "session.step.ended" | "session.step.failed"
+                if self.main(session) && self.compacting.is_none() =>
+            {
+                self.context_usage()?;
             }
             _ => {}
         }
