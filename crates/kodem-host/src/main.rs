@@ -279,18 +279,57 @@ fn state_digest(view: &TaskView) -> Result<u64> {
     .hash(&mut hasher);
     Ok(hasher.finish())
 }
+
+/// Inputs that can change a watched view. Database writes cover persisted task state, runs,
+/// outbox and transcript rows; activities and provider requests also change in host memory.
+#[derive(Default)]
+struct WatchState {
+    stored: Option<u64>,
+    activities: Vec<Activity>,
+    requests: Vec<InputRequest>,
+}
+impl WatchState {
+    fn changed(&mut self, stored: u64, activities: &[Activity], requests: &[InputRequest]) -> bool {
+        let activities_changed = self.activities != activities;
+        let requests_changed = self.requests != requests;
+        if self.stored == Some(stored) && !activities_changed && !requests_changed {
+            return false;
+        }
+        self.stored = Some(stored);
+        if activities_changed {
+            self.activities = activities.to_owned();
+        }
+        if requests_changed {
+            self.requests = requests.to_owned();
+        }
+        true
+    }
+}
+
 /// Answers a watcher once the task differs from what its cursor describes.
 ///
 /// Transcript rows are compared by the revisions of the store. The rest of the view (the task,
 /// the outbox, activities, requests and runs) is compared by a digest, so a change that only lives in
-/// host memory is seen without a notification from the code that made it. The host lock is
-/// held only while the task is looked at.
+/// host memory is seen without a notification from the code that made it. Unchanged inputs skip
+/// database reads and serialization until the timeout. The host lock is held only while the
+/// task is looked at.
 fn watch(host: &Shared, task_id: &str, after: Option<Cursor>) -> Result<Response> {
     let until = Instant::now() + WATCH_WAIT;
+    let mut observed = WatchState::default();
     loop {
         {
             let h = host.lock().unwrap();
             ensure!(!h.shutdown, "Host is restarting. Retry after reconnecting.");
+            if !observed.changed(
+                h.store.write_revision(),
+                h.activities.get(task_id).map_or(&[], Vec::as_slice),
+                h.requests.get(task_id).map_or(&[], Vec::as_slice),
+            ) && Instant::now() < until
+            {
+                drop(h);
+                std::thread::sleep(WATCH_INTERVAL);
+                continue;
+            }
             let mut view = task_state(&h, task_id)?;
             let (epoch, rev) = h.store.revision();
             let through = Cursor {
@@ -1645,4 +1684,52 @@ fn validate_answer(request: &InputRequest, response: &Value) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod watch_tests {
+    use super::*;
+
+    #[test]
+    fn idle_watcher_skips_reloading_unchanged_state() {
+        let mut observed = WatchState::default();
+        let reloads = (0..200).filter(|_| observed.changed(0, &[], &[])).count();
+        assert_eq!(reloads, 1);
+        assert!(observed.changed(1, &[], &[]));
+        assert!(!observed.changed(1, &[], &[]));
+    }
+
+    #[test]
+    fn watcher_detects_activity_changes_without_database_writes() {
+        let mut observed = WatchState::default();
+        assert!(observed.changed(0, &[], &[]));
+        let mut activities = vec![Activity {
+            id: "activity".into(),
+            kind: ActivityKind::Command,
+            detail: "building".into(),
+            started: 1,
+        }];
+        assert!(observed.changed(0, &activities, &[]));
+        assert!(!observed.changed(0, &activities, &[]));
+        activities[0].detail = "testing".into();
+        assert!(observed.changed(0, &activities, &[]));
+        assert!(observed.changed(0, &[], &[]));
+    }
+
+    #[test]
+    fn watcher_detects_request_changes_without_database_writes() {
+        let mut observed = WatchState::default();
+        assert!(observed.changed(0, &[], &[]));
+        let mut requests = vec![InputRequest {
+            id: Value::from(1),
+            task_id: "task".into(),
+            method: "requestApproval".into(),
+            params: serde_json::json!({"command": "first"}),
+        }];
+        assert!(observed.changed(0, &[], &requests));
+        assert!(!observed.changed(0, &[], &requests));
+        requests[0].params["command"] = Value::from("second");
+        assert!(observed.changed(0, &[], &requests));
+        assert!(observed.changed(0, &[], &[]));
+    }
 }

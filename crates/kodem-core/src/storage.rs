@@ -14,6 +14,7 @@ use std::{
 const RETAINED_CHANGES: usize = 1024;
 /// Most changed rows that one answer to a watcher carries, as one transcript page.
 const CHANGED_ROWS: usize = 100;
+const OUTGOING_QUERY: &str = "SELECT payload,state FROM submissions WHERE task_id=?1 AND payload IS NOT NULL AND state IN ('queued','pending','failed','unknown') ORDER BY rowid";
 
 // Transcript writes of this open store, newest last. A row that is written again and again
 // while it streams keeps one entry.
@@ -124,6 +125,8 @@ impl Store {
             )?;
         }
         db.execute_batch("CREATE TABLE IF NOT EXISTS agent_message_order(transcript TEXT NOT NULL, id TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY(transcript,id)); CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, ordinal INTEGER NOT NULL, json TEXT NOT NULL, UNIQUE(task_id,ordinal)); COMMIT;")?;
+        // Keep per-task reads in acceptance order without scanning other tasks' submissions.
+        db.execute_batch("CREATE INDEX IF NOT EXISTS submissions_task ON submissions(task_id);")?;
         retire_removed_providers(&db)?;
         repair_settings_collections(&db)?;
         assign_project_avatars(&db)?;
@@ -139,6 +142,11 @@ impl Store {
     pub fn revision(&self) -> (&str, u64) {
         (&self.epoch, self.changes.borrow().rev)
     }
+    /// Returns the number of database rows written through this store, including rolled-back
+    /// writes. The host is the only writer; an unchanged count lets its watchers skip rereads.
+    pub fn write_revision(&self) -> u64 {
+        self.db.total_changes()
+    }
     /// Returns the rows of one transcript that were written after a revision of this store.
     ///
     /// `None` means that the rows are not known exactly or do not fit one answer: the revision
@@ -150,20 +158,28 @@ impl Store {
             if after < changes.floor || after > changes.rev {
                 return Ok(None);
             }
+            if after == changes.rev {
+                return Ok(Some(Vec::new()));
+            }
             let mut ids: Vec<String> = Vec::new();
-            for (rev, owner, id) in &changes.rows {
-                if *rev > after && owner == transcript && !ids.contains(id) {
+            for (_, owner, id) in changes
+                .rows
+                .iter()
+                .rev()
+                .take_while(|(rev, ..)| *rev > after)
+            {
+                if owner == transcript && !ids.contains(id) {
                     ids.push(id.clone());
+                    if ids.len() > CHANGED_ROWS {
+                        return Ok(None);
+                    }
                 }
             }
             ids
         };
-        if ids.len() > CHANGED_ROWS {
-            return Ok(None);
-        }
         let mut statement = self
             .db
-            .prepare("SELECT seq,json FROM messages WHERE task_id=?1 AND id=?2")?;
+            .prepare_cached("SELECT seq,json FROM messages WHERE task_id=?1 AND id=?2")?;
         let mut messages = Vec::new();
         let mut bytes = 0usize;
         for id in ids {
@@ -386,7 +402,8 @@ impl Store {
     pub fn task(&self, id: &str) -> Result<Task> {
         let json: String = self
             .db
-            .query_row("SELECT json FROM tasks WHERE id=?1", [id], |r| r.get(0))
+            .prepare_cached("SELECT json FROM tasks WHERE id=?1")?
+            .query_row([id], |r| r.get(0))
             .context("Task not found")?;
         Ok(serde_json::from_str(&json)?)
     }
@@ -449,7 +466,8 @@ impl Store {
     pub fn settings(&self) -> Result<Settings> {
         let s: Option<String> = self
             .db
-            .query_row("SELECT json FROM settings WHERE id=1", [], |r| r.get(0))
+            .prepare_cached("SELECT json FROM settings WHERE id=1")?
+            .query_row([], |r| r.get(0))
             .optional()?;
         Ok(s.map(|s| Settings::from_json(&s))
             .transpose()?
@@ -656,7 +674,7 @@ impl Store {
             json.len() <= 4 * 1024 * 1024,
             "Message and attached context exceed 4 MiB"
         );
-        self.db.execute("INSERT INTO messages(id,task_id,json) VALUES(?1,?2,?3) ON CONFLICT(task_id,id) DO UPDATE SET json=excluded.json",params![m.id,m.task_id,json])?;
+        self.db.prepare_cached("INSERT INTO messages(id,task_id,json) VALUES(?1,?2,?3) ON CONFLICT(task_id,id) DO UPDATE SET json=excluded.json")?.execute(params![m.id,m.task_id,json])?;
         let mut changes = self.changes.borrow_mut();
         changes.rev += 1;
         let rev = changes.rev;
@@ -730,7 +748,7 @@ impl Store {
         before: Option<u64>,
         agent: bool,
     ) -> Result<(Vec<Message>, Option<u64>)> {
-        let mut stmt = self.db.prepare(if agent {
+        let mut stmt = self.db.prepare_cached(if agent {
             "SELECT COALESCE(o.position,1099511627776+m.seq) AS ordinal,m.json FROM messages m LEFT JOIN agent_message_order o ON o.transcript=m.task_id AND o.id=m.id WHERE m.task_id=?1 AND ordinal<?2 ORDER BY ordinal DESC LIMIT 101"
         } else {
             "SELECT seq,json FROM messages WHERE task_id=?1 AND seq<?2 ORDER BY seq DESC LIMIT 101"
@@ -905,7 +923,7 @@ impl Store {
     }
     /// Returns queued, in-flight and recoverable failed input in FIFO acceptance order.
     pub fn outgoing(&self, task_id: &str) -> Result<Vec<OutgoingMessage>> {
-        let mut query = self.db.prepare("SELECT payload,state FROM submissions WHERE task_id=?1 AND payload IS NOT NULL AND state IN ('queued','pending','failed','unknown') ORDER BY rowid")?;
+        let mut query = self.db.prepare_cached(OUTGOING_QUERY)?;
         let mut rows = query.query([task_id])?;
         let mut result = Vec::new();
         while let Some(row) = rows.next()? {
@@ -1007,7 +1025,7 @@ impl Store {
     pub fn runs(&self, task_id: &str) -> Result<Vec<Run>> {
         let mut statement = self
             .db
-            .prepare("SELECT json FROM runs WHERE task_id=?1 ORDER BY ordinal")?;
+            .prepare_cached("SELECT json FROM runs WHERE task_id=?1 ORDER BY ordinal")?;
         let rows = statement.query_map([task_id], |row| row.get::<_, String>(0))?;
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
@@ -1170,7 +1188,7 @@ impl Store {
         )?)?)
     }
     fn read_json<T: serde::de::DeserializeOwned>(&self, sql: &str) -> Result<Vec<T>> {
-        let mut stmt = self.db.prepare(sql)?;
+        let mut stmt = self.db.prepare_cached(sql)?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
@@ -1321,4 +1339,158 @@ fn repair_settings_collections(db: &Connection) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::StatementStatus;
+
+    fn message(task: &str, id: &str, text: &str) -> Message {
+        Message {
+            seq: 0,
+            transfer: None,
+            id: id.into(),
+            task_id: task.into(),
+            kind: MessageKind::Assistant,
+            attachments: Vec::new(),
+            feedback: Vec::new(),
+            file_edits: Vec::new(),
+            tool: None,
+            text: text.into(),
+            complete: true,
+            created: 0,
+        }
+    }
+
+    #[test]
+    fn write_revision_changes_on_writes_and_rollbacks_but_not_reads() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let store = Store::open(root.path())?;
+        let initial = store.write_revision();
+        store.save_settings(&Settings::default())?;
+        assert!(store.write_revision() > initial);
+        let saved = store.write_revision();
+        store.settings()?;
+        store.outgoing("task")?;
+        store.messages("task", None)?;
+        assert_eq!(store.write_revision(), saved);
+        let transaction = store.db.unchecked_transaction()?;
+        store.begin_submission("submission", "task", "prompt", &[])?;
+        transaction.rollback()?;
+        assert!(store.write_revision() > saved);
+        assert!(!store.has_submission("task", "submission")?);
+        let rolled_back = store.write_revision();
+        store.message(&message("task", "row", "text"))?;
+        assert!(store.write_revision() > rolled_back);
+        let written = store.write_revision();
+        store.remove_message("task", "row")?;
+        assert!(store.write_revision() > written);
+        Ok(())
+    }
+
+    #[test]
+    fn changed_messages_deduplicates_interleaved_writes_in_transcript_order() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let store = Store::open(root.path())?;
+        store.message(&message("task", "a", "old"))?;
+        let after = store.revision().1;
+        store.message(&message("task", "b", "second"))?;
+        store.message(&message("other", "a", "other transcript"))?;
+        store.message(&message("task", "a", "new"))?;
+        store.message(&message("task", "b", "latest"))?;
+        store.message(&message("task", "removed", "removed"))?;
+        store.remove_message("task", "removed")?;
+        let changed = store.changed_messages("task", after)?.unwrap();
+        assert_eq!(
+            changed
+                .iter()
+                .map(|row| (row.id.as_str(), row.text.as_str()))
+                .collect::<Vec<_>>(),
+            [("a", "new"), ("b", "latest")]
+        );
+        assert!(
+            store
+                .changed_messages("task", store.revision().1)?
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .changed_messages("task", store.revision().1 + 1)?
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn changed_messages_reports_page_and_retention_gaps() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let store = Store::open(root.path())?;
+        let transaction = store.db.unchecked_transaction()?;
+        for index in 0..=RETAINED_CHANGES {
+            store.message(&message("task", &index.to_string(), "text"))?;
+        }
+        transaction.commit()?;
+        assert!(store.changed_messages("task", 0)?.is_none());
+        assert!(store.changed_messages("task", 1)?.is_none());
+        let revision = store.revision().1;
+        assert_eq!(
+            store
+                .changed_messages("task", revision - CHANGED_ROWS as u64)?
+                .unwrap()
+                .len(),
+            CHANGED_ROWS
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outgoing_reads_only_one_tasks_submissions_in_acceptance_order() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let store = Store::open(root.path())?;
+        let transaction = store.db.unchecked_transaction()?;
+        for index in 0..10_000 {
+            store.begin_submission(&format!("other-{index}"), "other", "prompt", &[])?;
+        }
+        for (id, state) in [("z-first", "failed"), ("a-second", "queued")] {
+            let message = OutgoingMessage {
+                id: id.into(),
+                text: "prompt".into(),
+                attachments: Vec::new(),
+                feedback: Vec::new(),
+                created: 0,
+                state: DeliveryState::Queued,
+                error: None,
+                mode: SendMode::Queue,
+                expected_turn: None,
+            };
+            store.db.execute(
+                "INSERT INTO submissions(id,task_id,prompt,state,feedback,payload) VALUES(?1,'selected','prompt',?2,'[]',?3)",
+                params![id, state, serde_json::to_string(&message)?],
+            )?;
+        }
+        transaction.commit()?;
+        let outgoing = store.outgoing("selected")?;
+        assert_eq!(
+            outgoing
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            ["z-first", "a-second"]
+        );
+        assert_eq!(outgoing[0].state, DeliveryState::Failed);
+        assert_eq!(outgoing[1].state, DeliveryState::Queued);
+
+        let mut query = store.db.prepare(OUTGOING_QUERY)?;
+        let mut rows = query.query(["selected"])?;
+        while rows.next()?.is_some() {}
+        drop(rows);
+        let steps = query.get_status(StatementStatus::VmStep);
+        assert!(
+            steps < 100,
+            "Outbox query executed {steps} VM steps for two matching rows"
+        );
+        Ok(())
+    }
 }

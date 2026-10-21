@@ -167,16 +167,9 @@ fn entry_matches(entry: &StatusEntry, paths: &HashSet<String>) -> bool {
 }
 
 fn take_matching(entries: &mut Vec<StatusEntry>, paths: &HashSet<String>) -> Vec<StatusEntry> {
-    let mut moved = Vec::new();
-    let mut index = 0;
-    while index < entries.len() {
-        if entry_matches(&entries[index], paths) {
-            moved.push(entries.remove(index));
-        } else {
-            index += 1;
-        }
-    }
-    moved
+    entries
+        .extract_if(.., |entry| entry_matches(entry, paths))
+        .collect()
 }
 
 fn remove_matching(entries: &mut Vec<StatusEntry>, paths: &HashSet<String>) {
@@ -814,4 +807,52 @@ fn is_checkpoint(commit: &Commit) -> bool {
         || message.starts_with("synara checkpoint ref=refs/synara/checkpoints/")
         || message == "waku worktree snapshot"
         || message == "waku turn start snapshot"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(path: &str, original_path: Option<&str>) -> StatusEntry {
+        StatusEntry {
+            path: path.into(),
+            original_path: original_path.map(str::to_owned),
+            kind: FileChangeKind::Modified,
+            staged: false,
+            is_submodule: false,
+            additions: 1,
+            deletions: 0,
+        }
+    }
+
+    #[test]
+    fn take_matching_preserves_both_orders_and_matches_renamed_paths() {
+        let mut entries = vec![
+            entry("keep-first", None),
+            entry("selected", None),
+            entry("keep-second", None),
+            entry("renamed", Some("original")),
+            entry("keep-third", None),
+        ];
+        let paths = HashSet::from(["selected".into(), "original".into()]);
+        let moved = take_matching(&mut entries, &paths);
+        assert_eq!(
+            moved
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["selected", "renamed"]
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            ["keep-first", "keep-second", "keep-third"]
+        );
+        assert!(take_matching(&mut entries, &paths).is_empty());
+        let all = entries.iter().map(|entry| entry.path.clone()).collect();
+        assert_eq!(take_matching(&mut entries, &all).len(), 3);
+        assert!(entries.is_empty());
+    }
 }

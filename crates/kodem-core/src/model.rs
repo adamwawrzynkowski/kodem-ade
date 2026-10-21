@@ -1400,7 +1400,7 @@ pub fn is_kodem_tool_approval(method: &str, params: &serde_json::Value) -> bool 
         && params["serverName"] == MCP_SERVER
         && params["_meta"]["codex_approval_kind"] == "mcp_tool_call"
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct InputRequest {
     pub id: serde_json::Value,
     pub task_id: String,
