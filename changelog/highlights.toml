@@ -56,7 +56,74 @@
 # "1.19.3 to 2.1.0") in a headline, title, text or visual. Say what the user can do now. build.rs
 # refuses version numbers such as 1.19.3.
 
-reviewed = "8190e41df8b598d45cd2e9c786ccee3fcb18110a"
+reviewed = "05f61888314fb9599e3d18220414b5957d33522f"
+
+[[headline]]
+id = "headline-antigravity-grok-pace"
+text = "Antigravity and Grok join as agents, usage bars show your pace, and glass gets tint and blur sliders."
+
+[[highlight]]
+id = "antigravity-and-grok-providers"
+title = "Antigravity and Grok are here"
+text = "Sign in with each CLI's own login and work as with the other agents: tasks, approvals, usage and session import. Both carry a BETA badge."
+wide = true
+tone = "accent"
+visual = { kind = "chips", items = [
+    { text = "Antigravity", icon = "antigravity", detail = "BETA" },
+    { text = "Grok", icon = "xai", detail = "BETA" },
+] }
+
+[[highlight]]
+id = "question-cards-attachments"
+title = "Answer questions with files"
+text = "Question cards count your answers, take a note beside an option, and accept files, folders and images through the paperclip, a drop or a paste."
+wide = true
+tone = "blue"
+visual = { kind = "keys", keys = ["⇧", "↵"], label = "New line in an answer" }
+
+[[highlight]]
+id = "usage-limit-pacing"
+title = "See where your pace leads"
+text = "Each limit bar shows a tick for even use. A line below tells whether you are on pace, and when the limit runs out."
+wide = true
+tone = "amber"
+visual = { kind = "list", title = "Weekly limit", badge = "pace", items = [
+    { text = "On pace", state = "done", tone = "green" },
+    { text = "In deficit", state = "dot", tone = "amber" },
+    { text = "In reserve", state = "dot", tone = "blue" },
+    { text = "Limit reached", state = "dot", tone = "red" },
+] }
+
+[[highlight]]
+id = "glass-tint-blur"
+title = "Tune the glass"
+text = "Two sliders in Settings, Theme set how dark and how blurred every glass surface is. Defaults keep the current look."
+tone = "accent"
+visual = { kind = "figure", value = "24", label = "points of blur at most", detail = "tint from 0 to 2" }
+
+[[highlight]]
+id = "live-context-usage"
+title = "Context that keeps up"
+text = "The context meter now updates while a turn runs, for Claude Code, OpenCode, Antigravity and Codex, not only after it ends."
+tone = "green"
+visual = { kind = "glyph", icon = "gauge" }
+
+[[highlight]]
+id = "waiting-indicator"
+title = "A key that shows waiting"
+text = "Beside Stop, a spinning key appears while the agent waits for subagents or a timer. Hover it to see what it waits for."
+tone = "blue"
+visual = { kind = "chips", items = [
+    { text = "Subagents", icon = "users" },
+    { text = "Timer", icon = "clock" },
+] }
+
+[[highlight]]
+id = "git-out-of-beta"
+title = "Git is out of beta"
+text = "The BETA badge is gone from the Git workspace, its tile, title bar, View menu and command palette."
+tone = "green"
+visual = { kind = "keys", keys = ["⌥", "⌘", "4"], label = "Open Git" }
 
 [[headline]]
 id = "headline-wallpaper-and-project-order"
