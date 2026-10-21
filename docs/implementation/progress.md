@@ -1413,7 +1413,7 @@ Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targe
 Recorded on 21 October 2026. The user asked for a wallpaper behind the chat background's effects, chosen in Settings › Appearance › Theme and reached with a secondary press on the background, kept as Kodem's own copy, and for a switch on the same page that turns off the click waves, on by default.
 
 - `Settings` has `wallpaper` (the path of Kodem's copy) and `click_waves` (on by default).
-- `wallpaper.rs` copies the chosen image into `<data dir>/wallpaper/`, named by the SHA-256 of its bytes, and removes the earlier copies. It refuses a file larger than 64 MB or one that the `image` crate cannot read. A replaced or removed wallpaper is released from GPUI's asset cache and the sprite atlas.
+- `wallpaper.rs` copies the chosen image into `<data dir>/wallpaper/` under a new UUID name on every choice, and removes the earlier copies. It refuses a file larger than 64 MB or one that the `image` crate cannot read. The backdrop releases a replaced or removed wallpaper from GPUI's asset cache and the sprite atlas on the frame after it stops showing it.
 - The backdrop draws the wallpaper with `ObjectFit::Cover` beneath the field and paints the surface color over it at `WALLPAPER_VEIL` (0.6) instead of fully. The calm column's veil still applies.
 - The Theme page has a Background group: Wallpaper (thumbnail, Remove, Choose…) and Click waves. With the switch off, a press does not start a wave; a sent message still does.
 - A secondary press on the start screen's background, outside the composer, opens a Background menu. The conversation's text menu has the same Wallpaper… item. Both open the Theme page scrolled to its end.
@@ -1436,3 +1436,12 @@ Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targe
 Recorded on 21 October 2026. The user asked to remove the BETA badge of OpenCode.
 
 - `Provider::beta()` and `kit::beta_chip` are gone, so the provider rows of Settings, the model picker and the setup dialog show "OpenCode" without a chip. [providers.md](providers.md) no longer calls OpenCode support beta. The Git workspace keeps its own BETA tag.
+
+### Wallpaper that did not load again
+
+Recorded on 21 October 2026. The user reported that a chosen wallpaper sometimes did not load until a restart, maybe when the same image was chosen again. Cause: GPUI's image cache keeps a load by its path, a failed one too, and never retries it. Copies were named by the hash of their bytes, so choosing image A, then B, then A again reused A's path. On the change to B, the settings released A's image while the backdrop, which renders before the workspace paints the new wallpaper into its state, still asked for A on the next frame. That load read the deleted copy and cached the failure, which the path of the next copy of A then hit. Remove followed by the same image failed the same way. The dot screen's sample, also kept by path, could keep a failed sample.
+
+- Every choice copies the image under a new UUID name, so no path names another file after its copy was deleted.
+- The backdrop releases the image it showed when its wallpaper changes, on the frame after the workspace reported the change, instead of the settings releasing it at once. `wallpaper::release` takes the window, because the window that renders is out of the application's list of windows.
+
+Checked with a locked macOS `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary test, since removed, checked that the same image chosen twice, and again after a removal, gets a new path each time and leaves one copy. Not checked in the running app, under the no-visual-testing agreement.

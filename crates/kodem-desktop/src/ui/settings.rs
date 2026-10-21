@@ -1338,11 +1338,8 @@ impl Shell {
                 .await;
             let _ = this.update(cx, |s, cx| match cached {
                 Ok(path) => {
-                    if let Some(previous) = s.settings.wallpaper.replace(path)
-                        && s.settings.wallpaper.as_ref() != Some(&previous)
-                    {
-                        crate::wallpaper::release(&previous, cx);
-                    }
+                    // The background releases the earlier image once it shows this one.
+                    s.settings.wallpaper = Some(path);
                     s.save_settings();
                     cx.notify();
                 }
@@ -1355,12 +1352,12 @@ impl Shell {
         .detach();
     }
 
-    // Removes the wallpaper and deletes Kodem's copy of it.
+    // Removes the wallpaper and deletes Kodem's copy of it. The background releases the image
+    // once it no longer shows it.
     fn remove_wallpaper(&mut self, cx: &mut Context<Self>) {
-        let Some(previous) = self.settings.wallpaper.take() else {
+        if self.settings.wallpaper.take().is_none() {
             return;
-        };
-        crate::wallpaper::release(&previous, cx);
+        }
         self.save_settings();
         cx.notify();
         cx.spawn(async move |this, cx| {

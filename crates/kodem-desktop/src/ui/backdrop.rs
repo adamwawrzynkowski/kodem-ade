@@ -574,6 +574,9 @@ pub(super) struct Backdrop {
     /// The cells of the last grid, kept while its size stays the same.
     cells: Option<(u32, u32, Rc<[Cell]>)>,
     screen: screen::Screen,
+    /// The wallpaper that the last frame showed. Its image is released when another one, or
+    /// none, takes its place.
+    shown: Option<PathBuf>,
 }
 
 impl Backdrop {
@@ -592,6 +595,7 @@ impl Backdrop {
             glyphs: None,
             cells: None,
             screen: screen::Screen::default(),
+            shown: None,
         }
     }
 
@@ -677,6 +681,15 @@ impl Render for Backdrop {
                 state.wallpaper.clone(),
             )
         };
+        // The workspace tells the background of a new wallpaper while it paints, after this view
+        // rendered in the same frame. The earlier image is released only on the frame after, so
+        // no frame asks for a path whose copy is already gone.
+        if self.shown != wallpaper {
+            if let Some(previous) = self.shown.take() {
+                crate::wallpaper::release(&previous, window, cx);
+            }
+            self.shown = wallpaper.clone();
+        }
         let layer = div().absolute().top_0().left_0().size_full();
         let Some(bounds) = bounds else {
             state.borrow_mut().painted = None;
