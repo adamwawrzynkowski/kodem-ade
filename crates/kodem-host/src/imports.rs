@@ -1,7 +1,7 @@
-//! Finds the conversations that Claude Code, Codex, OpenCode and Antigravity stored for other
+//! Finds the conversations that Claude Code, Codex, OpenCode, Antigravity and Grok stored for other
 //! apps, and imports them as tasks that continue those conversations. Conversations that Kodem
-//! started are not listed: the ones that a provider marks as Kodem's, and the ones that the task
-//! of any Kodem build on this computer holds.
+//! started are not listed: the ones that a provider marks as Kodem's, and the ones that the task of
+//! any Kodem build on this computer holds.
 use crate::{Shared, accounts, new_task, provider};
 use anyhow::{Context, Result, ensure};
 use kodem_core::{git, ipc, platform, storage, *};
@@ -128,8 +128,8 @@ fn held(tasks: &[Task], root: &Path) -> BTreeSet<(Provider, String)> {
     held
 }
 
-/// Lists the stored conversations of every Claude Code, Codex, OpenCode and Antigravity account
-/// that Kodem did not start.
+/// Lists the stored conversations of every Claude Code, Codex, OpenCode, Antigravity and Grok
+/// account that Kodem did not start.
 pub(crate) fn discover(host: &Shared) -> Result<ExternalThreads> {
     let (projects, tasks, accounts, root) = {
         let h = host.lock().unwrap();

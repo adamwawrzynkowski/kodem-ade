@@ -3,11 +3,12 @@
 //!
 //! Each CLI is compared with the channel that its own update follows: Claude Code's configured
 //! release channel, Codex's latest GitHub release, which Kodem installs as a package,
-//! OpenCode's update service, and the Antigravity CLI's published changelog.
+//! OpenCode's update service, the Antigravity CLI's published changelog, and the release that
+//! Grok Build's own update check names.
 use anyhow::{Context, Result, bail, ensure};
 use kodem_core::{
     Provider, git, platform,
-    providers::{antigravity, claude, codex, opencode},
+    providers::{antigravity, claude, codex, grok, opencode},
 };
 use semver::Version;
 use serde::Deserialize;
@@ -106,6 +107,8 @@ pub fn update(provider: Provider, latest: Version, events: mpsc::Sender<Event>) 
             Provider::Codex => update_codex(&progress).map(|()| String::new()),
             Provider::Antigravity => antigravity::executable()
                 .and_then(|executable| run_update(executable, &["update"], &progress)),
+            Provider::Grok => grok::executable()
+                .and_then(|executable| run_update(executable, &["update"], &progress)),
         }
         .and_then(|last| {
             progress("Checking the installed version…".into(), None);
@@ -121,7 +124,8 @@ pub fn update(provider: Provider, latest: Version, events: mpsc::Sender<Event>) 
 }
 
 /// Reads the release from the version text that a provider's CLI reports, such as
-/// `codex-cli 0.47.0`, `2.1.300 (Claude Code)`, `opencode v2.0.32` or `1.4.3` (Antigravity).
+/// `codex-cli 0.47.0`, `2.1.300 (Claude Code)`, `opencode v2.0.32`, `1.4.3` (Antigravity) or
+/// `1.0.62` (Grok Build).
 fn parse_installed(reported: &str) -> Option<Version> {
     reported
         .split_whitespace()
@@ -135,6 +139,7 @@ fn installed_of(provider: Provider) -> Result<Version> {
         Provider::Codex => codex::version()?,
         Provider::OpenCode => opencode::version()?,
         Provider::Antigravity => antigravity::version()?,
+        Provider::Grok => grok::version()?,
     };
     parse_installed(&reported)
         .with_context(|| format!("{} reported no release: {reported}", provider.label()))
@@ -172,6 +177,7 @@ fn latest_of(provider: Provider) -> Result<Version> {
         .find_map(|line| line.strip_prefix("## "))
         .map(|heading| heading.trim().to_owned())
         .context("The Antigravity CLI changelog names no release")?,
+        Provider::Grok => grok_latest()?,
     };
     let version = Version::parse(&version)?;
     ensure!(
@@ -180,6 +186,27 @@ fn latest_of(provider: Provider) -> Result<Version> {
         provider.label()
     );
     Ok(version)
+}
+
+// The newest release in the channel that `grok update` follows, as the CLI's own check reads it.
+fn grok_latest() -> Result<String> {
+    let mut command = Command::new(grok::executable()?);
+    let output = platform::hide_console(&mut command)
+        .args(["update", "--check", "--json"])
+        .env("GROK_DISABLE_AUTOUPDATER", "1")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .context("Grok Build did not check for updates")?;
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .context("Grok Build reported its update check unreadably")?;
+    if let Some(error) = report["error"].as_str() {
+        bail!("Grok Build could not check for updates: {error}");
+    }
+    report["latestVersion"]
+        .as_str()
+        .map(str::to_owned)
+        .context("Grok Build named no newest release")
 }
 
 // The release channel that `claude update` follows: `autoUpdatesChannel` of the user's Claude

@@ -141,7 +141,7 @@ fn tools() -> Value {
                 "properties": {
                     "task": {"type":"string","description":"The complete task for the subagent."},
                     "model": {"type":"string","description":"Model to use, by name or identity as list_agents shows it, for example \"gpt-6.1-sol\". Omit it for the provider's default model."},
-                    "provider": {"type":"string","enum":["codex","claude","opencode","antigravity"],"description":"Provider to use when no model is named. Omit it to stay on your own provider."},
+                    "provider": {"type":"string","enum":["codex","claude","opencode","antigravity","grok"],"description":"Provider to use when no model is named. Omit it to stay on your own provider."},
                     "write": {"type":"boolean","description":"Let the subagent change files, in a worktree of its own. Default false."},
                     "wait_seconds": {"type":"integer","minimum":0,"maximum":WAIT_LIMIT,"description":"How long to wait for the result. Default 40."}
                 },
@@ -390,9 +390,10 @@ fn provider(name: Option<&str>) -> Result<Option<Provider>> {
         Some("claude" | "claude code" | "anthropic") => Some(Provider::Claude),
         Some("opencode" | "open code") => Some(Provider::OpenCode),
         Some("antigravity" | "agy" | "gemini" | "google") => Some(Provider::Antigravity),
+        Some("grok" | "xai" | "x.ai" | "grok build") => Some(Provider::Grok),
         Some(other) => {
             bail!(
-                "Unknown provider \"{other}\". Use \"codex\", \"claude\", \"opencode\" or \"antigravity\"."
+                "Unknown provider \"{other}\". Use \"codex\", \"claude\", \"opencode\", \"antigravity\" or \"grok\"."
             )
         }
     })
@@ -405,6 +406,7 @@ fn provider_name(provider: Provider) -> &'static str {
         Provider::Claude => "claude",
         Provider::OpenCode => "opencode",
         Provider::Antigravity => "antigravity",
+        Provider::Grok => "grok",
     }
 }
 

@@ -2,9 +2,9 @@
 //! terminal window the user watches, so that password prompts and progress stay visible.
 //!
 //! Each installer uses the tool's official source: Claude Code's install script, Codex's release
-//! package from GitHub, OpenCode's install script (its npm package on Windows), the Antigravity
-//! CLI's install script, Apple's Command Line Tools or Homebrew on macOS, winget on Windows, and
-//! the distribution's package manager on Linux.
+//! package from GitHub, OpenCode's install script (its npm package on Windows), the install
+//! scripts of the Antigravity CLI and Grok Build, Apple's Command Line Tools or Homebrew on
+//! macOS, winget on Windows, and the distribution's package manager on Linux.
 use crate::accounts;
 use anyhow::Result;
 use kodem_core::{Tool, ToolVersion, git, platform, providers::codex};
@@ -48,7 +48,9 @@ fn version(tool: Tool, path: Option<&OsStr>) -> Option<String> {
         Tool::Git => ("git", &["--version"]),
         Tool::GitLfs => ("git", &["lfs", "version"]),
         Tool::GitHub => ("gh", &["--version"]),
-        Tool::Claude | Tool::Codex | Tool::OpenCode | Tool::Antigravity => return None,
+        Tool::Claude | Tool::Codex | Tool::OpenCode | Tool::Antigravity | Tool::Grok => {
+            return None;
+        }
     };
     if program == "git" && !apple_git_ready(path) {
         return None;
@@ -166,6 +168,13 @@ fn steps(tool: Tool) -> Result<Vec<String>> {
         Tool::Antigravity => vec![
             "script=$(mktemp)".into(),
             "curl -fsSL https://antigravity.google/cli/install.sh -o \"$script\"".into(),
+            "bash \"$script\"".into(),
+            "rm -f \"$script\"".into(),
+        ],
+        // The script installs `grok` into ~/.grok/bin, where Kodem looks for the CLI.
+        Tool::Grok => vec![
+            "script=$(mktemp)".into(),
+            "curl -fsSL https://x.ai/cli/install.sh -o \"$script\"".into(),
             "bash \"$script\"".into(),
             "rm -f \"$script\"".into(),
         ],
@@ -309,6 +318,10 @@ fn steps(tool: Tool) -> Result<Vec<String>> {
         Tool::Antigravity => vec![
             "Invoke-RestMethod https://antigravity.google/cli/install.ps1 | Invoke-Expression".into(),
         ],
+        // The script installs `grok.exe` into %USERPROFILE%\.grok\bin, where Kodem looks for it.
+        Tool::Grok => {
+            vec!["Invoke-RestMethod https://x.ai/cli/install.ps1 | Invoke-Expression".into()]
+        }
         Tool::Codex => {
             let target = format!("{}-{CODEX_SYSTEM}", std::env::consts::ARCH);
             vec![

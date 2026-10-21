@@ -169,6 +169,7 @@ fn run() -> Result<()> {
                 Provider::Antigravity,
                 provider::initial_runtime(Provider::Antigravity),
             ),
+            (Provider::Grok, provider::initial_runtime(Provider::Grok)),
         ]),
         accounts: BTreeMap::new(),
         sessions: HashMap::new(),

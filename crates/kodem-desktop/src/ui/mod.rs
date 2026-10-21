@@ -2622,18 +2622,11 @@ struct UpcomingProvider {
     beta: bool,
 }
 impl UpcomingProvider {
-    const ALL: [Self; 2] = [
-        Self {
-            label: "xAI",
-            icon: "xai",
-            beta: true,
-        },
-        Self {
-            label: "Pi",
-            icon: "pi",
-            beta: false,
-        },
-    ];
+    const ALL: [Self; 1] = [Self {
+        label: "Pi",
+        icon: "pi",
+        beta: false,
+    }];
     /// Returns the hint shown when the pointer is on the placeholder.
     fn hint(self) -> String {
         format!("{} Coming Soon", self.label)

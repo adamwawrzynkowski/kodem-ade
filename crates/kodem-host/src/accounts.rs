@@ -37,6 +37,28 @@ const SHARED_CODEX: [&str; 6] = [
     "rules",
     "sessions",
 ];
+/// Non-secret Grok Build configuration and sessions shared with added accounts. The sign-in
+/// lives in `auth.json`, which is never shared.
+const SHARED_GROK: [&str; 18] = [
+    "config.toml",
+    "AGENTS.md",
+    "rules",
+    "skills",
+    "agents",
+    "personas",
+    "commands",
+    "hooks",
+    "workflows",
+    "plugins",
+    "installed-plugins",
+    "marketplace-cache",
+    "memory-v2",
+    "pager.toml",
+    "lsp.json",
+    "trusted_folders.toml",
+    "sandbox.toml",
+    "sessions",
+];
 const SIGN_IN_WAIT: Duration = Duration::from_secs(300);
 /// Account quotas reported by a running session stay fresh without another CLI start.
 const USAGE_FRESH_MS: u64 = 4 * 60 * 1000;
@@ -234,6 +256,7 @@ fn standard_home(provider: Provider) -> Result<PathBuf> {
             _ => home.join(".local").join("share"),
         },
         Provider::Antigravity => home.join(".gemini"),
+        Provider::Grok => home.join(".grok"),
     })
 }
 
@@ -250,11 +273,16 @@ fn link_shared(provider: Provider, home: &Path) -> Result<()> {
         Provider::OpenCode => &[],
         // The Antigravity CLI has one account, so it has no account directory to link into.
         Provider::Antigravity => &[],
+        Provider::Grok => &SHARED_GROK,
     };
     for name in names {
         let from = source.join(name);
         // Sessions must be shared even before the standard directory has stored one.
-        if provider == Provider::Claude && *name == "projects" && !from.exists() {
+        let sessions = matches!(
+            (provider, *name),
+            (Provider::Claude, "projects") | (Provider::Grok, "sessions")
+        );
+        if sessions && !from.exists() {
             fs::create_dir_all(&from)?;
         }
         let to = home.join(name);

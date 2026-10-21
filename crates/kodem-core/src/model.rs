@@ -14,6 +14,7 @@ pub enum Tool {
     Codex,
     OpenCode,
     Antigravity,
+    Grok,
     Git,
     GitLfs,
     GitHub,
@@ -28,6 +29,7 @@ impl Tool {
             Self::Codex => "Codex",
             Self::OpenCode => "OpenCode",
             Self::Antigravity => "Antigravity CLI",
+            Self::Grok => "Grok Build",
             Self::Git => "Git",
             Self::GitLfs => "Git LFS",
             Self::GitHub => "GitHub CLI",
@@ -40,6 +42,7 @@ impl Tool {
             Provider::Codex => Self::Codex,
             Provider::OpenCode => Self::OpenCode,
             Provider::Antigravity => Self::Antigravity,
+            Provider::Grok => Self::Grok,
         }
     }
 }
@@ -58,9 +61,16 @@ pub enum Provider {
     Claude,
     OpenCode,
     Antigravity,
+    Grok,
 }
 impl Provider {
-    pub const ALL: [Self; 4] = [Self::Claude, Self::Codex, Self::OpenCode, Self::Antigravity];
+    pub const ALL: [Self; 5] = [
+        Self::Claude,
+        Self::Codex,
+        Self::OpenCode,
+        Self::Antigravity,
+        Self::Grok,
+    ];
     /// Returns the integration's display name.
     pub fn label(self) -> &'static str {
         match self {
@@ -68,6 +78,7 @@ impl Provider {
             Self::Claude => "Claude Code",
             Self::OpenCode => "OpenCode",
             Self::Antigravity => "Antigravity",
+            Self::Grok => "Grok",
         }
     }
     /// Returns the bundled provider logo asset.
@@ -77,11 +88,12 @@ impl Provider {
             Self::Claude => "claude",
             Self::OpenCode => "opencode",
             Self::Antigravity => "antigravity",
+            Self::Grok => "xai",
         }
     }
     /// Reports an integration that is new and may still change, which the interface marks.
     pub fn beta(self) -> bool {
-        self == Self::Antigravity
+        matches!(self, Self::Antigravity | Self::Grok)
     }
     /// Returns the CLI command used to authenticate this integration.
     ///
@@ -93,6 +105,7 @@ impl Provider {
             Self::Claude => "claude auth login",
             Self::OpenCode => "opencode auth login",
             Self::Antigravity => "agy",
+            Self::Grok => "grok login",
         }
     }
     /// Returns the CLI command that removes this integration's saved sign-in.
@@ -105,6 +118,7 @@ impl Provider {
             Self::Claude => "claude auth logout",
             Self::OpenCode => "opencode auth logout",
             Self::Antigravity => "agy -i /logout",
+            Self::Grok => "grok logout",
         }
     }
     /// Reports a sign-out that runs in a terminal window, because the CLI signs out only in
@@ -124,6 +138,7 @@ impl Provider {
             Self::Claude => Some("CLAUDE_CONFIG_DIR"),
             Self::OpenCode => Some("XDG_DATA_HOME"),
             Self::Antigravity => None,
+            Self::Grok => Some("GROK_HOME"),
         }
     }
     /// Reports whether the default account clears `home_variable`. A general variable, as
@@ -2426,8 +2441,8 @@ pub enum TaskEdit {
     /// Turns the provider's fast mode on or off for the task's model.
     Fast(bool),
 }
-/// A conversation that Claude Code, Codex, OpenCode or Antigravity stored on this computer for
-/// another app, in the folder of a project.
+/// A conversation that Claude Code, Codex, OpenCode, Antigravity or Grok stored on this computer
+/// for another app, in the folder of a project.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalThread {
     pub provider: Provider,

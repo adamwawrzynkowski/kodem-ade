@@ -1687,7 +1687,7 @@ impl Shell {
             .child(
                 setting_group("Threads", None, self.theme).child(
                     self.setting_row(
-                        "Threads from Claude Code, Codex, OpenCode and Antigravity",
+                        "Threads from Claude Code, Codex, OpenCode, Antigravity and Grok",
                         "Import conversations that you had in those apps in the folders of your projects. Each one keeps its history and continues the same conversation.",
                         self.button("open-thread-import", "arrow-down-to-line", "Import threads…")
                             .on_click(cx.listener(|s, _, _, cx| {
@@ -2778,6 +2778,10 @@ pub(super) fn install_guide(provider: Provider) -> Option<(&'static str, &'stati
         Provider::Antigravity => Some((
             "Antigravity CLI installation guide",
             "https://antigravity.google/docs/getting-started/",
+        )),
+        Provider::Grok => Some((
+            "Grok Build installation guide",
+            "https://docs.x.ai/build/overview",
         )),
     }
 }

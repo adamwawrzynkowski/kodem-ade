@@ -1,7 +1,7 @@
-//! The dialog that imports the conversations of Claude Code, Codex, OpenCode and Antigravity
-//! into Kodem: the threads that the host found in the folders of projects, filters by provider
-//! and project, the user's choice among them, and the progress of the imports, which run one
-//! after another.
+//! The dialog that imports the conversations of Claude Code, Codex, OpenCode, Antigravity and Grok
+//! into Kodem: the threads that the host found in the folders of projects, filters by provider and
+//! project, the user's choice among them, and the progress of the imports, which run one after
+//! another.
 use super::*;
 
 /// Tallest list of threads, in points. A longer list scrolls.
@@ -437,7 +437,7 @@ impl Shell {
                 .text_size(text_px(13.))
                 .line_height(relative(1.45))
                 .text_color(t.muted)
-                .child("Conversations that you had in Claude Code, Codex, OpenCode and Antigravity, in the folders of your projects. An imported thread keeps its history and continues in Kodem."),
+                .child("Conversations that you had in Claude Code, Codex, OpenCode, Antigravity and Grok, in the folders of your projects. An imported thread keeps its history and continues in Kodem."),
         );
         if let Some(error) = &state.error {
             content = content.child(settings::error_block("Listing failed", error.clone(), t));
@@ -473,7 +473,7 @@ impl Shell {
                     .child(kit::loader_row("Looking for threads…", t))
             } else {
                 kit::empty_hint(
-                    "No conversations of Claude Code, Codex, OpenCode or Antigravity were found in the folders of your projects.",
+                    "No conversations of Claude Code, Codex, OpenCode, Antigravity or Grok were found in the folders of your projects.",
                     t,
                 )
             });

@@ -49,6 +49,7 @@ impl Shell {
             Provider::Codex => "OpenAI",
             Provider::OpenCode => "A provider that you connect to OpenCode",
             Provider::Antigravity => "Google",
+            Provider::Grok => "xAI",
         };
         kit::block(t)
             .child(kit::block_header("Provider terms", t.warning, t))

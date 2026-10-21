@@ -9,6 +9,8 @@ pub(crate) mod antigravity;
 mod claude;
 #[path = "providers/codex.rs"]
 mod codex;
+#[path = "providers/grok.rs"]
+mod grok;
 #[path = "providers/opencode.rs"]
 mod opencode;
 use anyhow::{Context, Result, ensure};
@@ -486,6 +488,7 @@ fn ensure_owner(host: Shared, task_id: String) {
             Provider::Claude => claude::run(host.clone(), &task_id, rx),
             Provider::OpenCode => opencode::run(host.clone(), &task_id, rx),
             Provider::Antigravity => antigravity::run(host.clone(), &task_id, rx),
+            Provider::Grok => grok::run(host.clone(), &task_id, rx),
         });
         if let Err(error) = result {
             let mut h = host.lock().unwrap();
@@ -594,6 +597,18 @@ Rules:
 - When the work changes, change the plan: add, remove or rewrite steps, so that it always shows what you actually do.
 - Before you end your turn, mark every finished step `[x]`. Leave a step `[ ]` only when it is not done, and say why.";
 
+/// How a Grok Build session keeps the plan, with its todo tool. The rules open with
+/// `kodem_core::providers::grok::KODEM_MARKER`, which tells Kodem's sessions from the others.
+const GROK_PLAN_RULES: &str = "\
+Kodem shows your todo list to the user beside the prompt as your plan and updates it live while you work. Keep it accurate with the todo_write tool.
+
+Rules:
+- Every request with two or more steps gets a todo list, also a short one, such as a search followed by an answer. Skip it only when one step answers the request.
+- Write the todo list before any other work: short steps, in the order you will do them.
+- Mark a step in_progress when you start it, and completed as soon as it is done, before you start the next step. Keep only one step in_progress. Do not mark several steps completed at the end.
+- When the work changes, change the todo list: add, remove or rewrite steps, so that it always shows what you actually do.
+- Before you end your turn, mark every finished step completed. Leave a step pending only when it is not done, and say why.";
+
 /// Returns the standing instructions of a task's provider session: the plan rules, the rules
 /// that its kind adds, and which browser to use when the session has Kodem's tools.
 ///
@@ -605,6 +620,7 @@ pub(crate) fn instructions(task: &Task) -> String {
         // OpenCode 2 has no tool that keeps a plan.
         Provider::OpenCode => None,
         Provider::Antigravity => Some(ANTIGRAVITY_PLAN_RULES),
+        Provider::Grok => Some(GROK_PLAN_RULES),
     };
     let rules = match task.kind {
         TaskKind::Coding => None,
@@ -823,6 +839,7 @@ pub(super) fn discover(
         Provider::Claude => claude::discover(host.clone(), &account, cwd),
         Provider::OpenCode => opencode::discover(host.clone(), &account, cwd),
         Provider::Antigravity => antigravity::discover(host.clone(), &account, cwd),
+        Provider::Grok => grok::discover(host.clone(), &account, cwd),
     });
     if let Err(error) = &result {
         let mut h = host.lock().unwrap();
@@ -839,6 +856,7 @@ pub(super) fn initial_runtime(provider: Provider) -> RuntimeInfo {
         Provider::Codex => RuntimeInfo::default(),
         Provider::OpenCode => opencode::initial_runtime(),
         Provider::Antigravity => antigravity::initial_runtime(),
+        Provider::Grok => grok::initial_runtime(),
     }
 }
 
@@ -850,6 +868,7 @@ pub(super) fn reconcile(host: &Shared, task_id: &str) -> Result<()> {
         Provider::Claude => claude::reconcile(host, task_id),
         Provider::OpenCode => opencode::reconcile(host, task_id),
         Provider::Antigravity => antigravity::reconcile(host, task_id),
+        Provider::Grok => grok::reconcile(host, task_id),
     }
 }
 
@@ -863,6 +882,7 @@ pub(crate) fn stored_threads(
         Provider::Claude => claude::stored_threads(account),
         Provider::OpenCode => opencode::stored_threads(account),
         Provider::Antigravity => antigravity::stored_threads(account),
+        Provider::Grok => grok::stored_threads(account),
     }
 }
 
@@ -877,6 +897,7 @@ pub(crate) fn stored_thread(
         Provider::Claude => claude::stored_thread(account, thread),
         Provider::OpenCode => opencode::stored_thread(account, thread),
         Provider::Antigravity => antigravity::stored_thread(account, thread),
+        Provider::Grok => grok::stored_thread(account, thread),
     }
 }
 
@@ -887,6 +908,7 @@ pub(crate) fn import_history(host: &Shared, task: &Task, account: &Account) -> R
         Provider::Claude => claude::import_history(host, task, account),
         Provider::OpenCode => opencode::import_history(host, task, account),
         Provider::Antigravity => antigravity::import_history(host, task, account),
+        Provider::Grok => grok::import_history(host, task, account),
     }
 }
 
@@ -897,6 +919,7 @@ pub(crate) fn executable(provider: Provider) -> Result<PathBuf> {
         Provider::Claude => Ok(claude::executable()),
         Provider::OpenCode => kodem_core::providers::opencode::executable(),
         Provider::Antigravity => kodem_core::providers::antigravity::executable(),
+        Provider::Grok => kodem_core::providers::grok::executable(),
     }
 }
 
@@ -904,7 +927,7 @@ pub(crate) fn executable(provider: Provider) -> Result<PathBuf> {
 pub(crate) fn generate_title(account: &Account, instructions: &str, input: &str) -> Result<String> {
     match account.provider {
         Provider::Claude => claude::generate_title(account, instructions, input),
-        Provider::Codex | Provider::OpenCode | Provider::Antigravity => {
+        Provider::Codex | Provider::OpenCode | Provider::Antigravity | Provider::Grok => {
             anyhow::bail!("This provider titles its conversations itself")
         }
     }
@@ -921,6 +944,7 @@ pub(crate) fn account_status(
         Provider::Claude => claude::account_status(host, account, usage),
         Provider::OpenCode => opencode::account_status(host, account, usage),
         Provider::Antigravity => antigravity::account_status(host, account, usage),
+        Provider::Grok => grok::account_status(host, account, usage),
     }
 }
 
@@ -937,6 +961,7 @@ pub(super) fn account_usage(
         Provider::Claude => claude::account_usage(host, &account, key),
         Provider::OpenCode => opencode::account_usage(host, &account, key),
         Provider::Antigravity => antigravity::account_usage(host, &account, key),
+        Provider::Grok => grok::account_usage(host, &account, key),
     }
 }
 
@@ -981,6 +1006,7 @@ pub(super) fn composer_catalog(
         Provider::Antigravity => {
             antigravity::composer_catalog(host, &account, task_id, project_id)?
         }
+        Provider::Grok => grok::composer_catalog(host, &account, task_id, project_id)?,
     };
     if !catalog.commands.contains(&ComposerCommand::Provider) {
         catalog.commands.insert(0, ComposerCommand::Provider);
@@ -1320,6 +1346,7 @@ pub(super) fn resources(
         Provider::Claude => claude::resources(host, &account, task_id, project_id),
         Provider::OpenCode => opencode::resources(host, &account, task_id, project_id),
         Provider::Antigravity => antigravity::resources(host, &account, task_id, project_id),
+        Provider::Grok => grok::resources(host, &account, task_id, project_id),
     }
 }
 

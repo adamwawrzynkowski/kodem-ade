@@ -54,6 +54,11 @@ impl Account {
         for variable in self.overrides() {
             command.env_remove(variable);
         }
+        // Grok Build updates itself in the background unless told not to, which would change
+        // the CLI under a running task. Kodem updates it from Settings instead.
+        if self.provider == Provider::Grok {
+            command.env("GROK_DISABLE_AUTOUPDATER", "1");
+        }
     }
 
     // Returns the variables that do not apply to this account's CLI processes.

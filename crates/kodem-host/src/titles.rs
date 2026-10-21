@@ -38,10 +38,13 @@ pub(super) fn start(host: Shared, task_id: &str) -> Result<()> {
     let (task, account, fallback, input) = {
         let h = host.lock().unwrap();
         let task = h.store.task(task_id)?;
-        // OpenCode and the Antigravity CLI name their conversations themselves; their session
-        // owners name one that they did not.
+        // OpenCode, the Antigravity CLI and Grok Build name their conversations themselves; their
+        // session owners name one that they did not.
         if !task.title_pending
-            || matches!(task.provider, Provider::OpenCode | Provider::Antigravity)
+            || matches!(
+                task.provider,
+                Provider::OpenCode | Provider::Antigravity | Provider::Grok
+            )
         {
             return Ok(());
         }
@@ -94,7 +97,10 @@ pub(super) fn review(host: Shared, task_id: &str) -> Result<()> {
         let h = host.lock().unwrap();
         let task = h.store.task(task_id)?;
         if task.title_review.is_none()
-            || matches!(task.provider, Provider::OpenCode | Provider::Antigravity)
+            || matches!(
+                task.provider,
+                Provider::OpenCode | Provider::Antigravity | Provider::Grok
+            )
         {
             return Ok(());
         }
