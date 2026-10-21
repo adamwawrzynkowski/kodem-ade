@@ -1489,3 +1489,15 @@ Recorded on 21 October 2026. The user asked to remove the BETA badge of the Git 
 - `Provider::beta()` (Antigravity) and `kit::beta_chip` are back. The chip follows the provider's name in the navigation and the provider card of Settings, the model picker and the setup dialog.
 - `UpcomingProvider::beta` marks the xAI placeholder, which shows the chip in the model picker, the Coming soon group of Settings and the setup dialog.
 
+
+### Question card and answer attachments
+
+Recorded on 21 October 2026. The user asked for a prettier question card in the current design language, with handy features and attachments of images, files and folders.
+
+- The card's header counts answered questions with a dot-matrix meter. Each question has a numbered chip that takes a check once it is answered, its options as selected rows, and a recessed field with a paperclip. Choosing a single option again clears it. With an option chosen, the field takes a note that is sent beside the options. A clear action empties one answer.
+- Return in a field sends the answers once every question has one, and otherwise moves to the next question without an answer; Shift-Return starts a new line. The footer names these keys.
+- Files, folders and images attach to one answer through the paperclip's picker, a drop on the question or a paste into its field. A pasted image is staged as the composer stages it and needs a model that takes images. An attachment alone answers a question.
+- The desktop sends each answer's paths as `attachments`. The host copies them with the prompt importer, validates them as prompt attachments, and adds references in the prompt's wording (`provider::attachment_reference`, which now also names an image): after the user's own words, or as an entry of their own after the chosen options, so an option keeps its label. A failed answer removes the copies.
+- OpenCode's choice fields take only the values of their options, so their questions keep the earlier behavior: no note, no attachments, and "Write my own answer".
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary host test, since removed, imported a file, an image and a folder for three answers and checked the merged references, the refusal of an unknown question, the removal of the copies and an untouched approval. Not checked with a live provider or in the running app, under the no-visual-testing agreement.

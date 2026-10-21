@@ -393,7 +393,11 @@ impl Shell {
     }
 
     /// Renders an almost fullscreen child thread with isolated focus and the task stop control.
-    pub(super) fn render_agent_popup(&mut self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    pub(super) fn render_agent_popup(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Stateful<Div>> {
         let popup = self.agent_popup.as_ref()?;
         let thread_id = popup.thread_id.clone();
         let focus = popup.focus.clone();
@@ -553,7 +557,7 @@ impl Shell {
                     .child(kit::loader_row("Loading agent thread…", t)),
             )
         };
-        body = body.child(self.question_panel(cx));
+        body = body.child(self.question_panel(window, cx));
         let requests: Vec<_> = self
             .view
             .as_ref()

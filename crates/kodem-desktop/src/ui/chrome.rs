@@ -479,7 +479,7 @@ impl Render for Shell {
             self.browsers.borrow_mut().end_frame(None);
             return preview;
         }
-        if let Some(popup) = self.render_agent_popup(cx) {
+        if let Some(popup) = self.render_agent_popup(window, cx) {
             self.browsers.borrow_mut().end_frame(None);
             return popup;
         }

@@ -1081,7 +1081,7 @@ impl Shell {
             .when(!empty, |d| {
                 d.child(self.subagents_strip(cx))
                     .child(self.activity_strip(cx))
-                    .child(self.question_panel(cx))
+                    .child(self.question_panel(window, cx))
                     // The next messages are a row of the composer, right above the draft.
                     .child(self.outgoing_tray(cx))
             })

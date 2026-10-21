@@ -1085,41 +1085,59 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         Request::Answer {
             task_id,
             id,
-            response,
+            mut response,
         } => {
-            let h = host.lock().unwrap();
-            let task = h.store.task(&task_id)?;
-            let request = h
-                .requests
-                .get(&task_id)
-                .and_then(|r| r.iter().find(|r| r.id == id))
-                .or_else(|| task.questions.iter().find(|r| r.id == id))
-                .context("This request is no longer pending")?;
-            validate_answer(request, &response)?;
-            if request.is_async() {
-                let submission_id = request.answer_submission_id();
-                let text = answer_text(request, &response);
-                drop(h);
-                provider::submit(
-                    host.clone(),
-                    task_id.clone(),
-                    submission_id,
-                    text,
-                    Vec::new(),
-                    Vec::new(),
-                    SendMode::Steer,
-                )?;
+            // Files attached to answers are copied before the host state is locked.
+            let attached = import_answer_attachments(root, &mut response)?;
+            let result = (|| {
                 let h = host.lock().unwrap();
-                let mut task = h.store.task(&task_id)?;
-                task.questions.retain(|r| r.id != id);
-                h.store.save_task(&task)?;
-                return Ok(Response::Ok);
+                let task = h.store.task(&task_id)?;
+                let request = h
+                    .requests
+                    .get(&task_id)
+                    .and_then(|r| r.iter().find(|r| r.id == id))
+                    .or_else(|| task.questions.iter().find(|r| r.id == id))
+                    .context("This request is no longer pending")?;
+                if !attached.is_empty() {
+                    let imported: Vec<Attachment> = attached
+                        .iter()
+                        .flat_map(|(_, imported)| imported.iter().cloned())
+                        .collect();
+                    provider::validate_attachments(&h, &task, &imported)?;
+                    reference_answer_attachments(request, &mut response, &attached)?;
+                }
+                validate_answer(request, &response)?;
+                if request.is_async() {
+                    let submission_id = request.answer_submission_id();
+                    let text = answer_text(request, &response);
+                    drop(h);
+                    provider::submit(
+                        host.clone(),
+                        task_id.clone(),
+                        submission_id,
+                        text,
+                        Vec::new(),
+                        Vec::new(),
+                        SendMode::Steer,
+                    )?;
+                    let h = host.lock().unwrap();
+                    let mut task = h.store.task(&task_id)?;
+                    task.questions.retain(|r| r.id != id);
+                    h.store.save_task(&task)?;
+                    return Ok(Response::Ok);
+                }
+                h.sessions
+                    .get(&task_id)
+                    .context("Provider disconnected")?
+                    .send(provider::Control::Answer { id, response })?;
+                Ok(Response::Ok)
+            })();
+            if result.is_err() {
+                for (_, imported) in &attached {
+                    attachments::discard(root, imported);
+                }
             }
-            h.sessions
-                .get(&task_id)
-                .context("Provider disconnected")?
-                .send(provider::Control::Answer { id, response })?;
-            Ok(Response::Ok)
+            result
         }
         Request::CaptureDiff {
             task_id,
@@ -1506,6 +1524,85 @@ fn answer_text(request: &InputRequest, response: &Value) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n\n---\n\n")
+}
+
+/// Copies the files that the user attached to answers into private storage, by question, and
+/// takes their paths out of the response. A folder is referenced in place.
+fn import_answer_attachments(
+    root: &std::path::Path,
+    response: &mut Value,
+) -> Result<Vec<(String, Vec<Attachment>)>> {
+    let mut wanted = Vec::new();
+    if let Some(answers) = response.get_mut("answers").and_then(Value::as_object_mut) {
+        for (question, answer) in answers {
+            let Some(paths) = answer
+                .as_object_mut()
+                .and_then(|answer| answer.remove("attachments"))
+            else {
+                continue;
+            };
+            let paths: Vec<std::path::PathBuf> =
+                serde_json::from_value(paths).context("Malformed answer attachments")?;
+            if !paths.is_empty() {
+                wanted.push((question.clone(), paths));
+            }
+        }
+    }
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sources = wanted
+        .iter()
+        .flat_map(|(_, paths)| paths.iter().cloned().map(AttachmentSource::File))
+        .collect();
+    let mut imported = attachments::import(root, sources)?.into_iter();
+    Ok(wanted
+        .into_iter()
+        .map(|(question, paths)| (question, imported.by_ref().take(paths.len()).collect()))
+        .collect())
+}
+
+/// Points each answer at the files attached to it. The references continue the user's own
+/// words, or follow the chosen options as an answer of their own, so an option keeps its label.
+fn reference_answer_attachments(
+    request: &InputRequest,
+    response: &mut Value,
+    attached: &[(String, Vec<Attachment>)],
+) -> Result<()> {
+    let questions = request
+        .questions()
+        .context("Only answers to questions take attachments")?;
+    for (id, imported) in attached {
+        let question = questions
+            .iter()
+            .find(|question| question["id"] == id.as_str())
+            .context("An attachment belongs to an unknown question")?;
+        let references = imported
+            .iter()
+            .map(provider::attachment_reference)
+            .collect::<Result<Vec<_>>>()?
+            .join("\n\n");
+        let labels: Vec<&str> = question["options"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|option| option["label"].as_str())
+            .collect();
+        let answers = &mut response["answers"][id.as_str()]["answers"];
+        if !answers.is_array() {
+            *answers = Value::Array(Vec::new());
+        }
+        if let Some(answers) = answers.as_array_mut() {
+            match answers.last_mut() {
+                Some(Value::String(last)) if !labels.contains(&last.as_str()) => {
+                    last.push_str("\n\n");
+                    last.push_str(&references);
+                }
+                _ => answers.push(Value::String(references)),
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_answer(request: &InputRequest, response: &Value) -> Result<()> {

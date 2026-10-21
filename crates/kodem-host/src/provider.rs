@@ -100,29 +100,30 @@ pub(crate) struct Compaction {
     updated: u64,
 }
 
+/// Returns the text that points the agent at an attachment, which it reads with its own tools.
+/// A prompt sends its images to the model directly and references only the other kinds.
+pub(crate) fn attachment_reference(attachment: &Attachment) -> Result<String> {
+    let name = serde_json::to_string(&attachment.name)?;
+    let path = serde_json::to_string(&attachment.path)?;
+    Ok(match &attachment.kind {
+        AttachmentKind::Skill { source } => format!(
+            "Use the skill at {}. Resolve its relative resources from the original skill directory.\nImmutable copy of the selected SKILL.md: {path}",
+            serde_json::to_string(source)?
+        ),
+        AttachmentKind::File => format!("Attached file: {name}\nImmutable local copy: {path}"),
+        AttachmentKind::Image => format!("Attached image: {name}\nImmutable local copy: {path}"),
+        AttachmentKind::Folder => {
+            format!("Attached folder: {name}\nRead it in place at its local path: {path}")
+        }
+    })
+}
+
 pub(crate) fn prompt_for(message: &OutgoingMessage) -> Result<String> {
     let mut prompt = message.text.clone();
     for attachment in &message.attachments {
-        if let AttachmentKind::Skill { source } = &attachment.kind {
-            prompt.push_str(&format!(
-                "\n\nUse the skill at {}. Resolve its relative resources from the original skill directory.\nImmutable copy of the selected SKILL.md: {}",
-                serde_json::to_string(source)?,
-                serde_json::to_string(&attachment.path)?
-            ));
-        }
-        if attachment.kind == AttachmentKind::File {
-            prompt.push_str(&format!(
-                "\n\nAttached file: {}\nImmutable local copy: {}",
-                serde_json::to_string(&attachment.name)?,
-                serde_json::to_string(&attachment.path)?
-            ));
-        }
-        if attachment.kind == AttachmentKind::Folder {
-            prompt.push_str(&format!(
-                "\n\nAttached folder: {}\nRead it in place at its local path: {}",
-                serde_json::to_string(&attachment.name)?,
-                serde_json::to_string(&attachment.path)?
-            ));
+        if attachment.kind != AttachmentKind::Image {
+            prompt.push_str("\n\n");
+            prompt.push_str(&attachment_reference(attachment)?);
         }
     }
     if !message.feedback.is_empty() {
