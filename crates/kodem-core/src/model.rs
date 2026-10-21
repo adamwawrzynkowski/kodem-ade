@@ -1796,6 +1796,11 @@ pub struct Settings {
     pub click_waves: bool,
     /// Lays a dithered dot screen over the top of the chat background.
     pub dot_screen: bool,
+    /// Strength of the tone of glass surfaces over the blur behind them: 1 keeps each surface's
+    /// own share of its tone, 0 leaves only the blur and 2 makes the surfaces solid.
+    pub glass_tint: f32,
+    /// Blur of what shows through glass surfaces, in points. 0 shows it sharp.
+    pub glass_blur: f32,
     pub sort: Sort,
     pub collapsed_projects: std::collections::HashSet<String>,
     /// The order of the project groups in the thread feed, as the user arranged them. A project
@@ -1843,6 +1848,8 @@ impl Default for Settings {
             wallpaper: None,
             click_waves: true,
             dot_screen: true,
+            glass_tint: Self::GLASS_TINT,
+            glass_blur: Self::GLASS_BLUR,
             sort: Sort::Recent,
             collapsed_projects: Default::default(),
             project_order: Vec::new(),
@@ -1884,6 +1891,14 @@ impl Settings {
     pub const TERMINAL_HEIGHT_RANGE: (f32, f32) = (100., 1200.);
     /// Smallest and largest interface scale.
     pub const UI_SCALE_RANGE: (f32, f32) = (0.6, 1.4);
+    /// Default strength of the tone of glass surfaces.
+    pub const GLASS_TINT: f32 = 1.;
+    /// Weakest and strongest tone of glass surfaces: only the blur, and solid.
+    pub const GLASS_TINT_RANGE: (f32, f32) = (0., 2.);
+    /// Default blur of glass surfaces, in points.
+    pub const GLASS_BLUR: f32 = 6.;
+    /// Smallest and largest blur of glass surfaces, in points.
+    pub const GLASS_BLUR_RANGE: (f32, f32) = (0., 24.);
     /// Reads saved settings. Settings from before the named themes hold a light switch only;
     /// a light one selects Paper.
     pub fn from_json(json: &str) -> serde_json::Result<Self> {

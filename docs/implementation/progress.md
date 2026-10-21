@@ -1522,3 +1522,13 @@ Recorded on 21 October 2026. The user asked for pacing on the usage trackers: wh
 - Pace is hidden in the first 3% of a window, where a few requests make the rate meaningless. Usage credits have no window and no pace.
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary desktop test, since removed, measured the windows of the user's screenshot (5-hour 50% used with 2h 44m left: 4.7 points in deficit, runs out in 2h 16m; weekly 34% used with 1d 22h 24m left: 38 points in reserve, ≈47% at reset), a window in its first 3%, a window without a reset, a full limit and an unused window. Not checked in the running app, under the no-visual-testing agreement.
+
+### Glass tint and blur
+
+Recorded on 21 October 2026. The user asked for sliders in the appearance settings that control how dark and how solid or blurred every glass surface is, with the current look as the default.
+
+- Settings gain `glass_tint` (0 to 2, default 1) and `glass_blur` (0 to 24 points, default 6). Saved settings without them load the defaults, and the store clamps both.
+- `kit::glass_fill` maps each surface's own share of its tone through the tint: up to 100% it scales the share from nothing, above it the share grows to the whole tone. The side panels (25%), the composer, menus, dialogs, notices, tooltips, the meter tab and the agent buttons and tiles (62.5%) all follow it. Every backdrop blur, including the jump to the latest message, the earlier-messages button and the meter tab, uses the saved blur. A blur of 0 adds no pass.
+- The Theme page of preferences has a Glass group with the two sliders. Each applies while it is dragged; the shell redraws its cached views when either value changes.
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary desktop test, since removed, confirmed that old saved settings load tint 1 and blur 6, that these give the earlier shares 0.25 and 0.625 and the 6-point blur exactly, that tint 0 and 2 give no tone and the whole tone, and that a blur over the range is clamped to 24. Not checked in the running app, under the no-visual-testing agreement.

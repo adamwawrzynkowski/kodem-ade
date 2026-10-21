@@ -48,7 +48,7 @@ impl SettingsPage {
     fn detail(self) -> &'static str {
         match self {
             Self::Theme => {
-                "Choose the colors of the workspace and its accent, and the background behind the chat."
+                "Choose the colors of the workspace and its accent, the background behind the chat and the glass of its surfaces."
             }
             Self::Typography => "Set the typefaces and the sizes of text and code.",
             Self::Interface => "Set the size of the controls and the spacing of the task list.",
@@ -391,6 +391,16 @@ const CLICK_WAVES_DETAIL: &str =
 const DOT_SCREEN_LABEL: &str = "Dot screen";
 /// What the dot screen switch shows.
 const DOT_SCREEN_DETAIL: &str = "A dithered dot screen over the top of the chat background. With a wallpaper, the dots take its colors.";
+/// Name of the slider of the tone of glass surfaces.
+const GLASS_TINT_LABEL: &str = "Glass tint";
+/// What the glass tint slider changes.
+const GLASS_TINT_DETAIL: &str = "How much of their color the side panels, the composer, menus and dialogs lay over the blur behind them. Higher is more solid, and darker on a dark theme; 100% is the default.";
+/// Step of the glass tint slider, in percent.
+const GLASS_TINT_STEP: f32 = 5.;
+/// Name of the slider of the blur behind glass surfaces.
+const GLASS_BLUR_LABEL: &str = "Glass blur";
+/// What the glass blur slider changes.
+const GLASS_BLUR_DETAIL: &str = "How strongly glass surfaces blur what lies behind them. 0 shows it sharp; 6 PT is the default.";
 /// Size of the wallpaper's thumbnail beside its buttons.
 const WALLPAPER_THUMBNAIL: (f32, f32) = (48., 30.);
 /// Name of the switch that shows the skater on the composer.
@@ -1239,12 +1249,71 @@ impl Shell {
         )
     }
 
-    // Builds the Theme page: the theme picker, the accent and the chat background.
+    // Builds the Theme page: the theme picker, the accent, the chat background and the glass.
     fn theme_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         page_column()
             .child(self.theme_choices(cx))
             .child(self.accent_choices(cx))
             .child(self.background_settings(cx))
+            .child(self.glass_settings(cx))
+            .into_any_element()
+    }
+
+    // Builds the Glass group of the Theme page: the sliders of the tone of glass surfaces and of
+    // the blur behind them. Each applies while it is dragged.
+    fn glass_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme;
+        let (weakest, strongest) = Settings::GLASS_TINT_RANGE;
+        let (sharpest, softest) = Settings::GLASS_BLUR_RANGE;
+        let tint = (self.settings.glass_tint.clamp(weakest, strongest) * 100.).round();
+        let blur = self.settings.glass_blur.clamp(sharpest, softest).round();
+        setting_group("Glass", None, t)
+            .child(
+                self.setting_row(
+                    GLASS_TINT_LABEL,
+                    GLASS_TINT_DETAIL,
+                    self.slider_control(
+                        controls::Slider::new(
+                            "glass-tint",
+                            tint,
+                            weakest * 100.,
+                            strongest * 100.,
+                            GLASS_TINT_STEP,
+                            cx.listener(move |s, value: &f32, _, cx| {
+                                s.settings.glass_tint = (value / 100.).clamp(weakest, strongest);
+                                s.save_settings();
+                                cx.notify();
+                            }),
+                        )
+                        .label(GLASS_TINT_LABEL),
+                        format!("{tint}%"),
+                        t.text,
+                    ),
+                ),
+            )
+            .child(
+                self.setting_row(
+                    GLASS_BLUR_LABEL,
+                    GLASS_BLUR_DETAIL,
+                    self.slider_control(
+                        controls::Slider::new(
+                            "glass-blur",
+                            blur,
+                            sharpest,
+                            softest,
+                            1.,
+                            cx.listener(move |s, value: &f32, _, cx| {
+                                s.settings.glass_blur = value.clamp(sharpest, softest);
+                                s.save_settings();
+                                cx.notify();
+                            }),
+                        )
+                        .label(GLASS_BLUR_LABEL),
+                        format!("{blur} PT"),
+                        t.text,
+                    ),
+                ),
+            )
             .into_any_element()
     }
 

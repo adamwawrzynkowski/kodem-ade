@@ -618,7 +618,9 @@ impl Store {
                 && s.terminal_height.is_finite()
                 && s.font_size.is_finite()
                 && s.code_font_size.is_finite()
-                && s.ui_scale.is_finite(),
+                && s.ui_scale.is_finite()
+                && s.glass_tint.is_finite()
+                && s.glass_blur.is_finite(),
             "Invalid layout value"
         );
         let mut s = s.clone();
@@ -632,6 +634,10 @@ impl Store {
         s.code_font_size = s.code_font_size.clamp(smallest, largest);
         let (smallest, largest) = Settings::UI_SCALE_RANGE;
         s.ui_scale = s.ui_scale.clamp(smallest, largest);
+        let (smallest, largest) = Settings::GLASS_TINT_RANGE;
+        s.glass_tint = s.glass_tint.clamp(smallest, largest);
+        let (smallest, largest) = Settings::GLASS_BLUR_RANGE;
+        s.glass_blur = s.glass_blur.clamp(smallest, largest);
         self.db.execute(
             "INSERT INTO settings VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET json=excluded.json",
             [serde_json::to_string(&s)?],

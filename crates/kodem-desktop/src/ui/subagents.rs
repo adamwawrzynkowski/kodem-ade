@@ -132,12 +132,12 @@ impl Shell {
         let id = agent.thread_id.clone();
         let t = self.theme;
         // A raised control rather than a restyled ghost: GPUI takes one hover style per element.
-        let share = kit::SURFACE_GLASS_FILL;
+        let share = kit::glass_fill(kit::SURFACE_GLASS_FILL);
         let link = self.control((
             ElementId::from("agent-link"),
             SharedString::from(id.clone()),
         ));
-        kit::glass(link, t.control, share)
+        kit::glass(link, t.control, kit::SURFACE_GLASS_FILL)
             .overflow_hidden()
             .h(px(28.))
             .px(px(8.))
@@ -247,7 +247,7 @@ impl Shell {
         let id = agent.thread_id.clone();
         let t = self.theme;
         let tone = state_tone(&agent.state, t);
-        let share = kit::SURFACE_GLASS_FILL;
+        let share = kit::glass_fill(kit::SURFACE_GLASS_FILL);
         let group = SharedString::from(format!("agent-tile:{id}"));
         let status = if agent.state.active() {
             motion::active_icon("loader", tone, true, cx.reduce_motion())

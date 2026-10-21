@@ -448,12 +448,16 @@ impl Shell {
 }
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // The saved scale, text sizes and typefaces apply before any length is built. The
-        // window root and the layers beside this view are cached, so a change redraws them.
-        if crate::theme::apply_metrics(&self.settings) {
+        // The saved scale, text sizes, typefaces and glass apply before any surface is built.
+        // The window root and the layers beside this view are cached, so a change redraws them.
+        let glass = crate::theme::apply_glass(&self.settings);
+        let metrics = crate::theme::apply_metrics(&self.settings);
+        if metrics {
             // Every row of the lists has a new height.
             self.chat_scroll.remeasure();
             self.sidebar_scroll.remeasure();
+        }
+        if metrics || glass {
             window.on_next_frame(|window, _| window.refresh());
         }
         // Spacing that is given in rems follows the interface scale with the rem.

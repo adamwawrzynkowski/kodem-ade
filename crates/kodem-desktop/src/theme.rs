@@ -14,6 +14,10 @@ static TEXT_SCALE: AtomicU32 = AtomicU32::new(1f32.to_bits());
 static CODE_SCALE: AtomicU32 = AtomicU32::new(1f32.to_bits());
 static TEXT_FONT: AtomicU8 = AtomicU8::new(0);
 static CODE_FONT: AtomicU8 = AtomicU8::new(0);
+// The saved strength of the tone of glass surfaces and the blur behind them. Every glass surface
+// reads them, so they are process-wide like the metrics.
+static GLASS_TINT: AtomicU32 = AtomicU32::new(Settings::GLASS_TINT.to_bits());
+static GLASS_BLUR: AtomicU32 = AtomicU32::new(Settings::GLASS_BLUR.to_bits());
 
 /// Applies the saved interface scale, text sizes and typefaces to every length and font that is
 /// built afterwards. Returns whether one of them changed.
@@ -38,6 +42,29 @@ pub fn apply_metrics(settings: &Settings) -> bool {
     changed |= TEXT_FONT.swap(text_font, Ordering::Relaxed) != text_font;
     changed |= CODE_FONT.swap(code_font, Ordering::Relaxed) != code_font;
     changed
+}
+
+/// Applies the saved tone and blur of glass surfaces to every surface that is built afterwards.
+/// Returns whether one of them changed.
+pub fn apply_glass(settings: &Settings) -> bool {
+    let (smallest, largest) = Settings::GLASS_TINT_RANGE;
+    let tint = settings.glass_tint.clamp(smallest, largest);
+    let (smallest, largest) = Settings::GLASS_BLUR_RANGE;
+    let blur = settings.glass_blur.clamp(smallest, largest);
+    let mut changed = GLASS_TINT.swap(tint.to_bits(), Ordering::Relaxed) != tint.to_bits();
+    changed |= GLASS_BLUR.swap(blur.to_bits(), Ordering::Relaxed) != blur.to_bits();
+    changed
+}
+
+/// Returns the strength of the tone of glass surfaces: 1 by default, 0 for only the blur and 2
+/// for solid surfaces.
+pub fn glass_tint() -> f32 {
+    f32::from_bits(GLASS_TINT.load(Ordering::Relaxed))
+}
+
+/// Returns the blur of glass surfaces, in points.
+pub fn glass_blur() -> f32 {
+    f32::from_bits(GLASS_BLUR.load(Ordering::Relaxed))
 }
 
 /// Returns the interface scale: 1 at 100%.

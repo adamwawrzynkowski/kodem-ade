@@ -944,10 +944,8 @@ pub(super) fn tab_indicator(accent: Hsla) -> Div {
         )
 }
 
-/// Share of a glass surface's tone that covers the background field, and the blur of the
-/// field that shows through, in points.
+/// Share of a glass surface's tone that covers the background field at the default glass tint.
 const GLASS_FILL: f32 = 0.25;
-pub(super) const GLASS_BLUR: f32 = 6.;
 
 /// Share of the tone of a glass surface that holds text over the conversation: the composer,
 /// menus, dialogs and floating cards. Half as much shows through as through the side panels, so
@@ -958,11 +956,30 @@ pub(super) const SURFACE_GLASS_FILL: f32 = 0.625;
 /// navigation, so that the glass shows through it without a blur of its own.
 pub(super) const PANE_SHARE: f32 = 0.5;
 
-/// Gives a surface glass in `tone`: the share `fill` of the tone over a blur of what lies
-/// behind it. GPUI's renderers on macOS (Metal), Linux (wgpu) and Windows (DirectX) all draw the
-/// blur, clipped to the surface's rounded rectangle.
+/// Returns the share of its tone that a glass surface takes under the saved glass tint, for the
+/// share `fill` that it takes by default. Up to the default tint the share grows from nothing to
+/// `fill`; above it, from `fill` to the whole tone.
+pub(super) fn glass_fill(fill: f32) -> f32 {
+    let tint = crate::theme::glass_tint();
+    if tint <= 1. {
+        fill * tint
+    } else {
+        fill + (1. - fill) * (tint - 1.)
+    }
+}
+
+/// Returns the blur of what shows through a glass surface, in points, as it is saved.
+pub(super) fn glass_blur() -> f32 {
+    crate::theme::glass_blur()
+}
+
+/// Gives a surface glass in `tone`: the share `fill` of the tone, under the saved glass tint,
+/// over a blur of what lies behind it. GPUI's renderers on macOS (Metal), Linux (wgpu) and
+/// Windows (DirectX) all draw the blur, clipped to the surface's rounded rectangle.
 pub(super) fn glass<E: Styled>(surface: E, tone: Hsla, fill: f32) -> E {
-    surface.bg(tone.opacity(fill)).backdrop_blur(px(GLASS_BLUR))
+    surface
+        .bg(tone.opacity(glass_fill(fill)))
+        .backdrop_blur(px(glass_blur()))
 }
 
 /// Gives a panel at a side of the window its glass, in the panel tone.

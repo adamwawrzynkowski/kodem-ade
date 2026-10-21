@@ -304,7 +304,7 @@ impl Shell {
                 let jump = if unseen {
                     // The tint is faint, so the conversation behind it is blurred like glass.
                     self.tinted("jump-latest", "arrow-down", "New below", t.accent)
-                        .backdrop_blur(px(kit::GLASS_BLUR))
+                        .backdrop_blur(px(kit::glass_blur()))
                 } else {
                     self.button("jump-latest", "arrow-down", "Latest")
                 };
@@ -1605,7 +1605,7 @@ impl Shell {
     pub(super) fn earlier_messages(&self, id: &'static str) -> Button {
         self.button(id, "arrow-up", "Earlier messages")
             .h(px(24.))
-            .backdrop_blur(px(kit::GLASS_BLUR))
+            .backdrop_blur(px(kit::glass_blur()))
             .accessibility_label("Load earlier messages")
     }
 
@@ -1740,7 +1740,7 @@ fn paint_edge_tab(
     // second is a column at the outer side whose rounded corner continues the composer's. Each
     // blur adds a pass, so the tab keeps to these two. The blur stops above the composer's edge.
     let seam_top = bottom - gpui::px(1.);
-    let filters = [Filter::Blur(px(kit::GLASS_BLUR))];
+    let filters = [Filter::Blur(px(kit::glass_blur()))];
     let circle = px(METER_TAB_SLANT_BLUR_RADIUS);
     // The circle's center lies inside the tab, square to the slant's middle, so that its edge
     // touches the slant there.
@@ -1811,9 +1811,12 @@ fn paint_edge_tab(
         size(bounds.size.width - gpui::px(1.), gpui::px(1.)),
     );
     window.paint_quad(fill(seam, surface));
-    for tone in [Some(surface.opacity(kit::SURFACE_GLASS_FILL)), hover]
-        .into_iter()
-        .flatten()
+    for tone in [
+        Some(surface.opacity(kit::glass_fill(kit::SURFACE_GLASS_FILL))),
+        hover,
+    ]
+    .into_iter()
+    .flatten()
     {
         let mut body = PathBuilder::fill();
         outline(&mut body, bottom);
