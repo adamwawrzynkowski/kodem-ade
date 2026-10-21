@@ -364,9 +364,6 @@ pub(super) fn system_reduce_motion() -> bool {
     }
 }
 
-/// A height no smaller than the terminal panel, which its opening grows toward.
-pub(super) const TERMINAL_REACH: f32 = 300.;
-
 /// How far each side panel is open, from 0 to 1. The values follow what the settings ask for,
 /// so opening and closing a panel slides instead of jumping.
 #[derive(Default)]

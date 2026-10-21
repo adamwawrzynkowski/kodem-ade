@@ -1,7 +1,10 @@
 use super::*;
 
-/// Rows of the task terminal that fit its pane.
-pub(super) const TERMINAL_ROWS: u16 = 12;
+/// Height of the terminal's title bar and the border above it, in points.
+pub(super) const TERMINAL_CHROME: f32 = 33.;
+
+/// Room for the chat that the terminal leaves when it is as tall as the window allows.
+const TERMINAL_CHAT_ROOM: f32 = 240.;
 
 /// Space between a dialog and the window's edges.
 const DIALOG_MARGIN: f32 = 24.;
@@ -659,6 +662,36 @@ impl Shell {
             / f32::from(code_px(7.2)))
         .clamp(20., 400.) as u16
     }
+    /// Returns the tallest the terminal's output can be in this window, in points.
+    pub(super) fn terminal_height_limit(&self, window: &Window) -> f32 {
+        let window_height = f32::from(window.viewport_size().height) / crate::theme::ui_scale();
+        (window_height - TERMINAL_CHAT_ROOM).max(Settings::TERMINAL_HEIGHT_RANGE.0)
+    }
+    /// Returns the height of the terminal's output as the window shows it, in points.
+    pub(super) fn terminal_height(&self, window: &Window) -> f32 {
+        self.settings
+            .terminal_height
+            .min(self.terminal_height_limit(window))
+    }
+    /// Returns how many rows of the terminal fit the height of its output.
+    pub(super) fn terminal_rows(&self, window: &Window) -> u16 {
+        // The output has 8 points of padding above and below its lines.
+        (f32::from(px(self.terminal_height(window) - 16.)) / f32::from(code_px(17.)))
+            .clamp(5., 200.) as u16
+    }
+    /// Sizes the task's terminal to the rows and columns that fit its pane.
+    pub(super) fn fit_terminal(&self, window: &Window) {
+        if self.terminal.is_none() {
+            return;
+        }
+        if let Some(task_id) = &self.selected {
+            self.send(core::Request::TerminalResize {
+                task_id: task_id.clone(),
+                rows: self.terminal_rows(window),
+                cols: self.terminal_columns(window),
+            });
+        }
+    }
     /// Builds the task terminal surface and forwards explicit keyboard input.
     pub(super) fn terminal_panel(
         &mut self,
@@ -680,7 +713,7 @@ impl Shell {
             .id("terminal-input")
             .track_focus(&focus)
             .key_context("Terminal")
-            .h(px(230.))
+            .h(px(self.terminal_height(window)))
             .w_full()
             .overflow_hidden()
             .font_family(crate::theme::mono())
@@ -731,8 +764,39 @@ impl Shell {
                 rows.into_iter()
                     .map(|line| div().h(code_px(17.)).child(line)),
             );
-        let cols = self.terminal_columns(window);
+        let dragging = self.dragging_terminal.is_some();
+        // The handle straddles the border above the terminal, like the dividers of the panes.
+        let handle = div()
+            .id("terminal-divider")
+            .group("terminal-divider")
+            .absolute()
+            .left_0()
+            .right_0()
+            .top(px(-chrome::RESIZE_REACH))
+            .h(px(chrome::RESIZE_REACH * 2. + 1.))
+            .cursor_row_resize()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|s, event: &MouseDownEvent, window, cx| {
+                    let pointer = f32::from(event.position.y) / crate::theme::ui_scale();
+                    s.dragging_terminal = Some((pointer, s.terminal_height(window)));
+                    cx.stop_propagation();
+                }),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(px(chrome::RESIZE_REACH - 1.))
+                    .h(px(3.))
+                    .when(dragging, |line| line.bg(theme.accent))
+                    .group_hover("terminal-divider", move |line| {
+                        line.bg(theme.accent.opacity(0.6))
+                    }),
+            );
         div()
+            .relative()
             .border_t_1()
             .border_color(theme.border)
             .bg(theme.inset)
@@ -755,15 +819,7 @@ impl Shell {
                     .child(div().flex_1())
                     .child(
                         self.icon_button("resize-terminal", "panel-bottom", "Fit terminal to pane")
-                            .on_click(cx.listener(move |s, _, _, _| {
-                                if let Some(task_id) = &s.selected {
-                                    s.send(core::Request::TerminalResize {
-                                        task_id: task_id.clone(),
-                                        rows: TERMINAL_ROWS,
-                                        cols,
-                                    });
-                                }
-                            })),
+                            .on_click(cx.listener(|s, _, window, _| s.fit_terminal(window))),
                     )
                     .child(
                         self.icon_button("copy-terminal", "copy", "Copy terminal output")
@@ -785,6 +841,7 @@ impl Shell {
                     ),
             )
             .child(content)
+            .child(handle)
             .with_animation(
                 "terminal-enter",
                 Animation::new(Duration::from_millis(150)),

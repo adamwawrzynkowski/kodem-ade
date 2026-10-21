@@ -221,8 +221,13 @@ pub fn shell_command(line: &str) -> Command {
     }
 }
 
+// The environment variable that tells a script to end without its final "Press Return" prompt,
+// because Kodem started it and no one waits at the terminal to close it.
+const NONINTERACTIVE_VARIABLE: &str = "KODEM_NONINTERACTIVE";
+
 /// Builds the line that a terminal's interactive shell runs to enter `cwd` and start `programs`
 /// in order. Each program starts when the one before it succeeds. An app runs until it quits.
+/// The programs see `KODEM_NONINTERACTIVE` set to `1`.
 pub fn program_sequence(cwd: &Path, programs: &[PathBuf]) -> Result<String> {
     ensure!(!programs.is_empty(), "Add a step to this command");
     for path in std::iter::once(cwd).chain(programs.iter().map(PathBuf::as_path)) {
@@ -238,16 +243,26 @@ pub fn program_sequence(cwd: &Path, programs: &[PathBuf]) -> Result<String> {
     if cfg!(windows) {
         // Windows PowerShell 5.1 has no `&&`, so each step runs in the success branch of the
         // step before it.
-        let mut line = format!("Set-Location -LiteralPath {}", powershell_quote(cwd));
+        // The variable is set for the session while the steps run and removed after them.
+        let mut line = format!(
+            "$env:{NONINTERACTIVE_VARIABLE} = '1'; Set-Location -LiteralPath {}",
+            powershell_quote(cwd)
+        );
         for program in programs {
             line.push_str("; if ($?) { ");
             line.push_str(&powershell_step(program));
         }
         line.push_str(&" }".repeat(programs.len()));
+        line.push_str(&format!("; Remove-Item Env:{NONINTERACTIVE_VARIABLE}"));
         Ok(line)
     } else {
+        // `env` sets the variable for each step only, in every POSIX shell and in fish.
         let mut steps = vec![format!("cd {}", posix_quote(cwd))];
-        steps.extend(programs.iter().map(|program| posix_step(program)));
+        steps.extend(
+            programs
+                .iter()
+                .map(|program| format!("env {NONINTERACTIVE_VARIABLE}=1 {}", posix_step(program))),
+        );
         Ok(steps.join(" && "))
     }
 }

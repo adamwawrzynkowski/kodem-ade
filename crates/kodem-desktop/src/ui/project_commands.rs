@@ -110,7 +110,7 @@ impl Shell {
                 div()
                     .text_size(text_px(12.))
                     .text_color(t.muted)
-                    .child("Scripts and apps that run in the task's terminal from the chat header. Steps run in order, and each starts when the one before it succeeds. Drag a command or a step to move it."),
+                    .child("Scripts and apps that run in the task's terminal from the chat header. Steps run in order, and each starts when the one before it succeeds. Each step sees KODEM_NONINTERACTIVE=1, so a script can end without a closing prompt. Drag a command or a step to move it."),
             )
             .child(tree)
             .child(
@@ -512,7 +512,7 @@ impl Shell {
         self.send(core::Request::RunProjectCommand {
             task_id,
             command_id,
-            rows: panels::TERMINAL_ROWS,
+            rows: self.terminal_rows(window),
             cols: self.terminal_columns(window),
         });
         self.show_terminal = true;

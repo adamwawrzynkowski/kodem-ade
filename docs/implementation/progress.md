@@ -1456,3 +1456,13 @@ Recorded on 21 October 2026. The user asked to reorder the project groups of the
 - A secondary click on a group header opens the Project menu: New task (New review in the review workspace) in that project, Expand or Collapse, Move up, Move down, Reveal in Finder, Copy path, Customize… and Remove…. Move up and Move down move the group past the group above or below it in the feed, and are unavailable when there is none.
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary test, since removed, checked that `project_rank` puts placed projects first in their saved order, then pinned projects, then the rest by name, and ignores a saved project that no longer exists. Not run: the Linux and Windows lint (the changes have no platform code). Not checked in the running app, under the no-visual-testing agreement.
+
+### Terminal height and command prompts
+
+Recorded on 21 October 2026. The user asked to resize the terminal below the chat, and for a project command to end without the Return press that its script asked for at the end.
+
+- `Settings::terminal_height` keeps the height of the terminal's output, 230 points by default and 100 to 1200 points when saved. The window shows at most its height less 240 points, so the chat keeps room. A drag of the border above the terminal changes the height, with the same handle as the pane dividers, and on release saves it and sizes the PTY to the rows and columns that fit. Fit terminal to pane and a project command use the rows that fit the height, in place of the fixed 12.
+- The terminal's opening slide grows toward the terminal's real height, in place of a fixed 300 points.
+- `platform::program_sequence` sets `KODEM_NONINTERACTIVE=1` for the steps of a project command: through `env` for each step on macOS and Linux, and for the session while the steps run in PowerShell. The Build command files already skip their final "Press Return" prompt and `pause` when it is set. The project dialog tells the user about the variable, for their own scripts.
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary test, since removed, ran the line that `program_sequence` builds through zsh for a script with a space in its name, and the script saw `KODEM_NONINTERACTIVE=1`. Not run: the Linux and Windows lint and the PowerShell line on Windows. Not checked in the running app, under the no-visual-testing agreement.

@@ -442,6 +442,7 @@ impl Shell {
         }
         let terminal_open = self.reveals.terminal;
         if terminal_open > 0. && self.has_checkout() {
+            let reach = self.terminal_height(window) + panels::TERMINAL_CHROME;
             let terminal = self.terminal_panel(window, cx);
             panel = panel.child(if terminal_open < 1. {
                 // While the terminal slides it is clipped to its current height and grows up
@@ -449,7 +450,7 @@ impl Shell {
                 div()
                     .w_full()
                     .flex_shrink_0()
-                    .max_h(px(motion::TERMINAL_REACH * terminal_open))
+                    .max_h(px(reach * terminal_open))
                     .overflow_hidden()
                     .child(terminal)
                     .into_any_element()

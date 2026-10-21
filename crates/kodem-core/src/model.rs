@@ -1695,6 +1695,8 @@ pub struct Settings {
     pub prevent_sleep: bool,
     pub sidebar_width: f32,
     pub review_width: f32,
+    /// Height of the task terminal's output below the chat, in points.
+    pub terminal_height: f32,
     pub collapsed: bool,
     pub comfortable: bool,
     /// Size of interface and prose text, in points. Every text size follows it in proportion.
@@ -1749,6 +1751,7 @@ impl Default for Settings {
             prevent_sleep: true,
             sidebar_width: 260.,
             review_width: 520.,
+            terminal_height: Self::TERMINAL_HEIGHT,
             collapsed: false,
             comfortable: false,
             font_size: Self::FONT_SIZE,
@@ -1797,6 +1800,10 @@ impl Settings {
     pub const CODE_FONT_SIZE: f32 = 12.;
     /// Smallest and largest size of code text.
     pub const CODE_FONT_SIZE_RANGE: (f32, f32) = (10., 20.);
+    /// Default height of the task terminal's output, in points.
+    pub const TERMINAL_HEIGHT: f32 = 230.;
+    /// Smallest and largest height of the task terminal's output.
+    pub const TERMINAL_HEIGHT_RANGE: (f32, f32) = (100., 1200.);
     /// Smallest and largest interface scale.
     pub const UI_SCALE_RANGE: (f32, f32) = (0.6, 1.4);
     /// Reads saved settings. Settings from before the named themes hold a light switch only;

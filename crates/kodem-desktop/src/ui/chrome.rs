@@ -602,7 +602,7 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(Self::request_quit))
             .on_action(cx.listener(Self::close_window))
-            .on_mouse_move(cx.listener(|s, event: &MouseMoveEvent, _, cx| {
+            .on_mouse_move(cx.listener(|s, event: &MouseMoveEvent, window, cx| {
                 // The pointer is in window pixels; the saved widths are in points.
                 let pointer = f32::from(event.position.x) / crate::theme::ui_scale();
                 if s.dragging_sidebar {
@@ -613,15 +613,28 @@ impl Render for Shell {
                     s.settings.review_width = (s.window_width - pointer).clamp(360., 900.);
                     cx.notify();
                 }
+                if let Some((start, height)) = s.dragging_terminal {
+                    // The terminal grows up as the pointer moves up from where the drag began.
+                    let pointer = f32::from(event.position.y) / crate::theme::ui_scale();
+                    s.settings.terminal_height = (height + start - pointer).clamp(
+                        Settings::TERMINAL_HEIGHT_RANGE.0,
+                        s.terminal_height_limit(window),
+                    );
+                    cx.notify();
+                }
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|s, _, _, cx| {
-                    if s.dragging_sidebar || s.dragging_review {
+                cx.listener(|s, _, window, cx| {
+                    if s.dragging_sidebar || s.dragging_review || s.dragging_terminal.is_some() {
                         s.save_settings();
+                    }
+                    if s.dragging_terminal.is_some() {
+                        s.fit_terminal(window);
                     }
                     s.dragging_sidebar = false;
                     s.dragging_review = false;
+                    s.dragging_terminal = None;
                     cx.notify();
                 }),
             );
@@ -807,7 +820,7 @@ impl Render for Shell {
 }
 
 /// Half the width of a pane divider's hit area, in points.
-const RESIZE_REACH: f32 = 5.;
+pub(super) const RESIZE_REACH: f32 = 5.;
 
 /// Width at the leading end of the title bar that the window controls take, in window pixels.
 /// Only macOS puts its controls there; elsewhere this is the title bar's leading margin.

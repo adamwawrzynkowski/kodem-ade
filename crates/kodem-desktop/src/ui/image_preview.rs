@@ -33,6 +33,7 @@ impl Shell {
         });
         self.dragging_sidebar = false;
         self.dragging_review = false;
+        self.dragging_terminal = None;
         cx.notify();
     }
 

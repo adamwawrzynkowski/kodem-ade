@@ -615,6 +615,7 @@ impl Store {
         ensure!(
             s.sidebar_width.is_finite()
                 && s.review_width.is_finite()
+                && s.terminal_height.is_finite()
                 && s.font_size.is_finite()
                 && s.code_font_size.is_finite()
                 && s.ui_scale.is_finite(),
@@ -623,6 +624,8 @@ impl Store {
         let mut s = s.clone();
         s.sidebar_width = s.sidebar_width.clamp(220., 420.);
         s.review_width = s.review_width.clamp(320., 900.);
+        let (smallest, largest) = Settings::TERMINAL_HEIGHT_RANGE;
+        s.terminal_height = s.terminal_height.clamp(smallest, largest);
         let (smallest, largest) = Settings::FONT_SIZE_RANGE;
         s.font_size = s.font_size.clamp(smallest, largest);
         let (smallest, largest) = Settings::CODE_FONT_SIZE_RANGE;

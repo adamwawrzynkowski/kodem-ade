@@ -321,6 +321,9 @@ pub struct Shell {
     pending_reference: Option<String>,
     dragging_sidebar: bool,
     dragging_review: bool,
+    /// A drag of the terminal's top edge: where the pointer and the terminal height were when
+    /// it started, in points.
+    dragging_terminal: Option<(f32, f32)>,
     /// A press on a title bar that the app draws itself, which moves the window once the
     /// pointer moves. A press that ends in place stays a click.
     title_press: bool,
@@ -770,6 +773,7 @@ impl Shell {
             pending_reference: None,
             dragging_sidebar: false,
             dragging_review: false,
+            dragging_terminal: None,
             title_press: false,
             meter_tab_hovered: false,
             meter_tab_focus: cx.focus_handle(),
@@ -2014,6 +2018,7 @@ impl Shell {
         self.panel = Panel::None;
         self.dragging_sidebar = false;
         self.dragging_review = false;
+        self.dragging_terminal = None;
         cx.notify();
     }
     // Asks before quitting. A second quit while the dialog is open quits.
@@ -2036,6 +2041,7 @@ impl Shell {
         self.agent_popup = None;
         self.dragging_sidebar = false;
         self.dragging_review = false;
+        self.dragging_terminal = None;
         self.panel = Panel::Quit;
         window.focus(&self.focus, cx);
         cx.notify();
