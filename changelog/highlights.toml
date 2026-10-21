@@ -56,7 +56,44 @@
 # "1.19.3 to 2.1.0") in a headline, title, text or visual. Say what the user can do now. build.rs
 # refuses version numbers such as 1.19.3.
 
-reviewed = "901db3e7048048984bdfeb5ac66a7057996b5b89"
+reviewed = "8190e41df8b598d45cd2e9c786ccee3fcb18110a"
+
+[[headline]]
+id = "headline-wallpaper-and-project-order"
+text = "Give the chat a wallpaper and halftone dots, and drag project groups into your own order."
+
+[[highlight]]
+id = "resizable-terminal"
+title = "A terminal you can resize"
+text = "Drag the border above the terminal. Kodem remembers the height, and project commands no longer wait for Return."
+tone = "green"
+visual = { kind = "figure", value = "230", label = "points by default", detail = "drag to change" }
+
+[[highlight]]
+id = "opencode-out-of-beta"
+title = "OpenCode is out of beta"
+text = "The BETA badge is gone from OpenCode in Settings, the model picker and setup."
+tone = "amber"
+visual = { kind = "glyph", icon = "opencode" }
+
+[[highlight]]
+id = "project-group-order-menu"
+title = "Order your project groups"
+text = "Drag a project group by its header to a new place; the feed scrolls near its edges. A right-click menu adds Move up and Move down."
+wide = true
+tone = "blue"
+visual = { kind = "chips", items = [
+    { text = "Move up", icon = "arrow-up" },
+    { text = "Move down", icon = "arrow-down" },
+    { text = "Copy path", icon = "copy" },
+] }
+
+[[highlight]]
+id = "chat-wallpaper-dots"
+title = "A wallpaper behind the chat"
+text = "Pick an image in Settings, Theme, or right-click the background. A halftone dot screen takes its colors, and a switch turns the click waves off."
+wide = true
+tone = "accent"
 
 [[headline]]
 id = "headline-subagent-tiles"
