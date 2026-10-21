@@ -868,6 +868,49 @@ pub(super) fn pulse(color: Hsla, reduce_motion: bool) -> AnyElement {
     .into_any_element()
 }
 
+/// Draws a ring of eight dots whose lit head moves one dot a clock step, with a fading tail.
+pub(super) fn orbit(color: Hsla, reduce_motion: bool) -> AnyElement {
+    const DOTS: usize = 8;
+    // One dot a step, so every step of the clock moves the head and none skips a dot.
+    let head = if reduce_motion {
+        0
+    } else {
+        (cycle(FRAME * DOTS as u32) * DOTS as f32) as usize % DOTS
+    };
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, cx| {
+            let side = f32::from(bounds.size.width.min(bounds.size.height));
+            let dot = (side / 6.).round().max(2.);
+            let radius = (side - dot) / 2.;
+            let center = bounds.center();
+            let (x, y) = (f32::from(center.x), f32::from(center.y));
+            window.paint_layer(bounds, |window| {
+                for index in 0..DOTS {
+                    let angle = index as f32 / DOTS as f32 * TAU;
+                    // Dots behind the head dim with their distance from it.
+                    let behind = (head + DOTS - index) % DOTS;
+                    let opacity = (1. - behind as f32 / DOTS as f32 * 1.15).max(0.16);
+                    let origin = point(
+                        px((x + angle.sin() * radius - dot / 2.).round()),
+                        px((y - angle.cos() * radius - dot / 2.).round()),
+                    );
+                    window.paint_quad(fill(
+                        Bounds::new(origin, size(px(dot), px(dot))),
+                        color.opacity(opacity),
+                    ));
+                }
+            });
+            if !reduce_motion {
+                schedule_step(window, cx);
+            }
+        },
+    )
+    .size(crate::theme::px(13.))
+    .flex_shrink_0()
+    .into_any_element()
+}
+
 /// Returns a stable random value from 0 to 1 for one cell and seed.
 pub(super) fn hash(x: i32, y: i32, seed: u32) -> f32 {
     let mut value = (x as u32).wrapping_mul(0x8DA6_B343)

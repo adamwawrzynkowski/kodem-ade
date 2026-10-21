@@ -1377,6 +1377,34 @@ impl Shell {
         } else {
             "Send message · Enter"
         };
+        // While the agent waits on work that runs apart from it, a glass key beside the stop
+        // button spins. It is no control: the pointer on it names what the agent waits for.
+        if let Some(waiting) = stopping.then(|| self.waiting_for()).flatten() {
+            actions = actions.child(
+                div()
+                    .id("composer-waiting")
+                    .relative()
+                    .overflow_hidden()
+                    .w(px(28.))
+                    .h(px(28.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(crate::theme::RADIUS_CONTROL))
+                    .border_1()
+                    .border_color(gpui::transparent_black())
+                    .layer(kit::glass_body(t.info))
+                    .shadow(kit::glass_glow(t.info, t, kit::Pose::Rest))
+                    .child(dither::orbit(t.on_accent, cx.reduce_motion()))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| Hint {
+                            text: waiting.clone(),
+                            theme: t,
+                        })
+                        .into()
+                    }),
+            );
+        }
         let submit_glyph = if stopping { "stop" } else { "arrow-up" };
         let submit = if stopping {
             self.glass("composer-submit", submit_glyph, "", t.removed)

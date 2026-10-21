@@ -29,6 +29,63 @@ impl Shell {
         })
     }
 
+    /// Names what the agent of a running task waits for before it continues, one item a line:
+    /// subagents that still work after its turn ended, or waits that are its only activities.
+    /// A request for the user's input is not a wait of this kind; it has its own surfaces.
+    pub(super) fn waiting_for(&self) -> Option<String> {
+        let view = self.view.as_ref()?;
+        let task = &view.task;
+        if !task.state.active() || task.state == RunState::Waiting {
+            return None;
+        }
+        let held = task.pending_completion.is_some();
+        let waits = !view.activities.is_empty()
+            && view.activities.iter().all(|activity| {
+                matches!(
+                    activity.kind,
+                    ActivityKind::Delegating | ActivityKind::WaitingTimer
+                )
+            });
+        if !held && !waits {
+            return None;
+        }
+        let agents: Vec<&str> = task
+            .subagents
+            .iter()
+            .filter(|agent| agent.state.active())
+            .map(|agent| agent.name.as_str())
+            .collect();
+        let mut lines = Vec::new();
+        if !agents.is_empty() {
+            lines.push(if agents.len() == 1 {
+                "Waiting for 1 subagent".to_owned()
+            } else {
+                format!("Waiting for {} subagents", agents.len())
+            });
+            lines.extend(agents.iter().map(|name| format!("· {name}")));
+        }
+        for activity in &view.activities {
+            let line = match activity.kind {
+                ActivityKind::WaitingTimer if activity.detail.is_empty() => {
+                    "Waiting for a timer".to_owned()
+                }
+                ActivityKind::WaitingTimer => format!("Waiting for a timer · {}", activity.detail),
+                // The subagents above already name the delegation.
+                ActivityKind::Delegating if !agents.is_empty() => continue,
+                ActivityKind::Delegating if activity.detail.is_empty() => {
+                    "Waiting for an agent".to_owned()
+                }
+                ActivityKind::Delegating => format!("Waiting for an agent · {}", activity.detail),
+                _ => continue,
+            };
+            lines.push(line);
+        }
+        if lines.is_empty() {
+            lines.push("Waiting for background work to finish".to_owned());
+        }
+        Some(lines.join("\n"))
+    }
+
     /// Shows every provider-reported activity, or the task's accurate fallback state.
     pub(super) fn activity_strip(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(view) = &self.view else {
