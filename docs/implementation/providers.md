@@ -2,7 +2,7 @@
 
 The host binds every conversation to a provider before starting its owner. Old task records and saved preferences default to Codex. A task can change its provider between turns, while no message is queued. The conversation of the earlier provider cannot move, so the task leaves it: the next message starts a conversation with the new provider and carries the earlier messages of the user and the replies as context. The transcript shows the change as a transfer row that names both agents. [Phase 7](progress.md) records the rules.
 
-The providers are Codex, Claude Code and OpenCode. OpenCode support is in beta, and the desktop marks it so. The Devin integration was removed on 12 October 2026; the store moves its old tasks aside when it opens.
+The providers are Codex, Claude Code and OpenCode. The Devin integration was removed on 12 October 2026; the store moves its old tasks aside when it opens.
 
 ## Caller and ownership
 
@@ -171,7 +171,7 @@ Not covered: a compaction that either CLI starts by itself in the middle of a lo
 
 The installed Codex schema also confirmed reasoning options and image modalities, including the schema default for omitted modalities.
 
-## OpenCode (beta)
+## OpenCode
 
 `providers/opencode.rs` drives `opencode serve` over the HTTP API of OpenCode 2 (`/api`) and its event stream (`/api/event`); `opencode_transcript.rs` maps events and stored messages to transcript items, and `opencode_import.rs` reads stored sessions. `kodem-core/src/providers/opencode.rs` owns the process, the loopback requests and the stream. OpenCode 1.x serves another API; Kodem refuses it and asks for `opencode upgrade --major`.
 

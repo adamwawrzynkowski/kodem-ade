@@ -73,10 +73,6 @@ impl Provider {
             Self::OpenCode => "opencode",
         }
     }
-    /// Reports an integration that is new and may still change, which the interface marks.
-    pub fn beta(self) -> bool {
-        self == Self::OpenCode
-    }
     /// Returns the CLI command used to authenticate this integration.
     pub fn login_command(self) -> &'static str {
         match self {

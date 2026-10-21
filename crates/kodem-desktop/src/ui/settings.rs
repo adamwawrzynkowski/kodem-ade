@@ -2118,8 +2118,7 @@ impl Shell {
                             .gap(px(6.))
                             .text_size(text_px(13.))
                             .font_weight(FontWeight::MEDIUM)
-                            .child(provider.label())
-                            .when(provider.beta(), |name| name.child(kit::beta_chip(t))),
+                            .child(provider.label()),
                     )
                     .child(
                         div()

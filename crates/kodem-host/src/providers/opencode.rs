@@ -3,7 +3,7 @@
 //! One `opencode serve` process per task owns the conversation, an OpenCode session. Kodem
 //! needs OpenCode 2, whose sessions keep their model, reasoning variant, agent, approval rules
 //! and standing instructions. The account, Kodem's tools and automatic compaction are fixed
-//! when a server starts. OpenCode support is in beta.
+//! when a server starts.
 #[path = "opencode_import.rs"]
 mod import;
 #[path = "opencode_transcript.rs"]

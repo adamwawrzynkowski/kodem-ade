@@ -1430,3 +1430,9 @@ Recorded on 21 October 2026. The user asked for a dithered dot layer in the chat
 - The backdrop paints it over the surface veil and beneath the lights, so the calm column's veil keeps it faint behind the reading text.
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. A temporary test, since removed, baked a 3024 × 1964 window at scale 2 in about 2 ms (release), checked the sprite's size and crop, that the lit share falls from the top to none at the reach, the neutral dot texel, and a dot's shade from a wallpaper sample. The look is not checked in the running app, under the no-visual-testing agreement.
+
+### OpenCode leaves beta
+
+Recorded on 21 October 2026. The user asked to remove the BETA badge of OpenCode.
+
+- `Provider::beta()` and `kit::beta_chip` are gone, so the provider rows of Settings, the model picker and the setup dialog show "OpenCode" without a chip. [providers.md](providers.md) no longer calls OpenCode support beta. The Git workspace keeps its own BETA tag.
