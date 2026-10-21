@@ -56,7 +56,7 @@
 # "1.19.3 to 2.1.0") in a headline, title, text or visual. Say what the user can do now. build.rs
 # refuses version numbers such as 1.19.3.
 
-reviewed = "05f61888314fb9599e3d18220414b5957d33522f"
+reviewed = "3dd21cd5d13954d6474187ea9080035dc0996a2a"
 
 [[headline]]
 id = "headline-antigravity-grok-pace"
