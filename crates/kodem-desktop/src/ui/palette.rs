@@ -300,7 +300,7 @@ impl Shell {
         if !self.git_open {
             add(
                 "git-pull-request",
-                "Open Git (Beta)",
+                "Open Git",
                 "",
                 "⌥⌘4",
                 "Workspaces",

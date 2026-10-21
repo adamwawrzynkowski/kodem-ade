@@ -355,6 +355,7 @@ impl Shell {
                     self.option_row(("model-provider", index), chosen, disabled)
                         .child(icon(provider.icon()).size(px(13.)))
                         .child(provider.label())
+                        .when(provider.beta(), |row| row.child(kit::beta_chip(t)))
                         .on_click(cx.listener(move |s, _, _, cx| {
                             s.choose_provider(provider, cx);
                         })),
@@ -365,6 +366,7 @@ impl Shell {
                     self.option_row(("model-provider-soon", index), false, true)
                         .child(icon(upcoming.icon).size(px(13.)))
                         .child(upcoming.label)
+                        .when(upcoming.beta, |row| row.child(kit::beta_chip(t)))
                         .tooltip(move |_, cx| {
                             cx.new(|_| Hint {
                                 text: upcoming.hint(),

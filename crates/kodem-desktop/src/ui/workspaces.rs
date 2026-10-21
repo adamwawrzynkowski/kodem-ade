@@ -413,39 +413,13 @@ impl Shell {
 }
 
 impl Shell {
-    // The Git workspace's tile in the rail at `slot`: the branch glyph with a Beta tag hanging
-    // from its lower edge.
+    // The Git workspace's tile in the rail at `slot`: the branch glyph.
     fn git_button(&self, slot: usize, cx: &mut Context<Self>) -> AnyElement {
-        let t = self.theme;
         let chosen = self.rail_slot() == slot;
         let tile = self
-            .rail_tile(
-                slot,
-                "git-pull-request",
-                "Git, beta",
-                "Git · Beta · ⌥⌘4".into(),
-                chosen,
-            )
+            .rail_tile(slot, "git-pull-request", "Git", "Git · ⌥⌘4".into(), chosen)
             .on_click(cx.listener(|s, _, _, cx| s.open_git(cx)));
-        self.rail_cell(slot, tile, chosen)
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .bottom(px(-4.))
-                    .flex()
-                    .justify_center()
-                    .child(
-                        git_beta_badge(t, chosen).relative().with_animation(
-                            ("rail-beta", chosen as usize),
-                            Animation::new(Duration::from_millis(260))
-                                .with_easing(motion::ease_out_cubic),
-                            |tag, delta| tag.top(px(3. * (1. - delta))).opacity(delta),
-                        ),
-                    ),
-            )
-            .into_any_element()
+        self.rail_cell(slot, tile, chosen).into_any_element()
     }
 
     /// Returns the Git workspace, created the first time it is needed.
@@ -553,35 +527,6 @@ impl Shell {
             }
         }
     }
-}
-
-/// Returns the Beta tag of the Git workspace's tile: a small mono pill in the accent, outlined
-/// over the rail and filled while the Git workspace is open.
-pub(super) fn git_beta_badge(theme: Theme, chosen: bool) -> Div {
-    div()
-        .h(px(10.))
-        .px(px(3.))
-        .flex()
-        .items_center()
-        .rounded(px(3.))
-        .border_1()
-        .border_color(if chosen {
-            theme.accent
-        } else {
-            theme.accent.opacity(0.45)
-        })
-        .bg(if chosen { theme.accent } else { theme.sidebar })
-        .text_color(if chosen {
-            theme.on_accent
-        } else {
-            theme.accent
-        })
-        .font_family(crate::theme::mono())
-        .text_size(text_px(6.))
-        .line_height(text_px(8.))
-        .font_weight(FontWeight::BOLD)
-        .letter_spacing(text_px(0.4))
-        .child("BETA")
 }
 
 // The dotted rule that parts the workspace tiles from the rest of the rail.

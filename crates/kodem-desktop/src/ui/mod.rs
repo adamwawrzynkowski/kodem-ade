@@ -2614,20 +2614,24 @@ fn merge_transcript(current: &TaskView, incoming: &mut TaskView, older: bool) {
     }
 }
 /// A provider that is shown as a placeholder. Kodem cannot run it yet, so it takes no click.
+/// `beta` marks one whose support starts in beta.
 #[derive(Clone, Copy)]
 struct UpcomingProvider {
     label: &'static str,
     icon: &'static str,
+    beta: bool,
 }
 impl UpcomingProvider {
     const ALL: [Self; 2] = [
         Self {
             label: "xAI",
             icon: "xai",
+            beta: true,
         },
         Self {
             label: "Pi",
             icon: "pi",
+            beta: false,
         },
     ];
     /// Returns the hint shown when the pointer is on the placeholder.
@@ -2744,7 +2748,7 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Agentic Coding", ShowCoding),
                 MenuItem::action("Chat", ShowChat),
                 MenuItem::action("Review", ShowReview),
-                MenuItem::action("Git (Beta)", ShowGit),
+                MenuItem::action("Git", ShowGit),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
                 MenuItem::action("Toggle Changes", ToggleReview),

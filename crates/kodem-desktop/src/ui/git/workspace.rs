@@ -760,7 +760,7 @@ impl GitWorkspace {
         }
     }
 
-    /// Builds the title bar's content: the workspace's name and Beta badge, the repository, its
+    /// Builds the title bar's content: the workspace's name, the repository, its
     /// branch with the commits ahead and behind, the running operation and the remote actions.
     pub fn render_title_bar(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let active_tab = self.tabs.get(self.active);
@@ -834,8 +834,7 @@ impl GitWorkspace {
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(cx.theme().foreground)
                             .child("Git"),
-                    )
-                    .child(crate::ui::kit::chip("BETA", kodem.accent)),
+                    ),
             )
             .when_some(repository, |this, (name, path)| {
                 let project = self.project(&path).cloned();
@@ -1630,12 +1629,7 @@ impl GitWorkspace {
                     .relative()
                     .p(px(24.))
                     .gap(px(4.))
-                    .child(
-                        h_flex()
-                            .gap(px(8.))
-                            .child(mono_label("Kodem · Git workspace", cx))
-                            .child(crate::ui::kit::chip("BETA", accent)),
-                    )
+                    .child(mono_label("Kodem · Git workspace", cx))
                     .child(
                         div()
                             .font_family(mono_font())

@@ -79,6 +79,10 @@ impl Provider {
             Self::Antigravity => "antigravity",
         }
     }
+    /// Reports an integration that is new and may still change, which the interface marks.
+    pub fn beta(self) -> bool {
+        self == Self::Antigravity
+    }
     /// Returns the CLI command used to authenticate this integration.
     ///
     /// The Antigravity CLI has no sign-in command: started without arguments, it asks for a

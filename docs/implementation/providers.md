@@ -2,7 +2,7 @@
 
 The host binds every conversation to a provider before starting its owner. Old task records and saved preferences default to Codex. A task can change its provider between turns, while no message is queued. The conversation of the earlier provider cannot move, so the task leaves it: the next message starts a conversation with the new provider and carries the earlier messages of the user and the replies as context. The transcript shows the change as a transfer row that names both agents. [Phase 7](progress.md) records the rules.
 
-The providers are Codex, Claude Code, OpenCode and Antigravity. Antigravity replaced the "Google" placeholder on 21 October 2026. The Devin integration was removed on 12 October 2026; the store moves its old tasks aside when it opens.
+The providers are Codex, Claude Code, OpenCode and Antigravity. Antigravity replaced the "Google" placeholder on 21 October 2026. Antigravity support is in beta, and the desktop marks it so, as it marks the xAI placeholder. The Devin integration was removed on 12 October 2026; the store moves its old tasks aside when it opens.
 
 ## Caller and ownership
 
@@ -202,7 +202,7 @@ Checked on 18 October 2026 against OpenCode 2.0.32 with free OpenCode models, th
 
 Not covered: image input, a slash command, a second account, a compaction that OpenCode starts by itself, a provider that needs a sign-in, `aarch64` Windows, and the desktop in the running app.
 
-## Antigravity
+## Antigravity (beta)
 
 `providers/antigravity.rs` drives the Antigravity CLI (`agy`) in its headless stream-json mode: `agy --input-format stream-json --output-format stream-json -p=`, one prompt per input line and one `result` event per turn. `antigravity_transcript.rs` maps the stream's `step_update` events and the conversation's stored `transcript_full.jsonl` to transcript items, and `antigravity_import.rs` reads stored conversations. `kodem-core/src/providers/antigravity.rs` finds the CLI (`~/.local/bin/agy`, `%LOCALAPPDATA%\agy\bin` on Windows) and reads the CLI's conversation index, `~/.gemini/antigravity-cli/conversation_summaries.db`, read-only.
 

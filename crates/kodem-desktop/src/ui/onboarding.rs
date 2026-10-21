@@ -173,6 +173,7 @@ impl Shell {
                             .items_center()
                             .gap(px(8.))
                             .child(div().text_size(text_px(13.)).child(provider.label()))
+                            .when(provider.beta(), |d| d.child(kit::beta_chip(t)))
                             .child(kit::chip(status, tone))
                             .when(is_default && found == Found::Ready, |d| {
                                 d.child(kit::chip("NEW TASKS", t.muted))
@@ -338,6 +339,7 @@ impl Shell {
                     .items_center()
                     .gap(px(8.))
                     .child(div().text_size(text_px(13.)).child(upcoming.label))
+                    .when(upcoming.beta, |d| d.child(kit::beta_chip(t)))
                     .child(kit::chip("COMING SOON", t.subtle)),
             )
             .tooltip(move |_, cx| {

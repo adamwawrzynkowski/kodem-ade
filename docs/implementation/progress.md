@@ -1480,3 +1480,12 @@ Recorded on 21 October 2026. The user asked for Antigravity support through the 
 Not available with the CLI's headless mode: steering, manual compaction, slash commands, and image input other than by path.
 
 Checked with a temporary IPC client and scratch hosts, not kept, as [providers.md](providers.md) lists. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Through zig, `cargo clippy --workspace --all-targets -D warnings` for `x86_64-unknown-linux-gnu` and `cargo clippy -p kodem-host -p kodem-core --all-targets -D warnings` for it and `x86_64-pc-windows-msvc` found nothing; the whole-workspace Windows run reports only the older `large_enum_variant` on Codex's `Catalog`. Not checked in the running app, under the no-visual-testing agreement.
+
+### Git leaves beta; Antigravity and xAI in beta
+
+Recorded on 21 October 2026. The user asked to remove the BETA badge of the Git workspace everywhere and to mark Antigravity and xAI with BETA badges everywhere.
+
+- The Git tile of the rail has no BETA pill (`git_beta_badge` is gone), and its hint reads "Git · ⌥⌘4". The Git title bar and the Git welcome card have no BETA chip, and the View menu and the command palette say "Git" and "Open Git".
+- `Provider::beta()` (Antigravity) and `kit::beta_chip` are back. The chip follows the provider's name in the navigation and the provider card of Settings, the model picker and the setup dialog.
+- `UpcomingProvider::beta` marks the xAI placeholder, which shows the chip in the model picker, the Coming soon group of Settings and the setup dialog.
+

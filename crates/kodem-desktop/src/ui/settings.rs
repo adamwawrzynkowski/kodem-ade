@@ -277,6 +277,7 @@ struct NavRow {
     target: NavTarget,
     glyph: Option<&'static str>,
     label: &'static str,
+    beta: bool,
     chosen: bool,
     open: bool,
     children: Vec<NavRow>,
@@ -289,6 +290,7 @@ impl NavRow {
             target,
             glyph: None,
             label,
+            beta: false,
             chosen,
             open: false,
             children: Vec::new(),
@@ -844,6 +846,7 @@ impl Shell {
                         )),
                         glyph: Some(provider.icon()),
                         label: provider.label(),
+                        beta: provider.beta(),
                         chosen: false,
                         open: page.provider() == Some(provider),
                         children: ProviderPage::pages(provider)
@@ -922,6 +925,7 @@ impl Shell {
                             .text_ellipsis()
                             .child(row.label),
                     )
+                    .when(row.beta, |item| item.child(kit::beta_chip(t)))
                     .when(parent, |item| item.child(nav_chevron(row.open, t)))
                     .when(!idle, |item| {
                         item.on_click(
@@ -2000,6 +2004,7 @@ impl Shell {
                     .border_color(t.border)
                     .child(icon(candidate.icon).size(px(13.)))
                     .child(candidate.label)
+                    .when(candidate.beta, |cell| cell.child(kit::beta_chip(t)))
                     .tooltip(move |_, cx| {
                         cx.new(|_| Hint {
                             text: candidate.hint(),
@@ -2117,7 +2122,8 @@ impl Shell {
                             .gap(px(6.))
                             .text_size(text_px(13.))
                             .font_weight(FontWeight::MEDIUM)
-                            .child(provider.label()),
+                            .child(provider.label())
+                            .when(provider.beta(), |name| name.child(kit::beta_chip(t))),
                     )
                     .child(
                         div()
