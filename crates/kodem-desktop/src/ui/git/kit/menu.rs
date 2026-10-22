@@ -123,7 +123,6 @@ pub struct PopupMenu {
     focus_handle: FocusHandle,
     entries: Vec<Entry>,
     min_width: Option<Pixels>,
-    max_height: Option<Pixels>,
     action_context: Option<FocusHandle>,
     /// The entry under the keyboard selection or the pointer.
     highlighted: Option<usize>,
@@ -152,7 +151,6 @@ impl PopupMenu {
             focus_handle: cx.focus_handle(),
             entries: Vec::new(),
             min_width: None,
-            max_height: None,
             action_context: None,
             highlighted: None,
             open_submenu: None,
@@ -184,12 +182,6 @@ impl PopupMenu {
     /// Sets the narrowest width of the menu.
     pub fn min_w(mut self, width: impl Into<Pixels>) -> Self {
         self.min_width = Some(width.into());
-        self
-    }
-
-    /// Sets the tallest height of the menu; longer menus scroll.
-    pub fn max_h(mut self, height: impl Into<Pixels>) -> Self {
-        self.max_height = Some(height.into());
         self
     }
 
@@ -504,10 +496,7 @@ impl Render for PopupMenu {
             .collect();
         let bounds = self.bounds.clone();
         let viewport = window.viewport_size();
-        let max_height = self
-            .max_height
-            .unwrap_or(viewport.height)
-            .min((viewport.height - px(16.)).max(px(0.)));
+        let max_height = (viewport.height - px(16.)).max(px(0.));
         div()
             .id("git-popup-menu")
             .track_focus(&self.focus_handle)

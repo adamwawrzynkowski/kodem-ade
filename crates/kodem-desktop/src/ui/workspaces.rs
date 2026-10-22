@@ -441,6 +441,7 @@ impl Shell {
             }));
         self.git = Some(git.clone());
         self.sync_git_projects(cx);
+        self.sync_git_agent(cx);
         // The repositories that the workspace restored opened before this view listened.
         for path in git.read(cx).repository_paths(cx) {
             self.git_event(&git::GitEvent::RepositoryOpened(path), cx);

@@ -23,7 +23,9 @@ use crate::theme::{RADIUS_CONTROL, px, text_px, ui_scale};
 use crate::ui::controls::Switch;
 use crate::ui::dither::{BarSegment, Dither, DitherBar, DitherField, checker};
 use crate::ui::fx;
-use crate::ui::git::ai::{AiResult, open_ai_result_dialog, run_ai_result_task};
+use crate::ui::git::ai::{
+    AiAgentState, AiResult, ai_action_group, open_ai_result_dialog, run_ai_result_task,
+};
 use crate::ui::git::components::{
     self, button, change_kind_chip, count_badge, full_size, mono_font, text_field,
 };
@@ -33,7 +35,7 @@ use crate::ui::git::icons;
 use crate::ui::git::kit::{
     ActiveTheme as _, ButtonVariants as _, ContextMenuExt as _, Disableable as _,
     DropdownMenu as _, Icon, IconName, InputState, PopupMenu, PopupMenuItem, ResizableState,
-    ScrollableElement as _, Selectable as _, Sizable as _, Textarea, TextareaState, h_flex,
+    ScrollableElement as _, Selectable as _, Sizable as _, Size, Textarea, TextareaState, h_flex,
     h_resizable, resizable_panel, v_flex, v_resizable,
 };
 use crate::ui::git::settings::GitSettings;
@@ -617,6 +619,7 @@ impl ChangesView {
         cx: &mut Context<Self>,
     ) {
         let settings = GitSettings::get(cx).clone();
+        let agent = AiAgentState::get(cx).agent;
         let repo = self.state.read(cx).repo.clone();
         let amend = self.amend;
         let scope = ChangeScope::from_include_unstaged(settings.ai_include_unstaged);
@@ -631,7 +634,8 @@ impl ChangesView {
             let task = cx.background_executor().spawn(async move {
                 let context =
                     ChangeContext::from_repo(&repo, amend, settings.ai_include_whole_file, scope)?;
-                AiService::new(AiConfig::from(&settings)).generate_commit(&context, target)
+                AiService::new(AiConfig::new(&settings, agent, repo.path.clone()))
+                    .generate_commit(&context, target)
             });
             let result = task.await;
             if let Ok(message) = &result {
@@ -665,6 +669,7 @@ impl ChangesView {
 
     fn review_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = GitSettings::get(cx).clone();
+        let agent = AiAgentState::get(cx).agent;
         let repo = self.state.read(cx).repo.clone();
         let amend = self.amend;
         let scope = ChangeScope::from_include_unstaged(settings.ai_include_unstaged);
@@ -677,7 +682,8 @@ impl ChangesView {
             dialog,
             move |progress| {
                 let context = ChangeContext::from_repo(&repo, amend, false, scope)?;
-                AiService::new(AiConfig::from(&settings)).review_changes(&context, progress)
+                AiService::new(AiConfig::new(&settings, agent, repo.path.clone()))
+                    .review_changes(&context, progress)
             },
             AiResult::CodeReview,
             cx,
@@ -686,6 +692,7 @@ impl ChangesView {
 
     fn explain_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = GitSettings::get(cx).clone();
+        let agent = AiAgentState::get(cx).agent;
         let repo = self.state.read(cx).repo.clone();
         let amend = self.amend;
         let scope = ChangeScope::from_include_unstaged(settings.ai_include_unstaged);
@@ -698,7 +705,7 @@ impl ChangesView {
             dialog,
             move |progress| {
                 let context = ChangeContext::from_repo(&repo, amend, false, scope)?;
-                AiService::new(AiConfig::from(&settings)).explain_diff(
+                AiService::new(AiConfig::new(&settings, agent, repo.path.clone())).explain_diff(
                     &context.diff,
                     None,
                     None,
@@ -1951,9 +1958,10 @@ impl ChangesView {
             .child(
                 h_flex()
                     .gap_2()
-                    .child(
+                    .child(ai_action_group(
+                        "changes",
                         button("ai-actions")
-                            .outline()
+                            .ghost()
                             .small()
                             .icon(icons::sparkles())
                             .label("AI")
@@ -2050,7 +2058,9 @@ impl ChangesView {
                                             }),
                                     )
                             }),
-                    )
+                        Size::Small,
+                        cx,
+                    ))
                     .child(
                         button("toggle-description")
                             .ghost()

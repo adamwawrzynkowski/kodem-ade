@@ -1556,3 +1556,14 @@ Recorded on 21 October 2026. The user asked for a third key beside Stop, not a c
 - A provider that does not report a wait as an activity shows no key for it. Claude Code's background shells are not tracked by the host, so a turn that ended while one runs shows none, and a background agent of Claude Code can show the key for the moment between two model requests of the main turn.
 
 Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not checked in the running app, under the no-visual-testing agreement.
+
+### Git AI actions on Kodem's providers
+
+Recorded on 23 October 2026. The user asked that the Git workspace's AI actions use Kodem's own providers, models and efforts instead of the Ollama and Codex setup that came from Liquid, with each action as `[action][model][effort]`, and the choice saved for the Git workspace only.
+
+- Each AI action is one bordered group with dividers: the action, the provider's logo, which opens Kodem's provider, account and model menu, and the reasoning effort, which always shows and opens Kodem's effort slider. The groups are the AI menu of the commit area, Explain in a commit's details and Review on each pull request.
+- The menus are Kodem's own (`Panel::GitModels`, `Panel::GitReasoning` in `model_picker.rs`). Their choices are saved as `ai_agent` in the Git settings only. Until the user picks one, the Git workspace follows the options that a new Kodem task would start with, and it never writes Kodem's preferences, project defaults or remembered models. The window gives the Git views the resolved choice as the `AiAgentState` global.
+- The actions run through the host as one-shot generations ([providers.md](providers.md#one-shot-generations)), in the repository's folder. The IPC protocol is 40.
+- The AI page of the Git settings lost the provider section (Ollama server, Codex model, effort and sign-in) and the per-feature Ollama models. It shows the current choice and keeps the switches and prompts. Old settings files load: the removed fields are ignored.
+
+Codex and Claude Code generations were checked live with temporary tests, since removed: answers with and without a schema, streamed thinking and answer text, and a clear error for an unknown model. Antigravity was checked live once through a scratch host: the hook denied the model's tool call, the answer arrived, and the conversation was deleted. OpenCode was checked live up to the model: OpenCode 2.1.3 refused the free model from `opencode serve`, and the session was deleted. Grok was checked only without a model turn, under its free plan's limit. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not checked in the running app, under the no-visual-testing agreement.

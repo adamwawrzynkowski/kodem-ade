@@ -77,6 +77,8 @@ const BLOCKED_COMMANDS: [&str; 11] = [
 const COMMAND_LIMIT: Duration = Duration::from_secs(6 * 60 * 60);
 /// How long after a turn OpenCode may still name the conversation before Kodem names it.
 const TITLE_WAIT: Duration = Duration::from_secs(30);
+/// How long a one-shot generation, such as a review, may take.
+const GENERATION_LIMIT: Duration = Duration::from_secs(10 * 60);
 /// The entry of a session's standing instructions that Kodem writes.
 const INSTRUCTIONS: &str = "kodem";
 /// Most messages that one page of a stored conversation returns.
@@ -1984,5 +1986,157 @@ impl Owner<'_> {
             self.transcript.stop_agents(self.host)?;
         }
         Ok(())
+    }
+}
+
+/// Answers a one-shot generation without a stored conversation or tools.
+///
+/// A server of its own runs one session that denies every permission. The session is deleted
+/// and the server stops however the generation ends.
+pub(super) fn generate(
+    _host: &Shared,
+    account: &Account,
+    generation: &Generation,
+    progress: &mut dyn FnMut(GenerationEvent),
+) -> Result<String> {
+    let model = generation
+        .model
+        .as_deref()
+        .map(|id| model_ref(id, generation.effort.as_deref()))
+        .transpose()?;
+    let mut server = probe(&generation.cwd, account)?;
+    let client = server.client().clone();
+    let events = client.events()?;
+    // The tag tells Kodem's import that Kodem started this session, should a crash leave it.
+    let mut body = json!({"location":{"directory":generation.cwd},"agent":"build",
+        "permissions":[rule("*", "*", "deny")],"metadata":{"kodem":{"generation":true}}});
+    if let Some(model) = model {
+        body["model"] = model;
+    }
+    let created = client.post("/api/session", &body)?;
+    let session = created["data"]["id"]
+        .as_str()
+        .context("OpenCode created a session without an identity")?
+        .to_owned();
+    let answer = generation_answer(&mut server, &events, &session, generation, progress);
+    if answer.is_err() {
+        let _ = client.post(&format!("/api/session/{session}/interrupt"), &json!({}));
+    }
+    // Nothing of the generation stays stored. Dropping the server stops it.
+    let _ = client.request(
+        "DELETE",
+        &format!("/api/session/{session}"),
+        None,
+        kodem_core::providers::opencode::REQUEST_LIMIT,
+    );
+    answer
+}
+
+// Sends the generation to its session and follows the session's events until its run ends.
+// Returns the text of the last answer.
+fn generation_answer(
+    server: &mut Server,
+    events: &mpsc::Receiver<std::result::Result<Value, String>>,
+    session: &str,
+    generation: &Generation,
+    progress: &mut dyn FnMut(GenerationEvent),
+) -> Result<String> {
+    let client = server.client().clone();
+    client.request(
+        "PUT",
+        &format!("/api/experimental/session/{session}/instructions/entries/{INSTRUCTIONS}"),
+        Some(&json!({"value":provider::generation_instructions(generation)})),
+        kodem_core::providers::opencode::REQUEST_LIMIT,
+    )?;
+    client.post(
+        &format!("/api/session/{session}/prompt"),
+        &json!({"text":generation.input}),
+    )?;
+    let deadline = Instant::now() + GENERATION_LIMIT;
+    let mut status = "";
+    // The text parts of the assistant message that wrote last.
+    let mut message = String::new();
+    let mut parts: Vec<String> = Vec::new();
+    loop {
+        ensure!(
+            Instant::now() < deadline,
+            "OpenCode did not answer within 10 minutes"
+        );
+        let event = match events.recv_timeout(Duration::from_millis(500)) {
+            Ok(Ok(event)) => event,
+            Ok(Err(error)) => bail!("{error}"),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                ensure!(server.running(), "OpenCode's server stopped");
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => bail!("OpenCode ended its event stream"),
+        };
+        let data = &event["data"];
+        let kind = event["type"].as_str().unwrap_or_default();
+        if kind == "form.created" {
+            // Questions are denied; one that still arrives is withdrawn.
+            if data["form"]["sessionID"] == session
+                && let Some(id) = data["form"]["id"].as_str()
+            {
+                client.request(
+                    "DELETE",
+                    &format!("/api/session/{session}/form/{id}"),
+                    None,
+                    kodem_core::providers::opencode::REQUEST_LIMIT,
+                )?;
+            }
+            continue;
+        }
+        if data["sessionID"] != session {
+            continue;
+        }
+        let next = match kind {
+            "session.reasoning.started" => "OpenCode is reasoning...",
+            "session.text.started" if generation.schema.is_some() => {
+                "OpenCode is writing the structured result..."
+            }
+            "session.text.started" => "OpenCode is writing the answer...",
+            _ => status,
+        };
+        if next != status {
+            status = next;
+            progress(GenerationEvent::Status(status.to_owned()));
+        }
+        match kind {
+            "session.reasoning.delta" => {
+                if let Some(delta) = data["delta"].as_str() {
+                    progress(GenerationEvent::Thinking(delta.to_owned()));
+                }
+            }
+            "session.text.delta" if generation.schema.is_none() => {
+                if let Some(delta) = data["delta"].as_str() {
+                    progress(GenerationEvent::Response(delta.to_owned()));
+                }
+            }
+            "session.text.ended" => {
+                let id = data["assistantMessageID"].as_str().unwrap_or_default();
+                if id != message {
+                    message = id.to_owned();
+                    parts.clear();
+                }
+                parts.push(data["text"].as_str().unwrap_or_default().to_owned());
+            }
+            // Every permission is denied; a request that still arrives is rejected.
+            "permission.asked" => {
+                if let Some(id) = data["id"].as_str() {
+                    client.post(
+                        &format!("/api/session/{session}/permission/{id}/reply"),
+                        &json!({"decision":"reject","message":"Tools are not available."}),
+                    )?;
+                }
+            }
+            "session.execution.succeeded" => return Ok(parts.join("\n\n")),
+            "session.execution.failed" => bail!(
+                transcript::error_text(&data["error"])
+                    .unwrap_or_else(|| "OpenCode reported a failure".into())
+            ),
+            "session.execution.interrupted" => bail!("OpenCode stopped before it answered"),
+            _ => {}
+        }
     }
 }

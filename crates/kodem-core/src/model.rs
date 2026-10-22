@@ -1283,6 +1283,52 @@ pub struct Delegation {
     pub worktree: Option<(String, PathBuf)>,
 }
 
+/// One request that a provider answers once, outside any task: no conversation that the
+/// provider keeps, and no tools. The Git workspace writes commit messages and reviews with it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Generation {
+    pub provider: Provider,
+    /// Account that answers; absent selects the provider's default account.
+    pub account: Option<String>,
+    /// Model by catalog identity; absent selects the provider's default model.
+    pub model: Option<String>,
+    /// Reasoning effort as the model's catalog lists it; absent keeps the model's default.
+    pub effort: Option<String>,
+    /// Folder that the provider runs in, such as the repository of the request.
+    pub cwd: PathBuf,
+    /// System instructions of the request.
+    pub instructions: String,
+    /// The request itself, which the model reads as data.
+    pub input: String,
+    /// JSON schema that a structured answer follows. Providers without structured output
+    /// receive it in the instructions instead.
+    pub schema: Option<serde_json::Value>,
+}
+
+/// Progress of a running generation.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum GenerationEvent {
+    /// A short line that says what the provider does now.
+    Status(String),
+    /// New text of the model's reasoning.
+    Thinking(String),
+    /// New text of the answer.
+    Response(String),
+}
+
+/// The state of a generation, as `Request::GenerationStatus` reads it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct GenerationStatus {
+    /// Progress since the `after` of the request, oldest first.
+    pub events: Vec<GenerationEvent>,
+    /// Events read so far: the `after` of the next request.
+    pub next: usize,
+    /// The generation ended: `result` or `error` is final, and the host forgets it.
+    pub done: bool,
+    pub result: Option<String>,
+    pub error: Option<String>,
+}
+
 /// Provider outcome awaiting completion of the task's whole agent tree.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TurnOutcome {
@@ -2797,6 +2843,19 @@ pub enum Request {
         parent: String,
         task_id: String,
     },
+    /// Starts a one-shot generation under the identity `job`, which the caller chooses.
+    /// Answers with `Response::Ok`; `GenerationStatus` reads its progress and result.
+    Generate {
+        job: String,
+        generation: Generation,
+    },
+    /// Reads the progress of a generation after its first `after` events, waiting up to
+    /// `wait_ms` for news. Answers with `Response::Generation`.
+    GenerationStatus {
+        job: String,
+        after: usize,
+        wait_ms: u64,
+    },
     /// Asks whether the Antigravity CLI of a task may run one tool call. The CLI's pre-tool
     /// hook sends the call as `payload`. An answer that holds a `ticket` waits for the user, and
     /// the hook asks again with that ticket and no payload. Answers with `Response::Text`, which
@@ -2835,6 +2894,7 @@ pub enum Response {
     Watched(SubscriptionStart),
     Agents(Vec<AgentOption>),
     Delegated(Delegation),
+    Generation(GenerationStatus),
     Usage {
         provider: Provider,
         account: String,

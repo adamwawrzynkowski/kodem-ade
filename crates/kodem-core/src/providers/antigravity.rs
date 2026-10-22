@@ -152,6 +152,91 @@ pub fn summary(conversation: &str) -> Result<Option<Summary>> {
     .next())
 }
 
+/// Deletes one conversation from the CLI's data folder, by its identity: its index entry, its
+/// folder and files, and the entries that name it as the last conversation of a folder.
+///
+/// The CLI's data serves every caller, so nothing else is touched. The caller deletes only a
+/// conversation that no process of the CLI runs, because a running CLI writes it again. When
+/// the index entry cannot be deleted, the files stay too, so the conversation is kept whole.
+pub fn delete_conversation(conversation: &str) -> Result<()> {
+    ensure!(
+        valid_conversation(conversation),
+        "\"{conversation}\" is not an Antigravity conversation"
+    );
+    forget(&data_dir()?, conversation)
+}
+
+fn forget(data: &Path, conversation: &str) -> Result<()> {
+    let index = data.join("conversation_summaries.db");
+    if index.is_file() {
+        // Other processes of the CLI may write the index meanwhile.
+        let connection = Connection::open_with_flags(
+            &index,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .context("Could not open the Antigravity conversation index")?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        connection
+            .execute(
+                "DELETE FROM conversation_summaries WHERE conversation_id = ?1",
+                [conversation],
+            )
+            .context("Could not delete the conversation from the Antigravity index")?;
+    }
+    let brain = data.join("brain").join(conversation);
+    absent(std::fs::remove_dir_all(&brain))
+        .with_context(|| format!("Could not delete {}", brain.display()))?;
+    let conversations = data.join("conversations");
+    for file in [
+        conversations.join(format!("{conversation}.db")),
+        conversations.join(format!("{conversation}.db-wal")),
+        conversations.join(format!("{conversation}.db-shm")),
+        data.join("annotations")
+            .join(format!("{conversation}.pbtxt")),
+        data.join("presence").join(format!("{conversation}.lock")),
+    ] {
+        absent(std::fs::remove_file(&file))
+            .with_context(|| format!("Could not delete {}", file.display()))?;
+    }
+    forget_last(
+        &data.join("cache").join("last_conversations.json"),
+        conversation,
+    )
+}
+
+// Treats a file that is already gone as deleted.
+fn absent(result: std::io::Result<()>) -> std::io::Result<()> {
+    match result {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+// Removes the entries of the CLI's list of the last conversation of each folder that name the
+// conversation. An unreadable list stays as it is.
+fn forget_last(path: &Path, conversation: &str) -> Result<()> {
+    let Ok(bytes) = std::fs::read(path) else {
+        return Ok(());
+    };
+    let Ok(serde_json::Value::Object(mut folders)) = serde_json::from_slice(&bytes) else {
+        return Ok(());
+    };
+    let before = folders.len();
+    folders.retain(|_, last| last.as_str() != Some(conversation));
+    if folders.len() == before {
+        return Ok(());
+    }
+    // A new file that replaces the list keeps a reader of the CLI from seeing half of it.
+    let replacement = path.with_extension(format!("{conversation}.tmp"));
+    let written = std::fs::write(&replacement, serde_json::to_vec_pretty(&folders)?)
+        .and_then(|()| platform::restrict(&replacement, 0o600))
+        .and_then(|()| std::fs::rename(&replacement, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&replacement);
+    }
+    written.with_context(|| format!("Could not update {}", path.display()))
+}
+
 fn read_summaries(index: &Path, conversation: Option<&str>) -> Result<Vec<Summary>> {
     if !index.is_file() {
         return Ok(Vec::new());

@@ -49,16 +49,28 @@ impl Shell {
         }
     }
 
-    /// Builds only the model, reasoning or access controls requested by its trigger.
+    /// Builds only the model, reasoning or access controls requested by its trigger. The Git
+    /// panels show and change the agent of the Git workspace's AI actions instead of the
+    /// composer's.
     pub(super) fn model_options(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
-        let runtime = self.selected_runtime();
+        let git = matches!(self.panel, Panel::GitModels | Panel::GitReasoning);
+        let models_panel = matches!(self.panel, Panel::Models | Panel::GitModels);
+        let preferences = if git {
+            self.git_ai_preferences(cx)
+        } else {
+            self.composer_preferences()
+        };
+        let runtime = self.provider_runtime(preferences.provider);
         let mut content = div().flex().flex_col().flex_shrink_0().gap(px(2.));
-        let preferences = self.composer_preferences();
-        let task_id = self.view.as_ref().map(|view| view.task.id.clone());
-        let disabled = self.agent_options_locked();
-        if self.panel == Panel::Models {
-            content = content.child(self.account_options(&preferences, disabled, cx));
+        let task_id = if git {
+            None
+        } else {
+            self.view.as_ref().map(|view| view.task.id.clone())
+        };
+        let disabled = !git && self.agent_options_locked();
+        if models_panel {
+            content = content.child(self.account_options(&preferences, disabled, git, cx));
             let mut models = div().id("model-list").flex().flex_col().gap(px(1.)).child(
                 div()
                     .px(px(8.))
@@ -100,18 +112,18 @@ impl Shell {
                         })
                         .child(self.check(chosen))
                         .on_click(cx.listener(move |s, _, _, cx| {
-                            s.choose_model(
-                                id.clone(),
-                                Some(model_id.clone()),
-                                (!effort.is_empty()).then(|| effort.clone()),
-                                cx,
-                            );
+                            let effort = (!effort.is_empty()).then(|| effort.clone());
+                            if git {
+                                s.choose_git_model(Some(model_id.clone()), effort, cx);
+                            } else {
+                                s.choose_model(id.clone(), Some(model_id.clone()), effort, cx);
+                            }
                         })),
                 );
             }
             content = content.child(models);
         }
-        if self.panel == Panel::Reasoning {
+        if matches!(self.panel, Panel::Reasoning | Panel::GitReasoning) {
             if let Some(model) = runtime
                 .models
                 .iter()
@@ -122,10 +134,15 @@ impl Shell {
                     .effort
                     .as_deref()
                     .unwrap_or(&model.default_effort);
+                let owner = if git {
+                    "git"
+                } else {
+                    task_id.as_deref().unwrap_or("new-task")
+                };
                 let key = format!(
                     "{}:{}:{}:{:?}",
                     preferences.provider.label(),
-                    task_id.as_deref().unwrap_or("new-task"),
+                    owner,
                     model.id,
                     model.efforts
                 );
@@ -147,12 +164,20 @@ impl Shell {
                     let subscription = cx.subscribe(
                         &slider,
                         move |s, _, event: &effort_slider::EffortSelected, cx| {
-                            s.choose_model(
-                                task_id.clone(),
-                                Some(model_id.clone()),
-                                Some(event.0.clone()),
-                                cx,
-                            );
+                            if git {
+                                s.choose_git_model(
+                                    Some(model_id.clone()),
+                                    Some(event.0.clone()),
+                                    cx,
+                                );
+                            } else {
+                                s.choose_model(
+                                    task_id.clone(),
+                                    Some(model_id.clone()),
+                                    Some(event.0.clone()),
+                                    cx,
+                                );
+                            }
                         },
                     );
                     self.effort_slider = Some((key, slider, subscription));
@@ -326,7 +351,7 @@ impl Shell {
                     .child("These controls unlock after pending work finishes and delivery is confirmed."),
             );
         }
-        if self.panel == Panel::Models && runtime.models.is_empty() {
+        if models_panel && runtime.models.is_empty() {
             content = content.child(
                 div()
                     .px(px(8.))
@@ -334,7 +359,7 @@ impl Shell {
                     .child(kit::loader_row("Reading the provider's model catalog", t)),
             );
         }
-        if self.panel == Panel::Models {
+        if models_panel {
             let mut rail = div()
                 .w(px(168.))
                 .flex_shrink_0()
@@ -357,7 +382,11 @@ impl Shell {
                         .child(provider.label())
                         .when(provider.beta(), |row| row.child(kit::beta_chip(t)))
                         .on_click(cx.listener(move |s, _, _, cx| {
-                            s.choose_provider(provider, cx);
+                            if git {
+                                s.choose_git_provider(provider, cx);
+                            } else {
+                                s.choose_provider(provider, cx);
+                            }
                         })),
                 );
             }
@@ -383,7 +412,7 @@ impl Shell {
                     t,
                 )));
             }
-            content = content.child(self.agent_footer(&preferences, cx));
+            content = content.child(self.agent_footer(&preferences, git, cx));
             return div()
                 .flex()
                 .items_start()
@@ -409,11 +438,14 @@ impl Shell {
         content.into_any_element()
     }
 
-    // The accounts of the composer's provider: identity, plan and the fullest limit window.
+    // The accounts of the provider in `preferences`: identity, plan and the fullest limit
+    // window. With `git` they choose the account of the Git workspace's AI actions, which no
+    // started conversation holds.
     fn account_options(
         &self,
         preferences: &AgentPreferences,
         disabled: bool,
+        git: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let t = self.theme;
@@ -438,8 +470,8 @@ impl Shell {
                 .pb(px(4.))
                 .child(kit::section_header("Account", Some(accounts.len()), t)),
         );
-        let limited = self.account_limit_locked();
-        let locked = self.account_locked() || limited;
+        let limited = !git && self.account_limit_locked();
+        let locked = (!git && self.account_locked()) || limited;
         for (index, state) in accounts.iter().enumerate() {
             let chosen = state.account.id == current;
             let id = (!state.account.is_default()).then(|| state.account.id.clone());
@@ -503,7 +535,13 @@ impl Shell {
                         }),
                 })
                 .child(self.check(chosen))
-                .on_click(cx.listener(move |s, _, _, cx| s.choose_account(id.clone(), cx))),
+                .on_click(cx.listener(move |s, _, _, cx| {
+                    if git {
+                        s.choose_git_account(id.clone(), cx);
+                    } else {
+                        s.choose_account(id.clone(), cx);
+                    }
+                })),
             );
         }
         if locked {
@@ -542,7 +580,13 @@ impl Shell {
     }
 
     // Saves or clears the composer's choices as the starting point of new tasks in the project.
-    fn agent_footer(&self, preferences: &AgentPreferences, cx: &mut Context<Self>) -> AnyElement {
+    // The Git workspace's agent has no project default, so with `git` only the refresh shows.
+    fn agent_footer(
+        &self,
+        preferences: &AgentPreferences,
+        git: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let t = self.theme;
         let mut footer = div()
             .mt(px(8.))
@@ -551,7 +595,7 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(6.));
-        if let Some(project) = self.composer_project() {
+        if let Some(project) = self.composer_project().filter(|_| !git) {
             let pinned = project.defaults.as_ref() == Some(preferences);
             let has_default = project.defaults.is_some();
             let project_id = project.id.clone();
@@ -588,7 +632,17 @@ impl Shell {
             .child(div().flex_1())
             .child(
                 self.icon_button("refresh-models", "refresh", "Refresh models and accounts")
-                    .on_click(cx.listener(|s, _, _, _| s.connect_runtime())),
+                    .on_click(cx.listener(move |s, _, _, cx| {
+                        if git {
+                            let preferences = s.git_ai_preferences(cx);
+                            s.send(core::Request::ConnectRuntime {
+                                provider: preferences.provider,
+                                account: preferences.account,
+                            });
+                        } else {
+                            s.connect_runtime();
+                        }
+                    })),
             )
             .into_any_element()
     }
@@ -1211,6 +1265,141 @@ impl Shell {
             account: preferences.account,
         });
         cx.notify();
+    }
+
+    /// Returns the agent of the Git workspace's AI actions: its saved choice, or while it has
+    /// none the options that a new task would start with, with a model the provider still lists.
+    pub(super) fn git_ai_preferences(&self, cx: &App) -> AgentPreferences {
+        let preferences = match &git::settings::GitSettings::get(cx).ai_agent {
+            Some(agent) => AgentPreferences {
+                provider: agent.provider,
+                account: agent.account.clone(),
+                model: agent.model.clone(),
+                effort: agent.effort.clone(),
+                ..AgentPreferences::default()
+            },
+            None => self.starting_preferences(None, None),
+        };
+        self.with_model(preferences, None)
+    }
+
+    /// Gives the Git workspace the agent that its AI actions run with, and the names that its
+    /// buttons show.
+    pub(super) fn sync_git_agent(&self, cx: &mut App) {
+        let preferences = self.git_ai_preferences(cx);
+        let runtime = self.provider_runtime(preferences.provider);
+        let default_effort = runtime
+            .models
+            .iter()
+            .find(|model| preferences.model.as_ref() == Some(&model.id))
+            .map(|model| model.default_effort.clone());
+        let effort = preferences
+            .effort
+            .clone()
+            .or(default_effort)
+            .filter(|effort| !effort.is_empty())
+            .unwrap_or_else(|| "Default".into());
+        let state = git::ai::AiAgentState {
+            model: self.model_name(&preferences).into(),
+            effort: effort.into(),
+            agent: kodem_git::settings::AiAgent {
+                provider: preferences.provider,
+                account: preferences.account,
+                model: preferences.model,
+                effort: preferences.effort,
+            },
+        };
+        if cx.try_global::<git::ai::AiAgentState>() != Some(&state) {
+            cx.set_global(state);
+            cx.refresh_windows();
+        }
+    }
+
+    /// Opens the agent menu of the Git workspace's AI actions beside the control that asked:
+    /// the provider and model menu, or the effort menu.
+    pub(super) fn open_git_agent_menu(
+        &mut self,
+        request: &git::ai::ChooseAiAgent,
+        cx: &mut Context<Self>,
+    ) {
+        self.menu_anchor = fx::anchor_bounds(&request.anchor, cx);
+        self.panel = if request.effort {
+            Panel::GitReasoning
+        } else {
+            Panel::GitModels
+        };
+        let preferences = self.git_ai_preferences(cx);
+        if self
+            .provider_runtime(preferences.provider)
+            .models
+            .is_empty()
+        {
+            self.send(core::Request::ConnectRuntime {
+                provider: preferences.provider,
+                account: preferences.account,
+            });
+        }
+        cx.notify();
+    }
+
+    // Saves the agent of the Git workspace's AI actions in the Git settings only, so that
+    // Kodem's own task options keep theirs.
+    fn save_git_agent(&mut self, preferences: AgentPreferences, cx: &mut Context<Self>) {
+        let agent = kodem_git::settings::AiAgent {
+            provider: preferences.provider,
+            account: preferences.account,
+            model: preferences.model,
+            effort: preferences.effort,
+        };
+        git::settings::GitSettings::update(cx, |settings| settings.ai_agent = Some(agent));
+        self.sync_git_agent(cx);
+        cx.notify();
+    }
+
+    // Moves the Git workspace's AI actions to another provider, starting from the options that
+    // Kodem keeps for that provider without changing them.
+    fn choose_git_provider(&mut self, provider: Provider, cx: &mut Context<Self>) {
+        if self.git_ai_preferences(cx).provider == provider {
+            return;
+        }
+        let preferences = self.provider_preferences(provider);
+        self.effort_slider = None;
+        self.send(core::Request::ConnectRuntime {
+            provider,
+            account: preferences.account.clone(),
+        });
+        self.save_git_agent(preferences, cx);
+    }
+
+    // Moves the Git workspace's AI actions to another account of their provider, with the
+    // provider's default model.
+    fn choose_git_account(&mut self, account: Option<String>, cx: &mut Context<Self>) {
+        let mut preferences = self.git_ai_preferences(cx);
+        if preferences.account == account {
+            return;
+        }
+        preferences.account = account.clone();
+        preferences.model = None;
+        preferences.effort = None;
+        let preferences = self.with_model(preferences, None);
+        self.send(core::Request::ConnectRuntime {
+            provider: preferences.provider,
+            account,
+        });
+        self.save_git_agent(preferences, cx);
+    }
+
+    // Chooses the model and effort of the Git workspace's AI actions.
+    fn choose_git_model(
+        &mut self,
+        model: Option<String>,
+        effort: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut preferences = self.git_ai_preferences(cx);
+        preferences.model = model;
+        preferences.effort = effort;
+        self.save_git_agent(preferences, cx);
     }
 
     /// Reports whether the selected model accepts image attachments.

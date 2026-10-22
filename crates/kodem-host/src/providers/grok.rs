@@ -110,6 +110,11 @@ const SESSION_LIMIT: Duration = Duration::from_secs(120);
 const QUIET: Duration = Duration::from_secs(15);
 /// Ended turns whose late updates are recognized. Only the latest ones still send any.
 const ENDED_TURNS: usize = 8;
+/// How long a one-shot generation may work on its answer.
+const GENERATION_LIMIT: Duration = Duration::from_secs(10 * 60);
+/// The reason that a one-shot generation gives the CLI for each tool call that it denies.
+const NO_TOOLS: &str =
+    "Tools are not available for this request. Answer from the supplied input only.";
 
 /// Returns the capabilities that do not depend on the CLI, so saved choices validate early.
 pub(super) fn initial_runtime() -> RuntimeInfo {
@@ -1173,6 +1178,25 @@ pub(super) fn reconcile(host: &Shared, task_id: &str) -> Result<()> {
     Ok(())
 }
 
+// Why a turn that ended for the CLI's stop `reason` did not finish, or `None` when it did.
+// `failure` is the reason of the CLI's last exhausted retry.
+fn stop_error(reason: &str, failure: Option<String>) -> Option<String> {
+    match reason {
+        "end_turn" | "" => None,
+        "cancelled" => Some("Grok Build cancelled the turn".into()),
+        "max_turn_requests" => Some("Grok Build reached its turn limit".into()),
+        "max_tokens" => Some("Grok Build reached its output limit".into()),
+        "refusal" => Some("The model refused this request".into()),
+        // The CLI ends a rate-limited turn without detail, but its last retry update said why.
+        "rate_limit" => Some(failure.unwrap_or_else(|| {
+            "xAI rate limited this account. Wait a moment and send again, or check the plan's \
+             usage."
+                .into()
+        })),
+        other => Some(format!("Grok Build ended the turn: {other}")),
+    }
+}
+
 /// The choices that the open session runs with, as Kodem last set them.
 #[derive(Default)]
 struct Applied {
@@ -1562,36 +1586,14 @@ impl Owner<'_> {
                 error: Some(error.chars().take(4000).collect()),
             };
         }
-        match reason {
-            "end_turn" | "" => TurnOutcome {
-                state: RunState::Completed,
-                error: None,
-            },
-            "max_turn_requests" => TurnOutcome {
-                state: RunState::Interrupted,
-                error: Some("Grok Build reached its turn limit".into()),
-            },
-            "max_tokens" => TurnOutcome {
-                state: RunState::Interrupted,
-                error: Some("Grok Build reached its output limit".into()),
-            },
-            "refusal" => TurnOutcome {
-                state: RunState::Failed,
-                error: Some("The model refused this request".into()),
-            },
-            // The CLI ends a rate-limited turn without detail, but its last retry update said why.
-            "rate_limit" => TurnOutcome {
-                state: RunState::Failed,
-                error: Some(self.transcript.failure.clone().unwrap_or_else(|| {
-                    "xAI rate limited this account. Wait a moment and send again, or check the \
-                     plan's usage."
-                        .into()
-                })),
-            },
-            other => TurnOutcome {
-                state: RunState::Failed,
-                error: Some(format!("Grok Build ended the turn: {other}")),
-            },
+        let state = match reason {
+            "end_turn" | "" => RunState::Completed,
+            "max_turn_requests" | "max_tokens" => RunState::Interrupted,
+            _ => RunState::Failed,
+        };
+        TurnOutcome {
+            state,
+            error: stop_error(reason, self.transcript.failure.clone()),
         }
     }
 
@@ -2444,5 +2446,316 @@ impl Owner<'_> {
             h.store.save_task(&task)?;
         }
         Ok(())
+    }
+}
+
+/// The turn of a one-shot generation, as its updates arrive.
+struct Generated {
+    /// The generation's session, whose updates hold the answer.
+    session: String,
+    /// The text since the latest tool call, which is the answer when the turn ends.
+    answer: String,
+    /// The reason of the CLI's last exhausted retry, which explains a rate limit.
+    failure: Option<String>,
+    /// The answer is a JSON object, so its text is not streamed.
+    structured: bool,
+    /// The status that the structured answer is being written was sent.
+    writing: bool,
+}
+
+impl Generated {
+    // Applies one session update: reasoning, answer text, a tool call, a subagent, or a retry.
+    // Records each subagent session in `sessions`, so that it is deleted too.
+    fn update(
+        &mut self,
+        params: &Value,
+        progress: &mut dyn FnMut(GenerationEvent),
+        sessions: &mut Vec<String>,
+    ) {
+        let update = &params["update"];
+        let kind = update["sessionUpdate"].as_str().unwrap_or_default();
+        if kind == "subagent_spawned"
+            && let Some(child) = update["child_session_id"].as_str()
+            && grok::valid_session(child)
+            && !sessions.iter().any(|known| known == child)
+        {
+            sessions.push(child.to_owned());
+        }
+        if params["sessionId"].as_str() != Some(self.session.as_str()) {
+            return;
+        }
+        let text = update["content"]["text"].as_str().unwrap_or_default();
+        match kind {
+            "agent_thought_chunk" if !text.is_empty() => {
+                progress(GenerationEvent::Thinking(text.to_owned()));
+            }
+            "agent_message_chunk" if !text.is_empty() => {
+                self.answer.push_str(text);
+                if !self.structured {
+                    progress(GenerationEvent::Response(text.to_owned()));
+                } else if !self.writing {
+                    self.writing = true;
+                    progress(GenerationEvent::Status(
+                        "Grok is writing the structured result...".into(),
+                    ));
+                }
+            }
+            // Text before a tool call introduces the call; the answer follows the last one.
+            "tool_call" => {
+                self.answer.clear();
+                self.writing = false;
+                let title = update["title"].as_str().unwrap_or("a tool");
+                progress(GenerationEvent::Status(format!("Grok is using {title}...")));
+            }
+            "retry_state" if update["type"] == "exhausted" => {
+                self.failure = update["reason"].as_str().map(str::to_owned);
+            }
+            "retry_state" => {
+                let attempt = update["attempt"].as_u64().unwrap_or(1);
+                let reason: String = update["reason"]
+                    .as_str()
+                    .and_then(|reason| reason.lines().next())
+                    .unwrap_or("The request failed")
+                    .chars()
+                    .take(160)
+                    .collect();
+                progress(GenerationEvent::Status(format!(
+                    "Grok is retrying, attempt {attempt}: {reason}"
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    // Ends the turn by the CLI's stop reason: the answer, or why there is none.
+    fn finish(self, reason: &str) -> Result<String> {
+        if let Some(error) = stop_error(reason, self.failure) {
+            bail!("{error}");
+        }
+        Ok(self.answer.trim().to_owned())
+    }
+}
+
+/// Answers a one-shot generation without a stored conversation or tools.
+///
+/// A process of its own opens a new session in the generation's folder without Kodem's MCP
+/// server and with the generation's instructions as rules of the system prompt, denies every
+/// tool call that the CLI asks about, and deletes the session afterwards, also on failure.
+pub(super) fn generate(
+    host: &Shared,
+    account: &Account,
+    generation: &Generation,
+    progress: &mut dyn FnMut(GenerationEvent),
+) -> Result<String> {
+    let home = home_of(account)?;
+    let mut connection = Connection::start(&generation.cwd, account, None)?;
+    publish(host, &connection.initialized);
+    let mut sessions = Vec::new();
+    let answer = generation_turn(&mut connection, generation, progress, &mut sessions);
+    forget_sessions(&mut connection, &home, &sessions);
+    answer
+}
+
+// Opens the generation's session, sends its input and reads the turn until it ends. Records the
+// session in `sessions` as soon as the CLI created it.
+fn generation_turn(
+    connection: &mut Connection,
+    generation: &Generation,
+    progress: &mut dyn FnMut(GenerationEvent),
+    sessions: &mut Vec<String>,
+) -> Result<String> {
+    let opened = connection.call(
+        "session/new",
+        json!({"cwd":generation.cwd,"mcpServers":[],
+            "_meta":{"rules":provider::generation_instructions(generation),
+                "yoloMode":false,"autoMode":false}}),
+        SESSION_LIMIT,
+        false,
+    )?;
+    let session = opened["sessionId"]
+        .as_str()
+        .context("Grok Build opened no session")?
+        .to_owned();
+    sessions.push(session.clone());
+    configure_generation(connection, &session, &opened, generation)?;
+    let prompt = connection.request(
+        "session/prompt",
+        json!({"sessionId":session,"prompt":[{"type":"text","text":generation.input}]}),
+    )?;
+    progress(GenerationEvent::Status(
+        "Grok is working on the request...".into(),
+    ));
+    let mut turn = Generated {
+        session,
+        answer: String::new(),
+        failure: None,
+        structured: generation.schema.is_some(),
+        writing: false,
+    };
+    let deadline = Instant::now() + GENERATION_LIMIT;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            let _ = connection.notify("session/cancel", json!({"sessionId":turn.session}));
+            bail!(
+                "Grok Build did not answer within {} minutes",
+                GENERATION_LIMIT.as_secs() / 60
+            );
+        }
+        let message = match connection.next_message(left.min(Duration::from_millis(200))) {
+            Ok(Some(message)) => message,
+            Ok(None) => continue,
+            Err(error) => bail!("{error}{}", connection.reason_suffix()),
+        };
+        let params = &message["params"];
+        match (message["method"].as_str(), message.get("id")) {
+            (Some(method), Some(id)) => refuse_request(connection, method, id, params, progress)?,
+            (
+                Some("session/update" | "_x.ai/session_notification" | "_x.ai/session/update"),
+                None,
+            ) => {
+                turn.update(params, progress, sessions);
+            }
+            (Some("_x.ai/session/prompt_complete"), None)
+                if params["sessionId"].as_str() == Some(turn.session.as_str()) =>
+            {
+                let reason = params["stopReason"].as_str().unwrap_or_default().to_owned();
+                return turn.finish(&reason);
+            }
+            (None, Some(id)) if id.as_u64() == Some(prompt) => {
+                if let Some(error) = message.get("error") {
+                    bail!("{}", error_text(error));
+                }
+                let reason = message["result"]["stopReason"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                return turn.finish(&reason);
+            }
+            _ => {}
+        }
+    }
+}
+
+// Applies the generation's model and reasoning level to its new session, the way a task's
+// choices apply, and the CLI's default mode, in which a tool call that its rules do not allow
+// asks first.
+fn configure_generation(
+    connection: &mut Connection,
+    session: &str,
+    opened: &Value,
+    generation: &Generation,
+) -> Result<()> {
+    let current = |id: &str| {
+        opened["configOptions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|option| option["id"] == id)
+            .and_then(|option| option["currentValue"].as_str())
+            .map(str::to_owned)
+    };
+    let catalog = runtime(&connection.initialized);
+    let mut model = current("model").or(catalog.default_model.clone());
+    let mut effort = current("reasoning_effort");
+    if let Some(chosen) = generation
+        .model
+        .clone()
+        .filter(|chosen| model.as_ref() != Some(chosen))
+    {
+        connection.call(
+            "session/set_config_option",
+            json!({"sessionId":session,"configId":"model","value":chosen}),
+            READ_LIMIT,
+            false,
+        )?;
+        model = Some(chosen);
+        // The reasoning level of the new model is not known.
+        effort = None;
+    }
+    let wanted = catalog
+        .models
+        .into_iter()
+        .find(|known| Some(&known.id) == model.as_ref())
+        .filter(|known| !known.efforts.is_empty())
+        .map(|known| {
+            generation
+                .effort
+                .clone()
+                .filter(|chosen| known.efforts.contains(chosen))
+                .unwrap_or(known.default_effort)
+        });
+    if let Some(wanted) = wanted.filter(|wanted| effort.as_ref() != Some(wanted)) {
+        connection.call(
+            "session/set_config_option",
+            json!({"sessionId":session,"configId":"reasoning_effort","value":wanted}),
+            READ_LIMIT,
+            false,
+        )?;
+    }
+    connection.call(
+        "session/set_mode",
+        json!({"sessionId":session,"modeId":"default"}),
+        READ_LIMIT,
+        false,
+    )?;
+    Ok(())
+}
+
+// Answers a request of the CLI during a generation, which has no tools and no user: denies each
+// tool call once, never for good, so the user's own sessions keep their rules, and cancels
+// questions and plans.
+fn refuse_request(
+    connection: &mut Connection,
+    method: &str,
+    id: &Value,
+    params: &Value,
+    progress: &mut dyn FnMut(GenerationEvent),
+) -> Result<()> {
+    match method {
+        "session/request_permission" => {
+            let title = params["toolCall"]["title"].as_str().unwrap_or("a tool");
+            progress(GenerationEvent::Status(format!(
+                "Kodem denied Grok's request to use {title}"
+            )));
+            let options = params["options"].as_array().cloned().unwrap_or_default();
+            connection.respond(id, select(&options, &["reject_once"], Some(NO_TOOLS)))
+        }
+        "_x.ai/ask_user_question" => connection.respond(id, json!({"outcome":"cancelled"})),
+        "_x.ai/exit_plan_mode" => {
+            connection.respond(id, json!({"outcome":"cancelled","feedback":NO_TOOLS}))
+        }
+        _ => connection.reject(id, "Kodem does not implement this request"),
+    }
+}
+
+// Deletes the sessions of a generation: through the CLI, which also updates its own lists, then
+// from the sessions folder by their identities, because the CLI can still write a session while
+// it stops. Stops the process.
+fn forget_sessions(connection: &mut Connection, home: &Path, sessions: &[String]) {
+    if connection.running() {
+        for session in sessions {
+            let _ = connection.call(
+                "_x.ai/session/delete",
+                json!({"sessionId":session}),
+                READ_LIMIT,
+                false,
+            );
+        }
+    }
+    connection.stop();
+    let Ok(groups) = std::fs::read_dir(home.join("sessions")) else {
+        return;
+    };
+    for group in groups.flatten() {
+        for session in sessions
+            .iter()
+            .filter(|session| grok::valid_session(session))
+        {
+            let folder = group.path().join(session);
+            if folder.is_dir() {
+                let _ = std::fs::remove_dir_all(&folder);
+            }
+        }
     }
 }

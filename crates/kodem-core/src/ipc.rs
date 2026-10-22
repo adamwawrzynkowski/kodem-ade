@@ -13,7 +13,7 @@ use std::{
 // Windows 10 1803 and newer provide Unix domain sockets that the standard library does not wrap.
 #[cfg(windows)]
 pub use uds_windows::{UnixListener, UnixStream};
-pub const PROTOCOL: u32 = 39;
+pub const PROTOCOL: u32 = 40;
 /// Where a Linux window that runs through XWayland keeps the session's Wayland display, which
 /// the host and the programs that it starts take back.
 pub const WAYLAND_DISPLAY: &str = "KODEM_WAYLAND_DISPLAY";

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use kodem_core::platform;
+use kodem_core::{Provider, platform};
 use serde::{Deserialize, Serialize};
 
 /// Narrowest width of the diff panel.
@@ -104,24 +104,20 @@ pub struct Settings {
     pub accounts: Vec<Account>,
 
     // AI
-    pub ai_provider: AiProvider,
-    pub ollama_base_url: String,
+    /// The provider, account, model and effort that run every AI action, chosen in the Git
+    /// workspace. `None` follows Kodem's own choices until the user picks one here.
+    pub ai_agent: Option<AiAgent>,
     pub ai_commit_messages: bool,
     pub ai_generate_description: bool,
     pub ai_include_whole_file: bool,
     pub ai_include_unstaged: bool,
-    pub ai_commit_model: String,
     pub ai_commit_prompt: String,
     pub ai_code_review: bool,
-    pub ai_review_model: String,
     pub ai_review_prompt: String,
     pub ai_explain_diffs: bool,
-    pub ai_explain_model: String,
     pub ai_explain_prompt: String,
     pub ai_pull_request_review: bool,
     pub ai_pull_request_review_prompt: String,
-    pub codex_model: String,
-    pub codex_reasoning_effort: String,
 
     // Workspace
     pub recent_repositories: Vec<PathBuf>,
@@ -192,24 +188,18 @@ impl Default for Settings {
 
             accounts: Vec::new(),
 
-            ai_provider: AiProvider::Ollama,
-            ollama_base_url: "http://localhost:11434".into(),
+            ai_agent: None,
             ai_commit_messages: true,
             ai_generate_description: true,
             ai_include_whole_file: false,
             ai_include_unstaged: false,
-            ai_commit_model: "qwen3.5:4b".into(),
             ai_commit_prompt: String::new(),
             ai_code_review: true,
-            ai_review_model: "qwen2.5-coder:7b".into(),
             ai_review_prompt: String::new(),
             ai_explain_diffs: true,
-            ai_explain_model: "qwen2.5-coder:1.5b".into(),
             ai_explain_prompt: String::new(),
             ai_pull_request_review: true,
             ai_pull_request_review_prompt: String::new(),
-            codex_model: String::new(),
-            codex_reasoning_effort: "medium".into(),
 
             recent_repositories: Vec::new(),
             open_repositories: Vec::new(),
@@ -305,24 +295,18 @@ impl DateFormat {
     }
 }
 
-/// The service that runs AI requests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AiProvider {
-    Ollama,
-    Codex,
-}
-
-impl AiProvider {
-    /// All providers, in the order the interface lists them.
-    pub const ALL: [AiProvider; 2] = [AiProvider::Ollama, AiProvider::Codex];
-
-    /// Returns the name of the provider as the interface shows it.
-    pub fn label(&self) -> &'static str {
-        match self {
-            AiProvider::Ollama => "Ollama",
-            AiProvider::Codex => "OpenAI Codex",
-        }
-    }
+/// The Kodem provider, account, model and reasoning effort that run the Git workspace's AI
+/// actions. Kodem keeps its own task options apart, so neither choice changes the other.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiAgent {
+    pub provider: Provider,
+    /// Account of the provider; `None` is the provider's default account.
+    pub account: Option<String>,
+    /// Model by the provider's catalog identity; `None` is the provider's default model.
+    pub model: Option<String>,
+    /// Reasoning effort; `None` is the model's default effort.
+    pub effort: Option<String>,
 }
 
 /// A Git host account whose token Git uses for HTTPS remotes on that host, and that the pull

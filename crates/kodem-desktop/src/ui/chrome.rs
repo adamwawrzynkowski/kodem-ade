@@ -567,6 +567,9 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|s, _: &ChooseAccess, w, cx| s.open_agent_menu(Panel::Access, w, cx)),
             )
+            .on_action(cx.listener(|s, request: &git::ai::ChooseAiAgent, _, cx| {
+                s.open_git_agent_menu(request, cx)
+            }))
             .on_action(cx.listener(|s, _: &CycleAccess, _, cx| s.cycle_access(cx)))
             .on_action(cx.listener(|s, _: &ShowCoding, _, cx| s.set_mode(TaskKind::Coding, cx)))
             .on_action(cx.listener(|s, _: &ShowChat, _, cx| s.set_mode(TaskKind::Chat, cx)))
@@ -785,6 +788,8 @@ impl Render for Shell {
                 | Panel::Plan
                 | Panel::Notifications
                 | Panel::Reasoning
+                | Panel::GitModels
+                | Panel::GitReasoning
                 | Panel::Access
                 | Panel::Mode
                 | Panel::Projects

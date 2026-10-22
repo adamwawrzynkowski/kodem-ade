@@ -126,6 +126,10 @@ enum Panel {
     Rename,
     Models,
     Reasoning,
+    /// The provider and model menu of the Git workspace's AI actions.
+    GitModels,
+    /// The reasoning effort menu of the Git workspace's AI actions.
+    GitReasoning,
     Access,
     Projects,
     TaskMenu,
@@ -1103,6 +1107,8 @@ impl Shell {
                         .filter(|id| workspace.tasks.iter().any(|t| &t.id == id));
                     self.workspace = Some(workspace);
                     self.sync_git_projects(cx);
+                    self.sync_git_agent(cx);
+                    self.sync_git_agent(cx);
                     if let Some(id) = selected {
                         self.select_task(id, cx)
                     }
@@ -1136,6 +1142,7 @@ impl Shell {
                 self.celebrate_transitions(&workspace, cx);
                 self.workspace = Some(workspace);
                 self.sync_git_projects(cx);
+                self.sync_git_agent(cx);
             }
             Response::Account(account) => self.account_added(&account, cx),
             Response::Project(project)
@@ -1588,6 +1595,8 @@ impl Shell {
             Response::Watched(_) => {}
             // Answers to the tools that a provider agent calls. The desktop never asks for them.
             Response::Agents(_) | Response::Delegated(_) => {}
+            // The Git workspace's AI actions ask for these themselves, outside the bridge.
+            Response::Generation(_) => {}
             // The import dialog takes these answers before the others.
             Response::ExternalThreads(_) | Response::Imported { .. } => {}
             Response::Ok => match reply.request {

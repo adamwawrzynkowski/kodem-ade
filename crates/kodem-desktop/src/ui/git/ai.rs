@@ -1,16 +1,18 @@
-//! AI results in the Git workspace: the dialog that shows an explanation, a code review or a
-//! pull request review, with live model activity while the request runs, and the runner that
-//! streams a background AI task's progress into that dialog.
+//! AI in the Git workspace: the agent that its actions run with and the buttons that choose it,
+//! the dialog that shows an explanation, a code review or a pull request review, with live
+//! model activity while the request runs, and the runner that streams a background AI task's
+//! progress into that dialog.
 use futures::{StreamExt as _, channel::mpsc};
 use gpui::ColorExt as _;
 use gpui::prelude::*;
 use gpui::{
-    App, ClipboardItem, Context, Div, ElementId, Entity, FontWeight, Hsla, IntoElement, Render,
-    RenderOnce, SharedString, StyleRefinement, Styled, Window, div,
+    Action, App, ClipboardItem, Context, Div, ElementId, Entity, FontWeight, Global, Hsla,
+    IntoElement, Render, RenderOnce, SharedString, StyleRefinement, Styled, Window, div,
 };
 use kodem_git::ai::{
     AiProgress, CodeReview, PullRequestComment, PullRequestReview, ReviewFinding, ReviewSeverity,
 };
+use kodem_git::settings::AiAgent;
 
 use crate::components::text_input::TextInput;
 use crate::theme::{RADIUS_SMALL, RADIUS_SURFACE, px, text_px};
@@ -19,15 +21,134 @@ use crate::ui::git::components::{button, dialog_header, mono_font, mono_label};
 use crate::ui::git::contextual_actions::{divider, open_liquid_dialog};
 use crate::ui::git::icons;
 use crate::ui::git::kit::{
-    ActiveTheme as _, ButtonVariants as _, IconName, ScrollableElement as _, Sizable as _,
-    TextView, WindowExt as _, h_flex, v_flex,
+    ActiveTheme as _, ButtonVariants as _, Icon, IconName, ScrollableElement as _, Sizable as _,
+    Size, TextView, WindowExt as _, h_flex, v_flex,
 };
 use crate::ui::git::motion;
 use crate::ui::git::syntax::DiffSyntaxHighlighter;
 use crate::ui::git::theme;
-use crate::ui::kit;
+use crate::ui::{fx, kit};
 
 const MAX_LIVE_TEXT_BYTES: usize = 8_192;
+
+/// The agent that the Git workspace's AI actions run with, as the window resolves it from the
+/// Git settings and Kodem's provider catalogs, with the names its buttons show. The window
+/// keeps it current.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AiAgentState {
+    /// The provider, account, model and effort that the next action runs with.
+    pub agent: AiAgent,
+    /// The display name of the model.
+    pub model: SharedString,
+    /// The name of the effort in use: the chosen one, the model's default, or "Default".
+    pub effort: SharedString,
+}
+
+impl Global for AiAgentState {}
+
+impl AiAgentState {
+    /// Returns the agent of the Git workspace's AI actions.
+    pub fn get(cx: &App) -> Self {
+        cx.try_global::<Self>().cloned().unwrap_or_default()
+    }
+}
+
+/// Asks the window to open the agent menu of the Git workspace's AI actions beside the control
+/// whose effect anchor is `anchor`: the provider and model menu, or with `effort` the reasoning
+/// effort menu.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = kodem_git, no_json)]
+pub struct ChooseAiAgent {
+    pub anchor: SharedString,
+    pub effort: bool,
+}
+
+/// Returns an AI action joined with its agent in one bordered container, with dividers between
+/// the parts: the action, the provider's logo, which opens the provider and model menu, and the
+/// reasoning effort, which opens the effort menu. Both menus choose for every AI action of the
+/// Git workspace. `action` is a ghost button of `size`; `id` makes the identities and anchors of
+/// the agent buttons unique.
+pub fn ai_action_group(
+    id: impl Into<SharedString>,
+    action: impl IntoElement,
+    size: Size,
+    cx: &App,
+) -> Div {
+    let id: SharedString = id.into();
+    let state = AiAgentState::get(cx);
+    let model_anchor: SharedString = format!("git-ai-model:{id}").into();
+    let effort_anchor: SharedString = format!("git-ai-effort:{id}").into();
+    let model_hint = format!(
+        "{} · {}. Choose the provider and model of Git AI actions.",
+        state.agent.provider.label(),
+        state.model
+    );
+    let effort_hint = format!(
+        "Reasoning effort: {}. Choose the effort of Git AI actions.",
+        state.effort
+    );
+    h_flex()
+        .flex_shrink_0()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(cx.theme().border)
+        .overflow_hidden()
+        .child(action)
+        .child(group_divider(cx))
+        .child(agent_button(
+            model_anchor,
+            Icon::named(state.agent.provider.icon()),
+            None,
+            model_hint,
+            false,
+            size,
+        ))
+        .child(group_divider(cx))
+        .child(agent_button(
+            effort_anchor,
+            Icon::named("gauge"),
+            Some(state.effort),
+            effort_hint,
+            true,
+            size,
+        ))
+}
+
+// Returns a button of an AI action group that asks the window to open an agent menu beside it.
+fn agent_button(
+    anchor: SharedString,
+    icon: Icon,
+    label: Option<SharedString>,
+    hint: String,
+    effort: bool,
+    size: Size,
+) -> Div {
+    let request = ChooseAiAgent {
+        anchor: anchor.clone(),
+        effort,
+    };
+    div()
+        .relative()
+        .child(
+            button(ElementId::Name(anchor.clone()))
+                .ghost()
+                .with_size(size)
+                .icon(icon)
+                .when_some(label, |button, label| button.label(label))
+                .tooltip(hint)
+                .on_click(move |_, window, cx| {
+                    // A row that holds the group, such as a pull request's, keeps its own click.
+                    cx.stop_propagation();
+                    window.dispatch_action(Box::new(request.clone()), cx);
+                }),
+        )
+        .child(fx::anchor(anchor))
+}
+
+// Returns the line between two parts of an AI action group.
+fn group_divider(cx: &App) -> Div {
+    div().w(px(1.)).h(px(14.)).bg(cx.theme().border)
+}
 
 /// What an AI result dialog shows.
 #[derive(Debug, Clone)]

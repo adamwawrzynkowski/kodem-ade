@@ -59,6 +59,8 @@ impl Shell {
             | Panel::Notifications
             | Panel::Models
             | Panel::Reasoning
+            | Panel::GitModels
+            | Panel::GitReasoning
             | Panel::Access
             | Panel::Mode
             | Panel::Projects
@@ -496,6 +498,8 @@ impl Shell {
             | Panel::Notifications
             | Panel::Models
             | Panel::Reasoning
+            | Panel::GitModels
+            | Panel::GitReasoning
             | Panel::Access
             | Panel::Mode
             | Panel::Projects

@@ -629,8 +629,13 @@ impl Shell {
                     ))
                     .child(self.command_menu(cx));
             }
-            Panel::Models | Panel::Reasoning | Panel::Access | Panel::Mode => {
-                width = if self.panel == Panel::Models {
+            Panel::Models
+            | Panel::Reasoning
+            | Panel::GitModels
+            | Panel::GitReasoning
+            | Panel::Access
+            | Panel::Mode => {
+                width = if matches!(self.panel, Panel::Models | Panel::GitModels) {
                     580.
                 } else {
                     360.

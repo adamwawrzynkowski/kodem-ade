@@ -19,7 +19,6 @@ use gpui::{
     AnyElement, App, Context, Div, ElementId, Entity, FontWeight, Hsla, IntoElement, Render,
     SharedString, Subscription, Window, div,
 };
-use kodem_git::ai::{CodexModel, OllamaModel};
 use kodem_git::settings::Settings;
 
 use crate::components::Button;
@@ -104,17 +103,12 @@ impl GitSettingsPage {
 pub struct GitSettingsView {
     page: GitSettingsPage,
     gpg_key: Entity<InputState>,
-    ollama_url: Entity<InputState>,
     commit_prompt: Entity<TextareaState>,
     review_prompt: Entity<TextareaState>,
     explain_prompt: Entity<TextareaState>,
     pull_request_review_prompt: Entity<TextareaState>,
     account_link: Entity<AccountLinkForm>,
     ignore_path: Entity<InputState>,
-    ai_status: Option<String>,
-    ai_models: Vec<OllamaModel>,
-    codex_models: Vec<CodexModel>,
-    ai_loading: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -126,11 +120,6 @@ impl GitSettingsView {
             InputState::new(window, cx)
                 .placeholder("GPG Key ID")
                 .default_value(s.gpg_key_id.clone())
-        });
-        let ollama_url = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("http://localhost:11434")
-                .default_value(s.ollama_base_url.clone())
         });
         let commit_prompt = prompt_field(
             "Use the built-in commit prompt",
@@ -161,7 +150,6 @@ impl GitSettingsView {
 
         let subscriptions = vec![
             save_on_change(&gpg_key, |s, value| s.gpg_key_id = value, cx),
-            save_on_change(&ollama_url, |s, value| s.ollama_base_url = value, cx),
             save_on_change(&commit_prompt, |s, value| s.ai_commit_prompt = value, cx),
             save_on_change(&review_prompt, |s, value| s.ai_review_prompt = value, cx),
             save_on_change(&explain_prompt, |s, value| s.ai_explain_prompt = value, cx),
@@ -175,17 +163,12 @@ impl GitSettingsView {
         Self {
             page: GitSettingsPage::General,
             gpg_key,
-            ollama_url,
             commit_prompt,
             review_prompt,
             explain_prompt,
             pull_request_review_prompt,
             account_link,
             ignore_path,
-            ai_status: None,
-            ai_models: Vec::new(),
-            codex_models: Vec::new(),
-            ai_loading: false,
             _subscriptions: subscriptions,
         }
     }
@@ -195,12 +178,9 @@ impl GitSettingsView {
         self.page
     }
 
-    /// Opens a page. The AI page checks its provider the first time it opens.
+    /// Opens a page.
     pub fn set_page(&mut self, page: GitSettingsPage, cx: &mut Context<Self>) {
         self.page = page;
-        if page == GitSettingsPage::Ai && self.ai_status.is_none() {
-            self.refresh_ai_status(cx);
-        }
         cx.notify();
     }
 }

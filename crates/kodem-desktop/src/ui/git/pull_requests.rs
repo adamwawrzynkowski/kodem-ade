@@ -9,14 +9,16 @@ use kodem_git::github::{self, PullRequest};
 
 use crate::theme::{RADIUS_CONTROL, RADIUS_SURFACE, px, text_px};
 use crate::ui::dither::DitherField;
-use crate::ui::git::ai::{AiResult, open_ai_result_dialog, run_ai_result_task};
+use crate::ui::git::ai::{
+    AiAgentState, AiResult, ai_action_group, open_ai_result_dialog, run_ai_result_task,
+};
 use crate::ui::git::components::{
     button, dither_empty_state, dither_icon_tile, dither_loader, mono_font, section_header,
 };
 use crate::ui::git::icons;
 use crate::ui::git::kit::{
     ActiveTheme as _, ButtonVariants as _, Disableable as _, ScrollableElement as _, Sizable as _,
-    h_flex, v_flex,
+    Size, h_flex, v_flex,
 };
 use crate::ui::git::settings::GitSettings;
 use crate::ui::git::state::RepositoryState;
@@ -116,6 +118,8 @@ impl PullRequestsView {
         };
         let token = Self::token(cx);
         let settings = GitSettings::get(cx).clone();
+        let agent = AiAgentState::get(cx).agent;
+        let cwd = self.state.read(cx).repo.path.clone();
         let detail = format!(
             "#{} · {} → {}",
             pull_request.number, pull_request.head.name, pull_request.base.name
@@ -132,7 +136,8 @@ impl PullRequestsView {
                     head: pull_request.head.name,
                     diff,
                 };
-                AiService::new(AiConfig::from(&settings)).review_pull_request(&context, progress)
+                AiService::new(AiConfig::new(&settings, agent, cwd))
+                    .review_pull_request(&context, progress)
             },
             AiResult::PullRequestReview,
             cx,
@@ -291,9 +296,10 @@ impl Render for PullRequestsView {
                                             pr.updated_at.chars().take(10).collect::<String>(),
                                         )),
                                 )
-                                .child(
+                                .child(ai_action_group(
+                                    format!("pull-request-{ix}"),
                                     button(("ai-review-pr", ix))
-                                        .outline()
+                                        .ghost()
                                         .xsmall()
                                         .icon(icons::sparkles())
                                         .label("Review")
@@ -306,7 +312,9 @@ impl Render for PullRequestsView {
                                                 cx,
                                             )
                                         })),
-                                )
+                                    Size::XSmall,
+                                    cx,
+                                ))
                         })),
                 )
             })

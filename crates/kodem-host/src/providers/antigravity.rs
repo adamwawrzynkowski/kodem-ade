@@ -91,6 +91,15 @@ const STOP_GRACE: Duration = Duration::from_secs(5);
 const READ_LIMIT: Duration = Duration::from_secs(45);
 /// How often the stored files of the conversations and the task list are read.
 const FOLLOW_INTERVAL: Duration = Duration::from_millis(300);
+/// The option of the pre-tool hook that refuses every tool call of a one-shot generation.
+const GENERATION_HOOK: &str = "--generation";
+/// Longest time that the CLI waits for the hook of a generation, in seconds. It answers at once.
+const GENERATION_HOOK_LIMIT: u64 = 60;
+/// How long a one-shot generation may work on its answer.
+const GENERATION_LIMIT: Duration = Duration::from_secs(10 * 60);
+/// The reason that a one-shot generation gives the CLI for each tool call that it denies.
+const NO_TOOLS: &str =
+    "Tools are not available for this request. Answer from the supplied input only.";
 
 /// Returns the capabilities that do not depend on the CLI, so saved choices validate early.
 pub(super) fn initial_runtime() -> RuntimeInfo {
@@ -267,9 +276,10 @@ fn models(listed: &[(String, String)], own: Option<&str>) -> Vec<Model> {
     models
 }
 
-/// Returns the CLI's identity of the model that runs a task, with its reasoning level.
-fn cli_model(host: &crate::Host, task: &Task) -> Option<String> {
-    let id = provider::effective_model(host, task)?;
+/// Returns the CLI's identity of a model at a reasoning level. A model that the CLI lists at
+/// several levels takes the requested one, else its default; an absent model stays absent.
+fn cli_model(host: &crate::Host, model: Option<String>, effort: Option<&str>) -> Option<String> {
+    let id = model?;
     let known = host
         .runtimes
         .get(&Provider::Antigravity)
@@ -277,9 +287,7 @@ fn cli_model(host: &crate::Host, task: &Task) -> Option<String> {
     let Some(model) = known.filter(|model| !model.effort_models.is_empty()) else {
         return Some(id);
     };
-    let effort = task
-        .effort
-        .as_deref()
+    let effort = effort
         .filter(|effort| model.effort_models.contains_key(*effort))
         .unwrap_or(&model.default_effort);
     model.effort_models.get(effort).cloned().or(Some(id))
@@ -729,6 +737,19 @@ fn hook_command(task_id: &str) -> Result<String> {
     .join(" "))
 }
 
+/// Returns the command line of the pre-tool hook that refuses every tool call of a generation.
+fn generation_hook() -> Result<String> {
+    Ok([
+        std::env::current_exe()?.to_string_lossy().into_owned(),
+        HOOK.to_owned(),
+        GENERATION_HOOK.to_owned(),
+    ]
+    .iter()
+    .map(|word| shell_word(word))
+    .collect::<Vec<_>>()
+    .join(" "))
+}
+
 /// Everything fixed when a process starts. A change needs a new process.
 #[derive(Clone, PartialEq)]
 struct Launch {
@@ -743,7 +764,11 @@ struct Launch {
 impl Launch {
     fn of(host: &crate::Host, task: &Task) -> Self {
         Self {
-            model: cli_model(host, task),
+            model: cli_model(
+                host,
+                provider::effective_model(host, task),
+                task.effort.as_deref(),
+            ),
             plan: access_of(task) == "plan",
             rules: provider::instructions(task),
             tools: !task
@@ -756,6 +781,30 @@ impl Launch {
 
 // Writes the session folder: the approval hook, Kodem's tools and the standing instructions.
 fn write_session_folder(folder: &Path, task_id: &str, launch: &Launch) -> Result<()> {
+    let servers = if launch.tools {
+        let (command, arguments) = crate::mcp::command(task_id)?;
+        json!({crate::mcp::SERVER:{"command":command,"args":arguments}})
+    } else {
+        json!({})
+    };
+    write_folder(
+        folder,
+        &hook_command(task_id)?,
+        HOOK_LIMIT,
+        &servers,
+        &launch.rules,
+    )
+}
+
+// Writes a session folder: the pre-tool hook with its time limit in seconds, the MCP servers
+// and the standing instructions.
+fn write_folder(
+    folder: &Path,
+    hook: &str,
+    limit: u64,
+    servers: &Value,
+    instructions: &str,
+) -> Result<()> {
     let agents = folder.join(".agents");
     let rules = agents.join("rules");
     std::fs::create_dir_all(&rules)?;
@@ -763,30 +812,23 @@ fn write_session_folder(folder: &Path, task_id: &str, launch: &Launch) -> Result
         platform::restrict(path, 0o700)?;
     }
     let hooks = json!({"kodem":{"PreToolUse":[{"matcher":"*","hooks":[
-        {"type":"command","command":hook_command(task_id)?,"timeout":HOOK_LIMIT}]}]}});
+        {"type":"command","command":hook,"timeout":limit}]}]}});
     std::fs::write(
         agents.join("hooks.json"),
         serde_json::to_vec_pretty(&hooks)?,
     )?;
-    let servers = if launch.tools {
-        let (command, arguments) = crate::mcp::command(task_id)?;
-        json!({crate::mcp::SERVER:{"command":command,"args":arguments}})
-    } else {
-        json!({})
-    };
     std::fs::write(
         agents.join("mcp_config.json"),
         serde_json::to_vec_pretty(&json!({"mcpServers":servers}))?,
     )?;
     let rule = rules.join(RULES);
-    if launch.rules.trim().is_empty() {
+    if instructions.trim().is_empty() {
         let _ = std::fs::remove_file(rule);
     } else {
         std::fs::write(
             rule,
             format!(
-                "---\ntrigger: always_on\ndescription: Kodem's rules for this session\n---\n{}\n",
-                launch.rules
+                "---\ntrigger: always_on\ndescription: Kodem's rules for this session\n---\n{instructions}\n"
             ),
         )?;
     }
@@ -803,12 +845,14 @@ struct Process {
 }
 
 impl Process {
+    /// Starts the CLI in `cwd`, with `folder` as one more workspace when it is not the session
+    /// folder itself.
     fn start(
         cwd: &Path,
         account: &Account,
         launch: Launch,
         conversation: Option<&str>,
-        folder: &Path,
+        folder: Option<&Path>,
     ) -> Result<Self> {
         let mut command = Command::new(antigravity::executable()?);
         platform::hide_console(&mut command);
@@ -828,7 +872,9 @@ impl Process {
         if let Some(conversation) = conversation {
             command.args(["--conversation", conversation]);
         }
-        command.arg("--add-dir").arg(folder);
+        if let Some(folder) = folder {
+            command.arg("--add-dir").arg(folder);
+        }
         // The prompts arrive on the stream. An empty prompt attached to the option keeps the
         // CLI from taking the next argument as one.
         command.arg("-p=");
@@ -981,8 +1027,28 @@ impl Drop for Process {
 }
 
 /// Runs the pre-tool hook for the CLI of one task: reads the call from standard input, asks the
-/// host, and prints the decision. It asks again while the user decides.
+/// host, and prints the decision. It asks again while the user decides. The hook of a one-shot
+/// generation refuses every call without asking the host.
 pub(crate) fn serve_hook(arguments: &[String]) -> Result<()> {
+    let decision = if arguments.iter().any(|argument| argument == GENERATION_HOOK) {
+        // The call is read whole, so the CLI never writes to a closed input.
+        let _ = std::io::copy(
+            &mut std::io::stdin().lock().take(LINE_LIMIT),
+            &mut std::io::sink(),
+        );
+        json!({"decision":"deny","reason":NO_TOOLS})
+    } else {
+        decide(arguments)?
+    };
+    let mut output = std::io::stdout().lock();
+    serde_json::to_writer(&mut output, &decision)?;
+    output.write_all(b"\n")?;
+    output.flush()?;
+    Ok(())
+}
+
+// Reads the call of a task's hook from standard input and asks the host until it decides.
+fn decide(arguments: &[String]) -> Result<Value> {
     let option = |name: &str| {
         arguments
             .iter()
@@ -1025,11 +1091,7 @@ pub(crate) fn serve_hook(arguments: &[String]) -> Result<()> {
             }
         }
     };
-    let mut output = std::io::stdout().lock();
-    serde_json::to_writer(&mut output, &decision)?;
-    output.write_all(b"\n")?;
-    output.flush()?;
-    Ok(())
+    Ok(decision)
 }
 
 /// Answers a hook of a task's CLI through the session owner that runs it.
@@ -1817,7 +1879,7 @@ impl Owner<'_> {
             &account,
             launch,
             self.conversation.as_deref(),
-            &self.folder,
+            Some(&self.folder),
         )?);
         self.account = account;
         Ok(())
@@ -2194,5 +2256,284 @@ impl Owner<'_> {
             h.store.save_task(&task)?;
         }
         Ok(())
+    }
+}
+
+/// The turn of a one-shot generation, as its events arrive.
+#[derive(Default)]
+struct Generated {
+    /// The generation's conversation once the CLI named it, then the subagents that it started,
+    /// which are all deleted afterwards.
+    conversations: Vec<String>,
+    /// The text since the latest tool call, which is the answer when the turn ends.
+    answer: String,
+    /// The text of the latest stored response that made no tool call, for a turn whose stream
+    /// carried no text.
+    stored: String,
+    /// The size of the stored conversation when it was last read, and its last step read.
+    stored_size: u64,
+    stored_step: Option<u64>,
+    /// Some thinking was sent, so the next thought starts a paragraph.
+    thought: bool,
+    /// The answer is a JSON object, so its text is not streamed.
+    structured: bool,
+    /// The status that the structured answer is being written was sent.
+    writing: bool,
+    /// The tool steps of the conversation that were reported.
+    tools: HashSet<u64>,
+}
+
+impl Generated {
+    fn conversation(&self) -> Option<&str> {
+        self.conversations.first().map(String::as_str)
+    }
+
+    // The CLI named the conversation that it opened.
+    fn started(&mut self, conversation: &str) {
+        if self.conversations.is_empty() && antigravity::valid_conversation(conversation) {
+            self.conversations.push(conversation.to_owned());
+        }
+    }
+
+    // Applies one `step_update` of the stream: answer text, a tool call, or a subagent.
+    fn update(&mut self, update: &Value, progress: &mut dyn FnMut(GenerationEvent)) {
+        let Some(conversation) = update["conversation_id"].as_str() else {
+            return;
+        };
+        self.started(conversation);
+        if self.conversation() != Some(conversation) {
+            return;
+        }
+        for agent in update["subagent_info"]["subagents"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            if let Some(child) = agent["conversation_id"].as_str()
+                && antigravity::valid_conversation(child)
+                && !self.conversations.iter().any(|known| known == child)
+            {
+                self.conversations.push(child.to_owned());
+            }
+        }
+        match update["step_type"].as_str().unwrap_or_default() {
+            "agent_response" => {
+                let delta = update["text_delta"].as_str().unwrap_or_default();
+                if delta.is_empty() {
+                    return;
+                }
+                self.answer.push_str(delta);
+                if !self.structured {
+                    progress(GenerationEvent::Response(delta.to_owned()));
+                } else if !self.writing {
+                    self.writing = true;
+                    progress(GenerationEvent::Status(
+                        "Antigravity is writing the structured result...".into(),
+                    ));
+                }
+            }
+            // Text before a tool call introduces the call; the answer follows the last one.
+            "tool" | "subagent" => {
+                let Some(step) = update["step_index"].as_u64() else {
+                    return;
+                };
+                if self.tools.insert(step) {
+                    self.answer.clear();
+                    self.writing = false;
+                    let name = update["tool_info"]["name"]
+                        .as_str()
+                        .or_else(|| update["tool_name"].as_str())
+                        .unwrap_or("a tool");
+                    progress(GenerationEvent::Status(format!(
+                        "Kodem denied Antigravity's request to use {name}"
+                    )));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Sends the thinking of each response that the CLI stored since the last read, and keeps
+    // the text of the latest one. The stream carries no thinking, so the stored conversation is
+    // its only source.
+    fn read_stored(&mut self, progress: &mut dyn FnMut(GenerationEvent)) {
+        let Some(path) = self
+            .conversation()
+            .and_then(|conversation| antigravity::transcript(conversation).ok())
+        else {
+            return;
+        };
+        let Ok(size) = std::fs::metadata(&path).map(|metadata| metadata.len()) else {
+            return;
+        };
+        if size == self.stored_size {
+            return;
+        }
+        self.stored_size = size;
+        let Ok(stored) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        // A line that the CLI still writes does not parse yet and is read again later.
+        for step in stored
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        {
+            let Some(index) = step["step_index"].as_u64() else {
+                continue;
+            };
+            if self.stored_step.is_some_and(|read| index <= read) {
+                continue;
+            }
+            self.stored_step = Some(index);
+            if step["type"] != "PLANNER_RESPONSE" {
+                continue;
+            }
+            let thinking = step["thinking"].as_str().unwrap_or_default().trim();
+            if !thinking.is_empty() {
+                let separator = if self.thought { "\n\n" } else { "" };
+                self.thought = true;
+                progress(GenerationEvent::Thinking(format!("{separator}{thinking}")));
+            }
+            self.stored = if step["tool_calls"].as_array().is_none_or(Vec::is_empty) {
+                step["content"].as_str().unwrap_or_default().to_owned()
+            } else {
+                String::new()
+            };
+        }
+    }
+
+    // Ends the turn by the CLI's result: the answer, or why there is none.
+    fn finish(&mut self, result: &Value) -> Result<String> {
+        if result["status"] != "SUCCESS" {
+            let error: String = result["error"]
+                .as_str()
+                .unwrap_or_default()
+                .chars()
+                .take(4000)
+                .collect();
+            if error.is_empty() {
+                bail!("The Antigravity CLI reported a failure");
+            }
+            bail!("The Antigravity CLI reported a failure: {error}");
+        }
+        let answer = if self.answer.trim().is_empty() {
+            &self.stored
+        } else {
+            &self.answer
+        };
+        Ok(answer.trim().to_owned())
+    }
+}
+
+/// Answers a one-shot generation without a stored conversation or tools.
+///
+/// A process of its own runs in a new session folder instead of the generation's folder, so
+/// the CLI loads no hook, MCP server or rule of the repository, and its only workspace holds no
+/// project file. The folder's pre-tool hook refuses every tool call without asking the host,
+/// its MCP configuration adds no server, and its rule holds the generation's instructions. The
+/// conversation that the CLI stores is deleted afterwards by its identity, also on failure.
+pub(super) fn generate(
+    host: &Shared,
+    account: &Account,
+    generation: &Generation,
+    progress: &mut dyn FnMut(GenerationEvent),
+) -> Result<String> {
+    let folder = std::env::temp_dir().join(SESSION_FOLDER).join(new_id());
+    let mut turn = Generated {
+        structured: generation.schema.is_some(),
+        ..Generated::default()
+    };
+    let answer = generation_turn(host, account, generation, progress, &folder, &mut turn);
+    // The turn's process has ended, so the CLI no longer writes these conversations.
+    for conversation in &turn.conversations {
+        if let Err(error) = antigravity::delete_conversation(conversation) {
+            eprintln!("Kodem could not delete Antigravity conversation {conversation}: {error:#}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&folder);
+    answer
+}
+
+// Starts the generation's process in its session folder, sends the input and reads the turn
+// until it ends. The process stops before this returns, on every path.
+fn generation_turn(
+    host: &Shared,
+    account: &Account,
+    generation: &Generation,
+    progress: &mut dyn FnMut(GenerationEvent),
+    folder: &Path,
+    turn: &mut Generated,
+) -> Result<String> {
+    // The model resolves as a task's does: the CLI's default when the generation names none.
+    let model = {
+        let h = host.lock().unwrap();
+        let chosen = generation.model.clone().or_else(|| {
+            h.runtimes
+                .get(&Provider::Antigravity)
+                .and_then(|runtime| runtime.default_model.clone())
+        });
+        cli_model(&h, chosen, generation.effort.as_deref())
+    };
+    let launch = Launch {
+        model,
+        plan: false,
+        rules: provider::generation_instructions(generation),
+        tools: false,
+    };
+    write_folder(
+        folder,
+        &generation_hook()?,
+        GENERATION_HOOK_LIMIT,
+        &json!({}),
+        &launch.rules,
+    )?;
+    let mut process = Process::start(folder, account, launch, None, None)?;
+    // A prompt that starts with a slash would be a command, which ends a stream-json session.
+    process.send(&json!({"event":"user","message":{"content":format!(
+        "The input of the request follows.\n\n{}",
+        generation.input
+    )}}))?;
+    progress(GenerationEvent::Status(
+        "Antigravity is working on the request...".into(),
+    ));
+    let deadline = Instant::now() + GENERATION_LIMIT;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            process.interrupt();
+            bail!(
+                "Antigravity did not answer within {} minutes",
+                GENERATION_LIMIT.as_secs() / 60
+            );
+        }
+        let event = match process.events.recv_timeout(left.min(FOLLOW_INTERVAL)) {
+            Ok(Ok(event)) => event,
+            Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                bail!(
+                    "The Antigravity CLI ended before it answered{}",
+                    process
+                        .reason()
+                        .map(|reason| format!(": {reason}"))
+                        .unwrap_or_default()
+                );
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                turn.read_stored(progress);
+                continue;
+            }
+        };
+        match event["event"].as_str().unwrap_or_default() {
+            "init" => {
+                if let Some(conversation) = event["conversation_id"].as_str() {
+                    turn.started(conversation);
+                }
+            }
+            "step_update" => turn.update(&event["step_update"], progress),
+            "result" => {
+                turn.read_stored(progress);
+                return turn.finish(&event["result"]);
+            }
+            _ => {}
+        }
     }
 }

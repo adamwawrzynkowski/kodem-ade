@@ -1706,3 +1706,13 @@ pub(crate) fn composer_catalog(
     result.skills.dedup_by(|a, b| a.path == b.path);
     Ok(result)
 }
+
+/// Answers a one-shot generation in an ephemeral, read-only thread without tools.
+pub(super) fn generate(
+    _host: &Shared,
+    account: &Account,
+    generation: &Generation,
+    progress: &mut dyn FnMut(GenerationEvent),
+) -> Result<String> {
+    Codex::generate(account, generation, progress)
+}

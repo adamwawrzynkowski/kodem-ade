@@ -81,6 +81,18 @@ Each provider owns its CLI authentication. Settings supplies its sign-in and sig
 
 The host stores the last model per account and per project in `Settings.model_choices` whenever preferences are saved or a task is created or edited. At start the host clears the retired Claude Code identity `default` from tasks and saved choices (`Store::retire_model`), so they fall back to the default model.
 
+## One-shot generations
+
+The Git workspace's AI actions (commit title and description, change and commit explanations, code review, pull request review) run as one-shot generations, not as tasks. `Request::Generate` starts one under an identity that the desktop chooses, and `Request::GenerationStatus` reads its progress in waits of up to 30 seconds, so a long review outlives no connection's read timeout. The host forgets a generation after a status reports it done, or 10 minutes after it ended unread. `provider::generate` resolves the account and calls the provider's `generate`; each one keeps no conversation and gives the model no tools, with a 10-minute limit:
+
+- Codex: an ephemeral, read-only thread with every feature and MCP server off (`Codex::start_restricted`, shared with title generation), the request's schema as `outputSchema`, and `summary: "auto"` so that reasoning text streams.
+- Claude Code: `-p` with `--no-session-persistence`, `--tools ""`, no setting sources and `--json-schema` for a structured answer, run in the repository, so its CLAUDE.md is read.
+- OpenCode: a session with one deny-all permission rule and the instructions as its `kodem` entry, deleted after the answer together with the server.
+- Antigravity: runs in a session folder of its own, not the repository, with a pre-tool hook (`antigravity-hook --generation`) that denies every call without asking the host. The conversation is deleted by identity afterwards (`antigravity::delete_conversation`); its summary in `jetbox_summaries_proto.pb` stays.
+- Grok: a session in `default` mode whose permission requests are all rejected once (never "always", which the CLI saves per project), deleted with `_x.ai/session/delete` and swept by identity. Grok runs its built-in read-only tools without asking, so those can still run.
+
+Providers without native structured output receive the schema in the instructions (`provider::generation_instructions`).
+
 ## Compaction
 
 `Request::CompactTask` compacts the conversation of a task that has a provider session and no running turn. The request is refused while a turn runs ("Compact after this turn finishes"), while delivery is uncertain, and before the first message ("There is nothing to compact yet. Send a message first."). It is not queued behind a running turn, because a control message is not durable. The reply is `Ok` as soon as the compaction started; its result arrives with the task. `ComposerCommand::Compact` is in a provider's composer catalog only for a task that has a session.

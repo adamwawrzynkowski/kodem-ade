@@ -1,45 +1,37 @@
 mod prompts;
 
-use std::env;
-use std::io::{BufRead as _, BufReader, Read as _, Write};
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Result, bail};
+use kodem_core::{Generation, GenerationEvent, Request, Response, ipc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::git::GitRepo;
-use crate::settings::{AiProvider, Settings};
+use crate::settings::{AiAgent, Settings};
 
-/// The AI provider, models and custom prompts, taken from the settings.
+/// How long one status request waits for news of a running generation, in milliseconds.
+const STATUS_WAIT_MS: u64 = 1_000;
+
+/// The Kodem agent that runs AI requests, the folder they run in, and the custom prompts.
 #[derive(Debug, Clone)]
 pub struct AiConfig {
-    pub provider: AiProvider,
-    pub ollama_base_url: String,
-    pub commit_model: String,
-    pub review_model: String,
-    pub explain_model: String,
-    pub codex_model: String,
-    pub codex_reasoning_effort: String,
+    pub agent: AiAgent,
+    pub cwd: PathBuf,
     pub commit_prompt: String,
     pub review_prompt: String,
     pub explain_prompt: String,
     pub pull_request_review_prompt: String,
 }
 
-impl From<&Settings> for AiConfig {
-    fn from(settings: &Settings) -> Self {
+impl AiConfig {
+    /// Returns the configuration of requests that `agent` runs in `cwd`, with the custom prompts
+    /// of `settings`.
+    pub fn new(settings: &Settings, agent: AiAgent, cwd: PathBuf) -> Self {
         Self {
-            provider: settings.ai_provider,
-            ollama_base_url: settings.ollama_base_url.clone(),
-            commit_model: settings.ai_commit_model.clone(),
-            review_model: settings.ai_review_model.clone(),
-            explain_model: settings.ai_explain_model.clone(),
-            codex_model: settings.codex_model.clone(),
-            codex_reasoning_effort: settings.codex_reasoning_effort.clone(),
+            agent,
+            cwd,
             commit_prompt: settings.ai_commit_prompt.clone(),
             review_prompt: settings.ai_review_prompt.clone(),
             explain_prompt: settings.ai_explain_prompt.clone(),
@@ -368,8 +360,8 @@ pub enum AiProgress {
     ResponseDelta(String),
 }
 
-/// Runs AI requests with the configured provider. All methods block until the provider finishes;
-/// run them on a background thread.
+/// Runs AI requests with the configured Kodem agent through the Kodem host. All methods block
+/// until the provider finishes; run them on a background thread.
 #[derive(Debug, Clone)]
 pub struct AiService {
     config: AiConfig,
@@ -390,13 +382,7 @@ impl AiService {
     ) -> Result<CommitMessage> {
         let (system, user) = prompts::commit(&self.config, context, target);
         let mut ignore_progress = |_| {};
-        let text = self.generate(
-            Feature::Commit,
-            &system,
-            &user,
-            Some(commit_schema()),
-            &mut ignore_progress,
-        )?;
+        let text = self.generate(&system, &user, Some(commit_schema()), &mut ignore_progress)?;
         if let Ok(message) = parse_json(&text, "commit message") {
             return Ok(message);
         }
@@ -428,13 +414,7 @@ impl AiService {
         progress: &mut dyn FnMut(AiProgress),
     ) -> Result<CodeReview> {
         let (system, user) = prompts::review(&self.config, context);
-        let text = self.generate(
-            Feature::Review,
-            &system,
-            &user,
-            Some(review_schema()),
-            progress,
-        )?;
+        let text = self.generate(&system, &user, Some(review_schema()), progress)?;
         parse_json(&text, "code review")
     }
 
@@ -448,7 +428,7 @@ impl AiService {
         progress: &mut dyn FnMut(AiProgress),
     ) -> Result<String> {
         let (system, user) = prompts::explain(&self.config, diff, file_path, commit_message);
-        self.generate(Feature::Explain, &system, &user, None, progress)
+        self.generate(&system, &user, None, progress)
     }
 
     /// Reviews a pull request and returns line comments. Sends progress updates while the provider
@@ -459,617 +439,76 @@ impl AiService {
         progress: &mut dyn FnMut(AiProgress),
     ) -> Result<PullRequestReview> {
         let (system, user) = prompts::pull_request_review(&self.config, context);
-        let text = self.generate(
-            Feature::PullRequestReview,
-            &system,
-            &user,
-            Some(pull_request_review_schema()),
-            progress,
-        )?;
+        let text = self.generate(&system, &user, Some(pull_request_review_schema()), progress)?;
         parse_json(&text, "pull request review")
     }
 
+    // Runs one request on the Kodem host with the configured agent and passes its progress on.
     fn generate(
         &self,
-        feature: Feature,
         system: &str,
         user: &str,
         schema: Option<Value>,
         progress: &mut dyn FnMut(AiProgress),
     ) -> Result<String> {
-        match self.config.provider {
-            AiProvider::Ollama => self.generate_with_ollama(
-                feature.model(&self.config),
-                system,
-                user,
-                schema,
-                progress,
-            ),
-            AiProvider::Codex => self.generate_with_codex(system, user, schema, progress),
-        }
-    }
-
-    fn generate_with_ollama(
-        &self,
-        model: &str,
-        system: &str,
-        user: &str,
-        schema: Option<Value>,
-        progress: &mut dyn FnMut(AiProgress),
-    ) -> Result<String> {
-        if model.trim().is_empty() {
-            bail!("Select an Ollama model in AI settings.");
-        }
-        let url = format!(
-            "{}/api/generate",
-            self.config.ollama_base_url.trim_end_matches('/')
-        );
-        let structured = schema.is_some();
-        let mut body = json!({
-            "model": model,
-            "system": system,
-            "prompt": user,
-            "stream": true,
-            "think": true,
-            "options": { "temperature": 0.15 }
-        });
-        if let Some(schema) = schema {
-            body["format"] = schema;
-        }
-        progress(AiProgress::Status(format!("Ollama is loading {model}...")));
-        let mut child = command("curl")
-            .args([
-                "-sS",
-                "--fail-with-body",
-                "--max-time",
-                "300",
-                "-H",
-                "Content-Type: application/json",
-                "--data-binary",
-                "@-",
-                &url,
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("Kodem could not start curl")?;
-        child
-            .stdin
-            .take()
-            .expect("curl stdin must be piped")
-            .write_all(body.to_string().as_bytes())?;
-        let stdout = child.stdout.take().context("curl did not open stdout")?;
-        let mut stderr = child.stderr.take().context("curl did not open stderr")?;
-        let stderr_task = std::thread::spawn(move || {
-            let mut output = String::new();
-            let _ = stderr.read_to_string(&mut output);
-            output
-        });
-        let mut response = String::new();
-        let mut stream_error = None;
-        let mut response_started = false;
-        progress(AiProgress::Status(
-            "Ollama is analyzing the request...".into(),
-        ));
-        for line in BufReader::new(stdout).lines() {
-            let chunk = match line
-                .context("Kodem could not read the Ollama response")
-                .and_then(|line| {
-                    serde_json::from_str::<OllamaGenerateChunk>(&line)
-                        .context("Ollama returned an invalid response chunk")
-                }) {
-                Ok(chunk) => chunk,
-                Err(error) => {
-                    stream_error = Some(error);
-                    let _ = child.kill();
-                    break;
-                }
+        let root = ipc::data_dir()?;
+        let job = kodem_core::new_id();
+        let agent = &self.config.agent;
+        ipc::request(
+            &root,
+            &Request::Generate {
+                job: job.clone(),
+                generation: Generation {
+                    provider: agent.provider,
+                    account: agent.account.clone(),
+                    model: agent.model.clone(),
+                    effort: agent.effort.clone(),
+                    cwd: self.config.cwd.clone(),
+                    instructions: system.to_string(),
+                    input: user.to_string(),
+                    schema,
+                },
+            },
+        )?;
+        let mut after = 0;
+        loop {
+            let Response::Generation(status) = ipc::request(
+                &root,
+                &Request::GenerationStatus {
+                    job: job.clone(),
+                    after,
+                    wait_ms: STATUS_WAIT_MS,
+                },
+            )?
+            else {
+                bail!("The Kodem host gave an unexpected answer.");
             };
-            if let Some(error) = chunk.error {
-                stream_error = Some(anyhow::anyhow!(error));
-                let _ = child.kill();
-                break;
+            for event in status.events {
+                progress(match event {
+                    GenerationEvent::Status(status) => AiProgress::Status(status),
+                    GenerationEvent::Thinking(text) => AiProgress::ThinkingDelta(text),
+                    GenerationEvent::Response(text) => AiProgress::ResponseDelta(text),
+                });
             }
-            if !chunk.thinking.is_empty() {
-                progress(AiProgress::ThinkingDelta(chunk.thinking));
-            }
-            if !chunk.response.is_empty() {
-                response.push_str(&chunk.response);
-                if structured {
-                    if !response_started {
+            after = status.next;
+            if status.done {
+                return match status.result {
+                    Some(result) => {
                         progress(AiProgress::Status(
-                            "Ollama is writing the structured result...".into(),
+                            "Kodem is formatting the result...".into(),
                         ));
+                        Ok(result)
                     }
-                } else {
-                    progress(AiProgress::ResponseDelta(chunk.response));
-                }
-                response_started = true;
+                    None => bail!(
+                        "{}",
+                        status
+                            .error
+                            .unwrap_or_else(|| "The AI request failed.".into())
+                    ),
+                };
             }
         }
-        let status = child.wait()?;
-        let error_output = stderr_task.join().unwrap_or_default();
-        if let Some(error) = stream_error {
-            return Err(error);
-        }
-        if !status.success() {
-            bail!("Ollama request failed: {}", error_output.trim());
-        }
-        if response.trim().is_empty() {
-            bail!("Ollama returned an empty response.");
-        }
-        progress(AiProgress::Status(
-            "Kodem is formatting the result...".into(),
-        ));
-        Ok(response)
     }
-
-    fn generate_with_codex(
-        &self,
-        system: &str,
-        user: &str,
-        schema: Option<Value>,
-        progress: &mut dyn FnMut(AiProgress),
-    ) -> Result<String> {
-        if !codex_available() {
-            bail!("Codex CLI is not installed. Install it, then sign in with `codex login`.");
-        }
-        let directory = temporary_directory("kodem-codex")?;
-        let output_path = directory.join("response.txt");
-        let schema_path = directory.join("schema.json");
-        let structured = schema.is_some();
-        let mut process = command("codex");
-        process.args([
-            "exec",
-            "--skip-git-repo-check",
-            "--ephemeral",
-            "--sandbox",
-            "read-only",
-            "--color",
-            "never",
-            "--json",
-            "--cd",
-        ]);
-        process.arg(&directory);
-        if !self.config.codex_model.trim().is_empty() {
-            process.arg("--model").arg(&self.config.codex_model);
-        }
-        if !self.config.codex_reasoning_effort.trim().is_empty() {
-            process.arg("--config").arg(format!(
-                "model_reasoning_effort=\"{}\"",
-                self.config.codex_reasoning_effort
-            ));
-        }
-        if let Some(schema) = schema {
-            std::fs::write(&schema_path, serde_json::to_vec_pretty(&schema)?)?;
-            process.arg("--output-schema").arg(&schema_path);
-        }
-        process.arg("--output-last-message").arg(&output_path);
-        process.arg("-");
-        process
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = process.spawn().context("Kodem could not start Codex CLI")?;
-        progress(AiProgress::Status("Codex is starting the task...".into()));
-        let prompt = format!("SYSTEM INSTRUCTIONS:\n{system}\n\nUSER REQUEST:\n{user}");
-        child
-            .stdin
-            .take()
-            .expect("Codex stdin must be piped")
-            .write_all(prompt.as_bytes())?;
-        let stdout = child.stdout.take().context("Codex did not open stdout")?;
-        let mut stderr = child.stderr.take().context("Codex did not open stderr")?;
-        let stderr_task = std::thread::spawn(move || {
-            let mut output = String::new();
-            let _ = stderr.read_to_string(&mut output);
-            output
-        });
-        let mut last_message = String::new();
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let Some(event) = parse_codex_stream_event(&line, structured) else {
-                continue;
-            };
-            if let Some(message) = event.final_message {
-                last_message = message;
-            }
-            for update in event.progress {
-                progress(update);
-            }
-        }
-        let status = child.wait()?;
-        let error = stderr_task.join().unwrap_or_default();
-        let response = std::fs::read_to_string(&output_path).unwrap_or(last_message);
-        let _ = std::fs::remove_dir_all(&directory);
-        if !status.success() {
-            bail!("Codex request failed: {}", concise_error(&error));
-        }
-        if response.trim().is_empty() {
-            bail!("Codex returned an empty response.");
-        }
-        Ok(response)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Feature {
-    Commit,
-    Review,
-    Explain,
-    PullRequestReview,
-}
-
-impl Feature {
-    fn model(self, config: &AiConfig) -> &str {
-        match self {
-            Self::Commit => &config.commit_model,
-            Self::Review | Self::PullRequestReview => &config.review_model,
-            Self::Explain => &config.explain_model,
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct OllamaGenerateChunk {
-    #[serde(default)]
-    response: String,
-    #[serde(default)]
-    thinking: String,
-    #[serde(default)]
-    error: Option<String>,
-}
-
-struct CodexStreamEvent {
-    progress: Vec<AiProgress>,
-    final_message: Option<String>,
-}
-
-fn parse_codex_stream_event(line: &str, structured: bool) -> Option<CodexStreamEvent> {
-    let value: Value = serde_json::from_str(line).ok()?;
-    let event_type = value.get("type")?.as_str()?;
-    let item_type = value.pointer("/item/type").and_then(Value::as_str);
-    let item_text = value
-        .pointer("/item/text")
-        .and_then(Value::as_str)
-        .filter(|text| !text.trim().is_empty())
-        .map(str::to_string);
-    let mut event = CodexStreamEvent {
-        progress: Vec::new(),
-        final_message: None,
-    };
-
-    match (event_type, item_type) {
-        ("turn.started", _) => event.progress.push(AiProgress::Status(
-            "Codex is analyzing the request...".into(),
-        )),
-        ("item.started", Some("reasoning")) => event
-            .progress
-            .push(AiProgress::Status("Codex is reasoning...".into())),
-        ("item.started", Some("agent_message")) => event.progress.push(AiProgress::Status(
-            "Codex is writing the response...".into(),
-        )),
-        ("item.started", Some("command_execution")) => event.progress.push(AiProgress::Status(
-            "Codex is checking the supplied context...".into(),
-        )),
-        ("item.completed", Some("reasoning")) => {
-            if let Some(text) = item_text {
-                event.progress.push(AiProgress::ThinkingDelta(text));
-            }
-        }
-        ("item.completed", Some("agent_message")) => {
-            if let Some(text) = item_text {
-                if !structured {
-                    event.progress.push(AiProgress::ResponseDelta(text.clone()));
-                }
-                event.final_message = Some(text);
-            }
-        }
-        ("turn.completed", _) => event.progress.push(AiProgress::Status(
-            "Kodem is formatting the result...".into(),
-        )),
-        _ => {}
-    }
-
-    (!event.progress.is_empty() || event.final_message.is_some()).then_some(event)
-}
-
-/// A model installed in Ollama, with its size in bytes.
-#[derive(Debug, Clone, Deserialize)]
-pub struct OllamaModel {
-    pub name: String,
-    #[serde(default)]
-    pub size: u64,
-}
-
-#[derive(Deserialize)]
-struct OllamaTagsResponse {
-    #[serde(default)]
-    models: Vec<OllamaModel>,
-}
-
-/// Returns the models installed in the Ollama server at `base_url`, sorted by name. Fails when the
-/// server does not answer within 5 seconds.
-pub fn ollama_models(base_url: &str) -> Result<Vec<OllamaModel>> {
-    let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
-    let output = command("curl")
-        .args(["-sS", "--fail-with-body", "--max-time", "5", &url])
-        .output()
-        .context("Kodem could not start curl")?;
-    if !output.status.success() {
-        bail!("Ollama is not available at {base_url}.");
-    }
-    let mut response: OllamaTagsResponse =
-        serde_json::from_slice(&output.stdout).context("Ollama returned an invalid model list")?;
-    response.models.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(response.models)
-}
-
-/// Downloads a model into the Ollama server at `base_url`. Blocks until the download finishes, for
-/// up to 30 minutes.
-pub fn pull_ollama_model(base_url: &str, model: &str) -> Result<()> {
-    if model.trim().is_empty() {
-        bail!("Enter a model name first.");
-    }
-    let url = format!("{}/api/pull", base_url.trim_end_matches('/'));
-    let body = json!({ "name": model, "stream": false }).to_string();
-    let mut child = command("curl")
-        .args([
-            "-sS",
-            "--fail-with-body",
-            "--max-time",
-            "1800",
-            "-H",
-            "Content-Type: application/json",
-            "--data-binary",
-            "@-",
-            &url,
-        ])
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    child
-        .stdin
-        .take()
-        .expect("curl stdin must be piped")
-        .write_all(body.as_bytes())?;
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        bail!(
-            "Ollama could not install the model: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(())
-}
-
-/// Returns whether the Codex CLI is installed and runs.
-pub fn codex_available() -> bool {
-    command("codex")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
-/// Returns the sign-in status that `codex login status` prints. Fails when the CLI is missing or
-/// reports an error.
-pub fn codex_status() -> Result<String> {
-    let output = command("codex")
-        .args(["login", "status"])
-        .output()
-        .context("Codex CLI is not installed")?;
-    let text = if output.stdout.is_empty() {
-        &output.stderr
-    } else {
-        &output.stdout
-    };
-    if !output.status.success() {
-        bail!("{}", concise_error(&String::from_utf8_lossy(text)));
-    }
-    Ok(String::from_utf8_lossy(text).trim().to_string())
-}
-
-/// A model that the Codex CLI offers, with its supported and default reasoning efforts.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodexModel {
-    pub model: String,
-    pub display_name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub supported_reasoning_efforts: Vec<CodexReasoningEffort>,
-    pub default_reasoning_effort: String,
-    #[serde(default)]
-    pub is_default: bool,
-}
-
-/// One reasoning effort that a Codex model supports.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodexReasoningEffort {
-    pub reasoning_effort: String,
-}
-
-/// The signed-in Codex account and the models it can use.
-pub struct CodexInfo {
-    pub account: String,
-    pub models: Vec<CodexModel>,
-}
-
-/// Reads the Codex account and the visible models from the Codex App Server. Starts the server,
-/// waits up to 8 seconds for each answer, then stops it.
-pub fn codex_info() -> Result<CodexInfo> {
-    let child = command("codex")
-        .args(["app-server", "--listen", "stdio://"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("Codex CLI is not installed")?;
-    read_codex_info(child)
-}
-
-fn read_codex_info(mut child: Child) -> Result<CodexInfo> {
-    let result = read_codex_info_from_transport(&mut child);
-    let _ = child.kill();
-    let _ = child.wait();
-    result
-}
-
-fn read_codex_info_from_transport(child: &mut Child) -> Result<CodexInfo> {
-    let stdout = child.stdout.take().context("Codex did not open stdout")?;
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let _ = sender.send(line);
-        }
-    });
-    let mut stdin = child.stdin.take().context("Codex did not open stdin")?;
-    send_codex_request(
-        &mut stdin,
-        json!({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "Kodem", "title": "Kodem", "version": env!("CARGO_PKG_VERSION")}}}),
-    )?;
-    let initialize = receive_codex_response(&receiver, 1)?;
-    require_codex_result(&initialize, "Codex initialization")?;
-
-    send_codex_request(&mut stdin, json!({"method": "initialized", "params": {}}))?;
-    send_codex_request(
-        &mut stdin,
-        json!({"id": 2, "method": "account/read", "params": {"refreshToken": true}}),
-    )?;
-    let account = receive_codex_response(&receiver, 2)?;
-    require_codex_result(&account, "Codex account check")?;
-
-    send_codex_request(
-        &mut stdin,
-        json!({"id": 3, "method": "model/list", "params": {"limit": 100, "includeHidden": false}}),
-    )?;
-    let models = receive_codex_response(&receiver, 3)?;
-    require_codex_result(&models, "Codex model list")?;
-    let models = models
-        .pointer("/result/data")
-        .cloned()
-        .context("Codex model list did not contain data")
-        .and_then(|data| {
-            serde_json::from_value(data).context("Codex returned an invalid model list")
-        })?;
-
-    Ok(CodexInfo {
-        account: parse_codex_account(&account),
-        models,
-    })
-}
-
-fn send_codex_request(stdin: &mut impl Write, value: Value) -> Result<()> {
-    writeln!(stdin, "{value}")?;
-    stdin.flush()?;
-    Ok(())
-}
-
-fn receive_codex_response(
-    receiver: &std::sync::mpsc::Receiver<String>,
-    request_id: u64,
-) -> Result<Value> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(8);
-    loop {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        let line = receiver.recv_timeout(remaining).with_context(|| {
-            format!("Codex App Server closed before request {request_id} completed")
-        })?;
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        if value.get("id").and_then(Value::as_u64) == Some(request_id) {
-            return Ok(value);
-        }
-    }
-}
-
-fn require_codex_result<'a>(value: &'a Value, operation: &str) -> Result<&'a Value> {
-    if let Some(error) = value.get("error") {
-        let message = error
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("The request failed.");
-        bail!("{operation} failed: {message}");
-    }
-    value
-        .get("result")
-        .with_context(|| format!("{operation} did not return a result"))
-}
-
-fn parse_codex_account(value: &Value) -> String {
-    let Some(account) = value
-        .pointer("/result/account")
-        .filter(|account| !account.is_null())
-    else {
-        return "Codex is not signed in.".into();
-    };
-    let email = account
-        .get("email")
-        .and_then(Value::as_str)
-        .unwrap_or("ChatGPT account");
-    let plan = account
-        .get("planType")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown plan");
-    format!("Signed in as {email} · {plan}")
-}
-
-/// Runs `codex login`, which blocks until the sign-in finishes, then returns the new sign-in
-/// status.
-pub fn codex_login() -> Result<String> {
-    let output = command("codex")
-        .arg("login")
-        .output()
-        .context("Codex CLI is not installed")?;
-    if !output.status.success() {
-        bail!(
-            "Codex sign-in failed: {}",
-            concise_error(&String::from_utf8_lossy(&output.stderr))
-        );
-    }
-    codex_status()
-}
-
-/// Signs out of the Codex CLI.
-pub fn codex_logout() -> Result<()> {
-    let output = command("codex")
-        .arg("logout")
-        .output()
-        .context("Codex CLI is not installed")?;
-    if !output.status.success() {
-        bail!(
-            "Codex sign-out failed: {}",
-            concise_error(&String::from_utf8_lossy(&output.stderr))
-        );
-    }
-    Ok(())
-}
-
-fn command(program: &str) -> Command {
-    crate::process::command(program)
-}
-
-fn temporary_directory(prefix: &str) -> Result<PathBuf> {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let path = env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()));
-    std::fs::create_dir_all(&path)?;
-    Ok(path)
-}
-
-fn concise_error(value: &str) -> String {
-    value
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("The command failed.")
-        .trim()
-        .to_string()
 }
 
 fn parse_json<T: for<'de> Deserialize<'de>>(response: &str, kind: &str) -> Result<T> {

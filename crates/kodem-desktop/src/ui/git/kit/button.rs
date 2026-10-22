@@ -290,16 +290,8 @@ impl ParentElement for LiquidButton {
     }
 }
 
-/// Opens a popup menu below an element when the user clicks it.
+/// Opens a popup menu beside an element when the user clicks it.
 pub trait DropdownMenu: Sized {
-    /// Opens the menu that `builder` fills below the element's leading edge.
-    fn dropdown_menu(
-        self,
-        builder: impl Fn(PopupMenu, &mut Window, &mut gpui::Context<PopupMenu>) -> PopupMenu + 'static,
-    ) -> DropdownMenuElement {
-        self.dropdown_menu_with_anchor(Anchor::TopLeft, builder)
-    }
-
     /// Opens the menu that `builder` fills at the corner of the element that `anchor` names.
     fn dropdown_menu_with_anchor(
         self,

@@ -3,6 +3,7 @@ mod accounts;
 mod attachments;
 mod awake;
 mod delegation;
+mod generation;
 mod imports;
 mod mcp;
 mod notifications;
@@ -38,6 +39,8 @@ struct Host {
     compacted: HashMap<String, u64>,
     terminals: HashMap<String, terminal::Terminal>,
     checks: std::collections::HashSet<String>,
+    /// One-shot generations outside tasks, by the identity that their client chose.
+    generations: HashMap<String, generation::Job>,
     /// Number of task views produced so far, which puts them in order for a client.
     views: std::cell::Cell<u64>,
     shutdown: bool,
@@ -179,6 +182,7 @@ fn run() -> Result<()> {
         compacted: HashMap::new(),
         terminals: HashMap::new(),
         checks: Default::default(),
+        generations: HashMap::new(),
         views: Default::default(),
         shutdown: false,
         usage_refresh: None,
@@ -741,6 +745,17 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
         )?)),
         Request::DelegateCancel { parent, task_id } => Ok(Response::Delegated(delegation::cancel(
             host, &parent, &task_id,
+        )?)),
+        Request::Generate { job, generation } => {
+            generation::start(host, job, generation)?;
+            Ok(Response::Ok)
+        }
+        Request::GenerationStatus {
+            job,
+            after,
+            wait_ms,
+        } => Ok(Response::Generation(generation::status(
+            host, &job, after, wait_ms,
         )?)),
         Request::AntigravityHook {
             task_id,

@@ -21,7 +21,9 @@ use kodem_git::util;
 
 use crate::theme::{px, text_px};
 use crate::ui::dither::{Dither, DitherField, DottedRule, cell_threshold, checker};
-use crate::ui::git::ai::{AiResult, open_ai_result_dialog, run_ai_result_task};
+use crate::ui::git::ai::{
+    AiAgentState, AiResult, ai_action_group, open_ai_result_dialog, run_ai_result_task,
+};
 use crate::ui::git::components::{
     self, author_avatar, button, change_kind_chip, full_size, mono_font, ref_badge, stat_chips,
 };
@@ -33,8 +35,9 @@ use crate::ui::git::diff::{DiffCloseRequested, DiffView, PreparedDiff};
 use crate::ui::git::icons;
 use crate::ui::git::kit::{
     ActiveTheme as _, ButtonVariants as _, ContextMenuExt as _, Icon, IconName, InputState,
-    PopupMenuItem, ResizableState, ScrollableElement as _, Sizable as _, VirtualListScrollHandle,
-    h_flex, h_resizable, resizable_panel, v_flex, v_resizable, v_virtual_list,
+    PopupMenuItem, ResizableState, ScrollableElement as _, Sizable as _, Size,
+    VirtualListScrollHandle, h_flex, h_resizable, resizable_panel, v_flex, v_resizable,
+    v_virtual_list,
 };
 use crate::ui::git::motion;
 use crate::ui::git::ref_drag::{
@@ -413,6 +416,7 @@ impl HistoryView {
         let detail = commit.short_hash.clone();
         let repo = state.repo.clone();
         let settings = GitSettings::get(cx).clone();
+        let agent = AiAgentState::get(cx).agent;
         let dialog = open_ai_result_dialog("Explain Commit", detail, window, cx);
         run_ai_result_task(
             dialog,
@@ -425,7 +429,7 @@ impl HistoryView {
                     &hash,
                     "--",
                 ])?;
-                AiService::new(AiConfig::from(&settings)).explain_diff(
+                AiService::new(AiConfig::new(&settings, agent, repo.path.clone())).explain_diff(
                     &diff,
                     None,
                     Some(&message),
@@ -1210,7 +1214,8 @@ impl HistoryView {
                                                     .child(commit.subject.clone()),
                                             )
                                             .when(GitSettings::get(cx).ai_explain_diffs, |this| {
-                                                this.child(
+                                                this.child(ai_action_group(
+                                                    "history",
                                                     button("explain-selected-commit")
                                                         .ghost()
                                                         .xsmall()
@@ -1223,7 +1228,9 @@ impl HistoryView {
                                                                 )
                                                             },
                                                         )),
-                                                )
+                                                    Size::XSmall,
+                                                    cx,
+                                                ))
                                             }),
                                     )
                                     .when(!commit.body.is_empty(), |this| {
