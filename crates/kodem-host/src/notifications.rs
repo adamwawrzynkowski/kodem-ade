@@ -98,6 +98,15 @@ impl Host {
     }
 
     fn notify_task(&self, task: &Task, state: &RunState) {
+        // A delegated task reports its outcome to the agent of its parent, whose turn alerts the
+        // user. Its own approvals still alert, because only the user can answer them.
+        let delegated = task
+            .lineage
+            .as_ref()
+            .is_some_and(|lineage| lineage.delegated);
+        if delegated && !matches!(state, RunState::Waiting | RunState::DeliveryUnknown) {
+            return;
+        }
         // A notification preference failure must never fail an already persisted turn.
         match self.store.settings() {
             Ok(settings) => {
