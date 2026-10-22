@@ -35,8 +35,7 @@ struct Highlight {
     wide: bool,
     #[serde(default)]
     tone: Option<Tone>,
-    #[serde(default)]
-    visual: Option<Visual>,
+    visual: Visual,
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -89,6 +88,53 @@ enum Visual {
     Glyph {
         icon: String,
     },
+    Tiles {
+        items: Vec<Tile>,
+    },
+    Toggles {
+        items: Vec<Toggle>,
+    },
+    Sliders {
+        items: Vec<Slider>,
+    },
+    Compare {
+        before: Chip,
+        after: Chip,
+        label: Option<String>,
+    },
+    Menu {
+        items: Vec<MenuItem>,
+        focus: Option<usize>,
+    },
+    Window {
+        area: Area,
+        label: Option<String>,
+    },
+    Gauge {
+        value: f32,
+        text: Option<String>,
+        label: String,
+    },
+    Steps {
+        items: Vec<String>,
+        current: usize,
+    },
+    Diff {
+        file: Option<String>,
+        lines: Vec<DiffLine>,
+    },
+    Notice {
+        icon: String,
+        title: String,
+        text: Option<String>,
+        #[serde(default)]
+        actions: Vec<String>,
+    },
+    Choice {
+        question: String,
+        options: Vec<String>,
+        chosen: Option<usize>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -128,8 +174,76 @@ struct Segment {
     tone: Option<Tone>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Tile {
+    text: String,
+    icon: String,
+    badge: Option<String>,
+    tone: Option<Tone>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Toggle {
+    text: String,
+    on: bool,
+    detail: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Slider {
+    text: String,
+    value: f32,
+    readout: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MenuItem {
+    text: String,
+    icon: Option<String>,
+    keys: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum Area {
+    Titlebar,
+    Sidebar,
+    Chat,
+    Composer,
+    Terminal,
+    Panel,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiffLine {
+    text: String,
+    change: Change,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum Change {
+    Added,
+    Removed,
+    Same,
+}
+
 /// The characters that the dot-matrix figures of `ui/whats_new.rs` can draw.
 const FIGURE_CHARACTERS: &str = "0123456789.,%+-x:/";
+
+/// Characters of any text that a visual shows, so that it fits the stage of a narrow card.
+const VISUAL_TEXT: usize = 44;
+
+/// Characters of a label under a tile or a step, which shares the stage's width with others.
+const SHORT_TEXT: usize = 14;
+
+/// Characters of the reading in the middle of a gauge's ring.
+const READING: usize = 5;
 
 /// How many highlights above a highlight must use other visual kinds, so that cards near each
 /// other on the board look different.
@@ -174,7 +288,7 @@ pub fn embed(out: &std::path::Path, chosen: Option<&str>) {
             literal(&highlight.text),
             highlight.wide,
             tone_path(tone),
-            visual(highlight.visual.as_ref(), tone),
+            visual(&highlight.visual, tone),
         )
         .unwrap();
     }
@@ -235,19 +349,27 @@ fn check(file: &File, source: &str, problems: &mut Vec<String>) {
         let id = &highlight.id;
         limit(id, "title", &highlight.title, 40, problems);
         limit(id, "text", &highlight.text, 160, problems);
-        let mut texts = vec![highlight.title.as_str(), highlight.text.as_str()];
-        if let Some(visual) = &highlight.visual {
-            check_visual(id, visual, problems);
-            texts.extend(visual_texts(visual));
+        check_visual(id, &highlight.visual, problems);
+        let shown = visual_texts(&highlight.visual);
+        for text in &shown {
+            if text.chars().count() > VISUAL_TEXT {
+                problems.push(format!(
+                    "{id}: {text:?} is longer than the {VISUAL_TEXT} characters that a visual \
+                     shows"
+                ));
+            }
         }
-        for text in texts {
+        for text in [highlight.title.as_str(), highlight.text.as_str()]
+            .into_iter()
+            .chain(shown)
+        {
             version_number(id, text, problems);
         }
     }
     let kinds: Vec<&str> = file
         .highlight
         .iter()
-        .map(|highlight| kind(highlight.visual.as_ref()))
+        .map(|highlight| kind(&highlight.visual))
         .collect();
     for (index, highlight) in file.highlight.iter().enumerate() {
         if let Some(above) = (index.saturating_sub(DISTINCT_ABOVE)..index)
@@ -262,18 +384,28 @@ fn check(file: &File, source: &str, problems: &mut Vec<String>) {
     }
 }
 
-// Names the kind of a visual as the file writes it; a highlight without one is "none".
-fn kind(visual: Option<&Visual>) -> &'static str {
+// Names the kind of a visual as the file writes it.
+fn kind(visual: &Visual) -> &'static str {
     match visual {
-        None => "none",
-        Some(Visual::List { .. }) => "list",
-        Some(Visual::Chips { .. }) => "chips",
-        Some(Visual::Prompt { .. }) => "prompt",
-        Some(Visual::Bars { .. }) => "bars",
-        Some(Visual::Figure { .. }) => "figure",
-        Some(Visual::Meter { .. }) => "meter",
-        Some(Visual::Keys { .. }) => "keys",
-        Some(Visual::Glyph { .. }) => "glyph",
+        Visual::List { .. } => "list",
+        Visual::Chips { .. } => "chips",
+        Visual::Prompt { .. } => "prompt",
+        Visual::Bars { .. } => "bars",
+        Visual::Figure { .. } => "figure",
+        Visual::Meter { .. } => "meter",
+        Visual::Keys { .. } => "keys",
+        Visual::Glyph { .. } => "glyph",
+        Visual::Tiles { .. } => "tiles",
+        Visual::Toggles { .. } => "toggles",
+        Visual::Sliders { .. } => "sliders",
+        Visual::Compare { .. } => "compare",
+        Visual::Menu { .. } => "menu",
+        Visual::Window { .. } => "window",
+        Visual::Gauge { .. } => "gauge",
+        Visual::Steps { .. } => "steps",
+        Visual::Diff { .. } => "diff",
+        Visual::Notice { .. } => "notice",
+        Visual::Choice { .. } => "choice",
     }
 }
 
@@ -288,13 +420,44 @@ fn check_visual(id: &str, visual: &Visual, problems: &mut Vec<String>) {
         }
     };
     match visual {
-        Visual::List { items, .. } => count("list", items.len(), 1..=5),
+        Visual::List { items, .. } => count("list", items.len(), 1..=4),
         Visual::Chips { items } => count("chips visual", items.len(), 1..=4),
-        Visual::Prompt { chips, .. } => count("prompt's chips", chips.len(), 0..=4),
+        Visual::Prompt { chips, .. } => count("prompt's chips", chips.len(), 0..=3),
         Visual::Bars { values, .. } => count("bars visual", values.len(), 2..=8),
         Visual::Meter { segments, .. } => count("meter", segments.len(), 2..=4),
         Visual::Keys { keys, .. } => count("keys visual", keys.len(), 1..=4),
-        Visual::Figure { .. } | Visual::Glyph { .. } => {}
+        Visual::Tiles { items } => count("tiles visual", items.len(), 1..=4),
+        Visual::Toggles { items } => count("toggles visual", items.len(), 1..=3),
+        Visual::Sliders { items } => count("sliders visual", items.len(), 1..=3),
+        Visual::Menu { items, .. } => count("menu", items.len(), 2..=4),
+        Visual::Steps { items, .. } => count("steps visual", items.len(), 2..=4),
+        Visual::Diff { lines, .. } => count("diff", lines.len(), 1..=4),
+        Visual::Notice { actions, .. } => count("notice's actions", actions.len(), 0..=2),
+        Visual::Choice { options, .. } => count("choice", options.len(), 2..=3),
+        Visual::Figure { .. }
+        | Visual::Glyph { .. }
+        | Visual::Compare { .. }
+        | Visual::Window { .. }
+        | Visual::Gauge { .. } => {}
+    }
+    let mut short = |what: &str, text: &str, most: usize| {
+        if text.chars().count() > most {
+            problems.push(format!(
+                "{id}: the {what} {text:?} is longer than {most} characters"
+            ));
+        }
+    };
+    match visual {
+        Visual::Tiles { items } => items
+            .iter()
+            .for_each(|tile| short("tile", &tile.text, SHORT_TEXT)),
+        Visual::Steps { items, .. } => items
+            .iter()
+            .for_each(|step| short("step", step, SHORT_TEXT)),
+        Visual::Gauge {
+            text: Some(text), ..
+        } => short("gauge's reading", text, READING),
+        _ => {}
     }
     match visual {
         Visual::Chips { items } | Visual::Prompt { chips: items, .. } => {
@@ -302,6 +465,52 @@ fn check_visual(id: &str, visual: &Visual, problems: &mut Vec<String>) {
                 if let Some(icon) = &chip.icon {
                     check_icon(id, icon, problems);
                 }
+            }
+        }
+        Visual::Compare { before, after, .. } => {
+            for icon in [&before.icon, &after.icon].into_iter().flatten() {
+                check_icon(id, icon, problems);
+            }
+        }
+        Visual::Tiles { items } => {
+            for tile in items {
+                check_icon(id, &tile.icon, problems);
+            }
+        }
+        Visual::Menu { items, focus } => {
+            for icon in items.iter().filter_map(|item| item.icon.as_ref()) {
+                check_icon(id, icon, problems);
+            }
+            if focus.is_some_and(|focus| focus >= items.len()) {
+                problems.push(format!("{id}: focus must be the index of a menu row"));
+            }
+        }
+        Visual::Notice { icon, .. } => check_icon(id, icon, problems),
+        Visual::Sliders { items } => {
+            if items
+                .iter()
+                .any(|slider| !(0. ..=1.).contains(&slider.value))
+            {
+                problems.push(format!("{id}: a slider's value is from 0 to 1"));
+            }
+        }
+        Visual::Gauge { value, .. } => {
+            if !(0. ..=1.).contains(value) {
+                problems.push(format!("{id}: a gauge's value is from 0 to 1"));
+            }
+        }
+        Visual::Steps { items, current } => {
+            if *current > items.len() {
+                problems.push(format!(
+                    "{id}: current is the index of a step, or the count of steps when all are done"
+                ));
+            }
+        }
+        Visual::Choice {
+            options, chosen, ..
+        } => {
+            if chosen.is_some_and(|chosen| chosen >= options.len()) {
+                problems.push(format!("{id}: chosen must be the index of an option"));
             }
         }
         Visual::Bars {
@@ -326,11 +535,11 @@ fn check_visual(id: &str, visual: &Visual, problems: &mut Vec<String>) {
         }
         Visual::Figure { value, .. } => {
             if value.is_empty()
-                || value.chars().count() > 7
+                || value.chars().count() > 6
                 || !value.chars().all(|c| FIGURE_CHARACTERS.contains(c))
             {
                 problems.push(format!(
-                    "{id}: a figure is 1 to 7 characters of {FIGURE_CHARACTERS}"
+                    "{id}: a figure is 1 to 6 characters of {FIGURE_CHARACTERS}"
                 ));
             }
         }
@@ -351,7 +560,10 @@ fn check_visual(id: &str, visual: &Visual, problems: &mut Vec<String>) {
             }
         }
         Visual::Glyph { icon } => check_icon(id, icon, problems),
-        Visual::List { .. } => {}
+        Visual::List { .. }
+        | Visual::Toggles { .. }
+        | Visual::Window { .. }
+        | Visual::Diff { .. } => {}
     }
 }
 
@@ -398,6 +610,65 @@ fn visual_texts(visual: &Visual) -> Vec<&str> {
             texts.extend(label.as_deref());
         }
         Visual::Glyph { .. } => {}
+        Visual::Tiles { items } => {
+            for tile in items {
+                texts.push(tile.text.as_str());
+                texts.extend(tile.badge.as_deref());
+            }
+        }
+        Visual::Toggles { items } => {
+            for toggle in items {
+                texts.push(toggle.text.as_str());
+                texts.extend(toggle.detail.as_deref());
+            }
+        }
+        Visual::Sliders { items } => {
+            for slider in items {
+                texts.push(slider.text.as_str());
+                texts.extend(slider.readout.as_deref());
+            }
+        }
+        Visual::Compare {
+            before,
+            after,
+            label,
+        } => {
+            chip_texts(std::slice::from_ref(before), &mut texts);
+            chip_texts(std::slice::from_ref(after), &mut texts);
+            texts.extend(label.as_deref());
+        }
+        Visual::Menu { items, .. } => {
+            for item in items {
+                texts.push(item.text.as_str());
+                texts.extend(item.keys.as_deref());
+            }
+        }
+        Visual::Window { label, .. } => texts.extend(label.as_deref()),
+        Visual::Gauge { text, label, .. } => {
+            texts.extend(text.as_deref());
+            texts.push(label.as_str());
+        }
+        Visual::Steps { items, .. } => texts.extend(items.iter().map(String::as_str)),
+        Visual::Diff { file, lines } => {
+            texts.extend(file.as_deref());
+            texts.extend(lines.iter().map(|line| line.text.as_str()));
+        }
+        Visual::Notice {
+            title,
+            text,
+            actions,
+            ..
+        } => {
+            texts.push(title.as_str());
+            texts.extend(text.as_deref());
+            texts.extend(actions.iter().map(String::as_str));
+        }
+        Visual::Choice {
+            question, options, ..
+        } => {
+            texts.push(question.as_str());
+            texts.extend(options.iter().map(String::as_str));
+        }
     }
     texts
 }
@@ -463,29 +734,31 @@ fn tone_path(tone: Tone) -> &'static str {
     }
 }
 
+// A capsule without its own tone takes `fallback`.
+fn chip(chip: &Chip, fallback: Tone) -> String {
+    format!(
+        "Chip {{ text: {}, icon: {}, detail: {}, added: {:?}, removed: {:?}, tone: {} }}",
+        literal(&chip.text),
+        optional(chip.icon.as_deref()),
+        optional(chip.detail.as_deref()),
+        chip.added,
+        chip.removed,
+        tone_path(chip.tone.unwrap_or(fallback)),
+    )
+}
+
 fn chips(chips: &[Chip]) -> String {
-    let items: Vec<String> = chips
-        .iter()
-        .map(|chip| {
-            format!(
-                "Chip {{ text: {}, icon: {}, detail: {}, added: {:?}, removed: {:?}, tone: {} }}",
-                literal(&chip.text),
-                optional(chip.icon.as_deref()),
-                optional(chip.detail.as_deref()),
-                chip.added,
-                chip.removed,
-                tone_path(chip.tone.unwrap_or(Tone::Muted)),
-            )
-        })
-        .collect();
+    let items: Vec<String> = chips.iter().map(|item| chip(item, Tone::Muted)).collect();
+    format!("&[{}]", items.join(", "))
+}
+
+fn strings(texts: &[String]) -> String {
+    let items: Vec<String> = texts.iter().map(|text| literal(text)).collect();
     format!("&[{}]", items.join(", "))
 }
 
 // A part without its own tone takes the card's.
-fn visual(visual: Option<&Visual>, card: Tone) -> String {
-    let Some(visual) = visual else {
-        return "Visual::None".into();
-    };
+fn visual(visual: &Visual, card: Tone) -> String {
     match visual {
         Visual::List {
             title,
@@ -584,5 +857,140 @@ fn visual(visual: Option<&Visual>, card: Tone) -> String {
             )
         }
         Visual::Glyph { icon } => format!("Visual::Glyph({})", literal(icon)),
+        Visual::Tiles { items } => {
+            let tiles: Vec<String> = items
+                .iter()
+                .map(|tile| {
+                    format!(
+                        "Tile {{ text: {}, icon: {}, badge: {}, tone: {} }}",
+                        literal(&tile.text),
+                        literal(&tile.icon),
+                        optional(tile.badge.as_deref()),
+                        tone_path(tile.tone.unwrap_or(card)),
+                    )
+                })
+                .collect();
+            format!("Visual::Tiles(&[{}])", tiles.join(", "))
+        }
+        Visual::Toggles { items } => {
+            let rows: Vec<String> = items
+                .iter()
+                .map(|toggle| {
+                    format!(
+                        "Toggle {{ text: {}, on: {}, detail: {} }}",
+                        literal(&toggle.text),
+                        toggle.on,
+                        optional(toggle.detail.as_deref()),
+                    )
+                })
+                .collect();
+            format!("Visual::Toggles(&[{}])", rows.join(", "))
+        }
+        Visual::Sliders { items } => {
+            let rows: Vec<String> = items
+                .iter()
+                .map(|slider| {
+                    format!(
+                        "Slider {{ text: {}, value: {:?}, readout: {} }}",
+                        literal(&slider.text),
+                        slider.value,
+                        optional(slider.readout.as_deref()),
+                    )
+                })
+                .collect();
+            format!("Visual::Sliders(&[{}])", rows.join(", "))
+        }
+        Visual::Compare {
+            before,
+            after,
+            label,
+        } => format!(
+            "Visual::Compare {{ before: {}, after: {}, label: {} }}",
+            chip(before, Tone::Muted),
+            chip(after, card),
+            optional(label.as_deref())
+        ),
+        Visual::Menu { items, focus } => {
+            let rows: Vec<String> = items
+                .iter()
+                .map(|item| {
+                    format!(
+                        "MenuItem {{ text: {}, icon: {}, keys: {} }}",
+                        literal(&item.text),
+                        optional(item.icon.as_deref()),
+                        optional(item.keys.as_deref()),
+                    )
+                })
+                .collect();
+            format!(
+                "Visual::Menu {{ items: &[{}], focus: {focus:?} }}",
+                rows.join(", ")
+            )
+        }
+        Visual::Window { area, label } => {
+            let area = match area {
+                Area::Titlebar => "Area::Titlebar",
+                Area::Sidebar => "Area::Sidebar",
+                Area::Chat => "Area::Chat",
+                Area::Composer => "Area::Composer",
+                Area::Terminal => "Area::Terminal",
+                Area::Panel => "Area::Panel",
+            };
+            format!(
+                "Visual::Window {{ area: {area}, label: {} }}",
+                optional(label.as_deref())
+            )
+        }
+        Visual::Gauge { value, text, label } => format!(
+            "Visual::Gauge {{ value: {value:?}, text: {}, label: {} }}",
+            optional(text.as_deref()),
+            literal(label)
+        ),
+        Visual::Steps { items, current } => format!(
+            "Visual::Steps {{ items: {}, current: {current} }}",
+            strings(items)
+        ),
+        Visual::Diff { file, lines } => {
+            let rows: Vec<String> = lines
+                .iter()
+                .map(|line| {
+                    let change = match line.change {
+                        Change::Added => "Change::Added",
+                        Change::Removed => "Change::Removed",
+                        Change::Same => "Change::Same",
+                    };
+                    format!(
+                        "DiffLine {{ text: {}, change: {change} }}",
+                        literal(&line.text)
+                    )
+                })
+                .collect();
+            format!(
+                "Visual::Diff {{ file: {}, lines: &[{}] }}",
+                optional(file.as_deref()),
+                rows.join(", ")
+            )
+        }
+        Visual::Notice {
+            icon,
+            title,
+            text,
+            actions,
+        } => format!(
+            "Visual::Notice {{ icon: {}, title: {}, text: {}, actions: {} }}",
+            literal(icon),
+            literal(title),
+            optional(text.as_deref()),
+            strings(actions)
+        ),
+        Visual::Choice {
+            question,
+            options,
+            chosen,
+        } => format!(
+            "Visual::Choice {{ question: {}, options: {}, chosen: {chosen:?} }}",
+            literal(question),
+            strings(options)
+        ),
     }
 }

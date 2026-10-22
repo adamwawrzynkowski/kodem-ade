@@ -19,157 +19,210 @@
 #   [[highlight]]      One card.
 #   id                 Lowercase letters, digits and hyphens, unique in this file.
 #   title              At most 40 characters. A human title, not the commit subject.
-#   text               At most 160 characters. What the user notices, in plain words.
+#   text               At most 160 characters. What the user gets, in plain words.
 #   wide = true        Optional. The card takes two of the board's four columns.
 #   tone               Optional: accent (default), green, red, amber, blue or muted.
-#   visual             Optional. A small live picture above the title, one of:
+#   visual             Required. A live picture on a stage above the title, one of the kinds
+#                      below. Every text a visual shows has at most 44 characters.
 #     { kind = "list", title = "…", badge = "…", items = [{ text = "…", state = "done", tag = "…", tone = "…" }] }
-#         1–5 rows. state: done, open, dot (a filled mark in the tone) or faded. A title draws the
+#         1–4 rows. state: done, open, dot (a filled mark in the tone) or faded. A title draws the
 #         rows as a tree under it; without one, each row is a small plate. title, badge, tag and
-#         tone are optional.
+#         tone are optional. For states, steps of a result, or a short checklist.
 #     { kind = "chips", items = [{ text = "…", icon = "…", detail = "…", added = 0, removed = 0, tone = "…" }] }
 #         1–4 capsules. All fields but text are optional. added and removed draw a diffstat.
+#         For a few named things that work together.
 #     { kind = "prompt", text = "…", chips = [ …as above… ] }
-#         A composer with a draft and optional capsules above it.
+#         A composer with a draft and 0–3 capsules above it. For something the user types.
 #     { kind = "bars", label = "…", values = [3, 5, 2], labels = ["…"], focus = 0 }
 #         2–8 dot-matrix bars. labels (one per bar) and focus (the lit bar's index) are optional.
+#         For a measured before and after, or a comparison of amounts.
 #     { kind = "figure", value = "72", label = "…", detail = "…" }
-#         A dot-matrix number of at most 7 characters from 0-9 . , % + - x : /, and a caption.
+#         A dot-matrix number of at most 6 characters from 0-9 . , % + - x : /, and a caption.
+#         For one measured result.
 #     { kind = "meter", segments = [{ label = "…", weight = 3, tone = "…" }], caption = "…" }
-#         2–4 parts of one dot-matrix bar with their legend.
+#         2–4 parts of one dot-matrix bar with their legend. For shares of a whole.
 #     { kind = "keys", keys = ["⌘", "B"], label = "…" }
-#         1–4 keycaps of at most 5 characters.
+#         1–4 keycaps of at most 5 characters. For a shortcut.
 #     { kind = "glyph", icon = "zap" }
-#         One large icon.
+#         One large icon. Only when no other kind fits.
+#     { kind = "tiles", items = [{ text = "…", icon = "…", badge = "…", tone = "…" }] }
+#         1–4 large icon tiles with a name of at most 14 characters. badge and tone are optional.
+#         For new agents, providers, avatars and other things with an icon of their own.
+#     { kind = "toggles", items = [{ text = "…", on = true, detail = "…" }] }
+#         1–3 settings rows with a switch. detail is optional. For new on/off settings.
+#     { kind = "sliders", items = [{ text = "…", value = 0.5, readout = "…" }] }
+#         1–3 settings rows with a slider; value places the thumb from 0 to 1. readout is
+#         optional. For settings with a range.
+#     { kind = "compare", before = { …a chip… }, after = { …a chip… }, label = "…" }
+#         A capsule as it was, an arrow and the capsule as it is now; the before detail is struck
+#         through. label is optional. For a rename, a state that ended (BETA) or a new default.
+#     { kind = "menu", items = [{ text = "…", icon = "…", keys = "⌘C" }], focus = 1 }
+#         2–4 rows of a menu. icon, keys and focus (the lit row's index) are optional. For new
+#         menu entries and commands.
+#     { kind = "window", area = "terminal", label = "…" }
+#         A sketch of the Kodem window with one area lit: titlebar, sidebar, chat, composer,
+#         terminal (with its drag grip) or panel (a side panel). label is optional. For where a
+#         change lives in the window.
+#     { kind = "gauge", value = 0.42, text = "42%", label = "…" }
+#         A dot-matrix ring filled to value from 0 to 1, with text of at most 5 characters in its
+#         middle (optional) and a label. For usage, limits and progress.
+#     { kind = "steps", items = ["…", "…"], current = 1 }
+#         2–4 steps of at most 14 characters along a line; those before current are done, and
+#         current may be the count of steps when all are done. For a flow.
+#     { kind = "diff", file = "…", lines = [{ text = "…", change = "added" }] }
+#         1–4 lines of a change: added, removed or same. file is optional. For Git and code.
+#     { kind = "notice", icon = "…", title = "…", text = "…", actions = ["…", "…"] }
+#         A dialog or notification with 0–2 buttons; the last is the main one. text is optional.
+#         For new dialogs, confirmations and notifications.
+#     { kind = "choice", question = "…", options = ["…", "…"], chosen = 0 }
+#         A question with 2–3 options, one of them chosen (optional). For questions and pickers.
 #   icon names are the files of assets/icons without ".svg".
 #
-# Cards near each other must look different: a highlight's visual kind (or "none" without one)
-# must differ from the kinds of the three highlights above it. Pick the kind that shows the change
-# best: a figure or bars for a measured result, keys for a shortcut, a prompt for something typed,
-# chips for named things, a meter for shares of a whole, a list for states or steps, a glyph when
-# nothing else fits. A wide card shows a figure, keys or a glyph beside its words.
+# Cards near each other must look different: a highlight's visual kind must differ from the
+# kinds of the three highlights above it. Pick the kind that shows the change best, using the
+# hints above.
 #
 # The board has four columns. The version card takes two in the middle of the second row when
 # the highlights fill six columns or more; widths that add up to 6, 10, 14… leave no gaps.
-# Visual data must be true: measured figures, real names and real shortcuts.
-# Never describe a change as a move from one version to another ("OpenCode 1 updates to 2",
-# "1.19.3 to 2.1.0") in a headline, title, text or visual. Say what the user can do now. build.rs
-# refuses version numbers such as 1.19.3.
+# Visual data must be true: measured figures, real names, real labels and real shortcuts.
+#
+# Write for the people who use Kodem, not for its developers. These are release notes:
+# - Say what the user can do now or what got better, in plain words, present tense and active
+#   voice. Talk to the user ("you") where it reads naturally. Lead with the benefit, then say
+#   where to find it.
+# - Leave out how it was built: no type, file, function or setting-key names, no rendering
+#   terms (textures, sprites, redraws, frames), no commit wording ("Add", "Fix", "Refactor").
+# - Titles are short sentence-case phrases a user would say ("Resize the terminal"), texts one
+#   or two short sentences. No lists of every place a change touches.
+# - Never describe a change as a move from one version to another ("OpenCode 1 updates to 2",
+#   "1.19.3 to 2.1.0") in a headline, title, text or visual. Say what the user can do now.
+#   build.rs refuses version numbers such as 1.19.3.
 
 reviewed = "3dd21cd5d13954d6474187ea9080035dc0996a2a"
 
 [[headline]]
 id = "headline-antigravity-grok-pace"
-text = "Antigravity and Grok join as agents, usage bars show your pace, and glass gets tint and blur sliders."
+text = "Antigravity and Grok arrive as agents, usage bars show your pace, and you can tune the glass look."
 
 [[highlight]]
 id = "antigravity-and-grok-providers"
-title = "Antigravity and Grok are here"
-text = "Sign in with each CLI's own login and work as with the other agents: tasks, approvals, usage and session import. Both carry a BETA badge."
+title = "Meet Antigravity and Grok"
+text = "Sign in with your Antigravity or Grok account and use them like any other agent: run tasks, approve steps, track usage and import past sessions."
 wide = true
 tone = "accent"
-visual = { kind = "chips", items = [
-    { text = "Antigravity", icon = "antigravity", detail = "BETA" },
-    { text = "Grok", icon = "xai", detail = "BETA" },
+visual = { kind = "tiles", items = [
+    { text = "Antigravity", icon = "antigravity", badge = "BETA", tone = "amber" },
+    { text = "Grok", icon = "xai", badge = "BETA", tone = "amber" },
 ] }
 
 [[highlight]]
 id = "question-cards-attachments"
-title = "Answer questions with files"
-text = "Question cards count your answers, take a note beside an option, and accept files, folders and images through the paperclip, a drop or a paste."
+title = "Answer with notes and files"
+text = "When an agent asks you something, add a note to any option and attach files, folders or images with the paperclip, a drop or a paste."
 wide = true
 tone = "blue"
-visual = { kind = "keys", keys = ["⇧", "↵"], label = "New line in an answer" }
+visual = { kind = "choice", question = "Which test runner should I set up?", options = [
+    "Vitest",
+    "Jest",
+], chosen = 0 }
 
 [[highlight]]
 id = "usage-limit-pacing"
-title = "See where your pace leads"
-text = "Each limit bar shows a tick for even use. A line below tells whether you are on pace, and when the limit runs out."
+title = "Know if you will hit your limit"
+text = "Usage bars now mark where even use would be. A line below says whether you are on pace and when the limit would run out."
 wide = true
 tone = "amber"
-visual = { kind = "list", title = "Weekly limit", badge = "pace", items = [
-    { text = "On pace", state = "done", tone = "green" },
-    { text = "In deficit", state = "dot", tone = "amber" },
-    { text = "In reserve", state = "dot", tone = "blue" },
-    { text = "Limit reached", state = "dot", tone = "red" },
-] }
+visual = { kind = "gauge", value = 0.42, text = "42%", label = "Weekly limit · On pace" }
 
 [[highlight]]
 id = "glass-tint-blur"
 title = "Tune the glass"
-text = "Two sliders in Settings, Theme set how dark and how blurred every glass surface is. Defaults keep the current look."
+text = "Two sliders in Settings under Theme set how solid and how blurred panels, menus and dialogs look."
 tone = "accent"
-visual = { kind = "figure", value = "24", label = "points of blur at most", detail = "tint from 0 to 2" }
+visual = { kind = "sliders", items = [
+    { text = "Glass tint", value = 0.5, readout = "100%" },
+    { text = "Glass blur", value = 0.25, readout = "6 PT" },
+] }
 
 [[highlight]]
 id = "live-context-usage"
-title = "Context that keeps up"
-text = "The context meter now updates while a turn runs, for Claude Code, OpenCode, Antigravity and Codex, not only after it ends."
+title = "A context meter that keeps up"
+text = "The context meter now fills while the agent works, not only when it finishes its turn."
 tone = "green"
-visual = { kind = "glyph", icon = "gauge" }
+visual = { kind = "chips", items = [
+    { text = "Claude Code", icon = "claude" },
+    { text = "Codex", icon = "openai" },
+    { text = "OpenCode", icon = "opencode" },
+    { text = "Antigravity", icon = "antigravity" },
+] }
 
 [[highlight]]
 id = "waiting-indicator"
-title = "A key that shows waiting"
-text = "Beside Stop, a spinning key appears while the agent waits for subagents or a timer. Hover it to see what it waits for."
+title = "See what the agent waits for"
+text = "A spinning key beside Stop shows that the agent is waiting for subagents or a timer. Point at it to see which."
 tone = "blue"
-visual = { kind = "chips", items = [
-    { text = "Subagents", icon = "users" },
-    { text = "Timer", icon = "clock" },
+visual = { kind = "list", title = "Waiting for 2 subagents", items = [
+    { text = "code-reviewer", state = "dot" },
+    { text = "test-runner", state = "dot" },
 ] }
 
 [[highlight]]
 id = "git-out-of-beta"
-title = "Git is out of beta"
-text = "The BETA badge is gone from the Git workspace, its tile, title bar, View menu and command palette."
+title = "Git is ready for everyday use"
+text = "The Git workspace is out of beta. Open it from its tile, the title bar, the View menu or the command palette."
 tone = "green"
-visual = { kind = "keys", keys = ["⌥", "⌘", "4"], label = "Open Git" }
+visual = { kind = "compare", before = { text = "Git", icon = "branch", detail = "BETA" }, after = { text = "Git", icon = "branch" }, label = "Open it with ⌥⌘4" }
 
 [[headline]]
 id = "headline-wallpaper-and-project-order"
-text = "Give the chat a wallpaper and halftone dots, and drag project groups into your own order."
+text = "Put a picture behind the chat, and drag your project groups into the order you like."
+
+[[highlight]]
+id = "project-group-order-menu"
+title = "Put your projects in order"
+text = "Drag a project group by its header to move it; the list scrolls when you near its edge. Right-click a header for Move up and Move down."
+wide = true
+tone = "blue"
+visual = { kind = "menu", items = [
+    { text = "Collapse", icon = "chevron-up" },
+    { text = "Move up", icon = "arrow-up" },
+    { text = "Move down", icon = "arrow-down" },
+    { text = "Copy path", icon = "copy" },
+], focus = 1 }
+
+[[highlight]]
+id = "chat-wallpaper-dots"
+title = "A picture behind the chat"
+text = "Pick a wallpaper in Settings under Theme, or right-click the chat background. The dot screen takes its colors, and click waves can be turned off."
+wide = true
+tone = "accent"
+visual = { kind = "toggles", items = [
+    { text = "Dot screen", on = true },
+    { text = "Click waves", on = false },
+] }
 
 [[highlight]]
 id = "resizable-terminal"
-title = "A terminal you can resize"
-text = "Drag the border above the terminal. Kodem remembers the height, and project commands no longer wait for Return."
+title = "Resize the terminal"
+text = "Drag the edge above the terminal to give it more or less room. Kodem remembers the height, and project commands start without Return."
 tone = "green"
-visual = { kind = "figure", value = "230", label = "points by default", detail = "drag to change" }
+visual = { kind = "window", area = "terminal", label = "Drag the edge to resize" }
 
 [[highlight]]
 id = "opencode-out-of-beta"
 title = "OpenCode is out of beta"
-text = "The BETA badge is gone from OpenCode in Settings, the model picker and setup."
+text = "OpenCode is now a full member of the agent lineup in Settings, the model picker and setup."
 tone = "amber"
-visual = { kind = "glyph", icon = "opencode" }
-
-[[highlight]]
-id = "project-group-order-menu"
-title = "Order your project groups"
-text = "Drag a project group by its header to a new place; the feed scrolls near its edges. A right-click menu adds Move up and Move down."
-wide = true
-tone = "blue"
-visual = { kind = "chips", items = [
-    { text = "Move up", icon = "arrow-up" },
-    { text = "Move down", icon = "arrow-down" },
-    { text = "Copy path", icon = "copy" },
-] }
-
-[[highlight]]
-id = "chat-wallpaper-dots"
-title = "A wallpaper behind the chat"
-text = "Pick an image in Settings, Theme, or right-click the background. A halftone dot screen takes its colors, and a switch turns the click waves off."
-wide = true
-tone = "accent"
+visual = { kind = "compare", before = { text = "OpenCode", icon = "opencode", detail = "BETA" }, after = { text = "OpenCode", icon = "opencode" } }
 
 [[headline]]
 id = "headline-subagent-tiles"
-text = "Subagents sit in tidy status tiles above the composer, with a count for each state."
+text = "Subagents now sit in tidy tiles above the composer, with a count for each state."
 
 [[highlight]]
 id = "subagent-status-tiles"
-title = "Subagents in status tiles"
-text = "Agents above the composer form two even columns of tiles with name and state. The header counts agents by state, so you see who runs, waits or failed."
+title = "Subagents at a glance"
+text = "Subagents sit in neat tiles above the composer, and the header counts how many are running, waiting, done or failed."
 wide = true
 tone = "accent"
 visual = { kind = "list", title = "Agents", badge = "by state", items = [
@@ -177,88 +230,87 @@ visual = { kind = "list", title = "Agents", badge = "by state", items = [
     { text = "Waiting", state = "dot", tone = "amber" },
     { text = "Completed", state = "done", tone = "green" },
     { text = "Failed", state = "dot", tone = "red" },
-    { text = "Interrupted", state = "faded" },
 ] }
 
 [[headline]]
 id = "headline-opencode-2-update-and-polish"
-text = "OpenCode 1 now updates to OpenCode 2 from the update card, and buttons, menus and fields get a finer look."
+text = "Update OpenCode right from Kodem, and enjoy a more polished look for buttons, menus and fields."
 
 [[highlight]]
 id = "opencode-2-update"
-title = "OpenCode 2 from the update card"
-text = "The update card now takes OpenCode all the way to OpenCode 2 instead of stopping at the last OpenCode 1 release."
+title = "Get the newest OpenCode"
+text = "The update card now offers the newest OpenCode release, so one click keeps you current."
 wide = true
 tone = "green"
-visual = { kind = "figure", value = "2", label = "OpenCode 2", detail = "offered by the update card" }
+visual = { kind = "notice", icon = "arrow-down", title = "Updates available", text = "A new OpenCode release is ready.", actions = ["Update"] }
 
 [[highlight]]
 id = "interface-polish"
-title = "A finer look for the interface"
-text = "Menus, tooltips and the palette are glass. Buttons sink when pressed, search fields are recessed, and placeholders use the theme's muted color."
+title = "A more polished look"
+text = "Menus, tooltips and the command palette are made of glass, buttons sink when you press them, and search fields sit in the surface."
 wide = true
 tone = "blue"
-visual = { kind = "glyph", icon = "sparkles" }
+visual = { kind = "chips", items = [
+    { text = "Glass menus", icon = "layers", tone = "blue" },
+    { text = "Pressable buttons", icon = "square", tone = "blue" },
+    { text = "Recessed search", icon = "search", tone = "blue" },
+] }
 
 [[headline]]
 id = "headline-macos-window-keys"
-text = "On macOS, ⌘W and ⌘H work, and closing the window asks before Kodem quits."
+text = "On macOS, ⌘W and ⌘H work as you expect, and closing the window asks before Kodem quits."
 
 [[highlight]]
 id = "macos-window-management"
 title = "Close and hide, the Mac way"
-text = "⌘W or the red button asks before Kodem quits, and ⌘Q confirms. ⌘H and Hide Kodem in the menu hide the app."
+text = "⌘W and the red close button ask before Kodem quits, and ⌘Q wants a second press. ⌘H hides Kodem like any other Mac app."
 wide = true
 tone = "red"
-visual = { kind = "keys", keys = ["⌘", "W"], label = "Close window" }
+visual = { kind = "keys", keys = ["⌘", "W"], label = "Asks before Kodem quits" }
 
 [[headline]]
 id = "headline-usage-panels"
-text = "Usage panels are tidier: context and limits sit in their own blocks, and costs read the same everywhere."
+text = "Usage panels are easier to read: context and limits get their own blocks, and costs look the same everywhere."
 
 [[highlight]]
 id = "usage-panels-blocks"
-title = "Clearer usage panels"
-text = "Context and Limits are separate blocks. Session cost joins the context block, and credits round to the cent, so 2500.0000000000 reads 2,500."
+title = "Cleaner usage panels"
+text = "Context and limits sit in their own blocks, session cost joins the context, and credits read as plain amounts."
 wide = true
 tone = "green"
-visual = { kind = "list", title = "Usage", badge = "blocks", items = [
-    { text = "Context window and session cost", state = "done" },
-    { text = "Limits, with refresh and age", state = "done" },
-    { text = "Compact now and Rules in the footer", state = "open" },
-] }
+visual = { kind = "figure", value = "2,500", label = "credits, not 2500.0000000000" }
 
 [[headline]]
 id = "headline-settings-categories"
-text = "Settings is sorted into categories with pages, and each provider has its own pages."
+text = "Settings is organized into categories, with pages of its own for each agent provider."
 
 [[highlight]]
 id = "settings-categories"
-title = "Settings, sorted into pages"
-text = "Categories on the left open their pages, and each agent provider has its own: Connection, Accounts, Model, Access and Compaction."
+title = "Settings, neatly organized"
+text = "Settings is split into categories with their own pages, and every agent gets pages for its connection, accounts, model, access and compaction."
 wide = true
 tone = "blue"
-visual = { kind = "chips", items = [
-    { text = "Appearance", detail = "3 pages" },
-    { text = "Workspace", detail = "4 pages" },
-    { text = "Agents", detail = "per provider" },
-    { text = "Git", detail = "7 pages" },
-] }
+visual = { kind = "menu", items = [
+    { text = "Appearance", icon = "palette" },
+    { text = "Workspace", icon = "panel-left" },
+    { text = "Agents", icon = "bot" },
+    { text = "Git", icon = "git-branch" },
+], focus = 2 }
 
 [[highlight]]
 id = "release-cards-vary"
-title = "Release cards with more variety"
-text = "Cards in What's new now take different pictures, and a wide card shows its figure, keys or icon beside the words instead of above them."
+title = "Release notes with more variety"
+text = "Each card in What's new gets a picture that suits its change, so the board is easier to scan."
 wide = true
 visual = { kind = "glyph", icon = "layers" }
 
 [[highlight]]
 id = "dialogs-fit-window"
-title = "Dialogs fit the window"
-text = "A tall dialog, such as What's new, no longer runs past a small window. Its header and actions stay in view and the body scrolls between them."
+title = "Dialogs that fit any window"
+text = "Tall dialogs like What's new no longer run off a small window. The header and buttons stay in view while the content scrolls."
 wide = true
 tone = "blue"
-visual = { kind = "figure", value = "24", label = "points of margin", detail = "to every edge of the window" }
+visual = { kind = "notice", icon = "sparkles", title = "What's new", text = "The content scrolls; the buttons stay.", actions = ["Got it"] }
 
 [[headline]]
 id = "headline-titles-and-santa"
@@ -266,80 +318,76 @@ text = "Task titles now follow the conversation, and Santa and a zombie join the
 
 [[highlight]]
 id = "titles-follow-conversation"
-title = "Titles that follow the talk"
-text = "A title Kodem wrote changes by itself when the subject moves on. It is checked every third message, and titles you renamed never change."
+title = "Titles that keep up"
+text = "Titles that Kodem wrote now change when the conversation moves to a new subject. Titles you renamed yourself never change."
 wide = true
 tone = "green"
-visual = { kind = "list", title = "Task title", badge = "auto", items = [
-    { text = "Fix Sidebar Task Grouping", state = "faded" },
-    { text = "Fix Windows Installer makensis Crash", state = "done" },
-] }
+visual = { kind = "compare", before = { text = "Fix sidebar grouping" }, after = { text = "Fix installer crash", icon = "pencil" }, label = "Checked every third message" }
 
 [[highlight]]
 id = "santa-and-zombie-skaters"
-title = "Santa and a zombie skate in"
-text = "A new Thematic group in the project's avatar picker: Santa rides a sleigh pulled by reindeer, and a zombie walks and breakdances."
+title = "Santa and a zombie join the skaters"
+text = "Find them in the new Thematic group of a project's avatar picker: Santa rides a reindeer sleigh, and the zombie shuffles and breakdances."
 wide = true
 tone = "amber"
-visual = { kind = "chips", items = [
-    { text = "Santa", icon = "sparkles", detail = "sleigh", tone = "red" },
-    { text = "Zombie", icon = "user", detail = "breakdance", tone = "green" },
+visual = { kind = "tiles", items = [
+    { text = "Santa", icon = "sparkles", badge = "sleigh", tone = "red" },
+    { text = "Zombie", icon = "user", badge = "breakdance", tone = "green" },
 ] }
 
 [[headline]]
 id = "headline-project-groups"
-text = "The sidebar now groups tasks into tinted project groups that count what needs you."
+text = "The sidebar groups your tasks by project and shows at a glance what needs you."
 
 [[highlight]]
 id = "tinted-project-groups"
 title = "Tasks grouped by project"
-text = "Every open task sits in its project's tinted group. The header counts tasks that need input, run or have unread results, and a group folds."
+text = "Open tasks sit in a tinted group for each project. Its header counts what needs you, what runs and what is new, and folds with a click."
 wide = true
 tone = "blue"
-visual = { kind = "glyph", icon = "folder-open" }
+visual = { kind = "window", area = "sidebar", label = "One tinted group per project" }
 
 [[headline]]
 id = "headline-live-release-notes"
-text = "Release notes now draw themselves, the version badge opens them, and frames got lighter on fast displays."
+text = "Release notes are drawn live, the version badge opens them, and Kodem runs lighter on fast displays."
 
 [[highlight]]
 id = "less-graphics-memory"
-title = "Less graphics memory"
-text = "Kodem no longer keeps two full-window textures that it never draws into."
+title = "Lighter on memory"
+text = "Kodem no longer reserves graphics memory that it never uses."
 tone = "green"
-visual = { kind = "figure", value = "66", label = "MB freed", detail = "at 4K, on macOS" }
+visual = { kind = "figure", value = "66", label = "MB of graphics memory freed", detail = "at 4K, on macOS" }
 
 [[highlight]]
 id = "live-release-notes"
 title = "Release notes, drawn live"
-text = "What's new is a board of highlights that Kodem draws itself. Every commit of the release waits in a folded list below it."
+text = "What's new is a board of highlights drawn by Kodem itself, with every change of the release in a folded list below."
 wide = true
 visual = { kind = "list", title = "What's new", badge = "live", items = [
     { text = "Highlights of this version", state = "done" },
     { text = "The version and its headline", state = "done" },
-    { text = "Every commit, folded", state = "open" },
+    { text = "Every change, folded", state = "open" },
 ] }
 
 [[highlight]]
 id = "steady-skater-background"
-title = "A steady skater"
-text = "On displays above 90 Hz the skater draws every second refresh, and keeps that pace while the window is in the background."
+title = "A smoother skater"
+text = "On displays above 90 Hz the skater moves evenly, also while Kodem is in the background."
 visual = { kind = "bars", label = "Background frames/s at 144 Hz", values = [29, 72], labels = ["Before", "Now"], focus = 1 }
 
 [[highlight]]
 id = "version-badge-opens-notes"
-title = "One click to what changed"
-text = "Click the build badge in the title bar to read the notes of the version you run."
+title = "What changed, one click away"
+text = "Click the version badge in the title bar to read the notes of the version you run."
 tone = "blue"
-visual = { kind = "glyph", icon = "tag" }
+visual = { kind = "window", area = "titlebar", label = "Click the version badge" }
 
 [[highlight]]
 id = "lighter-frames"
-title = "Lighter frames"
-text = "Unchanged frames are copied instead of drawn again, and a task that waits for you no longer redraws the window on every step."
+title = "Smoother and lighter"
+text = "Kodem skips work on screens that did not change, and a task that waits for you no longer keeps the window busy."
 tone = "green"
 visual = { kind = "chips", items = [
-    { text = "Unchanged frames", icon = "copy", detail = "copied" },
-    { text = "Sprite sort", icon = "zap", detail = "faster" },
-    { text = "Waiting tasks", icon = "clock", detail = "redraw on blink" },
+    { text = "Still screens", icon = "copy", detail = "reused" },
+    { text = "Waiting tasks", icon = "clock", detail = "quiet" },
 ] }

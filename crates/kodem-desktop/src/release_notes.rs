@@ -36,10 +36,9 @@ pub enum Tone {
     Muted,
 }
 
-/// The small picture of a highlight, drawn live above its title.
+/// The picture of a highlight, drawn live on a stage above its title.
 #[allow(dead_code)] // Each release's highlights use some of the kinds.
 pub enum Visual {
-    None,
     /// Rows with a state, as a tree under a title or as small plates.
     List {
         title: Option<&'static str>,
@@ -77,6 +76,57 @@ pub enum Visual {
     },
     /// One large icon.
     Glyph(&'static str),
+    /// Large icon tiles with a name, for agents, providers and other named things.
+    Tiles(&'static [Tile]),
+    /// Settings rows with a switch, on or off.
+    Toggles(&'static [Toggle]),
+    /// Settings rows with a slider at a position.
+    Sliders(&'static [Slider]),
+    /// A capsule as it was, an arrow, and the capsule as it is now.
+    Compare {
+        before: Chip,
+        after: Chip,
+        label: Option<&'static str>,
+    },
+    /// A menu with one row under the pointer.
+    Menu {
+        items: &'static [MenuItem],
+        focus: Option<usize>,
+    },
+    /// A sketch of the Kodem window with one area lit.
+    Window {
+        area: Area,
+        label: Option<&'static str>,
+    },
+    /// A dot-matrix ring filled to a share, with a reading in its middle.
+    Gauge {
+        value: f32,
+        text: Option<&'static str>,
+        label: &'static str,
+    },
+    /// Steps along a line. The steps before `current` are done.
+    Steps {
+        items: &'static [&'static str],
+        current: usize,
+    },
+    /// Lines of a change to a file.
+    Diff {
+        file: Option<&'static str>,
+        lines: &'static [DiffLine],
+    },
+    /// A dialog or a notification with its buttons; the last button is the main one.
+    Notice {
+        icon: &'static str,
+        title: &'static str,
+        text: Option<&'static str>,
+        actions: &'static [&'static str],
+    },
+    /// A question with its options, one of them chosen.
+    Choice {
+        question: &'static str,
+        options: &'static [&'static str],
+        chosen: Option<usize>,
+    },
 }
 
 /// A row of a list visual.
@@ -97,7 +147,7 @@ pub enum RowState {
     Faded,
 }
 
-/// A capsule of a chips or prompt visual.
+/// A capsule of a chips, prompt or compare visual.
 pub struct Chip {
     pub text: &'static str,
     pub icon: Option<&'static str>,
@@ -118,6 +168,62 @@ pub struct Segment {
     pub label: &'static str,
     pub weight: f32,
     pub tone: Tone,
+}
+
+/// A tile of a tiles visual.
+pub struct Tile {
+    pub text: &'static str,
+    pub icon: &'static str,
+    pub badge: Option<&'static str>,
+    pub tone: Tone,
+}
+
+/// A row of a toggles visual.
+pub struct Toggle {
+    pub text: &'static str,
+    pub on: bool,
+    pub detail: Option<&'static str>,
+}
+
+/// A row of a sliders visual. `value` is the thumb's place from 0 to 1.
+pub struct Slider {
+    pub text: &'static str,
+    pub value: f32,
+    pub readout: Option<&'static str>,
+}
+
+/// A row of a menu visual.
+pub struct MenuItem {
+    pub text: &'static str,
+    pub icon: Option<&'static str>,
+    pub keys: Option<&'static str>,
+}
+
+/// The area of the window that a window visual lights.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Each release's highlights use some of the kinds.
+pub enum Area {
+    Titlebar,
+    Sidebar,
+    Chat,
+    Composer,
+    Terminal,
+    Panel,
+}
+
+/// A line of a diff visual.
+pub struct DiffLine {
+    pub text: &'static str,
+    pub change: Change,
+}
+
+/// Whether a diff line was added, removed or kept.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Each release's highlights use some of the kinds.
+pub enum Change {
+    Added,
+    Removed,
+    Same,
 }
 
 // `HEADLINE` and `HIGHLIGHTS`: the entries of `changelog/highlights.toml` that this release

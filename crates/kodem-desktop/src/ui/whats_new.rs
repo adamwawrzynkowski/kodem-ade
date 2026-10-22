@@ -1,10 +1,15 @@
 //! The What's new dialog: a board of this release's highlights around a version card, which the
 //! app draws itself from `changelog/highlights.toml`, and every commit of the release in a folded
-//! list below it. Figures use a dot-matrix face; each card forms out of dither in reading order.
+//! list below it. Each highlight shows a live picture on a lit stage above its words. Figures use
+//! a dot-matrix face; each card forms out of dither in reading order.
 use super::*;
-use crate::release_notes::{self, Chip, Highlight, Row, RowState, Tone, Visual};
+use crate::release_notes::{
+    self, Area, Change, Chip, DiffLine, Highlight, MenuItem, Row, RowState, Slider, Tile, Toggle,
+    Tone, Visual,
+};
 use crate::updater::{Channel, VERSION};
 use dither::{BarSegment, Dither, DitherBar, DitherField, DottedRule, Edge};
+use std::f32::consts::TAU;
 use std::hash::{Hash, Hasher};
 
 /// Width of the dialog that holds the board.
@@ -18,11 +23,22 @@ const NARROW_COLUMNS: usize = 2;
 const NARROW_WINDOW: f32 = 900.;
 /// Space between the cards.
 const GAP: f32 = 12.;
+/// Space between a card's edge and its stage.
+const BEZEL: f32 = 6.;
+/// Height of a stage at least. A taller picture makes its stage, and so its row, taller.
+const STAGE_HEIGHT: f32 = 140.;
+/// Width of a picture at most, so that a wide stage centers it instead of stretching it.
+const PICTURE_WIDTH: f32 = 300.;
 /// Pitch and dot of the dot-matrix face, in points.
 const MATRIX_CELL: f32 = 3.;
 const MATRIX_DOT: f32 = 2.;
 /// Rows of a glyph of the dot-matrix face.
 const MATRIX_ROWS: usize = 7;
+/// Width of a figure's dot-matrix number on a card of one column at most, in points, before its
+/// pixels take one dot.
+const FIGURE_WIDTH: f32 = 132.;
+/// Side of a gauge's ring, in points.
+const GAUGE_SIZE: f32 = 84.;
 
 impl Shell {
     /// Builds the body of the What's new dialog: the board of highlights around the version card,
@@ -43,18 +59,26 @@ impl Shell {
         // Cards arrive in reading order, wherever their highlight stands in the file.
         let mut order: Vec<usize> = (0..places.len()).collect();
         order.sort_by_key(|&card| (places[card].row, places[card].column));
-        let mut board = div().w_full().grid().grid_cols(columns as u16).gap(px(GAP));
+        // Each row is a flex row, which takes the height of its tallest card. A grid in the
+        // scrolling body sized its rows from the cards' minimum height, so pictures and words
+        // ran out of the clipped cards.
+        let rows = places.iter().map(|place| place.row + 1).max().unwrap_or(0);
+        let mut lines: Vec<Vec<AnyElement>> = (0..rows).map(|_| Vec::new()).collect();
         for (beat, &card) in order.iter().enumerate() {
             let place = places[card];
             let surface = if card == 0 {
                 version_card(theme)
             } else {
-                highlight_card(&highlights[card - 1], theme)
-            }
-            .col_span(place.span as u16)
-            .col_start(place.column as i16 + 1)
-            .row_start(place.row as i16 + 1);
-            board = board.child(motion::assemble(
+                highlight_card(&highlights[card - 1], place.span >= 2, theme)
+            };
+            // A card of n columns grows by n shares and starts from the n - 1 gaps that it
+            // covers, so its edges line up with the columns of every other row.
+            let surface = surface
+                .min_w_0()
+                .flex_shrink_0()
+                .flex_basis(px((place.span - 1) as f32 * GAP))
+                .flex_grow(place.span as f32);
+            lines[place.row].push(motion::assemble(
                 ("whats-new-card", card),
                 surface,
                 beat,
@@ -62,6 +86,20 @@ impl Shell {
                 crate::theme::RADIUS_SURFACE,
             ));
         }
+        let board = div()
+            .w_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .gap(px(GAP))
+            .children(lines.into_iter().map(|cards| {
+                div()
+                    .w_full()
+                    .flex_shrink_0()
+                    .flex()
+                    .gap(px(GAP))
+                    .children(cards)
+            }));
         let changes = release_notes::changes();
         // Without highlights the commits are the news, so they show unfolded.
         let open = self.whats_new_changes || highlights.is_empty();
@@ -257,7 +295,7 @@ fn version_card(theme: Theme) -> Div {
                         )
                         .child(caps(channel.app_name(), theme).text_color(tone)),
                 )
-                .child(matrix(VERSION, theme.text, theme))
+                .child(matrix(VERSION, theme.text, 2, theme))
                 .when_some(release_notes::HEADLINE, |card, headline| {
                     card.child(
                         div()
@@ -275,84 +313,98 @@ fn version_card(theme: Theme) -> Div {
         )
 }
 
-/// A highlight's card: its live picture above its title and text, or beside them when the card is
-/// wide and the picture compact.
-fn highlight_card(highlight: &'static Highlight, theme: Theme) -> Div {
+/// A highlight's card: its picture on a stage, then its title and text across the card's width.
+/// A `roomy` card spans two columns or more, so its picture can lay out in a row.
+fn highlight_card(highlight: &'static Highlight, roomy: bool, theme: Theme) -> Div {
     let tone = color(highlight.tone, theme);
-    let words = div()
-        .relative()
+    kit::card(theme)
         .flex()
         .flex_col()
-        .gap(px(5.))
+        .p(px(BEZEL))
+        .child(stage(&highlight.visual, roomy, tone, theme))
         .child(
             div()
-                .text_size(text_px(16.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .line_height(relative(1.25))
-                .text_color(theme.text)
-                .child(highlight.title),
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .px(px(10.))
+                .pt(px(12.))
+                .pb(px(10.))
+                .child(
+                    div()
+                        .text_size(text_px(15.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .line_height(relative(1.25))
+                        .text_color(theme.text)
+                        .child(highlight.title),
+                )
+                .child(
+                    div()
+                        .text_size(text_px(12.5))
+                        .line_height(relative(1.5))
+                        .text_color(theme.muted)
+                        .child(highlight.text),
+                ),
+        )
+}
+
+/// The recessed stage of a picture, lit by a glow of the card's tone, with the picture in its
+/// middle. It grows with its row, so the words of the cards of a row start at the same height.
+fn stage(visual: &'static Visual, roomy: bool, tone: Hsla, theme: Theme) -> Div {
+    div()
+        .relative()
+        .flex_grow(1.)
+        .min_h(px(STAGE_HEIGHT))
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .p(px(16.))
+        .rounded(px(crate::theme::RADIUS_SURFACE - 2.))
+        .overflow_hidden()
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.inset)
+        .shadow(kit::recessed_light(theme))
+        .child(
+            Dither::new(DitherField::Glow {
+                x: 0.5,
+                y: 0.45,
+                radius: 0.85,
+                strength: 0.5,
+            })
+            .color(tone.opacity(0.32))
+            .grid(3., 1.5)
+            .toned()
+            .layer(),
         )
         .child(
             div()
-                .text_size(text_px(12.5))
-                .line_height(relative(1.45))
-                .text_color(theme.muted)
-                .child(highlight.text),
-        );
-    let card = kit::card(theme)
-        .flex()
-        .min_h(px(212.))
-        .p(px(16.))
-        .pb(px(18.));
-    if matches!(highlight.visual, Visual::None) {
-        return card.flex_col().justify_end().child(words);
-    }
-    let picture = div()
-        .relative()
-        .flex()
-        .flex_col()
-        .justify_center()
-        .child(visual(&highlight.visual, tone, theme));
-    // Above the words, a compact picture would stand alone in a wide empty band.
-    let beside = highlight.wide
-        && matches!(
-            highlight.visual,
-            Visual::Figure { .. } | Visual::Glyph(_) | Visual::Keys { .. }
-        );
-    if beside {
-        // The words keep at least half of the card; a long caption wraps instead of
-        // squeezing them into a narrow column.
-        card.items_center()
-            .gap(px(24.))
-            .child(picture.min_w_0())
-            .child(words.flex_1().min_w(relative(0.5)))
-    } else {
-        card.flex_col()
-            .justify_end()
-            .gap(px(16.))
-            .child(picture.flex_1().min_h(px(92.)))
-            .child(words)
-    }
+                .relative()
+                .w_full()
+                .max_w(px(PICTURE_WIDTH))
+                .flex()
+                .flex_col()
+                .child(picture(visual, roomy, tone, theme)),
+        )
 }
 
-/// Draws the picture of a highlight in its tone.
-fn visual(visual: &'static Visual, tone: Hsla, theme: Theme) -> AnyElement {
+/// Draws the picture of a highlight in its tone, for a roomy card or a card of one column.
+fn picture(visual: &'static Visual, roomy: bool, tone: Hsla, theme: Theme) -> Div {
     match visual {
-        Visual::None => div().into_any_element(),
         Visual::List {
             title: Some(title),
             badge,
             items,
-        } => tree(title, *badge, items, tone, theme).into_any_element(),
+        } => tree(title, *badge, items, tone, theme),
         Visual::List {
             title: None, items, ..
         } => div()
             .flex()
             .flex_col()
-            .gap(px(6.))
-            .children(items.iter().map(|row| plate_row(row, theme)))
-            .into_any_element(),
-        Visual::Chips(chips) => capsules(chips, theme).into_any_element(),
+            .gap(px(5.))
+            .children(items.iter().map(|row| plate_row(row, theme))),
+        Visual::Chips(chips) => capsules(chips, theme).justify_center(),
         Visual::Prompt { text, chips } => div()
             .flex()
             .flex_col()
@@ -360,104 +412,50 @@ fn visual(visual: &'static Visual, tone: Hsla, theme: Theme) -> AnyElement {
             .when(!chips.is_empty(), |prompt| {
                 prompt.child(capsules(chips, theme))
             })
-            .child(composer(text, theme))
-            .into_any_element(),
-        Visual::Bars { label, bars, focus } => {
-            let most = bars.iter().map(|bar| bar.value).fold(0., f32::max);
-            let labelled = bars.iter().any(|bar| bar.label.is_some());
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(8.))
-                .when_some(*label, |chart, label| {
-                    chart.child(kit::section_header(label, None, theme))
-                })
-                .child(div().h(px(68.)).flex().items_end().gap(px(8.)).children(
-                    bars.iter().enumerate().map(|(index, bar)| {
-                        let lit = focus.is_none_or(|focus| focus == index);
-                        let shade = if lit { tone } else { theme.subtle.opacity(0.7) };
-                        div()
-                            .relative()
-                            .flex_1()
-                            .h(px((68. * bar.value / most).max(2.)))
-                            .rounded_t(px(2.))
-                            .overflow_hidden()
-                            .border_t_2()
-                            .border_color(shade)
-                            .child(
-                                Dither::new(DitherField::Fade {
-                                    from: Edge::Bottom,
-                                    start: 1.,
-                                    end: 0.45,
-                                })
-                                .color(shade.opacity(if lit { 0.85 } else { 0.5 }))
-                                .grid(3., 2.)
-                                .layer(),
-                            )
-                    }),
-                ))
-                .child(DottedRule::horizontal(theme.subtle.opacity(0.45)))
-                .when(labelled, |chart| {
-                    chart.child(
-                        div()
-                            .flex()
-                            .gap(px(8.))
-                            .children(bars.iter().enumerate().map(|(index, bar)| {
-                                let lit = focus.is_none_or(|focus| focus == index);
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_center()
-                                    .text_ellipsis()
-                                    .child(figure(
-                                        bar.label.unwrap_or_default(),
-                                        if lit { theme.text } else { theme.subtle },
-                                    ))
-                            })),
-                    )
-                })
-                .into_any_element()
-        }
+            .child(composer(text, theme)),
+        Visual::Bars { label, bars, focus } => bar_chart(*label, bars, *focus, tone, theme),
         Visual::Figure {
             value,
             label,
             detail,
-        } => div()
-            .flex()
-            .items_center()
-            .gap(px(14.))
-            .child(matrix(
-                value,
-                if tone == theme.muted {
-                    theme.text
-                } else {
-                    tone
-                },
-                theme,
-            ))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .min_w_0()
-                    .child(
-                        div()
-                            .text_size(text_px(13.5))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .child(*label),
-                    )
-                    .when_some(*detail, |caption, detail| {
-                        caption.child(
+        } => {
+            let lit = if tone == theme.muted {
+                theme.text
+            } else {
+                tone
+            };
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(12.))
+                .child(matrix(value, lit, figure_block(value, roomy), theme))
+                .child(
+                    div()
+                        .max_w_full()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(2.))
+                        .child(
                             div()
-                                .text_size(text_px(12.))
-                                .text_color(theme.muted)
-                                .child(detail),
+                                .text_center()
+                                .text_size(text_px(13.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.text)
+                                .child(*label),
                         )
-                    }),
-            )
-            .into_any_element(),
+                        .when_some(*detail, |caption, detail| {
+                            caption.child(
+                                div()
+                                    .text_center()
+                                    .text_size(text_px(11.5))
+                                    .text_color(theme.muted)
+                                    .child(detail),
+                            )
+                        }),
+                )
+        }
         Visual::Meter { segments, caption } => {
             let parts: Vec<BarSegment> = segments
                 .iter()
@@ -505,62 +503,153 @@ fn visual(visual: &'static Visual, tone: Hsla, theme: Theme) -> AnyElement {
                             .child(caption),
                     )
                 })
-                .into_any_element()
         }
         Visual::Keys { keys, label } => div()
             .flex()
             .flex_col()
-            .gap(px(10.))
-            .child(div().flex().gap(px(6.)).children(keys.iter().map(|key| {
-                div()
-                    .min_w(px(34.))
-                    .h(px(34.))
-                    .px(px(8.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(crate::theme::RADIUS_CONTROL))
-                    .border_1()
-                    .border_b_2()
-                    .border_color(theme.edge)
-                    .bg(kit::raised_fill(theme.control))
-                    .shadow(kit::raised_light(theme))
-                    .font_family(crate::theme::mono())
-                    .text_size(text_px(14.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child(kit::shortcut(*key))
-            })))
-            .when_some(*label, |keys, label| {
-                keys.child(
-                    div()
-                        .text_size(text_px(12.))
-                        .text_color(theme.muted)
-                        .child(label),
-                )
-            })
-            .into_any_element(),
-        Visual::Glyph(glyph) => div()
-            .relative()
-            .size(px(96.))
-            .flex()
             .items_center()
-            .justify_center()
+            .gap(px(12.))
             .child(
-                Dither::new(DitherField::Glow {
-                    x: 0.5,
-                    y: 0.5,
-                    radius: 0.5,
-                    strength: 0.75,
-                })
-                .color(tone.opacity(0.55))
-                .grid(3., 2.)
-                .toned()
-                .layer(),
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_center()
+                    .gap(px(6.))
+                    .children(keys.iter().map(|key| keycap(key, theme))),
             )
-            .child(kit::icon_tile(glyph, tone, 52., false))
-            .into_any_element(),
+            .when_some(*label, |keys, label| keys.child(caption(label, theme))),
+        Visual::Glyph(glyph) => div().flex().justify_center().child(
+            div()
+                .relative()
+                .size(px(100.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Dither::new(DitherField::Glow {
+                        x: 0.5,
+                        y: 0.5,
+                        radius: 0.5,
+                        strength: 0.75,
+                    })
+                    .color(tone.opacity(0.55))
+                    .grid(3., 2.)
+                    .toned()
+                    .layer(),
+                )
+                .child(kit::icon_tile(glyph, tone, 56., false)),
+        ),
+        Visual::Tiles(tiles) => div()
+            .flex()
+            .flex_wrap()
+            .justify_center()
+            .gap_x(px(14.))
+            .gap_y(px(10.))
+            .children(tiles.iter().map(|item| tile(item, theme))),
+        Visual::Toggles(rows) => div()
+            .flex()
+            .flex_col()
+            .gap(px(5.))
+            .children(rows.iter().map(|row| toggle(row, tone, theme))),
+        Visual::Sliders(rows) => div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .children(rows.iter().map(|row| slider(row, tone, theme))),
+        Visual::Compare {
+            before,
+            after,
+            label,
+        } => div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(12.))
+            .child(
+                // A card of one column stacks the two capsules, which would wrap in a row.
+                div()
+                    .max_w_full()
+                    .flex()
+                    .when(!roomy, |pair| pair.flex_col())
+                    .items_center()
+                    .gap(px(if roomy { 10. } else { 6. }))
+                    .child(capsule(before, Look::Before, theme))
+                    .child(
+                        icon(if roomy { "arrow-right" } else { "arrow-down" })
+                            .size(px(14.))
+                            .text_color(color(after.tone, theme)),
+                    )
+                    .child(capsule(after, Look::After, theme)),
+            )
+            .when_some(*label, |compare, label| {
+                compare.child(caption(label, theme))
+            }),
+        Visual::Menu { items, focus } => div()
+            .flex()
+            .justify_center()
+            .child(menu(items, *focus, tone, theme)),
+        Visual::Window { area, label } => div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(10.))
+            .child(window_sketch(*area, tone, theme))
+            .when_some(*label, |sketch, label| sketch.child(caption(label, theme))),
+        Visual::Gauge { value, text, label } => div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(10.))
+            .child(gauge(*value, *text, tone, theme))
+            .child(caption(label, theme)),
+        Visual::Steps { items, current } => steps(items, *current, tone, theme),
+        Visual::Diff { file, lines } => diff(*file, lines, theme),
+        Visual::Notice {
+            icon: glyph,
+            title,
+            text,
+            actions,
+        } => div()
+            .flex()
+            .justify_center()
+            .child(notice(glyph, title, *text, actions, tone, theme)),
+        Visual::Choice {
+            question,
+            options,
+            chosen,
+        } => choice(question, options, *chosen, tone, theme),
     }
+}
+
+/// A short centered caption under a picture.
+fn caption(text: &'static str, theme: Theme) -> Div {
+    div()
+        .max_w_full()
+        .text_center()
+        .text_size(text_px(12.))
+        .line_height(relative(1.35))
+        .text_color(theme.muted)
+        .child(text)
+}
+
+/// A neutral raised plate, as of a control at rest.
+fn plate(theme: Theme) -> Div {
+    div()
+        .rounded(px(crate::theme::RADIUS_CONTROL))
+        .border_1()
+        .border_color(theme.border)
+        .bg(kit::raised_fill(theme.control))
+        .shadow(kit::raised_light(theme))
+}
+
+/// One line of text that ends with an ellipsis when its space runs out.
+fn label(text: &'static str, size: f32, tint: Hsla) -> Div {
+    div()
+        .min_w_0()
+        .truncate()
+        .text_size(text_px(size))
+        .text_color(tint)
+        .child(text)
 }
 
 /// Rows as a tree under a header: a chevron, the title and its badge, then the rows along a
@@ -575,29 +664,19 @@ fn tree(
     div()
         .flex()
         .flex_col()
-        .gap(px(6.))
+        .gap(px(7.))
         .child(
-            div()
-                .h(px(30.))
+            plate(theme)
+                .h(px(28.))
                 .px(px(9.))
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .rounded(px(crate::theme::RADIUS_CONTROL))
-                .border_1()
-                .border_color(theme.border)
-                .bg(kit::raised_fill(theme.control))
-                .shadow(kit::raised_light(theme))
                 .child(icon("chevron-down").size(px(11.)).text_color(theme.subtle))
                 .child(
-                    div()
+                    label(title, 12.5, theme.text)
                         .flex_1()
-                        .min_w_0()
-                        .text_ellipsis()
-                        .text_size(text_px(12.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
-                        .child(title),
+                        .font_weight(FontWeight::MEDIUM),
                 )
                 .when_some(badge, |header, badge| header.child(kit::chip(badge, tone))),
         )
@@ -608,7 +687,7 @@ fn tree(
                 .pl(px(14.))
                 .flex()
                 .flex_col()
-                .gap(px(7.))
+                .gap(px(6.))
                 .child(
                     div()
                         .absolute()
@@ -619,28 +698,27 @@ fn tree(
                 )
                 .children(rows.iter().map(|row| {
                     div()
+                        .h(px(18.))
                         .flex()
                         .items_center()
                         .gap(px(8.))
                         .child(row_mark(row, theme))
                         .child(row_text(row, theme))
+                        .when_some(row.tag, |line, tag| {
+                            line.child(figure(tag, color(row.tone, theme)))
+                        })
                 })),
         )
 }
 
 /// A row as a small raised plate: its mark, its text and its tag in its tone.
 fn plate_row(row: &'static Row, theme: Theme) -> Div {
-    div()
+    plate(theme)
         .h(px(28.))
         .px(px(9.))
         .flex()
         .items_center()
         .gap(px(8.))
-        .rounded(px(crate::theme::RADIUS_CONTROL))
-        .border_1()
-        .border_color(theme.border)
-        .bg(kit::raised_fill(theme.control))
-        .shadow(kit::raised_light(theme))
         .child(row_mark(row, theme))
         .child(row_text(row, theme))
         .when_some(row.tag, |plate, tag| {
@@ -671,65 +749,90 @@ fn row_mark(row: &Row, theme: Theme) -> AnyElement {
 }
 
 fn row_text(row: &'static Row, theme: Theme) -> Div {
-    div()
-        .flex_1()
-        .min_w_0()
-        .text_ellipsis()
-        .text_size(text_px(12.5))
-        .text_color(if row.state == RowState::Faded {
+    label(
+        row.text,
+        12.5,
+        if row.state == RowState::Faded {
             theme.subtle
         } else {
             theme.text
-        })
-        .child(row.text)
+        },
+    )
+    .flex_1()
 }
 
-/// Capsules in a wrapping row: an icon, a label and a detail or a diffstat, as above the composer.
+/// How a capsule shows a thing: as it is, as it was before a change, or as the change left it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Look {
+    Plain,
+    Before,
+    After,
+}
+
+/// Capsules in a wrapping row, as above the composer.
 fn capsules(chips: &'static [Chip], theme: Theme) -> Div {
     div()
         .flex()
         .flex_wrap()
         .gap(px(6.))
-        .children(chips.iter().map(|chip| {
-            let tone = color(chip.tone, theme);
-            div()
-                .h(px(26.))
-                .px(px(9.))
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .rounded(px(crate::theme::RADIUS_CONTROL))
-                .border_1()
-                .border_color(theme.edge)
-                .bg(kit::raised_fill(theme.control))
-                .shadow(kit::raised_light(theme))
-                .when_some(chip.icon, |capsule, glyph| {
-                    capsule.child(icon(glyph).size(px(12.)).text_color(tone))
-                })
-                .child(
-                    div()
-                        .text_size(text_px(12.))
-                        .text_color(theme.text)
-                        .child(chip.text),
-                )
-                .when_some(chip.detail, |capsule, detail| {
-                    capsule.child(figure(detail, tone))
-                })
-                .when(chip.added.is_some() || chip.removed.is_some(), |capsule| {
-                    capsule.child(line_totals(
-                        chip.added.unwrap_or(0),
-                        chip.removed.unwrap_or(0),
-                        theme,
-                    ))
-                })
-        }))
+        .children(chips.iter().map(|chip| capsule(chip, Look::Plain, theme)))
+}
+
+/// A capsule: an icon, a label and a detail or a diffstat. Before a change it is faded and its
+/// detail struck through; after it, it is lit in its tone.
+fn capsule(chip: &'static Chip, look: Look, theme: Theme) -> Div {
+    let tone = color(chip.tone, theme);
+    let before = look == Look::Before;
+    let surface = div()
+        .h(px(28.))
+        .max_w_full()
+        .px(px(10.))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .rounded(px(crate::theme::RADIUS_CONTROL))
+        .border_1();
+    let surface = if look == Look::After {
+        kit::lit(surface.border_color(tone.opacity(0.45)), tone)
+    } else {
+        surface
+            .border_color(theme.edge)
+            .bg(kit::raised_fill(theme.control))
+            .shadow(kit::raised_light(theme))
+    };
+    surface
+        .when_some(chip.icon, |capsule, glyph| {
+            capsule.child(icon(glyph).size(px(13.)).text_color(if before {
+                theme.subtle
+            } else {
+                tone
+            }))
+        })
+        .child(label(
+            chip.text,
+            12.5,
+            if before { theme.muted } else { theme.text },
+        ))
+        .when_some(chip.detail, |capsule, detail| {
+            capsule.child(
+                figure(detail, if before { theme.subtle } else { tone })
+                    .when(before, |detail| detail.line_through()),
+            )
+        })
+        .when(chip.added.is_some() || chip.removed.is_some(), |capsule| {
+            capsule.child(line_totals(
+                chip.added.unwrap_or(0),
+                chip.removed.unwrap_or(0),
+                theme,
+            ))
+        })
 }
 
 /// A still composer: a recessed field with the draft and the glass send key.
 fn composer(text: &'static str, theme: Theme) -> Div {
     div()
         .h(px(42.))
-        .pl(px(8.))
+        .pl(px(10.))
         .pr(px(6.))
         .flex()
         .items_center()
@@ -740,15 +843,7 @@ fn composer(text: &'static str, theme: Theme) -> Div {
         .bg(theme.inset)
         .shadow(kit::recessed_light(theme))
         .child(icon("plus").size(px(13.)).text_color(theme.muted))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_ellipsis()
-                .text_size(text_px(13.))
-                .text_color(theme.text)
-                .child(text),
-        )
+        .child(label(text, 13., theme.text).flex_1())
         .child(
             div()
                 .relative()
@@ -769,10 +864,839 @@ fn composer(text: &'static str, theme: Theme) -> Div {
         )
 }
 
+/// Dot-matrix bars on a dotted base line, the focused one lit, with their labels below.
+fn bar_chart(
+    label: Option<&'static str>,
+    bars: &'static [release_notes::Bar],
+    focus: Option<usize>,
+    tone: Hsla,
+    theme: Theme,
+) -> Div {
+    const HEIGHT: f32 = 60.;
+    let most = bars.iter().map(|bar| bar.value).fold(0., f32::max);
+    let labelled = bars.iter().any(|bar| bar.label.is_some());
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .when_some(label, |chart, label| {
+            chart.child(kit::section_header(label, None, theme))
+        })
+        .child(div().h(px(HEIGHT)).flex().items_end().gap(px(8.)).children(
+            bars.iter().enumerate().map(|(index, bar)| {
+                let lit = focus.is_none_or(|focus| focus == index);
+                let shade = if lit { tone } else { theme.subtle.opacity(0.7) };
+                div()
+                    .relative()
+                    .flex_1()
+                    .h(px((HEIGHT * bar.value / most).max(2.)))
+                    .rounded_t(px(2.))
+                    .overflow_hidden()
+                    .border_t_2()
+                    .border_color(shade)
+                    .child(
+                        Dither::new(DitherField::Fade {
+                            from: Edge::Bottom,
+                            start: 1.,
+                            end: 0.45,
+                        })
+                        .color(shade.opacity(if lit { 0.85 } else { 0.5 }))
+                        .grid(3., 2.)
+                        .layer(),
+                    )
+            }),
+        ))
+        .child(DottedRule::horizontal(theme.subtle.opacity(0.45)))
+        .when(labelled, |chart| {
+            chart.child(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .children(bars.iter().enumerate().map(|(index, bar)| {
+                        let lit = focus.is_none_or(|focus| focus == index);
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .flex()
+                            .justify_center()
+                            .child(figure(
+                                bar.label.unwrap_or_default(),
+                                if lit { theme.text } else { theme.subtle },
+                            ))
+                    })),
+            )
+        })
+}
+
+/// A keycap of a shortcut picture: a raised key with a heavier bottom edge.
+fn keycap(key: &'static str, theme: Theme) -> Div {
+    div()
+        .min_w(px(38.))
+        .h(px(38.))
+        .px(px(9.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(crate::theme::RADIUS_CONTROL))
+        .border_1()
+        .border_b_2()
+        .border_color(theme.edge)
+        .bg(kit::raised_fill(theme.control))
+        .shadow(kit::raised_light(theme))
+        .font_family(crate::theme::mono())
+        .text_size(text_px(15.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.text)
+        .child(kit::shortcut(key))
+}
+
+/// A named tile: a large icon tile, its name and an optional badge in its tone.
+fn tile(item: &'static Tile, theme: Theme) -> Div {
+    let tone = color(item.tone, theme);
+    div()
+        .w(px(78.))
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(7.))
+        .child(kit::icon_tile(item.icon, tone, 44., false))
+        .child(
+            label(item.text, 12.5, theme.text)
+                .max_w_full()
+                .font_weight(FontWeight::MEDIUM),
+        )
+        .when_some(item.badge, |tile, badge| tile.child(kit::chip(badge, tone)))
+}
+
+/// A settings row with a switch.
+fn toggle(row: &'static Toggle, tone: Hsla, theme: Theme) -> Div {
+    plate(theme)
+        .h(px(30.))
+        .px(px(10.))
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(label(row.text, 12.5, theme.text).flex_1())
+        .when_some(row.detail, |line, detail| {
+            line.child(figure(detail, theme.subtle))
+        })
+        .child(switch(row.on, tone, theme))
+}
+
+/// A still switch, drawn as the settings draw theirs: lit dots behind the thumb when on.
+fn switch(on: bool, tone: Hsla, theme: Theme) -> Div {
+    const WIDTH: f32 = 28.;
+    const HEIGHT: f32 = 16.;
+    const THUMB: f32 = 10.;
+    // The thumb sits inside the one-point border.
+    let inset = (HEIGHT - 2. - THUMB) / 2.;
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(WIDTH))
+        .h(px(HEIGHT))
+        .rounded(px(4.))
+        .overflow_hidden()
+        .border_1()
+        .border_color(if on { tone.opacity(0.65) } else { theme.edge })
+        .bg(theme.inset)
+        .child(
+            Dither::new(DitherField::Fade {
+                from: Edge::Left,
+                start: if on { 0.95 } else { 0.25 },
+                end: if on { 0.05 } else { 0.25 },
+            })
+            .color(if on { tone } else { theme.subtle.opacity(0.6) })
+            .grid(2., 1.)
+            .layer(),
+        )
+        .child(
+            div()
+                .absolute()
+                .top(px(inset))
+                .left(px(if on {
+                    WIDTH - 2. - THUMB - inset
+                } else {
+                    inset
+                }))
+                .size(px(THUMB))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(2.5))
+                .bg(if on { theme.text } else { theme.muted })
+                .when(on, |thumb| {
+                    thumb.child(div().size(px(3.)).rounded(px(1.)).bg(tone))
+                }),
+        )
+}
+
+/// A settings row with a slider: its name and reading above a dot-matrix track and its thumb.
+fn slider(row: &'static Slider, tone: Hsla, theme: Theme) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(7.))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(label(row.text, 12., theme.text).flex_1())
+                .when_some(row.readout, |line, readout| {
+                    line.child(figure(readout, tone))
+                }),
+        )
+        .child(
+            // The track is inset by half a thumb, so the thumb stays inside at both ends.
+            div()
+                .relative()
+                .h(px(14.))
+                .mx(px(4.))
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .top(px(4.))
+                        .h(px(6.))
+                        .child(DitherBar::meter(
+                            row.value,
+                            tone,
+                            theme.subtle.opacity(0.55),
+                        )),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left(relative(row.value))
+                        .ml(px(-4.))
+                        .w(px(8.))
+                        .h(px(14.))
+                        .rounded(px(2.5))
+                        .border_1()
+                        .border_color(tone)
+                        .bg(theme.text),
+                ),
+        )
+}
+
+/// A floating menu with one row under the pointer, lit as a chosen menu row.
+fn menu(items: &'static [MenuItem], focus: Option<usize>, tone: Hsla, theme: Theme) -> Div {
+    div()
+        .w_full()
+        .max_w(px(232.))
+        .flex()
+        .flex_col()
+        .gap(px(1.))
+        .p(px(4.))
+        .rounded(px(crate::theme::RADIUS_SURFACE))
+        .border_1()
+        .border_color(theme.edge)
+        .bg(theme.raised)
+        .shadow(theme.floating())
+        .children(items.iter().enumerate().map(|(index, item)| {
+            let chosen = focus == Some(index);
+            div()
+                .relative()
+                .h(px(26.))
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .rounded(px(crate::theme::RADIUS_SMALL))
+                .overflow_hidden()
+                .when(chosen, |row| {
+                    row.bg(tone.opacity(0.12))
+                        .layer(dither::row_wash(tone, true, false))
+                        .child(kit::selection_edge(tone))
+                })
+                .when_some(item.icon, |row, glyph| {
+                    row.child(icon(glyph).size(px(13.)).text_color(if chosen {
+                        tone
+                    } else {
+                        theme.muted
+                    }))
+                })
+                .child(
+                    label(
+                        item.text,
+                        12.5,
+                        if chosen { theme.text } else { theme.muted },
+                    )
+                    .flex_1(),
+                )
+                .when_some(item.keys, |row, keys| row.child(kit::keycap(keys, theme)))
+        }))
+}
+
+/// A sketch of the Kodem window: the title bar, the sidebar, the chat with the composer, and the
+/// terminal or a side panel when they are the lit area.
+fn window_sketch(area: Area, tone: Hsla, theme: Theme) -> Div {
+    let line = theme.subtle.opacity(0.45);
+    let title_bar = area_surface(area == Area::Titlebar, tone, theme)
+        .h(px(13.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap(px(3.))
+        .px(px(6.))
+        .border_b_1()
+        .when(area != Area::Titlebar, |bar| {
+            bar.border_color(theme.border).bg(theme.header)
+        })
+        .children((0..3).map(|_| div().size(px(4.)).rounded_full().bg(line)))
+        .child(div().flex_1())
+        .when(area == Area::Titlebar, |bar| {
+            bar.child(div().h(px(6.)).w(px(22.)).rounded(px(2.)).bg(tone))
+        });
+    let sidebar = area_surface(area == Area::Sidebar, tone, theme)
+        .w(relative(0.28))
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .gap(px(5.))
+        .p(px(6.))
+        .border_r_1()
+        .when(area != Area::Sidebar, |side| {
+            side.border_color(theme.border).bg(theme.sidebar)
+        })
+        .children([0.8, 0.55, 0.7, 0.45].map(|width| sketch_line(width, line)));
+    let chat = area_surface(false, tone, theme)
+        .flex_1()
+        .min_h_0()
+        .overflow_hidden()
+        .flex()
+        .flex_col()
+        .gap(px(5.))
+        .p(px(7.))
+        .when(area == Area::Chat, |chat| {
+            chat.child(
+                Dither::new(DitherField::Flow {
+                    scale: 0.22,
+                    speed: 0.,
+                    bias: -0.05,
+                })
+                .color(tone.opacity(0.55))
+                .grid(3., 1.5)
+                .toned()
+                .layer(),
+            )
+        })
+        .child(sketch_line(0.7, line))
+        .child(
+            div().flex().justify_end().child(
+                div()
+                    .w(relative(0.45))
+                    .h(px(8.))
+                    .rounded(px(3.))
+                    .bg(theme.control),
+            ),
+        )
+        .child(sketch_line(0.55, line));
+    let composer = area_surface(area == Area::Composer, tone, theme)
+        .mx(px(7.))
+        .mb(px(6.))
+        .h(px(13.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_end()
+        .px(px(3.))
+        .rounded(px(3.))
+        .border_1()
+        .when(area != Area::Composer, |field| {
+            field.border_color(theme.edge).bg(theme.inset)
+        })
+        .child(
+            div()
+                .size(px(7.))
+                .rounded(px(2.))
+                .bg(if area == Area::Composer { tone } else { line }),
+        );
+    let main = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .child(chat)
+        .child(composer)
+        .when(area == Area::Terminal, |main| {
+            main.child(
+                area_surface(true, tone, theme)
+                    .h(px(24.))
+                    .flex_shrink_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .px(px(7.))
+                    .pt(px(7.))
+                    .border_t_1()
+                    // The grip on the terminal's top edge, which the pointer drags.
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(-3.))
+                            .left_0()
+                            .right_0()
+                            .flex()
+                            .justify_center()
+                            .child(div().w(px(18.)).h(px(5.)).rounded(px(2.)).bg(tone)),
+                    )
+                    .child(sketch_line(0.5, tone.opacity(0.75)))
+                    .child(sketch_line(0.3, line)),
+            )
+        });
+    div()
+        .w_full()
+        .max_w(px(250.))
+        .h(px(100.))
+        .flex()
+        .flex_col()
+        .rounded(px(6.))
+        .overflow_hidden()
+        .border_1()
+        .border_color(theme.edge)
+        .bg(theme.canvas)
+        .shadow(kit::raised_light(theme))
+        .child(title_bar)
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(sidebar)
+                .child(main)
+                .when(area == Area::Panel, |body| {
+                    body.child(
+                        area_surface(true, tone, theme)
+                            .w(relative(0.3))
+                            .flex_shrink_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(5.))
+                            .p(px(6.))
+                            .border_l_1()
+                            .children([0.75, 0.5, 0.65].map(|width| sketch_line(width, line))),
+                    )
+                }),
+        )
+}
+
+/// A part of the window sketch. The lit part takes the tone: a tint, a tinted edge and dots that
+/// rise from its bottom, under the content that the caller adds.
+fn area_surface(lit: bool, tone: Hsla, theme: Theme) -> Div {
+    let part = div().relative();
+    if !lit {
+        return part;
+    }
+    part.border_color(tone.opacity(0.7))
+        .bg(tone.opacity(0.1))
+        .child(
+            Dither::new(DitherField::Fade {
+                from: Edge::Bottom,
+                start: 0.45,
+                end: 0.,
+            })
+            .color(tone.opacity(0.5))
+            .grid(2., 1.)
+            .layer(),
+        )
+        .text_color(theme.text)
+}
+
+/// A line of placeholder text in a sketch, `width` of its parent wide.
+fn sketch_line(width: f32, shade: Hsla) -> Div {
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(relative(width))
+        .h(px(3.))
+        .rounded(px(1.5))
+        .bg(shade)
+}
+
+/// A dot-matrix ring filled clockwise from the top to `value`, with an optional reading in it.
+fn gauge(value: f32, reading: Option<&'static str>, tone: Hsla, theme: Theme) -> Div {
+    // Width of the ring, in dots.
+    const BAND: f32 = 4.;
+    let unlit = theme.subtle.opacity(0.18);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "gauge".hash(&mut hasher);
+    value.to_bits().hash(&mut hasher);
+    for shade in [tone, unlit] {
+        let rgba = hsla_to_rgba(shade);
+        for part in [rgba.red, rgba.green, rgba.blue, rgba.alpha] {
+            part.to_bits().hash(&mut hasher);
+        }
+    }
+    let digest = hasher.finish();
+    let ring = canvas(
+        |_, _, _| {},
+        move |bounds, _, window, cx| {
+            let scale = crate::theme::ui_scale();
+            let cell = MATRIX_CELL * scale;
+            // The same count of cells as the scene's grid takes.
+            let cells = (f32::from(bounds.size.width) / cell).floor();
+            let center = (cells - 1.) / 2.;
+            let outer = cells / 2.;
+            dither::paint_scene(
+                bounds,
+                cell,
+                MATRIX_DOT * scale,
+                digest,
+                &|column, row| {
+                    let (dx, dy) = (column as f32 - center, row as f32 - center);
+                    let distance = (dx * dx + dy * dy).sqrt();
+                    if distance > outer - 0.5 || distance < outer - 0.5 - BAND {
+                        return None;
+                    }
+                    let turn = dx.atan2(-dy).rem_euclid(TAU) / TAU;
+                    Some(if turn <= value { tone } else { unlit })
+                },
+                window,
+                cx,
+            );
+        },
+    )
+    .absolute()
+    .inset_0();
+    div()
+        .relative()
+        .flex_shrink_0()
+        // Half a point more than the grid, so rounding never drops its last column.
+        .size(px(GAUGE_SIZE + 0.5))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(ring)
+        .when_some(reading, |gauge, reading| {
+            gauge.child(
+                div()
+                    .relative()
+                    .font_family(crate::theme::mono())
+                    .text_size(text_px(15.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.text)
+                    .child(reading),
+            )
+        })
+}
+
+/// Steps along a dotted line: done steps checked, the current one lit, the rest open.
+fn steps(items: &'static [&'static str], current: usize, tone: Hsla, theme: Theme) -> Div {
+    let last = items.len().saturating_sub(1);
+    div()
+        .w_full()
+        .flex()
+        .children(items.iter().enumerate().map(|(index, step)| {
+            let done = index < current;
+            let now = index == current;
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(16.))
+                        .flex()
+                        .items_center()
+                        .child(step_link(index > 0, index <= current, tone, theme))
+                        .child(step_mark(done, now, tone, theme))
+                        .child(step_link(index < last, index < current, tone, theme)),
+                )
+                .child(
+                    label(
+                        step,
+                        11.5,
+                        if now {
+                            theme.text
+                        } else if done {
+                            theme.muted
+                        } else {
+                            theme.subtle
+                        },
+                    )
+                    .max_w_full()
+                    .px(px(2.)),
+                )
+        }))
+}
+
+// Half of the dotted line between two steps, lit where the steps reached it.
+fn step_link(shown: bool, lit: bool, tone: Hsla, theme: Theme) -> Div {
+    div().flex_1().when(shown, |link| {
+        link.child(DottedRule::horizontal(if lit {
+            tone.opacity(0.8)
+        } else {
+            theme.subtle.opacity(0.45)
+        }))
+    })
+}
+
+// The mark of a step: a check when done, a lit dot when current, an open ring otherwise.
+fn step_mark(done: bool, now: bool, tone: Hsla, theme: Theme) -> Div {
+    let mark = div()
+        .size(px(16.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .border_1()
+        .bg(theme.inset);
+    if done {
+        mark.border_color(tone.opacity(0.6))
+            .bg(tone.opacity(0.18))
+            .child(icon("check").size(px(9.)).text_color(tone))
+    } else if now {
+        mark.border_color(tone)
+            .shadow(kit::tint_light(tone))
+            .child(div().size(px(6.)).rounded_full().bg(tone))
+    } else {
+        mark.border_color(theme.subtle.opacity(0.6))
+    }
+}
+
+/// Lines of a change in a recessed block, under the file's name and its line counts.
+fn diff(file: Option<&'static str>, lines: &'static [DiffLine], theme: Theme) -> Div {
+    let added = lines
+        .iter()
+        .filter(|line| line.change == Change::Added)
+        .count();
+    let removed = lines
+        .iter()
+        .filter(|line| line.change == Change::Removed)
+        .count();
+    kit::block(theme)
+        .flex()
+        .flex_col()
+        .when_some(file, |block, file| {
+            block.child(
+                div()
+                    .h(px(24.))
+                    .px(px(9.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(icon("file").size(px(11.)).text_color(theme.subtle))
+                    .child(
+                        label(file, 11., theme.muted)
+                            .flex_1()
+                            .font_family(crate::theme::mono()),
+                    )
+                    .child(line_totals(added, removed, theme)),
+            )
+        })
+        .child(
+            div()
+                .py(px(4.))
+                .flex()
+                .flex_col()
+                .children(lines.iter().map(|line| {
+                    let (sign, tint, fill) = match line.change {
+                        Change::Added => ("+", theme.added, theme.added.opacity(0.1)),
+                        Change::Removed => ("−", theme.removed, theme.removed.opacity(0.1)),
+                        Change::Same => (" ", theme.subtle, gpui::transparent_black()),
+                    };
+                    div()
+                        .h(px(18.))
+                        .flex()
+                        .items_center()
+                        .bg(fill)
+                        .font_family(crate::theme::mono())
+                        .child(
+                            div()
+                                .w(px(18.))
+                                .flex_shrink_0()
+                                .text_center()
+                                .text_size(text_px(11.))
+                                .text_color(tint)
+                                .child(sign),
+                        )
+                        .child(
+                            label(
+                                line.text,
+                                11.,
+                                if line.change == Change::Same {
+                                    theme.muted
+                                } else {
+                                    theme.text
+                                },
+                            )
+                            .flex_1()
+                            .pr(px(8.)),
+                        )
+                })),
+        )
+}
+
+/// A floating dialog or notification: its icon, title and text, and its buttons with the last
+/// one lit as the main action.
+fn notice(
+    glyph: &'static str,
+    title: &'static str,
+    text: Option<&'static str>,
+    actions: &'static [&'static str],
+    tone: Hsla,
+    theme: Theme,
+) -> Div {
+    let main = actions.len().saturating_sub(1);
+    div()
+        .w_full()
+        .max_w(px(272.))
+        .flex()
+        .flex_col()
+        .gap(px(10.))
+        .p(px(11.))
+        .rounded(px(crate::theme::RADIUS_SURFACE))
+        .border_1()
+        .border_color(theme.edge)
+        .bg(theme.raised)
+        .shadow(theme.floating())
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(10.))
+                .child(kit::icon_tile(glyph, tone, 28., false))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(label(title, 12.5, theme.text).font_weight(FontWeight::SEMIBOLD))
+                        .when_some(text, |words, text| {
+                            words.child(
+                                div()
+                                    .text_size(text_px(11.5))
+                                    .line_height(relative(1.4))
+                                    .text_color(theme.muted)
+                                    .line_clamp(2)
+                                    .text_ellipsis()
+                                    .child(text),
+                            )
+                        }),
+                ),
+        )
+        .when(!actions.is_empty(), |notice| {
+            notice.child(div().flex().justify_end().gap(px(6.)).children(
+                actions.iter().enumerate().map(|(index, action)| {
+                    let button = div()
+                        .h(px(24.))
+                        .min_w_0()
+                        .px(px(10.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(crate::theme::RADIUS_CONTROL))
+                        .border_1()
+                        .text_size(text_px(11.5));
+                    if index == main {
+                        kit::lit(button.border_color(tone.opacity(0.45)), tone)
+                            .child(label(action, 11.5, tone))
+                    } else {
+                        button
+                            .border_color(theme.edge)
+                            .bg(kit::raised_fill(theme.control))
+                            .shadow(kit::raised_light(theme))
+                            .child(label(action, 11.5, theme.muted))
+                    }
+                }),
+            ))
+        })
+}
+
+/// A question with its options as radio rows, the chosen one lit.
+fn choice(
+    question: &'static str,
+    options: &'static [&'static str],
+    chosen: Option<usize>,
+    tone: Hsla,
+    theme: Theme,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .child(
+            div()
+                .pb(px(2.))
+                .text_size(text_px(12.5))
+                .font_weight(FontWeight::MEDIUM)
+                .line_height(relative(1.35))
+                .text_color(theme.text)
+                .line_clamp(2)
+                .text_ellipsis()
+                .child(question),
+        )
+        .children(options.iter().enumerate().map(|(index, option)| {
+            let on = chosen == Some(index);
+            let row = div()
+                .h(px(26.))
+                .px(px(9.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .rounded(px(crate::theme::RADIUS_CONTROL))
+                .border_1();
+            let row = if on {
+                kit::lit(row.border_color(tone.opacity(0.45)), tone)
+            } else {
+                row.border_color(theme.border)
+                    .bg(kit::raised_fill(theme.control))
+                    .shadow(kit::raised_light(theme))
+            };
+            row.child(
+                div()
+                    .size(px(11.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(if on { tone } else { theme.subtle.opacity(0.7) })
+                    .when(on, |radio| {
+                        radio.child(div().size(px(5.)).rounded_full().bg(tone))
+                    }),
+            )
+            .child(label(option, 12., if on { theme.text } else { theme.muted }).flex_1())
+        }))
+}
+
+/// Returns the pixel block of a figure's dot-matrix number: two dots a pixel, or one when the
+/// number would be wider than the stage of its card allows.
+fn figure_block(text: &str, roomy: bool) -> usize {
+    let room = if roomy { PICTURE_WIDTH } else { FIGURE_WIDTH };
+    if matrix_columns(text) as f32 * 2. * MATRIX_CELL <= room {
+        2
+    } else {
+        1
+    }
+}
+
+// The pixel columns of a text in the dot-matrix face, with one between glyphs.
+fn matrix_columns(text: &str) -> usize {
+    text.chars()
+        .map(|character| glyph(character).0)
+        .sum::<usize>()
+        + text.chars().count().saturating_sub(1)
+}
+
 /// Text in a 5×7 dot-matrix face, like a segment display: each pixel of a glyph is a block of
-/// 2×2 dots, lit in `lit` over faint unlit dots. The sprite is baked once per text and color.
-fn matrix(text: &'static str, lit: Hsla, theme: Theme) -> impl IntoElement {
-    const BLOCK: usize = 2;
+/// `block`×`block` dots, lit in `lit` over faint unlit dots. The sprite is baked once per text,
+/// block and color.
+fn matrix(text: &'static str, lit: Hsla, block: usize, theme: Theme) -> impl IntoElement {
     let unlit = theme.subtle.opacity(0.16);
     // Each pixel column of the text: the glyph and its column, or a space between glyphs.
     let mut columns: Vec<Option<([u8; MATRIX_ROWS], usize)>> = Vec::new();
@@ -783,10 +1707,11 @@ fn matrix(text: &'static str, lit: Hsla, theme: Theme) -> impl IntoElement {
         let (width, rows) = glyph(character);
         columns.extend((0..width).map(|column| Some((rows, column))));
     }
-    let width = (columns.len() * BLOCK) as f32 * MATRIX_CELL;
-    let height = (MATRIX_ROWS * BLOCK) as f32 * MATRIX_CELL;
+    let width = (columns.len() * block) as f32 * MATRIX_CELL;
+    let height = (MATRIX_ROWS * block) as f32 * MATRIX_CELL;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut hasher);
+    block.hash(&mut hasher);
     for color in [lit, unlit] {
         let rgba = hsla_to_rgba(color);
         for value in [rgba.red, rgba.green, rgba.blue, rgba.alpha] {
@@ -804,7 +1729,7 @@ fn matrix(text: &'static str, lit: Hsla, theme: Theme) -> impl IntoElement {
                 MATRIX_DOT * scale,
                 digest,
                 &|column, row| {
-                    let (column, row) = (column as usize / BLOCK, row as usize / BLOCK);
+                    let (column, row) = (column as usize / block, row as usize / block);
                     let (rows, x) = (*columns.get(column)?)?;
                     let bits = *rows.get(row)?;
                     Some(if bits & (0b10000 >> x) != 0 {
