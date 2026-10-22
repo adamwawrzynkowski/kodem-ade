@@ -1038,7 +1038,8 @@ pub struct Task {
     pub pinned: bool,
     #[serde(default)]
     pub settled: Option<bool>,
-    /// Last background observation that this task's branch is merged into the default branch.
+    /// Last background observation that this task's work is merged into the default branch: its
+    /// branch, or for a task on the default branch, the files that its turns changed.
     #[serde(default)]
     pub branch_merged: bool,
     pub archived: bool,

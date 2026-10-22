@@ -164,7 +164,8 @@ fn branch_base(cwd: &Path, observed_head: Option<&str>) -> Option<String> {
         .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned())
 }
 /// Detects committed task work merged into a locally known default branch without fetching.
-/// Unchanged branches, default-branch tasks and dirty checkouts are never considered merged.
+/// A task on the default branch counts as merged once the files that its turns changed are
+/// committed there. Unchanged work and dirty checkouts are never considered merged.
 pub fn branch_merged(project: &Path, task: &Task) -> bool {
     let Some(baseline) = &task.baseline else {
         return false;
@@ -172,7 +173,10 @@ pub fn branch_merged(project: &Path, task: &Task) -> bool {
     let Some((default, remote)) = default_branch(project) else {
         return false;
     };
-    if task.branch == default || task.branch == "detached HEAD" {
+    if task.branch == default {
+        return work_committed(task, baseline, &default);
+    }
+    if task.branch == "detached HEAD" {
         return false;
     }
     let Some(tip) = resolve_commit(project, &format!("refs/heads/{}", task.branch)) else {
@@ -193,6 +197,60 @@ pub fn branch_merged(project: &Path, task: &Task) -> bool {
         .flatten()
         .filter_map(|reference| resolve_commit(project, &reference))
         .any(|target| query(project, &["merge-base", "--is-ancestor", &tip, &target]).is_ok())
+}
+// A task that works on the default branch has no branch to merge. Its work is merged once every
+// file that its turns left changed is committed after the baseline, and no file that they
+// touched has uncommitted changes. Committed work stays merged until the next turn, so that a
+// later edit of the same files by the user or another task does not reopen it.
+fn work_committed(task: &Task, baseline: &str, default: &str) -> bool {
+    if task.branch_merged {
+        return true;
+    }
+    let Some(observed) = head(&task.cwd) else {
+        return false;
+    };
+    if observed == baseline || branch(&task.cwd) != default {
+        return false;
+    }
+    let Ok(changes) = checkpoint::turn_changes(&task.cwd, &task.id) else {
+        return false;
+    };
+    if changes.kept.is_empty() {
+        return false;
+    }
+    let Ok(committed) = query(
+        &task.cwd,
+        &[
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            baseline,
+            &observed,
+            "--",
+        ],
+    ) else {
+        return false;
+    };
+    let committed: Vec<&[u8]> = committed
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .collect();
+    if !changes
+        .kept
+        .iter()
+        .all(|path| committed.contains(&path.as_slice()))
+    {
+        return false;
+    }
+    status(&task.cwd).is_ok_and(|files| {
+        !files.iter().any(|(path, old, _)| {
+            changes.touched.contains(path)
+                || old
+                    .as_ref()
+                    .is_some_and(|old| changes.touched.contains(old))
+        })
+    })
 }
 /// Creates an isolated task worktree on a new branch, preserving the original checkout.
 ///

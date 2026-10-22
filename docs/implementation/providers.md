@@ -61,7 +61,7 @@ The approval rule is remembered for each model in `Settings.access_choices`, key
 
 `CreateReview` resolves its target in `kodem-core/src/git/review.rs`. A pull request is fetched from the remote whose address ends with the owner and repository of the pull request's URL, into `refs/kodem/reviews/<task>/head` and `/base`; the references are deleted once the worktree exists, because the detached worktree keeps the commits reachable. A branch is resolved from local references without a fetch. The merge base of the head and the base branch becomes `Task.baseline`, so `Comparison::Baseline` captures the reviewed changes with the existing capture code. The fetch can update the remote-tracking reference of the base branch, as any `git fetch` does. `DeleteTask` removes a review's worktree with `git worktree remove --force` and a chat's folder, and only at the path the host derives from the task's identity.
 
-Only a `Coding` task follows the branch of its checkout and takes part in merge-based settlement. A chat has no checkout, so `complete_turn` captures no diff for it.
+Only a `Coding` task follows the branch of its checkout and takes part in merge-based settlement. A task on a branch of its own settles when that branch is merged into the default branch. A task on the default branch settles once every file that its turns left changed (`checkpoint::turn_changes`) is committed after its baseline and no file that they touched has uncommitted changes; that observation holds until its next turn. A chat has no checkout, so `complete_turn` captures no diff for it.
 
 `CreateTask` takes an optional `base` commit for a new worktree. The desktop uses it for the task that fixes a review's findings: its branch starts at the reviewed commit.
 

@@ -5,6 +5,7 @@
 //! index, and the commit is reachable only from `refs/kodem/checkpoints/<task>/<name>`. Ignored
 //! files and other repositories that the checkout links to are not part of a checkpoint.
 use super::*;
+use std::collections::BTreeSet;
 
 const NAMESPACE: &str = "refs/kodem/checkpoints";
 
@@ -162,6 +163,58 @@ pub fn apply(cwd: &Path, task_id: &str, name: &str) -> Result<()> {
         ],
     )?;
     Ok(())
+}
+
+/// The files that the turns of a task changed, read from its checkpoints.
+pub struct TurnChanges {
+    /// Every path that a turn created, changed or removed.
+    pub touched: BTreeSet<Vec<u8>>,
+    /// The touched paths whose content differs between the first and the last checkpoint: the
+    /// work that the task leaves behind.
+    pub kept: Vec<Vec<u8>>,
+}
+
+/// Returns the files that the turns of a task changed. Each checkpoint is compared with the one
+/// before it, so in a checkout that other work shares, files changed between two turns count
+/// too: the result can hold more than the task's own files, never fewer.
+pub fn turn_changes(cwd: &Path, task_id: &str) -> Result<TurnChanges> {
+    let prefix = reference(task_id, "x")?;
+    let prefix = prefix.trim_end_matches('x');
+    let root = repository(cwd)?;
+    let references = line(git(
+        &root,
+        None,
+        &["for-each-ref", "--format=%(refname)", prefix],
+    )?);
+    // An undo saves checkpoints under other names. Only the numbered ones follow the turns.
+    let mut turns: Vec<(u64, &str)> = references
+        .lines()
+        .filter_map(|reference| Some((reference.strip_prefix(prefix)?.parse().ok()?, reference)))
+        .collect();
+    turns.sort_unstable();
+    let mut touched = BTreeSet::new();
+    for pair in turns.windows(2) {
+        touched.extend(changed(&root, pair[0].1, pair[1].1)?);
+    }
+    let kept = match (turns.first(), turns.last()) {
+        (Some(first), Some(last)) if first != last => changed(&root, first.1, last.1)?,
+        _ => Vec::new(),
+    };
+    Ok(TurnChanges { touched, kept })
+}
+
+// Lists the paths whose content differs between two checkpoints.
+fn changed(root: &Path, from: &str, to: &str) -> Result<Vec<Vec<u8>>> {
+    let bytes = git(
+        root,
+        None,
+        &["diff", "--name-only", "-z", "--no-renames", from, to, "--"],
+    )?;
+    Ok(bytes
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect())
 }
 
 /// Returns the reference of a checkpoint, for commands that name its commit.

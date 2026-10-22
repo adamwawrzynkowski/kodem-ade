@@ -1588,3 +1588,13 @@ Recorded on 23 October 2026. The user reported that the time on a working thread
 - A working row shows `45s`, `12m`, `1h` or `1h 5m`, with no day unit. Rows at rest still show their age.
 
 Checked with temporary tests, since removed: the stretch across claim, two turn starts, finalize, a continuation from rest, a failed delivery, a stale start, and a saved task without the field; and the figure at each boundary up to `30h 5m`. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not checked in the running app, under the no-visual-testing agreement.
+
+### Threads on the default branch settle when their work is committed
+
+Recorded on 23 October 2026. The user reported that threads did not settle by themselves after their changes were merged.
+
+- Cause: `git::branch_merged` returned false for every task on the default branch, and most tasks work in the project's own checkout on `main`, so the 30-second settlement refresh never settled them.
+- `checkpoint::turn_changes` reads the files that a task's turns changed from its numbered checkpoints: each checkpoint against the one before it, and the first against the last for the work left behind.
+- A task on the default branch is merged once the checkout is still on that branch, every file that its turns left changed is in the commits after its baseline, and no file that they touched has uncommitted or untracked changes. A task without changes never settles this way. Once observed, the task stays settled until its next turn, so a later edit of the same files does not reopen it. Tasks on a branch of their own keep the earlier merge check.
+
+Checked with temporary tests, since removed, in scratch repositories: a task file left uncommitted, staged, committed and edited again; a file changed and then reverted by later turns; a task without changes; and a merged feature branch. A read-only run over the open threads of the release store settled the three whose files were committed and kept two whose files had uncommitted edits. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` and `cargo fmt --check`. Not checked in the running app, under the no-visual-testing agreement.
