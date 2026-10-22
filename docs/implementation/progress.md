@@ -1598,3 +1598,14 @@ Recorded on 23 October 2026. The user reported that threads did not settle by th
 - A task on the default branch is merged once the checkout is still on that branch, every file that its turns left changed is in the commits after its baseline, and no file that they touched has uncommitted or untracked changes. A task without changes never settles this way. Once observed, the task stays settled until its next turn, so a later edit of the same files does not reopen it. Tasks on a branch of their own keep the earlier merge check.
 
 Checked with temporary tests, since removed, in scratch repositories: a task file left uncommitted, staged, committed and edited again; a file changed and then reverted by later turns; a task without changes; and a merged feature branch. A read-only run over the open threads of the release store settled the three whose files were committed and kept two whose files had uncommitted edits. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` and `cargo fmt --check`. Not checked in the running app, under the no-visual-testing agreement.
+
+### Sidebar rows name the model and the plan's progress
+
+Recorded on 23 October 2026. The user asked for dividers on the second line of a thread row, the model of the task, the account's accent before the provider icon, and the progress of the task's plan.
+
+- The second line of a thread row (`Shell::task_card`) is a list of parts with a thin rule between each (`sidebar::meta_divider`): the provider, the model, the project and branch, the plan and the saved diff. A part that does not apply is left out, with its rule.
+- The provider part still shows only for a provider or account other than the default. The accent of a non-default account now stands before the provider icon.
+- The model is the task's own model, or else its provider's default model, by its catalog name. A chat has no branch, so its model takes the free width, as before.
+- A task with a plan shows the `list-checks` icon and its done and total steps, such as `3/5`, in the addition tone once every step is done. Its tooltip names the counts.
+
+Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not checked in the running app, under the no-visual-testing agreement.

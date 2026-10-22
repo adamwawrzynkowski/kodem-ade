@@ -1296,68 +1296,132 @@ impl Shell {
         // Most tasks run on the default provider and account, so a row names its provider only
         // where it differs.
         let other_provider = account.is_some() || provider != self.settings.agent_defaults.provider;
-        // The second line names where the task works. A chat has no branch, so it names its
-        // model instead. A folder without Git has no branch either.
-        let place = if task.kind.has_project() && task.branch.is_empty() {
-            "No Git".to_owned()
-        } else if task.kind.has_project() {
-            task.branch.clone()
-        } else {
-            self.model_name(&AgentPreferences {
-                provider,
-                model: task.model.clone(),
-                ..AgentPreferences::default()
+        // A task without its own model runs its provider's default model.
+        let model = task
+            .model
+            .clone()
+            .or_else(|| {
+                self.workspace
+                    .as_ref()
+                    .and_then(|w| w.runtimes.get(&provider))
+                    .and_then(|runtime| runtime.default_model.clone())
             })
-        };
-        let mut meta = div()
-            .h(px(16.))
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .font_family(crate::theme::mono())
-            .text_size(text_px(10.5))
-            .text_color(if selected { t.muted } else { t.subtle })
-            .when(other_provider, |d| {
-                d.child(
-                    div()
-                        .id((
-                            ElementId::from("task-provider"),
-                            SharedString::from(id.clone()),
-                        ))
-                        .flex()
-                        .flex_shrink_0()
-                        .items_center()
-                        .gap(px(3.))
-                        .child(icon(provider.icon()).size(px(11.)))
-                        .when_some(account.as_ref(), |d, (_, tone)| {
-                            d.child(div().size(px(5.)).rounded(px(1.)).bg(*tone))
+            .map(|model| {
+                self.model_name(&AgentPreferences {
+                    provider,
+                    model: Some(model),
+                    ..AgentPreferences::default()
+                })
+            });
+        // The second line names who runs the task, on which model, where it works, how far its
+        // plan is and what it changed, with a divider between each part. A chat has no branch,
+        // so its model takes the free width. A folder without Git has no branch either.
+        let mut segments: Vec<AnyElement> = Vec::new();
+        if other_provider {
+            segments.push(
+                div()
+                    .id((
+                        ElementId::from("task-provider"),
+                        SharedString::from(id.clone()),
+                    ))
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(px(4.))
+                    .when_some(account.as_ref(), |d, (_, tone)| {
+                        d.child(div().size(px(5.)).rounded(px(1.)).bg(*tone))
+                    })
+                    .child(icon(provider.icon()).size(px(11.)))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| Hint {
+                            text: provider_hint.clone(),
+                            theme: t,
                         })
-                        .tooltip(move |_, cx| {
-                            cx.new(|_| Hint {
-                                text: provider_hint.clone(),
-                                theme: t,
-                            })
-                            .into()
-                        }),
-                )
-            })
-            // A row outside its project's card names its project in the project's tint.
-            .when_some(project.filter(|_| !grouped), |d, project| {
-                d.child(
+                        .into()
+                    })
+                    .into_any_element(),
+            );
+        }
+        if task.kind.has_project() {
+            if let Some(model) = model {
+                segments.push(
                     div()
-                        .flex_shrink_0()
-                        .max_w(relative(0.45))
+                        .min_w_0()
+                        .max_w(relative(0.4))
                         .text_ellipsis()
-                        .text_color(project_tint(project, t))
-                        .child(project.name.clone()),
-                )
-                .child(div().flex_shrink_0().child("/"))
-            })
-            .child(div().flex_1().min_w_0().text_ellipsis().child(place));
+                        .child(model)
+                        .into_any_element(),
+                );
+            }
+            let place = if task.branch.is_empty() {
+                "No Git".to_owned()
+            } else {
+                task.branch.clone()
+            };
+            segments.push(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    // A row outside its project's card names its project in the project's tint.
+                    .when_some(project.filter(|_| !grouped), |d, project| {
+                        d.child(
+                            div()
+                                .flex_shrink_0()
+                                .max_w(relative(0.45))
+                                .text_ellipsis()
+                                .text_color(project_tint(project, t))
+                                .child(project.name.clone()),
+                        )
+                        .child(div().flex_shrink_0().child("/"))
+                    })
+                    .child(div().flex_1().min_w_0().text_ellipsis().child(place))
+                    .into_any_element(),
+            );
+        } else {
+            segments.push(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_ellipsis()
+                    .child(model.unwrap_or_else(|| provider.label().to_owned()))
+                    .into_any_element(),
+            );
+        }
+        if !task.plan.is_empty() {
+            let total = task.plan.len();
+            let done = task
+                .plan
+                .iter()
+                .filter(|step| step.status == PlanStatus::Done)
+                .count();
+            let plan_hint = format!("Plan · {done} of {total} steps done");
+            segments.push(
+                div()
+                    .id((ElementId::from("task-plan"), SharedString::from(id.clone())))
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(px(3.))
+                    .when(done == total, |d| d.text_color(t.added))
+                    .child(icon("list-checks").size(px(11.)))
+                    .child(format!("{done}/{total}"))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| Hint {
+                            text: plan_hint.clone(),
+                            theme: t,
+                        })
+                        .into()
+                    })
+                    .into_any_element(),
+            );
+        }
         if let Some(review) = task.review.as_ref().filter(|r| r.error.is_none()) {
             let snapshot = review.snapshot_id.clone();
             let task_id = id.clone();
-            meta = meta.child(
+            segments.push(
                 self.control((ElementId::from("task-diff"), SharedString::from(id.clone())))
                     .border_0()
                     .bg(gpui::transparent_black())
@@ -1386,8 +1450,23 @@ impl Shell {
                             theme: t,
                         })
                         .into()
-                    }),
+                    })
+                    .into_any_element(),
             );
+        }
+        let mut meta = div()
+            .h(px(16.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .font_family(crate::theme::mono())
+            .text_size(text_px(10.5))
+            .text_color(if selected { t.muted } else { t.subtle });
+        for (index, segment) in segments.into_iter().enumerate() {
+            if index > 0 {
+                meta = meta.child(meta_divider(t));
+            }
+            meta = meta.child(segment);
         }
         let tone = selection_tone(task, t);
         // While the selection edge slides, the row that opened takes its tint as the edge comes,
@@ -1752,6 +1831,11 @@ fn attention_badges(attention: Attention, reduce_motion: bool, theme: Theme) -> 
         ));
     }
     badges
+}
+
+/// Returns the thin rule that parts the details on the second line of a thread row.
+fn meta_divider(theme: Theme) -> Div {
+    div().flex_shrink_0().w(px(1.)).h(px(9.)).bg(theme.border)
 }
 
 // The saved diff of a task row as short "+N −N" counts. Counts of a thousand lines or more
