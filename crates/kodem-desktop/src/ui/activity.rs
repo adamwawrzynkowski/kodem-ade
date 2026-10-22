@@ -365,6 +365,9 @@ impl Shell {
             .flex()
             .flex_col()
             .gap(px(1.));
+        // Rows keep their height and the list scrolls. A row that clips its overflow has no
+        // content minimum, so without this the current row alone absorbs the overflow and
+        // collapses under the next row.
         for (index, step) in plan.iter().enumerate() {
             let current = progress.current == Some(index);
             let marker = match step.status {
@@ -383,6 +386,7 @@ impl Shell {
             steps = steps.child(
                 div()
                     .relative()
+                    .flex_shrink_0()
                     .flex()
                     .items_start()
                     .gap(px(8.))
