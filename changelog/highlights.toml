@@ -98,7 +98,36 @@
 #   "1.19.3 to 2.1.0") in a headline, title, text or visual. Say what the user can do now.
 #   build.rs refuses version numbers such as 1.19.3.
 
-reviewed = "3dd21cd5d13954d6474187ea9080035dc0996a2a"
+reviewed = "ca95c5fb3bbe13fd76a1f5e323cd7e5466bbea4b"
+
+[[headline]]
+id = "headline-git-ai-providers"
+text = "Git AI actions now run on your Kodem agents, and long plans no longer squash their rows."
+
+[[highlight]]
+id = "plan-rows-keep-height"
+title = "Plans stay readable"
+text = "Steps of a long plan keep their full height and the list scrolls, so the current step no longer collapses under the next one."
+wide = true
+tone = "green"
+visual = { kind = "list", title = "Plan", items = [
+    { text = "Done", state = "done", tone = "green" },
+    { text = "Current", state = "dot", tone = "accent" },
+    { text = "Next", state = "open" },
+] }
+
+[[highlight]]
+id = "git-ai-kodem-agents"
+title = "Pick the agent for Git AI"
+text = "Commit messages, explanations and pull request reviews use your Kodem agents. Choose the agent, model and reasoning effort for each action."
+wide = true
+tone = "accent"
+visual = { kind = "chips", items = [
+    { text = "Claude Code", icon = "claude" },
+    { text = "Codex", icon = "openai" },
+    { text = "OpenCode", icon = "opencode" },
+    { text = "Grok", icon = "xai" },
+] }
 
 [[headline]]
 id = "headline-antigravity-grok-pace"
