@@ -1578,3 +1578,13 @@ Recorded on 23 October 2026. The user reported three problems with the What's ne
 - `changelog/highlights.toml` was rewritten as release notes for users, with ids unchanged, and every card got the kind that suits it. Its header gives a hint for each kind and writing rules: what the user can do now, plain words, no names from the code, no rendering or commit wording. The generation prompts of `scripts/github-release.sh` and the local changelog script point to those rules and ask for a fitting visual on every card.
 
 Checked a build with every highlight and a temporary broken file, since restored, that build.rs reported for a long tile name, a missing icon, a long gauge reading, a slider out of range, a repeated kind and a menu focus out of range. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not checked in the running app, under the no-visual-testing agreement.
+
+### Sidebar working time counts the whole stretch, in hours and minutes
+
+Recorded on 23 October 2026. The user reported that the time on a working thread's sidebar row was not the total time worked, and that it showed only minutes, or only hours past one hour.
+
+- Cause: the row counted from `task.updated`, which a new provider turn of the same run, a steering message and a message queued while the task worked all reset.
+- `Task::working_since` holds the start of the current stretch of work. The orchestrator sets it when a message is claimed or a turn starts from rest, keeps it through later turns, steering, waiting for input and held outcomes, and clears it when the task stops working. A message queued while the task worked starts a new run, and so a new stretch, when it is claimed after the turn ends. A task saved before this change counts from its last update until its next turn.
+- A working row shows `45s`, `12m`, `1h` or `1h 5m`, with no day unit. Rows at rest still show their age.
+
+Checked with temporary tests, since removed: the stretch across claim, two turn starts, finalize, a continuation from rest, a failed delivery, a stale start, and a saved task without the field; and the figure at each boundary up to `30h 5m`. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings) and `cargo fmt --check`. Not checked in the running app, under the no-visual-testing agreement.

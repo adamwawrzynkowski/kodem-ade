@@ -1264,11 +1264,14 @@ impl Shell {
         } else if blocked {
             kit::chip(task.state.label().to_uppercase(), t.removed).into_any_element()
         } else {
-            figure(
-                elapsed(task.updated),
-                if active { t.accent } else { t.subtle },
-            )
-            .into_any_element()
+            // A working task counts its whole stretch of work; tasks saved before the stretch
+            // was recorded count from their last update.
+            let time = if active {
+                worked(task.working_since.unwrap_or(task.updated))
+            } else {
+                elapsed(task.updated)
+            };
+            figure(time, if active { t.accent } else { t.subtle }).into_any_element()
         };
         let review_hint = task.review.as_ref().map_or_else(|| "No saved task diff. A snapshot will be recorded when the next turn finishes.".to_owned(), |r| {
             if let Some(error) = &r.error { format!("Could not capture task diff: {error}") }
@@ -1780,6 +1783,20 @@ fn short_count(count: usize) -> String {
         format!("{}.{}M", count / 1_000_000, count / 100_000 % 10)
     } else {
         format!("{}M", count / 1_000_000)
+    }
+}
+
+/// Returns the time worked since a timestamp, such as `45s`, `12m` or `1h 5m`.
+fn worked(since: u64) -> String {
+    let s = now().saturating_sub(since) / 1000;
+    if s < 60 {
+        format!("{s}s")
+    } else if s < 3600 {
+        format!("{}m", s / 60)
+    } else if s % 3600 < 60 {
+        format!("{}h", s / 3600)
+    } else {
+        format!("{}h {}m", s / 3600, s % 3600 / 60)
     }
 }
 

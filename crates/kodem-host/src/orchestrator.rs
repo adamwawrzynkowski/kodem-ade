@@ -322,6 +322,7 @@ pub(crate) fn apply(task: &mut Task, event: &Event) {
             task.handoff = None;
             task.updated = *at;
             task.last_started = Some(*at);
+            task.working_since = Some(*at);
         }
         Event::Delivered { turn, begins, .. } => {
             if *begins {
@@ -338,6 +339,10 @@ pub(crate) fn apply(task: &mut Task, event: &Event) {
         Event::TurnStarted { turn, branch, at } => {
             if let Some(branch) = branch {
                 task.branch = branch.clone();
+            }
+            // A turn that follows another of the same stretch of work keeps its start.
+            if !task.state.active() || task.working_since.is_none() {
+                task.working_since = Some(*at);
             }
             task.active_turn = turn.clone();
             task.state = RunState::Running;
@@ -377,6 +382,9 @@ pub(crate) fn apply(task: &mut Task, event: &Event) {
             task.error = outcome.error.clone();
             task.updated = *at;
         }
+    }
+    if !task.state.active() {
+        task.working_since = None;
     }
 }
 

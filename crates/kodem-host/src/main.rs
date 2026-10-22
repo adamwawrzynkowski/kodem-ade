@@ -1526,6 +1526,7 @@ fn new_task(
         created: now(),
         updated: now(),
         last_started: None,
+        working_since: None,
         feedback: Vec::new(),
         attachments: Vec::new(),
         error: None,

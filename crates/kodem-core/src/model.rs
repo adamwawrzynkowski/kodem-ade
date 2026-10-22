@@ -1047,6 +1047,10 @@ pub struct Task {
     /// Last submitted or started run; viewing and completing a task do not change its recent order.
     #[serde(default)]
     pub last_started: Option<u64>,
+    /// When the task began its current stretch of work. New turns and steering within the
+    /// stretch keep it; absent while the task is not working.
+    #[serde(default)]
+    pub working_since: Option<u64>,
     pub feedback: Vec<Feedback>,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
