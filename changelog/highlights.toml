@@ -98,7 +98,41 @@
 #   "1.19.3 to 2.1.0") in a headline, title, text or visual. Say what the user can do now.
 #   build.rs refuses version numbers such as 1.19.3.
 
-reviewed = "ca95c5fb3bbe13fd76a1f5e323cd7e5466bbea4b"
+reviewed = "95bd8ac5145f34f8114ab161b734caabd37a5c4f"
+
+[[headline]]
+id = "headline-sidebar-rows-and-settling"
+text = "Thread rows show the model and plan progress, and finished work settles by itself."
+
+[[highlight]]
+id = "work-time-hours-minutes"
+title = "The real time a thread has worked"
+text = "A working thread counts its whole stretch of work, and the sidebar shows hours and minutes."
+wide = true
+tone = "accent"
+visual = { kind = "compare", before = { text = "Working", icon = "clock", detail = "12m" }, after = { text = "Working", icon = "clock", detail = "1h 5m" }, label = "Counts the whole stretch" }
+
+[[highlight]]
+id = "sidebar-model-plan-progress"
+title = "Model and plan in every row"
+text = "Each thread row in the sidebar names its model and shows how many plan steps are done, with thin dividers between the details."
+wide = true
+tone = "blue"
+visual = { kind = "window", area = "sidebar", label = "Model and plan steps, such as 3/5" }
+
+[[highlight]]
+id = "settle-committed-work"
+title = "Committed work settles"
+text = "A thread on your main branch settles once the files it changed are committed."
+tone = "green"
+visual = { kind = "steps", items = ["Work", "Commit", "Settled"], current = 3 }
+
+[[highlight]]
+id = "quieter-delegated-alerts"
+title = "Fewer alerts from helpers"
+text = "A task that an agent started for itself alerts you only when it needs your input or attention."
+tone = "amber"
+visual = { kind = "notice", icon = "bell", title = "Needs your input", actions = ["Open"] }
 
 [[headline]]
 id = "headline-git-ai-providers"
