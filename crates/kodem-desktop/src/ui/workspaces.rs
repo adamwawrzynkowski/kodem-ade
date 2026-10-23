@@ -498,24 +498,46 @@ impl Shell {
         cx.notify();
     }
 
-    /// Gives the Git workspace Kodem's projects, which name and draw its repositories.
+    /// Gives the Git workspace Kodem's projects, which name and draw its repositories, and
+    /// opens there the repository of each project that it has not seen yet.
     pub(super) fn sync_git_projects(&mut self, cx: &mut Context<Self>) {
         let Some(git) = &self.git else {
             return;
         };
-        let projects = self
-            .workspace
-            .as_ref()
-            .map(|workspace| {
-                workspace
+        let (projects, repositories): (Vec<Project>, Vec<PathBuf>) = match &self.workspace {
+            Some(workspace) => {
+                let projects: Vec<Project> = workspace
                     .projects
                     .iter()
                     .filter(|project| !project.removed)
                     .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        git.update(cx, |git, cx| git.set_projects(projects, cx));
+                    .collect();
+                let repositories = projects
+                    .iter()
+                    .filter(|project| !workspace.without_git.contains(&project.id))
+                    .map(|project| project.path.clone())
+                    .collect();
+                (projects, repositories)
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+        git.update(cx, |git, cx| {
+            git.set_projects(projects, cx);
+            git.open_project_repositories(repositories, cx);
+        });
+    }
+
+    /// Opens the Git workspace on the Changes of the open task's project repository.
+    pub(super) fn open_changes_in_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.task_project().map(|project| project.path.clone()) else {
+            return;
+        };
+        self.open_git(cx);
+        if !self.git_open {
+            return;
+        }
+        let git = self.git_workspace(window, cx);
+        git.update(cx, |git, cx| git.show_changes(path, window, cx));
     }
 
     // Carries out what the Git workspace asks of the window.

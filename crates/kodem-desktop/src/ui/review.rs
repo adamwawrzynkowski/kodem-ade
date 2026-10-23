@@ -121,7 +121,24 @@ impl Shell {
                                 },
                             )),
                         )
-                        .child(figure(count.to_string(), t.subtle)),
+                        .child(figure(count.to_string(), t.subtle))
+                        .child(div().flex_1())
+                        // The project's repository opens on its Changes in the Git workspace.
+                        .when(
+                            self.tracks_changes() && self.task_project().is_some(),
+                            |header| {
+                                header.child(
+                                    self.icon_button(
+                                        "open-changes-in-git",
+                                        "git-pull-request",
+                                        "Open Changes in Git",
+                                    )
+                                    .on_click(cx.listener(
+                                        |s, _, window, cx| s.open_changes_in_git(window, cx),
+                                    )),
+                                )
+                            },
+                        ),
                 )
             });
         // A folder without Git has nothing to compare its files with.

@@ -3,15 +3,16 @@
 //! window draws its parts: the title bar holds the repository and the remote actions, the
 //! workspace rail holds the repository cards, the sidebar slot holds the repository's sidebar,
 //! and the content area holds this view.
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui::ColorExt as _;
 use gpui::prelude::*;
 use gpui::{
-    Anchor, Animation, AnimationExt as _, AnyElement, AnyView, App, Bounds, Context, Div,
-    ElementId, Entity, EventEmitter, Focusable, Hsla, IntoElement, PathPromptOptions, Pixels,
-    Render, SharedString, Stateful, Subscription, Window, canvas, div, point,
+    Anchor, Animation, AnimationExt as _, AnyElement, AnyView, AnyWindowHandle, App, Bounds,
+    Context, Div, ElementId, Entity, EventEmitter, Focusable, Hsla, IntoElement, PathPromptOptions,
+    Pixels, Render, SharedString, Stateful, Subscription, Window, canvas, div, point,
 };
 use kodem_core::Project;
 use kodem_git::git::{FetchOptions, GitRepo, PullOptions, PushOptions};
@@ -170,6 +171,11 @@ pub struct GitWorkspace {
     _onboarding_subscription: Option<Subscription>,
     /// Kodem's projects, which give the repositories their names, icons and colors.
     projects: Vec<Project>,
+    /// The repositories of Kodem's projects at the last sync, so that only a project added
+    /// since then opens its repository and a repository closed here stays closed.
+    project_repositories: HashSet<PathBuf>,
+    /// The window of the workspace, where the views of a project's repository open.
+    window: AnyWindowHandle,
 }
 
 impl EventEmitter<GitEvent> for GitWorkspace {}
@@ -195,6 +201,8 @@ impl GitWorkspace {
             onboarding: None,
             _onboarding_subscription: None,
             projects: Vec::new(),
+            project_repositories: HashSet::new(),
+            window: window.window_handle(),
         };
 
         let settings = GitSettings::get(cx).clone();
@@ -235,6 +243,54 @@ impl GitWorkspace {
             self.projects = projects;
             cx.notify();
         }
+    }
+
+    /// Opens the repositories of Kodem's projects that were added since the last call, in the
+    /// background of the open repository. The first call opens every repository that is not
+    /// open yet, so projects added before the workspace existed appear as well.
+    pub fn open_project_repositories(
+        &mut self,
+        repositories: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let open = self.repository_paths(cx);
+        let missing: Vec<PathBuf> = repositories
+            .iter()
+            .filter(|path| !self.project_repositories.contains(*path) && !open.contains(path))
+            .cloned()
+            .collect();
+        self.project_repositories = repositories.into_iter().collect();
+        if missing.is_empty() {
+            return;
+        }
+        // The views of a repository need the window, which the project sync does not carry.
+        let window = self.window;
+        cx.spawn(async move |this, cx| {
+            cx.update_window(window, |_, window, cx| {
+                this.update(cx, |this, cx| {
+                    for path in missing {
+                        this.open_repository(path, false, window, cx);
+                    }
+                })
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Shows the Changes of the repository at `path`, and opens the repository first when it is
+    /// not open.
+    pub fn show_changes(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.add_repository(path, window, cx);
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        if tab.view != ViewTab::Changes {
+            tab.view = ViewTab::Changes;
+            self.content_animation_sequence = self.content_animation_sequence.wrapping_add(1);
+        }
+        self.refresh_active_changes(cx);
+        cx.notify();
     }
 
     /// Returns the sidebar of the open repository.
@@ -302,12 +358,26 @@ impl GitWorkspace {
     /// Opens a repository in a new tab, or shows its tab when it is open. Kodem lists it as a
     /// project as well.
     pub fn add_repository(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_repository(path, true, window, cx);
+    }
+
+    // Opens a repository in a new tab, which becomes the open one when `activate` is set. A tab
+    // that is open already becomes the open one under the same condition.
+    fn open_repository(
+        &mut self,
+        path: PathBuf,
+        activate: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(ix) = self
             .tabs
             .iter()
             .position(|t| t.state.read(cx).repo.path == path)
         {
-            self.activate_repository(ix, cx);
+            if activate {
+                self.activate_repository(ix, cx);
+            }
             return;
         }
 
@@ -374,17 +444,21 @@ impl GitWorkspace {
             sidebar,
             view: ViewTab::History,
         });
-        self.active = self.tabs.len() - 1;
+        if activate {
+            self.active = self.tabs.len() - 1;
+        }
 
         GitSettings::update(cx, |s| {
             if !s.open_repositories.contains(&path) {
                 s.open_repositories.push(path.clone());
             }
-            if !s.recent_repositories.contains(&path) {
-                s.recent_repositories.insert(0, path.clone());
-                s.recent_repositories.truncate(10);
+            if activate {
+                if !s.recent_repositories.contains(&path) {
+                    s.recent_repositories.insert(0, path.clone());
+                    s.recent_repositories.truncate(10);
+                }
+                s.active_repository = Some(path.clone());
             }
-            s.active_repository = Some(path.clone());
         });
         cx.emit(GitEvent::RepositoryOpened(path));
         cx.notify();
