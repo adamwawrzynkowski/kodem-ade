@@ -2,5 +2,8 @@
 # runs on other computers than the one that builds it, so ggml targets fixed processor features
 # instead of the build computer's: on x64 AVX2, FMA, F16C and BMI2, which processors have had
 # since 2013, and on Arm the compiler's baseline for the target.
+# whisper-rs-sys passes every CMAKE_ variable on to CMake. The included file keeps ggml's Vulkan
+# build folders within the path length limit of Windows.
 [env]
 GGML_NATIVE = "OFF"
+CMAKE_PROJECT_INCLUDE = { value = "scripts/ggml-short-paths.cmake", relative = true }
