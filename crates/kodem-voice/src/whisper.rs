@@ -118,22 +118,25 @@ fn speaks(samples: &[f32]) -> bool {
         .is_some()
 }
 
-/// Reports whether whisper.cpp runs on a GPU here.
+/// Reports whether whisper.cpp runs on a GPU here: whether ggml registered a GPU, as whisper.cpp
+/// checks when it picks one. The registry leaves out a Vulkan backend that could not start.
+/// whisper-rs's Vulkan device list starts Vulkan again instead, and on a driver without Vulkan
+/// 1.2 that throws a C++ exception, which ends the process.
 fn gpu_present() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        true
-    }
-    #[cfg(any(
-        all(windows, target_arch = "x86_64"),
-        not(any(target_os = "macos", windows))
-    ))]
-    {
-        !whisper_rs::vulkan::list_devices().is_empty()
-    }
-    #[cfg(all(windows, not(target_arch = "x86_64")))]
-    {
-        false
+    use whisper_rs::whisper_rs_sys::{
+        ggml_backend_dev_count, ggml_backend_dev_get, ggml_backend_dev_type,
+        ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_GPU as GPU,
+        ggml_backend_dev_type_GGML_BACKEND_DEVICE_TYPE_IGPU as IGPU,
+    };
+    // SAFETY: the registry is built once with every backend's errors caught, and each index
+    // below the count names one of its devices.
+    unsafe {
+        (0..ggml_backend_dev_count()).any(|index| {
+            matches!(
+                ggml_backend_dev_type(ggml_backend_dev_get(index)),
+                GPU | IGPU
+            )
+        })
     }
 }
 

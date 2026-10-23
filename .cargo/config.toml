@@ -3,7 +3,7 @@
 # instead of the build computer's: on x64 AVX2, FMA, F16C and BMI2, which processors have had
 # since 2013, and on Arm the compiler's baseline for the target.
 # whisper-rs-sys passes every CMAKE_ variable on to CMake. The included file keeps ggml's Vulkan
-# build folders within the path length limit of Windows.
+# build folders within the path length limit of Windows and turns on C++ exceptions for MSVC.
 [env]
 GGML_NATIVE = "OFF"
-CMAKE_PROJECT_INCLUDE = { value = "scripts/ggml-short-paths.cmake", relative = true }
+CMAKE_PROJECT_INCLUDE = { value = "scripts/whisper-cmake.cmake", relative = true }

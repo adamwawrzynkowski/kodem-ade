@@ -8,7 +8,8 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 cpal = "=0.18.2"
-whisper-rs = "=0.16.0"
+# raw-api gives ggml's backend registry, which tells whether whisper.cpp found a GPU.
+whisper-rs = { version = "=0.16.0", features = ["raw-api"] }
 
 # Apple silicon runs the speech model on its GPU through Metal.
 [target.'cfg(target_os = "macos")'.dependencies]
