@@ -98,7 +98,7 @@
 #   "1.19.3 to 2.1.0") in a headline, title, text or visual. Say what the user can do now.
 #   build.rs refuses version numbers such as 1.19.3.
 
-reviewed = "827b21815165369b5786a50f2ac0b51d597dc723"
+reviewed = "dec61d07748caa4a744aae6c8d2d21f899f6f513"
 
 [[headline]]
 id = "headline-plugins-voice"
