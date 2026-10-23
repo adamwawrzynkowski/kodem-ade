@@ -12,9 +12,13 @@ fn eligible(task: &Task) -> bool {
 }
 
 /// Refreshes automatic settlement from Git, preserving edits made during the observation.
+/// Does nothing while the user has turned automatic settlement off.
 pub(super) fn refresh(host: &Shared) -> Result<()> {
     let (projects, tasks) = {
         let h = host.lock().unwrap();
+        if !h.store.settings()?.auto_settle {
+            return Ok(());
+        }
         (h.store.projects()?, h.store.tasks()?)
     };
     for task in tasks.into_iter().filter(eligible) {

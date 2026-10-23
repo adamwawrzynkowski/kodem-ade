@@ -278,7 +278,7 @@ impl Shell {
                                     cx.notify();
                                 })),
                         );
-                        let settled = task.is_settled();
+                        let settled = task.is_settled(self.settings.auto_settle);
                         let settle_id = task.id.clone();
                         let busy = task.state.active() || task.state == RunState::DeliveryUnknown;
                         menu = menu.child(

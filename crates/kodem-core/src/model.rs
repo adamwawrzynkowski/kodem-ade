@@ -1096,11 +1096,12 @@ impl Task {
             && viewed.is_none_or(|viewed| viewed < self.updated)
     }
     /// Resolves manual or merge-based settlement while keeping active or uncertain work visible.
-    pub fn is_settled(&self) -> bool {
+    /// Merged work settles a task only with `auto_settle`; a manual choice always counts.
+    pub fn is_settled(&self, auto_settle: bool) -> bool {
         !self.state.active()
             && !self.needs_input()
             && self.state != RunState::DeliveryUnknown
-            && self.settled.unwrap_or(self.branch_merged)
+            && self.settled.unwrap_or(auto_settle && self.branch_merged)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1837,6 +1838,9 @@ pub struct Settings {
     /// Keeps the computer from sleeping on its own while an agent starts or runs a turn. The
     /// host holds the lock, so it works with the window closed. The display can still sleep.
     pub prevent_sleep: bool,
+    /// Settles a task by itself once its work is merged into the default branch. A task that
+    /// the user settled or reopened by hand keeps that choice.
+    pub auto_settle: bool,
     pub sidebar_width: f32,
     pub review_width: f32,
     /// Height of the task terminal's output below the chat, in points.
@@ -1898,6 +1902,7 @@ impl Default for Settings {
         Self {
             notifications: NotificationSettings::default(),
             prevent_sleep: true,
+            auto_settle: true,
             sidebar_width: 260.,
             review_width: 520.,
             terminal_height: Self::TERMINAL_HEIGHT,

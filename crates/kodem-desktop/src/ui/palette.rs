@@ -244,7 +244,7 @@ impl Shell {
                 Action::Pin(!task.pinned),
             );
             if !task.state.active() && task.state != RunState::DeliveryUnknown {
-                let settled = task.is_settled();
+                let settled = task.is_settled(self.settings.auto_settle);
                 add(
                     "circle-check",
                     if settled {

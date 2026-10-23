@@ -374,6 +374,10 @@ const THEME_PREVIEW: f32 = 86.;
 const ARTIFACTS_LABEL: &str = "Artifacts, /design and /slides";
 /// What the Artifacts switch does and what it needs.
 const ARTIFACTS_DETAIL: &str = "Claude Code keeps Artifacts off in sessions that an app starts. Turn this on so that /design and /slides publish to claude.ai. This needs a claude.ai sign-in on a Pro, Max, Team or Enterprise plan. Each task applies the change with its next message.";
+/// Name of the switch that settles merged tasks by themselves.
+const AUTO_SETTLE_LABEL: &str = "Settle merged tasks";
+/// What settling merged tasks by themselves does.
+const AUTO_SETTLE_DETAIL: &str = "A task moves to Settled by itself once its work is merged into the default branch. A task you settle or reopen by hand keeps your choice.";
 /// Name of the switch that keeps the computer awake while an agent works.
 const AWAKE_LABEL: &str = "Keep the computer awake";
 /// What the switch that keeps the computer awake does.
@@ -1584,31 +1588,49 @@ impl Shell {
         )
     }
 
-    // Builds the Tasks page: where new tasks work, how the list sorts them and the sleep guard.
+    // Builds the Tasks page: where new tasks work, how the list sorts and settles them and the
+    // sleep guard.
     fn task_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme;
         page_column()
             .child(setting_group("New tasks", None, t).child(self.task_location_setting(cx)))
-            .child(setting_group("Task list", None, t).child(self.setting_row(
-                "Task order",
-                "Sort by the last update, the name, what needs you, or the creation time.",
-                self.segmented(
-                    "sort",
-                    [
-                        (Sort::Recent, "Updated"),
-                        (Sort::Name, "Name"),
-                        (Sort::Attention, "Attention"),
-                        (Sort::Created, "Created"),
-                    ],
-                    &self.settings.sort,
-                    |s, sort, cx| {
-                        s.settings.sort = sort;
-                        s.save_settings();
-                        cx.notify();
-                    },
-                    cx,
-                ),
-            )))
+            .child(
+                setting_group("Task list", None, t)
+                    .child(self.setting_row(
+                        "Task order",
+                        "Sort by the last update, the name, what needs you, or the creation time.",
+                        self.segmented(
+                            "sort",
+                            [
+                                (Sort::Recent, "Updated"),
+                                (Sort::Name, "Name"),
+                                (Sort::Attention, "Attention"),
+                                (Sort::Created, "Created"),
+                            ],
+                            &self.settings.sort,
+                            |s, sort, cx| {
+                                s.settings.sort = sort;
+                                s.save_settings();
+                                cx.notify();
+                            },
+                            cx,
+                        ),
+                    ))
+                    .child(
+                        self.setting_row(
+                            AUTO_SETTLE_LABEL,
+                            AUTO_SETTLE_DETAIL,
+                            controls::Switch::new("auto-settle", self.settings.auto_settle)
+                                .label(AUTO_SETTLE_LABEL)
+                                .on_click(cx.listener(|s, enabled: &bool, _, cx| {
+                                    s.settings.auto_settle = *enabled;
+                                    s.save_settings();
+                                    cx.notify();
+                                }))
+                                .into_any_element(),
+                        ),
+                    ),
+            )
             .child(
                 setting_group("While agents work", None, t).child(
                     self.setting_row(

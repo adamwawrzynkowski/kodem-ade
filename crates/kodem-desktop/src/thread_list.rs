@@ -158,7 +158,7 @@ pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> F
     });
     let mut rows = Vec::new();
     let (open, settled): (Vec<_>, Vec<_>) = tasks.into_iter().partition(|(_, _, task)| {
-        Section::of(task, settings) != Section::Threads || !collapses(task)
+        Section::of(task, settings) != Section::Threads || !collapses(task, settings.auto_settle)
     });
     if filter.kind.has_project() {
         project_groups(&mut rows, workspace, settings, filter.query, open);
@@ -203,8 +203,8 @@ pub fn rows(workspace: &Workspace, settings: &Settings, filter: Filter<'_>) -> F
 }
 
 // A settled task leaves the open list unless the user pinned it without settling it by hand.
-fn collapses(task: &Task) -> bool {
-    task.is_settled() && !(task.settled.is_none() && task.pinned)
+fn collapses(task: &Task, auto_settle: bool) -> bool {
+    task.is_settled(auto_settle) && !(task.settled.is_none() && task.pinned)
 }
 
 /// Returns the sort key of a project's group: the place the user gave it, then pinned projects
