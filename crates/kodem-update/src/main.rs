@@ -343,6 +343,15 @@ mod windows {
         }
     }
 
+    /// Returns the version that Installed apps shows: `0.60` for `0.60.0`, as the desktop's
+    /// `updater::version_label` does. Earlier versions, such as `0.1.59`, keep their patch number.
+    fn version_label(version: &str) -> &str {
+        version
+            .strip_suffix(".0")
+            .filter(|short| short.contains('.'))
+            .unwrap_or(version)
+    }
+
     /// Writes the installed version into the installer's entry under Installed apps. An
     /// unpacked archive has no entry and is left alone.
     fn record_version(installed: &Path) -> Result<()> {
@@ -365,7 +374,7 @@ mod windows {
             {
                 return Ok(());
             }
-            let value = wide(version);
+            let value = wide(version_label(version));
             let result = RegSetValueExW(
                 key,
                 wide("DisplayVersion").as_ptr(),

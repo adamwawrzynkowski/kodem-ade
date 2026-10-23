@@ -33,6 +33,16 @@ fn asset_name() -> String {
 }
 pub const VERSION: &str = env!("KODEM_APP_VERSION");
 
+/// Returns the name that Kodem shows for a version: `0.60` for `0.60.0`. Releases count minor
+/// versions since 0.60; earlier ones, such as `0.1.59`, keep their patch number. Tags, bundles
+/// and update checks keep the full `X.Y.Z` version.
+pub fn version_label(version: &str) -> &str {
+    version
+        .strip_suffix(".0")
+        .filter(|short| short.contains('.'))
+        .unwrap_or(version)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
     Debug,

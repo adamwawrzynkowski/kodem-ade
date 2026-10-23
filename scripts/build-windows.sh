@@ -264,7 +264,7 @@ package_step() {
     [[ -n "$icon" ]] || { echo "The $arch build left no app icon for the installer." >&2; exit 1; }
     makensis=$(kodem_makensis)
     MSYS2_ARG_CONV_EXCL='*' "$makensis" -V2 \
-        "-DAPP_NAME=$app_name" "-DAPP_ID=$app_id" "-DVERSION=$release_version" "-DARCH=$arch" \
+        "-DAPP_NAME=$app_name" "-DAPP_ID=$app_id" "-DVERSION=$release_version" "-DDISPLAY_VERSION=$(kodem_release_version_label "$release_version")" "-DARCH=$arch" \
         "-DPACKAGE=$(cygpath -w "$folder")" "-DOUTFILE=$(cygpath -w "$installer")" "-DICON=$(cygpath -w "$icon")" \
         "$(cygpath -w "$KODEM_ROOT/scripts/windows-installer.nsi")"
     [[ -f "$installer" ]] || { echo "makensis did not write $installer" >&2; exit 1; }

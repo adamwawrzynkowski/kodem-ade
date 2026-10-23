@@ -96,6 +96,12 @@ fn windows_resources(channel: &str, version: &[&str]) {
         .replace('\\', "\\\\");
     let numbers = version.join(",");
     let text = version.join(".");
+    // Explorer shows the product version as X.Y, such as 0.60, like the app does.
+    let product = if version[2] == "0" {
+        version[..2].join(".")
+    } else {
+        text.clone()
+    };
     let rc = format!(
         r#"1 ICON "{icon_path}"
 1 VERSIONINFO
@@ -114,7 +120,7 @@ BEGIN
       VALUE "InternalName", "kodem"
       VALUE "OriginalFilename", "kodem.exe"
       VALUE "ProductName", "{name}"
-      VALUE "ProductVersion", "{text}"
+      VALUE "ProductVersion", "{product}"
     END
   END
   BLOCK "VarFileInfo"

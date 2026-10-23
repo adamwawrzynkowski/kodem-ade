@@ -37,7 +37,7 @@ on:
         required: false
         type: string
       version:
-        description: Version (X.X.X; empty for the next patch version)
+        description: Version (X.Y, such as 0.61; empty for the next version)
         required: false
         type: string
       platforms:

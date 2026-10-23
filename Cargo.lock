@@ -3566,7 +3566,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kodem-core"
-version = "0.1.0"
+version = "0.61.0"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -3587,7 +3587,7 @@ dependencies = [
 
 [[package]]
 name = "kodem-desktop"
-version = "0.1.0"
+version = "0.61.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3626,7 +3626,7 @@ dependencies = [
 
 [[package]]
 name = "kodem-git"
-version = "0.1.0"
+version = "0.61.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3638,7 +3638,7 @@ dependencies = [
 
 [[package]]
 name = "kodem-host"
-version = "0.1.0"
+version = "0.61.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3658,7 +3658,7 @@ dependencies = [
 
 [[package]]
 name = "kodem-update"
-version = "0.1.0"
+version = "0.61.0"
 dependencies = [
  "anyhow",
  "embed-resource",
@@ -3668,7 +3668,7 @@ dependencies = [
 
 [[package]]
 name = "kodem-voice"
-version = "0.1.0"
+version = "0.61.0"
 dependencies = [
  "anyhow",
  "cpal",

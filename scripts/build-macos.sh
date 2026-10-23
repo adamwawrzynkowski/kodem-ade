@@ -77,6 +77,7 @@ cat > "$bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
+<key>CFBundleDevelopmentRegion</key><string>en</string>
 <key>CFBundleName</key><string>$app_name</string>
 <key>CFBundleDisplayName</key><string>$app_name</string>
 <key>CFBundleIdentifier</key><string>$bundle_id</string>
@@ -95,6 +96,11 @@ cat > "$bundle/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 /usr/bin/plutil -lint "$bundle/Contents/Info.plist"
+# Finder shows the version as X.Y, such as 0.60. The updater reads Info.plist itself, where every
+# installed version expects X.Y.Z.
+mkdir -p "$bundle/Contents/Resources/en.lproj"
+printf '"CFBundleShortVersionString" = "%s";\n' "$(kodem_release_version_label "$release_version")" > "$bundle/Contents/Resources/en.lproj/InfoPlist.strings"
+/usr/bin/plutil -lint "$bundle/Contents/Resources/en.lproj/InfoPlist.strings"
 cat > "$bundle/Contents/Resources/BuildInfo.txt" <<INFO
 Build: $build_id
 Configuration: $channel

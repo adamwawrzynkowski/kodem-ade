@@ -264,7 +264,10 @@ fn update_look(state: &State) -> Option<(Look, String)> {
         State::Idle | State::Checking => return None,
         State::Available(release) => (
             Look::Available,
-            format!("Download Kodem {}", release.version),
+            format!(
+                "Download Kodem {}",
+                updater::version_label(&release.version.to_string())
+            ),
         ),
         State::Downloading { received, total } => {
             let (fraction, indeterminate, help) = if *total == 0 {

@@ -26,6 +26,7 @@ use crate::ui::git::settings::GitSettings;
 use crate::ui::git::settings_view::{segmented, setting_row, toggle_row};
 use crate::ui::git::theme;
 use crate::ui::git::workspace::welcome_card;
+use crate::updater::{VERSION, version_label};
 
 const STEP_DURATION: Duration = Duration::from_millis(360);
 const TIDE_DURATION: Duration = Duration::from_millis(900);
@@ -560,7 +561,7 @@ fn welcome_step(cx: &App) -> Div {
                         .font_family(mono_font())
                         .text_size(text_px(11.))
                         .text_color(colors.text_tertiary)
-                        .child(format!("kodem v{}", env!("CARGO_PKG_VERSION"))),
+                        .child(format!("kodem v{}", version_label(VERSION))),
                 ),
         )
         .child(

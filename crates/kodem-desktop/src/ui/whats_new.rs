@@ -7,7 +7,7 @@ use crate::release_notes::{
     self, Area, Change, Chip, DiffLine, Highlight, MenuItem, Row, RowState, Slider, Tile, Toggle,
     Tone, Visual,
 };
-use crate::updater::{Channel, VERSION};
+use crate::updater::{Channel, VERSION, version_label};
 use dither::{BarSegment, Dither, DitherBar, DitherField, DottedRule, Edge};
 use std::f32::consts::TAU;
 use std::hash::{Hash, Hasher};
@@ -146,7 +146,7 @@ impl Shell {
                         )
                         .when(!release_notes::PREVIOUS.is_empty(), |header| {
                             header.child(figure(
-                                format!("since {}", release_notes::PREVIOUS),
+                                format!("since {}", version_label(release_notes::PREVIOUS)),
                                 theme.subtle,
                             ))
                         }),
@@ -264,7 +264,7 @@ fn version_card(theme: Theme) -> Div {
     let summary = match (count, release_notes::PREVIOUS) {
         (0, _) => None,
         (count, "") => Some(format!("{count} changes")),
-        (count, previous) => Some(format!("{count} changes since {previous}")),
+        (count, previous) => Some(format!("{count} changes since {}", version_label(previous))),
     };
     kit::card(theme)
         .flex()
@@ -295,7 +295,7 @@ fn version_card(theme: Theme) -> Div {
                         )
                         .child(caps(channel.app_name(), theme).text_color(tone)),
                 )
-                .child(matrix(VERSION, theme.text, 2, theme))
+                .child(matrix(version_label(VERSION), theme.text, 2, theme))
                 .when_some(release_notes::HEADLINE, |card, headline| {
                     card.child(
                         div()

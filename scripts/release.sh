@@ -16,7 +16,7 @@
 # The workflow cannot create release tags, which a ruleset reserves for the owner's accounts, so
 # a release becomes public when one of them publishes the staged draft.
 #
-# KODEM_VERSION chooses a newer version explicitly. KODEM_RELEASE_PLATFORMS limits the build to
+# KODEM_VERSION chooses a newer version explicitly, as X.Y such as 0.61. KODEM_RELEASE_PLATFORMS limits the build to
 # some of macos, windows and linux.
 set -euo pipefail
 KODEM_ROOT=$(cd "$(dirname "$0")/.." && pwd)

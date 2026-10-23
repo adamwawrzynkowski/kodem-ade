@@ -8,7 +8,8 @@
 ;
 ; scripts/build-windows.sh compiles it with makensis and these definitions:
 ;   APP_NAME  Kodem, Kodem Nightly          APP_ID   dev.kodem.ade, dev.kodem.ade.nightly
-;   VERSION   X.X.X                         ARCH     x86_64 or aarch64
+;   VERSION   X.Y.Z                         ARCH     x86_64 or aarch64
+;   DISPLAY_VERSION  the version that people see, X.Y such as 0.60
 ;   PACKAGE   the package folder            OUTFILE  the installer to write
 ;   ICON      the app icon (.ico)
 Unicode true
@@ -26,10 +27,10 @@ SetCompressor /SOLID lzma
 Name "${APP_NAME}"
 OutFile "${OUTFILE}"
 InstallDir "$LOCALAPPDATA\Programs\${APP_NAME}"
-BrandingText "${APP_NAME} ${VERSION}"
+BrandingText "${APP_NAME} ${DISPLAY_VERSION}"
 VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName" "${APP_NAME}"
-VIAddVersionKey "ProductVersion" "${VERSION}"
+VIAddVersionKey "ProductVersion" "${DISPLAY_VERSION}"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "FileDescription" "${APP_NAME} Setup"
 VIAddVersionKey "CompanyName" "Kodem"
@@ -108,7 +109,7 @@ Section "Install"
     CreateShortcut "$SMPROGRAMS\${APP_NAME}.lnk" "$INSTDIR\kodem.exe"
     CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\kodem.exe"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${APP_NAME}"
-    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${DISPLAY_VERSION}"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "Kodem"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\kodem.exe,0"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"

@@ -5,7 +5,9 @@ exclude = ["vendor"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+# The first release of the X.Y scheme, after Nightly 0.1.60. The release commands raise the minor
+# version from the newest release: 0.61, 0.62, 0.63…
+version = "0.61.0"
 edition = "2024"
 rust-version = "1.97"
 license-file = "LICENSE"

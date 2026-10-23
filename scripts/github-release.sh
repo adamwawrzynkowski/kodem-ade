@@ -29,7 +29,7 @@ kodem_release_check_account() {
 # Resolves a monotonically increasing channel version before compiling, or the version of the
 # release that another platform already published for this commit.
 kodem_release_prepare() {
-    local channel=$1 base tags previous candidate releases pattern tag target draft
+    local channel=$1 base tags previous releases pattern tag target draft
     base=$(cargo pkgid -p kodem-desktop)
     base=${base##*#}
     base=${base##*@}
@@ -83,7 +83,7 @@ kodem_release_prepare() {
         release_tag=$release_existing
         release_version=${release_tag#nightly/}
         release_version=${release_version#v}
-        [[ -z "${KODEM_VERSION:-}" || "$KODEM_VERSION" == "$release_version" ]] || { echo "This commit is already released as $release_tag. Unset KODEM_VERSION to add this platform to it." >&2; return 1; }
+        [[ -z "${KODEM_VERSION:-}" || "$(kodem_release_requested_version "$KODEM_VERSION" 2>/dev/null)" == "$release_version" ]] || { echo "This commit is already released as $release_tag. Unset KODEM_VERSION to add this platform to it." >&2; return 1; }
         echo "Release: $release_repository $release_tag at $release_commit (adding this platform)"
         kodem_release_changes "$channel" "$tags"
         kodem_release_highlights
@@ -94,12 +94,10 @@ kodem_release_prepare() {
     else
         previous=$(printf '%s\n' "$tags" | sed -nE 's/^v([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
     fi
-    if [[ -n "$previous" ]]; then
-        candidate="${previous%.*}.$((${previous##*.} + 1))"
-        release_version=$(printf '%s\n' "$base" "$candidate" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+    release_version=$(kodem_release_next_version "$base" "$previous")
+    if [[ -n "${KODEM_VERSION:-}" ]]; then
+        release_version=$(kodem_release_requested_version "$KODEM_VERSION") || return 1
     fi
-    release_version=${KODEM_VERSION:-$release_version}
-    [[ "$release_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo 'KODEM_VERSION must be X.X.X without leading zeros.' >&2; return 1; }
     if [[ -n "$previous" ]]; then
         [[ "$release_version" != "$previous" && "$(printf '%s\n' "$release_version" "$previous" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" == "$release_version" ]] || { echo "Version must be newer than $previous." >&2; return 1; }
     fi
@@ -116,6 +114,41 @@ kodem_release_tag() {
     local channel=$1 version=$2
     [[ -n "$version" ]] || return 0
     if [[ "$channel" == nightly ]]; then echo "nightly/v$version"; else echo "v$version"; fi
+}
+
+# Prints the version that follows a channel's newest release: the next minor version with patch
+# 0, such as 0.61.0 after 0.60.0, or the workspace version in Cargo.toml when that is newer.
+# Releases before counted patch versions up to 0.1.60; the workspace version 0.61.0 follows
+# them. Without an earlier release, prints the workspace version.
+kodem_release_next_version() {
+    local base=$1 previous=$2 major minor
+    [[ -n "$previous" ]] || { echo "$base"; return 0; }
+    major=${previous%%.*}
+    minor=${previous#*.}
+    minor=${minor%%.*}
+    printf '%s\n' "$base" "$major.$((minor + 1)).0" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1
+}
+
+# Prints the version that KODEM_VERSION requests as X.Y.0. It names a version as X.Y, such as
+# 0.61, or as X.Y.0.
+kodem_release_requested_version() {
+    if [[ "$1" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+        echo "$1.0"
+    elif [[ "$1" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.0$ ]]; then
+        echo "$1"
+    else
+        echo 'KODEM_VERSION must be X.Y, such as 0.61, without leading zeros.' >&2
+        return 1
+    fi
+}
+
+# Prints the name that Kodem shows for a version: 0.60 for 0.60.0. Versions before 0.60 keep
+# their patch number, such as 0.1.59. Tags, bundles and release.json keep X.Y.Z, which the
+# updaters of every installed version parse.
+kodem_release_version_label() {
+    local version=$1
+    [[ "$version" != *.*.0 ]] || version=${version%.0}
+    echo "$version"
 }
 
 # Prints the tag of the newest published release of a channel on GitHub, or nothing before its
@@ -359,8 +392,8 @@ kodem_release_publish() {
     shift
     local files=("$@")
     local flags=(--latest)
-    title="Kodem $release_version"
-    if [[ "$channel" == nightly ]]; then title="Kodem Nightly $release_version"; flags=(--prerelease --latest=false); fi
+    title="Kodem $(kodem_release_version_label "$release_version")"
+    if [[ "$channel" == nightly ]]; then title="Kodem Nightly $(kodem_release_version_label "$release_version")"; flags=(--prerelease --latest=false); fi
     [[ "$(git rev-parse HEAD)" == "$release_commit" && -z "$(git status --porcelain --untracked-files=normal)" ]] || { echo 'Source changed during the build; refusing publication.' >&2; return 1; }
     if [[ -n "${release_existing:-}" ]]; then
         release_api=$(gh release view "$release_tag" --repo "$release_repository" --json apiUrl --jq .apiUrl)

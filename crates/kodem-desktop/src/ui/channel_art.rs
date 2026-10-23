@@ -4,7 +4,7 @@
 //! sits near the trailing end of the section, away from the wordmark, and only sparse dots lie
 //! behind the text. A scene is baked once into a sprite, so it costs one draw per frame.
 use super::*;
-use crate::updater::{Channel, VERSION};
+use crate::updater::{Channel, VERSION, version_label};
 use dither::{DottedRule, Edge};
 use std::hash::{Hash, Hasher};
 
@@ -152,7 +152,12 @@ pub(super) fn channel_badge(theme: Theme) -> Div {
                 ),
         )
         .child(DottedRule::vertical(tone.opacity(0.45)))
-        .child(div().px(px(6.)).text_color(theme.muted).child(VERSION))
+        .child(
+            div()
+                .px(px(6.))
+                .text_color(theme.muted)
+                .child(version_label(VERSION)),
+        )
 }
 
 /// Where a scene puts its motif and its text, in window pixels.
