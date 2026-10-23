@@ -10,6 +10,8 @@
 # file has considered: every commit since the previous release, other than the commits that only
 # change this file, must be an ancestor of it or be it. Commit changes of this file alone, with a
 # subject that starts with "Changelog:". Those commits are left out of the commit list.
+# A commit whose subject starts with "hidden:" needs no review here and is left out of the
+# commit list too.
 #
 # Format (build.rs checks it, so `cargo build` reports a mistake):
 #

@@ -15,6 +15,9 @@ release_workflow=release.yml
 release_highlights_file=changelog/highlights.toml
 # The subject prefix of commits that change only the highlights. The change list leaves them out.
 release_changelog_prefix='Changelog:'
+# The subject prefix of commits that release notes skip: the highlights gate does not ask for
+# them, and the change list leaves them out.
+release_hidden_prefix='hidden:'
 
 # Fails unless GitHub CLI's account may create release tags. The Release tags ruleset reserves
 # them for the owner, collaborators and the release workflow, whose job permissions decide.
@@ -164,9 +167,9 @@ kodem_release_local_highlights() {
 
 # Fails unless the highlights file reviewed every commit after a channel's previous release tag
 # up to a commit: each commit after the file's `reviewed` commit must be a Changelog: commit
-# that changes only the file. Then prints the commits it lacks and a prompt for a coding model
-# that writes the highlights, and copies the prompt where a clipboard command exists. Before the
-# first release of a channel there is nothing to review.
+# that changes only the file, or a hidden: commit. Then prints the commits it lacks and a prompt
+# for a coding model that writes the highlights, and copies the prompt where a clipboard command
+# exists. Before the first release of a channel there is nothing to review.
 kodem_release_check_changelog() {
     local previous_tag=$1 commit=$2 reviewed range after status sha subject files pending="" prompt
     [[ -n "$previous_tag" ]] || return 0
@@ -190,6 +193,7 @@ kodem_release_check_changelog() {
             echo "${sha:0:12} \"$subject\" changes more than $release_highlights_file. A $release_changelog_prefix commit may change only that file; reword it or split it." >&2
             return 1
         fi
+        [[ "$subject" != "$release_hidden_prefix"* ]] || continue
         pending+="${sha:0:12} $subject"$'\n'
     done <<< "$range"
     [[ -n "$pending" ]] || { echo "Release highlights reviewed every change since $previous_tag."; return 0; }
@@ -230,9 +234,9 @@ PROMPT
 }
 
 # Sets release_previous to the newest release of the channel before release_version, and
-# release_notes to the subjects of the commits since it, newest first, without merges and without
-# the Changelog: commits that only change the highlights. GitHub compares up to 250 commits; the
-# notes keep 100. Missing notes never stop a release.
+# release_notes to the subjects of the commits since it, newest first, without merges, without
+# the Changelog: commits that only change the highlights and without the hidden: commits. GitHub
+# compares up to 250 commits; the notes keep 100. Missing notes never stop a release.
 kodem_release_changes() {
     local channel=$1 tags=$2 previous_tag base
     if [[ "$channel" == nightly ]]; then
@@ -245,7 +249,7 @@ kodem_release_changes() {
     previous_tag="v$release_previous"
     [[ "$channel" != nightly ]] || previous_tag="nightly/$previous_tag"
     if ! base=$(gh api "repos/$release_repository/git/ref/tags/$previous_tag" --jq .object.sha) \
-        || ! release_notes=$(gh api "repos/$release_repository/compare/$base...$release_commit?per_page=250" --jq "[.commits[] | select((.parents | length) < 2) | .commit.message | split(\"\\n\")[0] | select(startswith(\"$release_changelog_prefix\") | not)] | reverse | .[:100] | .[]"); then
+        || ! release_notes=$(gh api "repos/$release_repository/compare/$base...$release_commit?per_page=250" --jq "[.commits[] | select((.parents | length) < 2) | .commit.message | split(\"\\n\")[0] | select(startswith(\"$release_changelog_prefix\") or startswith(\"$release_hidden_prefix\") | not)] | reverse | .[:100] | .[]"); then
         echo "Could not read the changes since $previous_tag. This release shows no change list." >&2
         release_notes=""
         return 0
