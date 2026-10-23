@@ -2119,6 +2119,8 @@ pub struct NotificationSettings {
     pub while_focused: bool,
     pub play_sound: bool,
     pub sound: NotificationSound,
+    /// Plays the error sound in the window when an error notice appears.
+    pub error_sound: bool,
 }
 impl Default for NotificationSettings {
     fn default() -> Self {
@@ -2131,6 +2133,7 @@ impl Default for NotificationSettings {
             while_focused: true,
             play_sound: true,
             sound: NotificationSound::default(),
+            error_sound: true,
         }
     }
 }

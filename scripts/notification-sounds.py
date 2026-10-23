@@ -140,7 +140,15 @@ def ascend():
     return room(buffer, 0.35)
 
 
-DESIGNS = {"chime": chime, "bell": bell, "glass": glass, "pulse": pulse_pair, "ascend": ascend}
+def error():
+    """Two rounded pops that fall a tritone, the second lower and longer: plays with an error."""
+    buffer = [0.0] * int(0.7 * RATE)
+    pop(buffer, 0.0, 622.25, 0.05, 0.05, 1.0)
+    pop(buffer, 0.14, 440.0, 0.09, 0.05, 0.9)
+    return room(buffer, 0.3)
+
+
+DESIGNS = {"chime": chime, "bell": bell, "glass": glass, "pulse": pulse_pair, "ascend": ascend, "error": error}
 
 
 def master(channels):

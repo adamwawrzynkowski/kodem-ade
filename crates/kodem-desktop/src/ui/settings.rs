@@ -1871,6 +1871,36 @@ impl Shell {
                     ),
             )
             .child(
+                setting_group("Error sound", None, t)
+                    .child(self.notification_toggle(
+                        "notifications-error-sound",
+                        (
+                            "Play error sound",
+                            "Play a short sound in Kodem when an error notification appears.",
+                        ),
+                        self.settings.notifications.error_sound,
+                        false,
+                        |n| &mut n.error_sound,
+                        cx,
+                    ))
+                    .child(
+                        self.setting_row(
+                            "Preview error sound",
+                            "Play the error sound now.",
+                            self.button("preview-error-sound", "play", "Play")
+                                .on_click(cx.listener(|s, _, _, cx| {
+                                    if let Err(error) = crate::sound::error() {
+                                        s.report_error(
+                                            format!("Could not preview the sound: {error:#}"),
+                                            cx,
+                                        );
+                                    }
+                                }))
+                                .into_any_element(),
+                        ),
+                    ),
+            )
+            .child(
                 setting_group("Test", None, t).child(
                         self.setting_row(
                             "Test notification",

@@ -502,7 +502,7 @@ impl Render for Shell {
         self.folds.begin_frame();
         self.sync_reveals(cx);
         self.sync_rail_slide();
-        self.sync_error_notices(cx);
+        self.sync_notices(cx);
         self.sync_censor();
         fx::begin_frame(cx);
         skater::begin_frame(cx);
@@ -833,8 +833,11 @@ impl Render for Shell {
         }
         // The handles come last, so they sit above the panes on both sides of a divider.
         root = root.child(body.relative().children(handles));
-        root = root.children(self.floating_notices(cx));
+        // The floating cards lie above the workspace and its dialogs, so an error stays in view
+        // while a dialog is open. Menus open above the cards.
+        let notices = self.floating_notices(cx);
         if self.panel == Panel::Palette {
+            root = root.children(notices);
             root = root.child(self.palette(window, cx));
         } else if matches!(
             self.panel,
@@ -858,9 +861,13 @@ impl Render for Shell {
                 | Panel::Sort
                 | Panel::Comparison
         ) {
+            root = root.children(notices);
             root = root.child(self.menu(window, cx));
         } else if self.panel != Panel::None {
             root = root.child(self.panel(window, cx));
+            root = root.children(notices);
+        } else {
+            root = root.children(notices);
         }
         // A page is a view of the platform above the window's drawing, so it hides while a
         // menu or a dialog would lie under it.

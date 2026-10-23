@@ -162,6 +162,8 @@ enum Panel {
     AddServer,
     /// Adds a skill from GitHub or a folder, or writes a new one.
     AddSkill,
+    /// The whole text of an error or a warning notice.
+    NoticeDetails,
 }
 /// What the side pane shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2033,6 +2035,11 @@ impl Shell {
         self.submit_current(cx);
     }
     fn cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        // Escape leaves the details of a notice for the dialog that was open before it.
+        if self.panel == Panel::NoticeDetails {
+            self.close_notice_details(cx);
+            return;
+        }
         // Escape first leaves voice input: a recording, the download offer or the download.
         if self.panel == Panel::None && self.cancel_voice(cx) {
             return;
@@ -2152,6 +2159,7 @@ impl Shell {
         };
         let t = self.theme;
         let mut events = Vec::new();
+        let mut problems = Vec::new();
         let previous_tasks: HashMap<&str, &core::Task> = current
             .tasks
             .iter()
@@ -2161,6 +2169,14 @@ impl Shell {
             let Some(previous) = previous_tasks.get(task.id.as_str()) else {
                 continue;
             };
+            // A new error or uncertain delivery floats its notice, of any task.
+            let problem = (task.error != previous.error || task.state != previous.state)
+                .then(|| notices::task_problem(task))
+                .flatten()
+                .filter(|problem| {
+                    notices::task_problem(previous)
+                        .is_none_or(|before| before.condition != problem.condition)
+                });
             let kind = if !previous.needs_input() && task.needs_input() {
                 Some(notices::NoticeKind::NeedsInput)
             } else if previous.state.active() && task.state == RunState::Completed {
@@ -2172,13 +2188,19 @@ impl Shell {
             };
             if let Some(kind) = kind {
                 fx::impact(&sidebar::thread_anchor(&task.id), kind.tone(t), cx);
-                if self.selected.as_ref() != Some(&task.id) {
+                // The notice of the task's problem stands for its failure.
+                let reported = problem.is_some() && kind == notices::NoticeKind::Blocked;
+                if self.selected.as_ref() != Some(&task.id) && !reported {
                     events.push((kind, task.id.clone(), task.title.clone()));
                 }
             }
+            problems.extend(problem);
         }
         for (kind, task_id, title) in events {
             self.record_task_event(kind, task_id, title, cx);
+        }
+        for problem in problems {
+            self.raise_problem(problem, true, cx);
         }
     }
 

@@ -15,13 +15,19 @@ pub fn audio(sound: NotificationSound) -> &'static [u8] {
 
 /// Starts a notification sound and returns without waiting for it. A new sound replaces one
 /// that is still playing.
-#[cfg(windows)]
 pub fn play(sound: NotificationSound) -> Result<()> {
+    play_audio(audio(sound))
+}
+
+/// Starts a bundled WAV sound and returns without waiting for it. A new sound replaces one
+/// that is still playing.
+#[cfg(windows)]
+pub fn play_audio(audio: &'static [u8]) -> Result<()> {
     use windows_sys::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
     // The data is static, so it outlives the asynchronous playback that reads it.
     let played = unsafe {
         PlaySoundW(
-            audio(sound).as_ptr().cast(),
+            audio.as_ptr().cast(),
             std::ptr::null_mut(),
             SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
         )
@@ -30,10 +36,10 @@ pub fn play(sound: NotificationSound) -> Result<()> {
     Ok(())
 }
 
-/// Starts a notification sound and returns without waiting for it. A new sound replaces one
+/// Starts a bundled WAV sound and returns without waiting for it. A new sound replaces one
 /// that is still playing.
 #[cfg(not(windows))]
-pub fn play(sound: NotificationSound) -> Result<()> {
+pub fn play_audio(audio: &'static [u8]) -> Result<()> {
     use anyhow::Context;
     use std::{
         io::Write,
@@ -50,7 +56,7 @@ pub fn play(sound: NotificationSound) -> Result<()> {
         .prefix("kodem-sound-")
         .suffix(".wav")
         .tempfile()?;
-    file.write_all(audio(sound))?;
+    file.write_all(audio)?;
     file.flush()?;
     let path = file.into_temp_path();
     let child = Command::new(player)

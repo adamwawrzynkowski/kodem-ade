@@ -63,6 +63,7 @@ impl Shell {
                 false => "Add MCP server",
             },
             Panel::AddSkill => "Add skill",
+            Panel::NoticeDetails => self.notice_details_title(),
             Panel::None
             | Panel::Usage
             | Panel::Plan
@@ -156,10 +157,6 @@ impl Shell {
                                     TaskKind::Review => "Delete this review and its local conversation history? This cannot be undone. Its detached worktree is removed. The project, its branches and the pull request stay as they are.",
                                 }),
                         );
-                    if let Some(error) = &self.error {
-                        content =
-                            content.child(settings::error_block("Error", error.clone(), theme));
-                    }
                     let id = task.id.clone();
                     let deleting = self.deleting_task.as_ref() == Some(&id);
                     actions = Some(
@@ -221,10 +218,7 @@ impl Shell {
                                 .line_height(relative(1.45))
                                 .text_color(theme.muted)
                                 .child("Remove this project from Kodem? Files and chat history are kept. Open the repository again to restore it."),
-                        )
-                        .when_some(self.error.clone(), |d, error| {
-                            d.child(settings::error_block("Error", error, theme))
-                        });
+                        );
                     actions = Some(
                         footer_actions().child(
                             self.tinted(
@@ -272,10 +266,7 @@ impl Shell {
                                 .line_height(relative(1.45))
                                 .text_color(theme.muted)
                                 .child("This folder has no Git repository of its own. Initialize Git to get task worktrees, branches and tracked changes, or open it anyway and let tasks edit the folder directly."),
-                        )
-                        .when_some(self.error.clone(), |d, error| {
-                            d.child(settings::error_block("Error", error, theme))
-                        });
+                        );
                     actions = Some(
                         footer_actions()
                             .child(
@@ -488,6 +479,10 @@ impl Shell {
                 content = content.child(self.thread_import(cx));
                 actions = Some(self.thread_import_actions(cx));
             }
+            Panel::NoticeDetails => {
+                content = content.child(self.notice_details());
+                actions = Some(self.notice_details_actions(cx));
+            }
             Panel::Rename => {
                 content = content
                     .child(kit::section_header("Title", None, theme))
@@ -540,7 +535,10 @@ impl Shell {
             whats_new::WIDTH
         } else if self.panel == Panel::Files {
             1000.
-        } else if matches!(self.panel, Panel::Settings | Panel::ImportThreads) {
+        } else if matches!(
+            self.panel,
+            Panel::Settings | Panel::ImportThreads | Panel::NoticeDetails
+        ) {
             780.
         } else if matches!(self.panel, Panel::AddServer | Panel::AddSkill) {
             680.
@@ -551,7 +549,13 @@ impl Shell {
             self.panel,
             Panel::DeleteTask | Panel::RemoveProject | Panel::Quit
         );
-        let tone = if danger { theme.removed } else { theme.accent };
+        let tone = if self.panel == Panel::NoticeDetails {
+            self.notice_details_tone()
+        } else if danger {
+            theme.removed
+        } else {
+            theme.accent
+        };
         let presentation = match self.panel {
             Panel::CustomizeProject => Some(("palette", "Name, accent, icon and commands")),
             Panel::RemoveProject => Some(("trash-2", "Files and local history stay on disk")),
@@ -577,6 +581,10 @@ impl Shell {
             Panel::Rename => Some(("pencil", "A manual title stops automatic renaming")),
             Panel::DeleteTask => Some(("trash-2", "Removes this task's local conversation")),
             Panel::Quit => Some(("log-out", "Closes the window and ends the app")),
+            Panel::NoticeDetails => Some((
+                "triangle-alert",
+                "The whole message. Select any part of it or copy all of it",
+            )),
             Panel::ImportThreads => Some((
                 "arrow-down-to-line",
                 "Conversations of Claude Code, Codex, OpenCode, Antigravity and Grok in your projects",
@@ -586,6 +594,10 @@ impl Shell {
         let close = self
             .icon_button("close-panel", "close", "Close · Esc")
             .on_click(cx.listener(|s, _, _, cx| {
+                if s.panel == Panel::NoticeDetails {
+                    s.close_notice_details(cx);
+                    return;
+                }
                 s.panel = Panel::None;
                 cx.notify();
             }));

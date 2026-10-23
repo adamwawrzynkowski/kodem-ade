@@ -469,9 +469,6 @@ impl Shell {
             )
             .child(icons)
             .child(commands)
-            .when_some(self.error.clone(), |d, error| {
-                d.child(settings::error_block("Error", error, t))
-            })
             .into_any_element()
     }
 

@@ -77,7 +77,6 @@ impl Shell {
                 doc.set_scroll(self.chat_scroll.clone(), px(8.))
             });
             panel = panel.child(self.chat_selection.clone());
-            let state = &view.task.state;
             let center_diff =
                 self.reviewing_file && self.settings.diff_placement == DiffPlacement::Conversation;
             if self.settings.skater && !center_diff {
@@ -104,31 +103,6 @@ impl Shell {
             }
             if !center_diff {
                 panel = panel.child(self.chat_header(view, cx));
-            }
-            if state == &RunState::DeliveryUnknown {
-                let id = view.task.id.clone();
-                panel = panel.child(
-                    notice(t, t.warning, "Delivery")
-                        .child(div().flex_1().child(
-                            "Delivery needs confirmation before another message can be sent.",
-                        ))
-                        .child(
-                            self.button("reconcile", "refresh", "Check history")
-                                .on_click(cx.listener(move |s, _, _, _| {
-                                    s.send(core::Request::Reconcile {
-                                        task_id: id.clone(),
-                                    })
-                                })),
-                        ),
-                );
-            }
-            if let Some(error) = &view.task.error {
-                panel = panel.child(
-                    notice(t, t.removed, "Error").child(div().flex_1().child(error.clone())),
-                );
-            }
-            if let Some(account_notice) = self.account_notice(cx) {
-                panel = panel.child(account_notice);
             }
             if let Some(review_actions) = self.review_actions(cx) {
                 panel = panel.child(review_actions);
@@ -402,10 +376,6 @@ impl Shell {
                 .when(self.mode == TaskKind::Review, |column| {
                     column.child(self.review_picker(cx))
                 })
-                .children(
-                    self.account_notice(cx)
-                        .map(|notice| div().mx(px(-20.)).child(notice)),
-                )
                 .child(composer)
                 .child(self.shortcut_hints());
             panel = panel.child(
@@ -585,76 +555,6 @@ impl Shell {
                     })),
             )
             .into_any_element()
-    }
-
-    // Tells the user when the task's account cannot run a turn, with the action that fixes it.
-    fn account_notice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let t = self.theme;
-        let Some(state) = self.composer_account() else {
-            // The host keeps a removed account's tasks blocked instead of switching identity.
-            let preferences = self.composer_preferences();
-            self.workspace.as_ref()?;
-            preferences.account.as_ref()?;
-            return Some(
-                notice(t, t.removed, "Account")
-                    .child(div().flex_1().child(format!(
-                        "The {} account of this task was removed. Choose another account to continue.",
-                        preferences.provider.label()
-                    )))
-                    .child(
-                        self.button("notice-choose-account", "users", "Choose account")
-                            .on_click(cx.listener(|s, _, window, cx| {
-                                s.open_agent_menu(Panel::Models, window, cx)
-                            })),
-                    )
-                    .into_any_element(),
-            );
-        };
-        let provider = state.account.provider;
-        let id = state.account.id.clone();
-        let name = state.account.name.clone();
-        if state.status.signed_in == Some(false) {
-            return Some(
-                notice(t, t.warning, "Account")
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(format!("{name} is signed out of {}.", provider.label())),
-                    )
-                    .child(
-                        self.primary("notice-sign-in", "log-in", "Sign in")
-                            .disabled(state.status.signing_in)
-                            .on_click(cx.listener(move |s, _, _, _| {
-                                s.send(core::Request::SignInAccount {
-                                    provider,
-                                    id: id.clone(),
-                                })
-                            })),
-                    )
-                    .into_any_element(),
-            );
-        }
-        let usage = state
-            .status
-            .usage
-            .as_ref()
-            .filter(|usage| usage::limit_reached(usage))?;
-        let reset = [usage.primary.as_ref(), usage.secondary.as_ref()]
-            .into_iter()
-            .flatten()
-            .filter(|window| window.used_percent >= 100)
-            .filter_map(|window| window.resets_at)
-            .min();
-        // The notice names the reset. It does not offer another account: using one to continue
-        // past a limit is what the providers' terms forbid.
-        Some(
-            notice(t, t.removed, "Limit")
-                .child(div().flex_1().child(format!(
-                    "{name} reached its usage limit. {}",
-                    usage::reset_time(reset)
-                )))
-                .into_any_element(),
-        )
     }
 
     // The heading of a start screen: a greeting, then what the workspace starts, both in words
