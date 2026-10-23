@@ -1,7 +1,7 @@
 //! The workspace rail: a narrow column of icons that swaps the window between Agentic Coding,
-//! Chat, Review and Git. Each task workspace lists its own tasks, and keeps the task that was
-//! open in it and the unsent draft of its start screen. The Git workspace covers the task
-//! workspace that was open and keeps its own repositories.
+//! Chat, Review, Git and Plugins. Each task workspace lists its own tasks, and keeps the task
+//! that was open in it and the unsent draft of its start screen. The Git and Plugins workspaces
+//! cover the task workspace that was open; Git keeps its own repositories.
 use super::*;
 use crate::thread_list::Section;
 
@@ -72,6 +72,7 @@ impl Shell {
         rail = rail.child(
             tiles
                 .child(self.git_button(TaskKind::ALL.len(), cx))
+                .child(self.plugins_button(TaskKind::ALL.len() + 1, cx))
                 .child(rail_pill(&self.rail_slide, self.rail_slot(), t.accent)),
         );
         if self.git_open
@@ -250,8 +251,12 @@ impl Shell {
             })
     }
 
-    // The rail slot of the open workspace: the task workspaces in their order, then Git.
+    // The rail slot of the open workspace: the task workspaces in their order, then Git, then
+    // Plugins.
     fn rail_slot(&self) -> usize {
+        if self.plugins.open {
+            return TaskKind::ALL.len() + 1;
+        }
         if self.git_open {
             return TaskKind::ALL.len();
         }
@@ -330,6 +335,7 @@ impl Shell {
         if self.git_open {
             self.close_git(cx);
         }
+        self.close_plugins(cx);
         if self.mode == mode {
             return;
         }
@@ -422,6 +428,21 @@ impl Shell {
         self.rail_cell(slot, tile, chosen).into_any_element()
     }
 
+    // The Plugins workspace's tile in the rail at `slot`: the puzzle piece.
+    fn plugins_button(&self, slot: usize, cx: &mut Context<Self>) -> AnyElement {
+        let chosen = self.rail_slot() == slot;
+        let tile = self
+            .rail_tile(
+                slot,
+                "puzzle",
+                "Plugins",
+                "Plugins · MCP servers and skills · ⌥⌘5".into(),
+                chosen,
+            )
+            .on_click(cx.listener(|s, _, _, cx| s.open_plugins(cx)));
+        self.rail_cell(slot, tile, chosen).into_any_element()
+    }
+
     /// Returns the Git workspace, created the first time it is needed.
     pub(super) fn git_workspace(
         &mut self,
@@ -454,6 +475,7 @@ impl Shell {
         if self.git_open || self.creating_task {
             return;
         }
+        self.close_plugins(cx);
         self.git_open = true;
         self.settings.git_workspace = true;
         self.panel = Panel::None;

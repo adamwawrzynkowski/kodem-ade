@@ -224,9 +224,9 @@ fn claude_channel() -> &'static str {
     }
 }
 
-// Returns the system's curl with the options of every request: HTTPS only, bounded in time
-// and size, and without the user's curl configuration.
-fn curl(url: &str, accept: &str, limit: Duration, max_bytes: u64) -> Command {
+/// Returns the system's curl with the options of every request: HTTPS only, bounded in time
+/// and size, and without the user's curl configuration.
+pub(crate) fn curl(url: &str, accept: &str, limit: Duration, max_bytes: u64) -> Command {
     let mut command = Command::new(crate::updater::curl_program());
     platform::hide_console(&mut command)
         .args([
@@ -255,8 +255,8 @@ fn curl(url: &str, accept: &str, limit: Duration, max_bytes: u64) -> Command {
     command
 }
 
-// Reads a small document over HTTPS.
-fn fetch(url: &str) -> Result<Vec<u8>> {
+/// Reads a small document over HTTPS.
+pub(crate) fn fetch(url: &str) -> Result<Vec<u8>> {
     let output = curl(
         url,
         "application/json, text/plain",
@@ -518,8 +518,8 @@ fn download(
     Ok(())
 }
 
-// Returns the system's own `tar`: bsdtar on macOS and Windows reads `.tar.gz` archives.
-fn tar_program() -> Result<PathBuf> {
+/// Returns the system's own `tar`: bsdtar on macOS and Windows reads `.tar.gz` archives.
+pub(crate) fn tar_program() -> Result<PathBuf> {
     #[cfg(windows)]
     let candidates = vec![
         PathBuf::from(std::env::var_os("SystemRoot").context("SystemRoot is unavailable")?)

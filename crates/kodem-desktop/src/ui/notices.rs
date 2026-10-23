@@ -521,6 +521,7 @@ impl Shell {
                             .on_click(cx.listener(move |s, _, _, cx| {
                                 s.panel = Panel::None;
                                 s.close_git(cx);
+                                s.close_plugins(cx);
                                 s.select_task(task.clone(), cx);
                                 cx.notify();
                             }))

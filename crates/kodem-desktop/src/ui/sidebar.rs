@@ -829,6 +829,7 @@ impl Shell {
     /// Opens the task `offset` rows away from the open one in the feed, wrapping at the ends.
     pub(super) fn select_adjacent_task(&mut self, offset: isize, cx: &mut Context<Self>) {
         self.close_git(cx);
+        self.close_plugins(cx);
         let tasks = self.feed_tasks(cx);
         if tasks.is_empty() {
             return;
@@ -849,6 +850,7 @@ impl Shell {
     /// The tasks of the open workspace come first, in feed order; then those of the others.
     pub(super) fn select_next_attention(&mut self, cx: &mut Context<Self>) {
         self.close_git(cx);
+        self.close_plugins(cx);
         let Some(workspace) = &self.workspace else {
             return;
         };
@@ -1675,11 +1677,16 @@ fn project_tile(project: &Project, theme: Theme, size: f32, glyph_size: f32) -> 
     glyph_tile(glyph, project_tint(project, theme), size, glyph_size)
 }
 
-// Returns a square tile of `size` points with a glyph of `glyph_size` points. The tile is a dark
-// plate in both appearances, like an application icon, so that glyph tiles and image tiles look
-// alike in one list. The tint colors the plate, its edge and a glow of fine dots in its leading
-// top corner. The glyph is paper white.
-fn glyph_tile(glyph: &'static str, tint: Hsla, size: f32, glyph_size: f32) -> AnyElement {
+/// Returns a square tile of `size` points with a glyph of `glyph_size` points. The tile is a dark
+/// plate in both appearances, like an application icon, so that glyph tiles and image tiles look
+/// alike in one list. The tint colors the plate, its edge and a glow of fine dots in its leading
+/// top corner. The glyph is paper white.
+pub(super) fn glyph_tile(
+    glyph: &'static str,
+    tint: Hsla,
+    size: f32,
+    glyph_size: f32,
+) -> AnyElement {
     let radius = tile_radius(size);
     // The tint of the light appearance is too dark to read on the plate.
     let mut glow = tint;

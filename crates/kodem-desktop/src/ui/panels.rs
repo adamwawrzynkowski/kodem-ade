@@ -53,6 +53,16 @@ impl Shell {
             Panel::DeleteTask => "Delete thread?",
             Panel::ImportThreads => "Import threads",
             Panel::Quit => "Quit Kodem?",
+            Panel::AddServer => match self
+                .plugins
+                .custom
+                .as_ref()
+                .is_some_and(|custom| custom.editing().is_some())
+            {
+                true => "Edit MCP server",
+                false => "Add MCP server",
+            },
+            Panel::AddSkill => "Add skill",
             Panel::None
             | Panel::Usage
             | Panel::Plan
@@ -300,6 +310,14 @@ impl Shell {
             Panel::Settings => {
                 content = content.p_0().gap_0().child(self.settings_panel(cx));
             }
+            Panel::AddServer => {
+                content = content.child(self.custom_server_panel(cx));
+                actions = Some(self.custom_server_actions(cx));
+            }
+            Panel::AddSkill => {
+                content = content.child(self.add_skill_panel(cx));
+                actions = Some(self.add_skill_actions(cx));
+            }
             Panel::WhatsNew => {
                 content = content.child(self.whats_new(window, cx));
                 actions = Some(
@@ -524,6 +542,8 @@ impl Shell {
             1000.
         } else if matches!(self.panel, Panel::Settings | Panel::ImportThreads) {
             780.
+        } else if matches!(self.panel, Panel::AddServer | Panel::AddSkill) {
+            680.
         } else {
             600.
         };
@@ -542,6 +562,14 @@ impl Shell {
                 "The highlights of this version, then every change",
             )),
             Panel::Resources => Some(("code", "What the provider can use in this task")),
+            Panel::AddServer => Some((
+                "plug",
+                "Fill in a form, paste a configuration or search the web",
+            )),
+            Panel::AddSkill => Some((
+                "book",
+                "From GitHub, from a folder, or your own instructions",
+            )),
             Panel::Check => Some((
                 "square-terminal",
                 "Runs in the task's checkout and is recorded in the conversation",

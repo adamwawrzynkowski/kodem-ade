@@ -32,6 +32,7 @@ mod onboarding;
 mod overview_ruler;
 mod palette;
 mod panels;
+mod plugins;
 mod project_commands;
 mod projects;
 mod questions;
@@ -108,6 +109,7 @@ actions!(
         ShowChat,
         ShowReview,
         ShowGit,
+        ShowPlugins,
         CloneRepository
     ]
 );
@@ -154,6 +156,10 @@ enum Panel {
     ImportThreads,
     /// Asks before Kodem quits.
     Quit,
+    /// Adds an MCP server from a form, a pasted configuration or a web search.
+    AddServer,
+    /// Adds a skill from GitHub or a folder, or writes a new one.
+    AddSkill,
 }
 /// What the side pane shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -198,6 +204,8 @@ pub struct Shell {
     git: Option<Entity<git::GitWorkspace>>,
     /// The Git workspace covers the workspace of `mode`.
     git_open: bool,
+    /// The Plugins workspace, which covers the workspace of `mode` while it is open.
+    plugins: plugins::Plugins,
     /// Repository folders that the Git workspace asked the host to list as projects.
     git_registrations: HashSet<PathBuf>,
     /// The pages of the Git section of preferences.
@@ -426,6 +434,7 @@ impl Shell {
             cx.new(|cx| TextInput::composer("Type a command or search threads…", cx));
         let review_filter = cx.new(|cx| TextInput::new("Filter…", cx));
         let icon_filter = cx.new(|cx| TextInput::new("Search icons…", cx));
+        let plugins = plugins::Plugins::new(cx);
         let browser_address = cx.new(|cx| {
             let mut input = TextInput::new("Address or file path", cx);
             input.set_single_line(true);
@@ -512,6 +521,10 @@ impl Shell {
             cx.observe(&aux, |_, _, cx| cx.notify()),
             cx.observe(&review_filter, |_, _, cx| cx.notify()),
             cx.observe(&icon_filter, |_, _, cx| cx.notify()),
+            cx.observe(&plugins.search, |s, _, cx| {
+                s.directory_query_changed(cx);
+                cx.notify();
+            }),
             cx.subscribe_in(
                 &browser_address,
                 window,
@@ -683,6 +696,7 @@ impl Shell {
             mode: TaskKind::default(),
             git: None,
             git_open: false,
+            plugins,
             git_registrations: HashSet::new(),
             git_settings: Some(cx.new(|cx| git::settings_view::GitSettingsView::new(window, cx))),
             mode_tasks: HashMap::new(),
@@ -1977,6 +1991,7 @@ impl Shell {
     }
     fn new_task(&mut self, _: &NewTask, window: &mut Window, cx: &mut Context<Self>) {
         self.close_git(cx);
+        self.close_plugins(cx);
         self.open_empty_chat(cx);
         window.focus(&self.input.read(cx).focus_handle(cx), cx);
     }
@@ -2013,6 +2028,11 @@ impl Shell {
         self.submit_current(cx);
     }
     fn cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        // In the Plugins workspace, Escape leaves a detail page for its list.
+        if self.panel == Panel::None && self.plugins.open && self.plugins.detail.is_some() {
+            self.close_plugin_detail(cx);
+            return;
+        }
         if self.panel == Panel::None
             && let Some(viewer) = &self.diff_view
         {
@@ -2706,6 +2726,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-alt-2", ShowChat, None),
         KeyBinding::new("secondary-alt-3", ShowReview, None),
         KeyBinding::new("secondary-alt-4", ShowGit, None),
+        KeyBinding::new("secondary-alt-5", ShowPlugins, None),
         KeyBinding::new("secondary-shift-o", CloneRepository, None),
         KeyBinding::new("escape", Cancel, None),
         KeyBinding::new("secondary-q", Quit, None),
@@ -2751,6 +2772,7 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Chat", ShowChat),
                 MenuItem::action("Review", ShowReview),
                 MenuItem::action("Git", ShowGit),
+                MenuItem::action("Plugins", ShowPlugins),
                 MenuItem::separator(),
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
                 MenuItem::action("Toggle Changes", ToggleReview),

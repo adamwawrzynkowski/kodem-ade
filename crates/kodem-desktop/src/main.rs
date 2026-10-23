@@ -9,6 +9,7 @@ mod components;
 mod harness;
 mod icons;
 mod markdown;
+mod plugins;
 mod release_notes;
 mod sound;
 mod syntax;

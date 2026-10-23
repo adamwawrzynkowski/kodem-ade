@@ -258,6 +258,35 @@ impl Shell {
                         }),
                 )
             });
+        if self.plugins.open {
+            let title = self.plugins_title();
+            header = header.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .min_w_0()
+                    .flex_1()
+                    .px(px(14.))
+                    .gap(px(8.))
+                    .when(self.reveals.sidebar <= 0., |d| {
+                        d.pl(gpui::px(WINDOW_CONTROLS)).child(
+                            self.icon_button("expand-sidebar", "panel-left", "Show sidebar · ⌘B")
+                                .occlude()
+                                .on_click(cx.listener(|s, _, _, cx| {
+                                    s.settings.collapsed = false;
+                                    s.save_settings();
+                                    cx.notify();
+                                })),
+                        )
+                    })
+                    .child(title),
+            );
+            return header
+                .when(app_window_buttons(window), |header| {
+                    header.child(self.window_buttons(window, cx))
+                })
+                .into_any_element();
+        }
         if let Some(git) = self.git.clone().filter(|_| self.git_open) {
             let title = git.update(cx, |git, cx| git.render_title_bar(window, cx));
             header = header.child(
@@ -442,6 +471,7 @@ impl Shell {
     fn go_to_task(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(id) = self.feed_tasks(cx).get(index) {
             self.close_git(cx);
+            self.close_plugins(cx);
             self.select_task(id.clone(), cx);
         }
     }
@@ -575,6 +605,7 @@ impl Render for Shell {
             .on_action(cx.listener(|s, _: &ShowChat, _, cx| s.set_mode(TaskKind::Chat, cx)))
             .on_action(cx.listener(|s, _: &ShowReview, _, cx| s.set_mode(TaskKind::Review, cx)))
             .on_action(cx.listener(|s, _: &ShowGit, _, cx| s.open_git(cx)))
+            .on_action(cx.listener(|s, _: &ShowPlugins, _, cx| s.open_plugins(cx)))
             .on_action(cx.listener(|s, _: &diff_view::SaveEdits, _, cx| s.save_edit(cx)))
             .on_action(cx.listener(|s, _: &CloneRepository, window, cx| {
                 s.open_git(cx);
@@ -596,6 +627,13 @@ impl Render for Shell {
                     && let Some(git) = s.git.clone()
                 {
                     git.update(cx, |git, cx| git.open_commit_search(cx));
+                    return;
+                }
+                // In the Plugins workspace, search narrows the open list.
+                if s.plugins.open {
+                    let search = s.plugins.search.read(cx).focus_handle(cx);
+                    w.focus(&search, cx);
+                    cx.notify();
                     return;
                 }
                 s.settings.collapsed = false;
@@ -653,8 +691,10 @@ impl Render for Shell {
         };
         root = root.child(self.titlebar(window, cx));
         let rail = self.workspace_rail(window, cx);
+        let plugins = git.is_none() && self.plugins.open;
         let sidebar = match &git {
             Some(git) => self.git_sidebar(git, cx),
+            None if plugins => self.plugins_sidebar(cx),
             None => self.sidebar(cx),
         };
         let sidebar_open = self.reveals.sidebar;
@@ -674,6 +714,7 @@ impl Render for Shell {
             sidebar
         };
         let narrow_review = git.is_none()
+            && !plugins
             && self.show_review
             && self.has_checkout()
             && self.window_width <= 1100.
@@ -690,6 +731,18 @@ impl Render for Shell {
                     .min_w_0()
                     .h_full()
                     .child(git.clone()),
+                t.canvas,
+                5.,
+            ),
+            None if plugins => motion::switched(
+                "workspace-enter-plugins",
+                div()
+                    .relative()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(self.plugins_page(window, cx)),
                 t.canvas,
                 5.,
             ),
@@ -740,6 +793,7 @@ impl Render for Shell {
                 .child(div().w(px(1.)).flex_shrink_0().h_full().bg(t.border))
                 .child(self.side_pane(window, cx));
         } else if git.is_none()
+            && !plugins
             && review_open > 0.
             && self.has_checkout()
             && self.window_width > 1100.

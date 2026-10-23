@@ -12,6 +12,7 @@ enum Action {
     OpenTask(String),
     Workspace(TaskKind),
     Git,
+    Plugins,
     CloneRepository,
     NextAttention,
     Models,
@@ -286,7 +287,7 @@ impl Shell {
             (TaskKind::Chat, "⌥⌘2"),
             (TaskKind::Review, "⌥⌘3"),
         ] {
-            if mode != self.mode || self.git_open {
+            if mode != self.mode || self.git_open || self.plugins.open {
                 add(
                     mode.icon(),
                     &format!("Open {}", mode.label()),
@@ -305,6 +306,16 @@ impl Shell {
                 "⌥⌘4",
                 "Workspaces",
                 Action::Git,
+            );
+        }
+        if !self.plugins.open {
+            add(
+                "puzzle",
+                "Open Plugins",
+                "MCP servers and skills",
+                "⌥⌘5",
+                "Workspaces",
+                Action::Plugins,
             );
         }
         add(
@@ -534,10 +545,12 @@ impl Shell {
             Action::OpenProject => self.open_project(&OpenProject, window, cx),
             Action::OpenTask(id) => {
                 self.close_git(cx);
+                self.close_plugins(cx);
                 self.select_task(id, cx)
             }
             Action::Workspace(mode) => self.set_mode(mode, cx),
             Action::Git => self.open_git(cx),
+            Action::Plugins => self.open_plugins(cx),
             Action::CloneRepository => {
                 self.open_git(cx);
                 let git = self.git_workspace(window, cx);
