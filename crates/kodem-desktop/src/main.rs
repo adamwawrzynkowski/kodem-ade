@@ -18,6 +18,7 @@ mod thread_list;
 mod tool_output;
 mod ui;
 mod updater;
+mod voice;
 mod wallpaper;
 mod window_state;
 use gpui::{prelude::*, *};

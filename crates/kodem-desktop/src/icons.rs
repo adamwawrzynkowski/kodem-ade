@@ -93,6 +93,7 @@ impl AssetSource for Assets {
             "list-end",
             "list-ordered",
             "loader",
+            "mic",
             "lock-open",
             "log-in",
             "log-out",

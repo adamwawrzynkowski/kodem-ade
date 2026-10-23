@@ -354,6 +354,23 @@ impl TextInput {
         cx.notify();
     }
 
+    /// Replaces the selection with `words` as one undoable edit and puts the caret after them.
+    /// A space keeps them apart from a word right before or after the selection.
+    pub fn insert_words(&mut self, words: &str, cx: &mut Context<Self>) {
+        let range = self.selected_range.clone();
+        let before = self.content[..range.start].chars().next_back();
+        let after = self.content[range.end..].chars().next();
+        let mut text = String::with_capacity(words.len() + 2);
+        if before.is_some_and(|c| !c.is_whitespace()) {
+            text.push(' ');
+        }
+        text.push_str(words);
+        if after.is_some_and(|c| !c.is_whitespace()) {
+            text.push(' ');
+        }
+        self.complete_slash(range, &text, cx);
+    }
+
     fn completion_accept(&mut self, _: &AcceptCompletion, _: &mut Window, cx: &mut Context<Self>) {
         if self.completion_open && self.marked_range.is_none() {
             cx.emit(CompletionInput::Accept);

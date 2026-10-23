@@ -1,0 +1,6 @@
+# whisper.cpp, the speech engine of kodem-voice, builds with CMake, which reads these. A release
+# runs on other computers than the one that builds it, so ggml targets fixed processor features
+# instead of the build computer's: on x64 AVX2, FMA, F16C and BMI2, which processors have had
+# since 2013, and on Arm the compiler's baseline for the target.
+[env]
+GGML_NATIVE = "OFF"

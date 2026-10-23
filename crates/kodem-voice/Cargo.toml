@@ -1,0 +1,26 @@
+[package]
+name = "kodem-voice"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+cpal = "=0.18.2"
+whisper-rs = "=0.16.0"
+
+# Apple silicon runs the speech model on its GPU through Metal.
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "=0.16.0", features = ["metal"] }
+
+# Linux and Windows on x64 run it on a graphics card through Vulkan when a driver offers one, and
+# on the CPU otherwise. Windows on Arm builds on an x64 computer, where ggml cannot build the tool
+# that compiles its Vulkan shaders, so it runs on the CPU.
+[target.'cfg(any(all(windows, target_arch = "x86_64"), not(any(target_os = "macos", windows))))'.dependencies]
+whisper-rs = { version = "=0.16.0", features = ["vulkan"] }
+
+# Kodem loads the Vulkan loader on Windows only once voice input needs it. See
+# kodem-desktop's build script.
+[target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
+windows = { version = "0.62", features = ["Win32_System_LibraryLoader"] }

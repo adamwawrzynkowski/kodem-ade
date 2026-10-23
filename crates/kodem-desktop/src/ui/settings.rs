@@ -21,6 +21,8 @@ pub(crate) enum SettingsPage {
     Git,
     Events,
     Sound,
+    /// The microphone, its volume and the speech model of voice input.
+    Voice,
     Shortcuts,
 }
 
@@ -40,6 +42,7 @@ impl SettingsPage {
             Self::Git => "Git",
             Self::Events => "Events",
             Self::Sound => "Sound",
+            Self::Voice => "Voice",
             Self::Shortcuts => "Keyboard shortcuts",
         }
     }
@@ -69,6 +72,9 @@ impl SettingsPage {
                 "Choose the task events that send a notification, even after closing the window."
             }
             Self::Sound => "Choose the sound of a notification and send a test.",
+            Self::Voice => {
+                "Choose the microphone of voice input and its volume, and manage the speech model that transcribes it on this computer."
+            }
             Self::Shortcuts => "Move around the workspace without leaving the keyboard.",
         }
     }
@@ -81,7 +87,8 @@ impl SettingsPage {
             Self::Agents | Self::Provider(..) => 2,
             Self::Git => 3,
             Self::Events | Self::Sound => 4,
-            Self::Shortcuts => 5,
+            Self::Voice => 5,
+            Self::Shortcuts => 6,
         };
         &CATEGORIES[index]
     }
@@ -213,7 +220,7 @@ impl SettingsCategory {
 }
 
 /// The categories of Preferences in navigation order.
-pub(super) static CATEGORIES: [SettingsCategory; 6] = [
+pub(super) static CATEGORIES: [SettingsCategory; 7] = [
     SettingsCategory {
         icon: "sun",
         label: "Appearance",
@@ -247,6 +254,11 @@ pub(super) static CATEGORIES: [SettingsCategory; 6] = [
         icon: "bell",
         label: "Notifications",
         pages: &[SettingsPage::Events, SettingsPage::Sound],
+    },
+    SettingsCategory {
+        icon: "mic",
+        label: "Voice",
+        pages: &[SettingsPage::Voice],
     },
     SettingsCategory {
         icon: "keyboard",
@@ -335,6 +347,7 @@ const SHORTCUTS: [(&str, &[(&str, &str)]); 3] = [
             ("Reasoning effort", "⇧ ⌘ E"),
             ("Access mode", "⇧ ⌘ A"),
             ("Switch build and plan, or cycle Codex access", "⇧ Tab"),
+            ("Start or stop voice input", "⇧ ⌘ Space"),
         ],
     ),
     (
@@ -736,6 +749,7 @@ impl Shell {
             SettingsPage::Git => self.git_settings(),
             SettingsPage::Events => self.event_settings(cx),
             SettingsPage::Sound => self.sound_settings(cx),
+            SettingsPage::Voice => self.voice_settings(cx),
             SettingsPage::Shortcuts => self.shortcut_settings(),
         };
         // Each page, and each page of the Git section, scrolls on its own from the top.
@@ -2039,7 +2053,12 @@ impl Shell {
     }
 
     // Lays out a slider beside the mono readout of its value, in a column of fixed width.
-    fn slider_control(&self, slider: controls::Slider, readout: String, tone: Hsla) -> AnyElement {
+    pub(super) fn slider_control(
+        &self,
+        slider: controls::Slider,
+        readout: String,
+        tone: Hsla,
+    ) -> AnyElement {
         div()
             .w(px(SLIDER_COLUMN))
             .flex()

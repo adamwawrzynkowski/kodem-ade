@@ -90,6 +90,7 @@ cat > "$bundle/Contents/Info.plist" <<PLIST
 <key>KodemBuildID</key><string>$build_id</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSMicrophoneUsageDescription</key><string>Voice input records your prompt and transcribes it on this Mac.</string>
 <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
 </dict></plist>
 PLIST

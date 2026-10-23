@@ -1906,6 +1906,7 @@ Apache License
 ========================================================================
 Apache-2.0
 
+cpal@0.18.2 | https://github.com/RustAudio/cpal
 imgref@1.12.3 | https://github.com/kornelski/imgref
 Upstream authors: Kornel Lesiński <kornel@geekhood.net>
 zune-core@0.5.3 | https://github.com/etemesi254/zune-image
@@ -2342,6 +2343,10 @@ Upstream authors: Steven Fackler <sfackler@gmail.com>
 no_std_io2@0.9.4 | https://github.com/wcampbell0x2a/no-std-io2
 quick-error@2.0.1 | http://github.com/tailhook/quick-error
 Upstream authors: Paul Colomiets <paul@colomiets.name>; Colin Kiegel <kiegel@gmx.de>
+toml_datetime@1.1.1+spec-1.1.0 | https://github.com/toml-rs/toml
+toml_edit@0.25.13+spec-1.1.0 | https://github.com/toml-rs/toml
+toml_parser@1.1.3+spec-1.1.0 | https://github.com/toml-rs/toml
+toml_writer@1.1.2+spec-1.1.0 | https://github.com/toml-rs/toml
 
 Apache License
                            Version 2.0, January 2004
@@ -4675,6 +4680,8 @@ core-text@21.0.0 | https://github.com/servo/core-foundation-rs
 Upstream authors: The Servo Project Developers
 core-video@0.5.2 | https://github.com/rust-media/apple-media-rs
 Upstream authors: Zhou Wei <zhouwei@ehom.net>
+coreaudio-rs@0.14.2 | https://github.com/RustAudio/coreaudio-rs.git
+Upstream authors: mitchmindtree <mitchell.nordine@gmail.com>; yupferris <jake@fusetools.com>
 crossbeam-deque@0.8.8 | https://github.com/crossbeam-rs/crossbeam
 crossbeam-epoch@0.9.21 | https://github.com/crossbeam-rs/crossbeam
 crossbeam-queue@0.3.14 | https://github.com/crossbeam-rs/crossbeam
@@ -7485,6 +7492,8 @@ accesskit_macos@0.26.3 | https://github.com/AccessKit/accesskit
 Upstream authors: The AccessKit contributors
 anyhow@1.0.104 | https://github.com/dtolnay/anyhow
 Upstream authors: David Tolnay <dtolnay@gmail.com>
+dasp_sample@0.11.0 | https://github.com/rustaudio/sample.git
+Upstream authors: mitchmindtree <mitchell.nordine@gmail.com>
 dirs-sys@0.4.1 | https://github.com/dirs-dev/dirs-sys-rs
 Upstream authors: Simon Ochsenreither <simon@ochsenreither.de>
 dirs-sys@0.5.0 | https://github.com/dirs-dev/dirs-sys-rs
@@ -7530,6 +7539,7 @@ Upstream authors: Nicolas Silva <nical@fastmail.com>
 lyon_tessellation@1.0.22 | https://github.com/nical/lyon
 Upstream authors: Nicolas Silva <nical@fastmail.com>
 mach2@0.5.0 | https://github.com/JohnTitor/mach2
+mach2@0.6.0 | https://github.com/JohnTitor/mach2
 miniz_oxide@0.8.9 | https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide
 Upstream authors: Frommi <daniil.liferenko@gmail.com>; oyvindln <oyvindln@users.noreply.github.com>; Rich Geldreich richgel99@gmail.com
 miniz_oxide@0.9.1 | https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide
@@ -7537,6 +7547,9 @@ Upstream authors: Frommi <daniil.liferenko@gmail.com>; oyvindln <oyvindln@users.
 num-conv@0.2.2 | https://github.com/jhpratt/num-conv
 Upstream authors: Jacob Pratt <jacob@jhpratt.dev>
 objc2-app-kit@0.3.2 | https://github.com/madsmtm/objc2
+objc2-audio-toolbox@0.3.2 | https://github.com/madsmtm/objc2
+objc2-core-audio-types@0.3.2 | https://github.com/madsmtm/objc2
+objc2-core-audio@0.3.2 | https://github.com/madsmtm/objc2
 objc2-core-foundation@0.3.2 | https://github.com/madsmtm/objc2
 objc2-core-location@0.3.2 | https://github.com/madsmtm/objc2
 objc2-exception-helper@0.1.1 | https://github.com/madsmtm/objc2
@@ -10091,6 +10104,30 @@ DEALINGS IN THE SOFTWARE.
 ========================================================================
 MIT
 
+winnow@1.0.4 | https://github.com/winnow-rs/winnow
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+========================================================================
+MIT
+
 pulldown-cmark-escape@0.11.0 | https://github.com/raphlinus/pulldown-cmark
 Upstream authors: Raph Levien <raph.levien@gmail.com>; Marcus Klaas de Vries <mail@marcusklaas.nl>
 pulldown-cmark@0.13.4 | https://github.com/raphlinus/pulldown-cmark
@@ -11481,6 +11518,52 @@ Portions of ICU4X may have been adapted from ICU4C and/or ICU4J.
 ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation and others.
 
 ========================================================================
+Unlicense
+
+whisper-rs@0.16.0 | https://codeberg.org/tazz4843/whisper-rs
+
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute this software, either in source code form or as a compiled
+binary, for any purpose, commercial or non-commercial, and by any
+means.
+
+In jurisdictions that recognize copyright laws, the author or authors
+of this software dedicate any and all copyright interest in the
+software to the public domain. We make this dedication for the benefit
+of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of
+relinquishment in perpetuity of all present and future rights to this
+software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <https://unlicense.org>
+
+========================================================================
+Unlicense
+
+whisper-rs-sys@0.15.0 | https://codeberg.org/tazz4843/whisper-rs
+
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or distribute this software, either in source code form or as a compiled binary, for any purpose, commercial or non-commercial, and by any means.
+
+In jurisdictions that recognize copyright laws, the author or authors of this software dedicate any and all copyright interest in the software to the public domain. We make this dedication for the benefit of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of relinquishment in perpetuity of all present and future rights to this software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <http://unlicense.org/>
+
+========================================================================
 Zlib
 
 slotmap@1.1.1 | https://github.com/orlp/slotmap
@@ -11602,7 +11685,7 @@ the following restrictions:
 ========================================================================
 Additional original upstream notices
 
-addr2line@0.25.1/LICENSE-APACHE; aligned@0.4.3/LICENSE-APACHE; arrayvec@0.7.8/LICENSE-APACHE; as-slice@0.2.1/LICENSE-APACHE; async-channel@2.5.0/LICENSE-APACHE; async-task@4.7.1/LICENSE-APACHE; atomic@0.5.3/LICENSE-APACHE; backtrace@0.3.76/LICENSE-APACHE; base64@0.22.1/LICENSE-APACHE; base64@0.23.1/LICENSE-APACHE; bitflags@2.13.1/LICENSE-APACHE; bitstream-io@4.10.0/LICENSE-APACHE; by_address@1.2.1/LICENSE-APACHE; cfg-if@1.0.4/LICENSE-APACHE; cgl@0.3.2/LICENSE-APACHE; cocoa-foundation@0.2.0/LICENSE-APACHE; cocoa@0.26.0/LICENSE-APACHE; concurrent-queue@2.5.0/LICENSE-APACHE; core-foundation-sys@0.8.7/LICENSE-APACHE; core-foundation@0.10.0/LICENSE-APACHE; core-graphics-types@0.2.0/LICENSE-APACHE; core-graphics2@0.5.2/LICENSE-APACHE; core-graphics@0.24.0/LICENSE-APACHE; core-text@21.0.0/LICENSE-APACHE; core-video@0.5.2/LICENSE-APACHE; crossbeam-deque@0.8.8/LICENSE-APACHE; crossbeam-epoch@0.9.21/LICENSE-APACHE; crossbeam-queue@0.3.14/LICENSE-APACHE; crossbeam-utils@0.8.23/LICENSE-APACHE; data-url@0.3.2/LICENSE-APACHE; displaydoc@0.2.7/LICENSE-APACHE; either@1.18.0/LICENSE-APACHE; equivalent@1.0.2/LICENSE-APACHE; errno@0.3.14/LICENSE-APACHE; euclid@0.22.14/LICENSE-APACHE; event-listener-strategy@0.5.4/LICENSE-APACHE; event-listener@5.4.2/LICENSE-APACHE; fastrand@2.5.0/LICENSE-APACHE; fixedbitset@0.5.7/LICENSE-APACHE; flate2@1.1.10/LICENSE-APACHE; fnv@1.0.7/LICENSE-APACHE; form_urlencoded@1.2.2/LICENSE-APACHE; futures-lite@2.6.1/LICENSE-APACHE; getopts@0.2.24/LICENSE-APACHE; gif@0.14.2/LICENSE-APACHE; gimli@0.32.3/LICENSE-APACHE; hash32@0.3.1/LICENSE-APACHE; hashbrown@0.16.1/LICENSE-APACHE; hashbrown@0.17.1/LICENSE-APACHE; heapless@0.9.3/LICENSE-APACHE; heck@0.5.0/LICENSE-APACHE; idna@1.1.0/LICENSE-APACHE; idna_adapter@1.2.2/LICENSE-APACHE; indexmap@2.14.2/LICENSE-APACHE; io-surface@0.16.1/LICENSE-APACHE; itertools@0.14.0/LICENSE-APACHE; lazy_static@1.5.0/LICENSE-APACHE; lock_api@0.4.14/LICENSE-APACHE; log@0.4.34/LICENSE-APACHE; metal@0.33.0/LICENSE-APACHE; num-bigint@0.4.8/LICENSE-APACHE; num-complex@0.4.6/LICENSE-APACHE; num-derive@0.4.2/LICENSE-APACHE; num-integer@0.1.47/LICENSE-APACHE; num-rational@0.4.2/LICENSE-APACHE; num-traits@0.2.19/LICENSE-APACHE; num_cpus@1.17.0/LICENSE-APACHE; object@0.37.3/LICENSE-APACHE; once_cell@1.21.4/LICENSE-APACHE; palette@0.7.7/LICENSE-APACHE; palette_derive@0.7.7/LICENSE-APACHE; palette_math@0.7.7/LICENSE-APACHE; parking@2.2.1/LICENSE-APACHE; parking_lot@0.12.5/LICENSE-APACHE; parking_lot_core@0.9.12/LICENSE-APACHE; percent-encoding@2.3.2/LICENSE-APACHE; png@0.18.1/LICENSE-APACHE; pollster@0.2.5/LICENSE-APACHE; pollster@0.4.0/LICENSE-APACHE; rayon-core@1.13.0/LICENSE-APACHE; rayon@1.12.0/LICENSE-APACHE; regex-automata@0.4.18/LICENSE-APACHE; regex-syntax@0.8.11/LICENSE-APACHE; regex@1.13.1/LICENSE-APACHE; roxmltree@0.21.1/LICENSE-APACHE; rustc-demangle@0.1.28/LICENSE-APACHE; rustix@1.1.4/LICENSE-APACHE; scopeguard@1.2.0/LICENSE-APACHE; serde_fmt@1.1.0/LICENSE-APACHE; simplecss@0.2.2/LICENSE-APACHE; smallvec@1.16.0/LICENSE-APACHE; smol_str@0.3.6/LICENSE-APACHE; stable_deref_trait@1.2.1/LICENSE-APACHE; stacker@0.1.25/LICENSE-APACHE; svgtypes@0.16.1/LICENSE-APACHE; tempfile@3.27.0/LICENSE-APACHE; unicase@2.9.0/LICENSE-APACHE; unicode-bidi@0.3.18/LICENSE-APACHE; unicode-segmentation@1.13.3/LICENSE-APACHE; unicode-vo@0.1.0/LICENSE-APACHE; unicode-width@0.2.2/LICENSE-APACHE; unicode-xid@0.2.6/LICENSE-APACHE; url@2.5.8/LICENSE-APACHE; uuid@1.26.0/LICENSE-APACHE; value-bag-serde1@1.14.1/LICENSE-APACHE; value-bag@1.14.1/LICENSE-APACHE; waker-fn@1.2.0/LICENSE-APACHE; weezl@0.1.12/LICENSE-APACHE; wry@0.57.0/LICENSE-APACHE; yaml-rust@0.4.5/LICENSE-APACHE; zed-font-kit@0.14.1-zed/LICENSE-APACHE
+addr2line@0.25.1/LICENSE-APACHE; aligned@0.4.3/LICENSE-APACHE; arrayvec@0.7.8/LICENSE-APACHE; as-slice@0.2.1/LICENSE-APACHE; async-channel@2.5.0/LICENSE-APACHE; async-task@4.7.1/LICENSE-APACHE; atomic@0.5.3/LICENSE-APACHE; backtrace@0.3.76/LICENSE-APACHE; base64@0.22.1/LICENSE-APACHE; base64@0.23.1/LICENSE-APACHE; bitflags@2.13.1/LICENSE-APACHE; bitstream-io@4.10.0/LICENSE-APACHE; by_address@1.2.1/LICENSE-APACHE; cfg-if@1.0.4/LICENSE-APACHE; cgl@0.3.2/LICENSE-APACHE; cocoa-foundation@0.2.0/LICENSE-APACHE; cocoa@0.26.0/LICENSE-APACHE; concurrent-queue@2.5.0/LICENSE-APACHE; core-foundation-sys@0.8.7/LICENSE-APACHE; core-foundation@0.10.0/LICENSE-APACHE; core-graphics-types@0.2.0/LICENSE-APACHE; core-graphics2@0.5.2/LICENSE-APACHE; core-graphics@0.24.0/LICENSE-APACHE; core-text@21.0.0/LICENSE-APACHE; core-video@0.5.2/LICENSE-APACHE; coreaudio-rs@0.14.2/LICENSE-APACHE; crossbeam-deque@0.8.8/LICENSE-APACHE; crossbeam-epoch@0.9.21/LICENSE-APACHE; crossbeam-queue@0.3.14/LICENSE-APACHE; crossbeam-utils@0.8.23/LICENSE-APACHE; data-url@0.3.2/LICENSE-APACHE; displaydoc@0.2.7/LICENSE-APACHE; either@1.18.0/LICENSE-APACHE; equivalent@1.0.2/LICENSE-APACHE; errno@0.3.14/LICENSE-APACHE; euclid@0.22.14/LICENSE-APACHE; event-listener-strategy@0.5.4/LICENSE-APACHE; event-listener@5.4.2/LICENSE-APACHE; fastrand@2.5.0/LICENSE-APACHE; fixedbitset@0.5.7/LICENSE-APACHE; flate2@1.1.10/LICENSE-APACHE; fnv@1.0.7/LICENSE-APACHE; form_urlencoded@1.2.2/LICENSE-APACHE; futures-lite@2.6.1/LICENSE-APACHE; getopts@0.2.24/LICENSE-APACHE; gif@0.14.2/LICENSE-APACHE; gimli@0.32.3/LICENSE-APACHE; hash32@0.3.1/LICENSE-APACHE; hashbrown@0.16.1/LICENSE-APACHE; hashbrown@0.17.1/LICENSE-APACHE; heapless@0.9.3/LICENSE-APACHE; heck@0.5.0/LICENSE-APACHE; idna@1.1.0/LICENSE-APACHE; idna_adapter@1.2.2/LICENSE-APACHE; indexmap@2.14.2/LICENSE-APACHE; io-surface@0.16.1/LICENSE-APACHE; itertools@0.14.0/LICENSE-APACHE; lazy_static@1.5.0/LICENSE-APACHE; lock_api@0.4.14/LICENSE-APACHE; log@0.4.34/LICENSE-APACHE; metal@0.33.0/LICENSE-APACHE; num-bigint@0.4.8/LICENSE-APACHE; num-complex@0.4.6/LICENSE-APACHE; num-derive@0.4.2/LICENSE-APACHE; num-integer@0.1.47/LICENSE-APACHE; num-rational@0.4.2/LICENSE-APACHE; num-traits@0.2.19/LICENSE-APACHE; num_cpus@1.17.0/LICENSE-APACHE; object@0.37.3/LICENSE-APACHE; once_cell@1.21.4/LICENSE-APACHE; palette@0.7.7/LICENSE-APACHE; palette_derive@0.7.7/LICENSE-APACHE; palette_math@0.7.7/LICENSE-APACHE; parking@2.2.1/LICENSE-APACHE; parking_lot@0.12.5/LICENSE-APACHE; parking_lot_core@0.9.12/LICENSE-APACHE; percent-encoding@2.3.2/LICENSE-APACHE; png@0.18.1/LICENSE-APACHE; pollster@0.2.5/LICENSE-APACHE; pollster@0.4.0/LICENSE-APACHE; rayon-core@1.13.0/LICENSE-APACHE; rayon@1.12.0/LICENSE-APACHE; regex-automata@0.4.18/LICENSE-APACHE; regex-syntax@0.8.11/LICENSE-APACHE; regex@1.13.1/LICENSE-APACHE; roxmltree@0.21.1/LICENSE-APACHE; rustc-demangle@0.1.28/LICENSE-APACHE; rustix@1.1.4/LICENSE-APACHE; scopeguard@1.2.0/LICENSE-APACHE; serde_fmt@1.1.0/LICENSE-APACHE; simplecss@0.2.2/LICENSE-APACHE; smallvec@1.16.0/LICENSE-APACHE; smol_str@0.3.6/LICENSE-APACHE; stable_deref_trait@1.2.1/LICENSE-APACHE; stacker@0.1.25/LICENSE-APACHE; svgtypes@0.16.1/LICENSE-APACHE; tempfile@3.27.0/LICENSE-APACHE; unicase@2.9.0/LICENSE-APACHE; unicode-bidi@0.3.18/LICENSE-APACHE; unicode-segmentation@1.13.3/LICENSE-APACHE; unicode-vo@0.1.0/LICENSE-APACHE; unicode-width@0.2.2/LICENSE-APACHE; unicode-xid@0.2.6/LICENSE-APACHE; url@2.5.8/LICENSE-APACHE; uuid@1.26.0/LICENSE-APACHE; value-bag-serde1@1.14.1/LICENSE-APACHE; value-bag@1.14.1/LICENSE-APACHE; waker-fn@1.2.0/LICENSE-APACHE; weezl@0.1.12/LICENSE-APACHE; wry@0.57.0/LICENSE-APACHE; yaml-rust@0.4.5/LICENSE-APACHE; zed-font-kit@0.14.1-zed/LICENSE-APACHE
 
 Apache License
                         Version 2.0, January 2004
@@ -12161,7 +12244,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-anyhow@1.0.104/LICENSE-APACHE; dyn-clone@1.0.20/LICENSE-APACHE; enumn@0.1.14/LICENSE-APACHE; erased-serde@0.4.10/LICENSE-APACHE; inventory@0.3.24/LICENSE-APACHE; itoa@1.0.18/LICENSE-APACHE; libc@0.2.189/LICENSE-APACHE; mach2@0.5.0/LICENSE-APACHE; paste@1.0.15/LICENSE-APACHE; pastey@0.1.1/LICENSE-APACHE; proc-macro2@1.0.107/LICENSE-APACHE; quote@1.0.47/LICENSE-APACHE; ref-cast-impl@1.0.27/LICENSE-APACHE; ref-cast@1.0.27/LICENSE-APACHE; rustc-hash@2.1.3/LICENSE-APACHE; semver@1.0.28/LICENSE-APACHE; serde@1.0.229/LICENSE-APACHE; serde_core@1.0.229/LICENSE-APACHE; serde_derive@1.0.229/LICENSE-APACHE; serde_derive_internals@0.30.0/LICENSE-APACHE; serde_json@1.0.151/LICENSE-APACHE; syn@2.0.119/LICENSE-APACHE; syn@3.0.5/LICENSE-APACHE; thiserror-impl@1.0.69/LICENSE-APACHE; thiserror-impl@2.0.20/LICENSE-APACHE; thiserror@1.0.69/LICENSE-APACHE; thiserror@2.0.20/LICENSE-APACHE; typeid@1.0.3/LICENSE-APACHE; unicode-ident@1.0.24/LICENSE-APACHE; vte@0.15.0/LICENSE-APACHE
+anyhow@1.0.104/LICENSE-APACHE; dyn-clone@1.0.20/LICENSE-APACHE; enumn@0.1.14/LICENSE-APACHE; erased-serde@0.4.10/LICENSE-APACHE; inventory@0.3.24/LICENSE-APACHE; itoa@1.0.18/LICENSE-APACHE; libc@0.2.189/LICENSE-APACHE; mach2@0.5.0/LICENSE-APACHE; mach2@0.6.0/LICENSE-APACHE; paste@1.0.15/LICENSE-APACHE; pastey@0.1.1/LICENSE-APACHE; proc-macro2@1.0.107/LICENSE-APACHE; quote@1.0.47/LICENSE-APACHE; ref-cast-impl@1.0.27/LICENSE-APACHE; ref-cast@1.0.27/LICENSE-APACHE; rustc-hash@2.1.3/LICENSE-APACHE; semver@1.0.28/LICENSE-APACHE; serde@1.0.229/LICENSE-APACHE; serde_core@1.0.229/LICENSE-APACHE; serde_derive@1.0.229/LICENSE-APACHE; serde_derive_internals@0.30.0/LICENSE-APACHE; serde_json@1.0.151/LICENSE-APACHE; syn@2.0.119/LICENSE-APACHE; syn@3.0.5/LICENSE-APACHE; thiserror-impl@1.0.69/LICENSE-APACHE; thiserror-impl@2.0.20/LICENSE-APACHE; thiserror@1.0.69/LICENSE-APACHE; thiserror@2.0.20/LICENSE-APACHE; typeid@1.0.3/LICENSE-APACHE; unicode-ident@1.0.24/LICENSE-APACHE; vte@0.15.0/LICENSE-APACHE
 
 Apache License
                         Version 2.0, January 2004
@@ -12340,7 +12423,7 @@ TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
 
 END OF TERMS AND CONDITIONS
 
-approx@0.5.1/LICENSE; flume@0.11.1/LICENSE-APACHE; imgref@1.12.3/LICENSE-APACHE; kurbo@0.13.1/LICENSE-APACHE; polycool@0.4.0/LICENSE-APACHE; static_assertions@1.1.0/LICENSE-APACHE; tinyvec@1.13.2/LICENSE-APACHE.md; utf8_iter@1.0.4/LICENSE-APACHE; zune-core@0.5.3/LICENSE-APACHE; zune-jpeg@0.5.15/LICENSE-APACHE
+approx@0.5.1/LICENSE; cpal@0.18.2/LICENSE; flume@0.11.1/LICENSE-APACHE; imgref@1.12.3/LICENSE-APACHE; kurbo@0.13.1/LICENSE-APACHE; polycool@0.4.0/LICENSE-APACHE; static_assertions@1.1.0/LICENSE-APACHE; tinyvec@1.13.2/LICENSE-APACHE.md; utf8_iter@1.0.4/LICENSE-APACHE; zune-core@0.5.3/LICENSE-APACHE; zune-jpeg@0.5.15/LICENSE-APACHE
 
 Apache License
                            Version 2.0, January 2004
@@ -13097,7 +13180,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-bit_field@0.10.3/LICENSE-APACHE; crc32fast@1.5.1/LICENSE-APACHE; ctor@1.0.13/LICENSE-APACHE; dpi@0.1.2/LICENSE; fallible-iterator@0.3.0/LICENSE-APACHE; fallible-streaming-iterator@0.1.9/LICENSE-APACHE; float-ord@0.3.2/LICENSE-APACHE; foreign-types-macros@0.2.4/LICENSE-APACHE; foreign-types-shared@0.3.1/LICENSE-APACHE; foreign-types@0.5.0/LICENSE-APACHE; link-section@0.19.3/LICENSE-APACHE; linktime-proc-macro@0.2.3/LICENSE-APACHE; no_std_io2@0.9.4/LICENSE-APACHE; quick-error@2.0.1/LICENSE-APACHE
+bit_field@0.10.3/LICENSE-APACHE; crc32fast@1.5.1/LICENSE-APACHE; ctor@1.0.13/LICENSE-APACHE; dpi@0.1.2/LICENSE; fallible-iterator@0.3.0/LICENSE-APACHE; fallible-streaming-iterator@0.1.9/LICENSE-APACHE; float-ord@0.3.2/LICENSE-APACHE; foreign-types-macros@0.2.4/LICENSE-APACHE; foreign-types-shared@0.3.1/LICENSE-APACHE; foreign-types@0.5.0/LICENSE-APACHE; link-section@0.19.3/LICENSE-APACHE; linktime-proc-macro@0.2.3/LICENSE-APACHE; no_std_io2@0.9.4/LICENSE-APACHE; quick-error@2.0.1/LICENSE-APACHE; toml_datetime@1.1.1+spec-1.1.0/LICENSE-APACHE; toml_edit@0.25.13+spec-1.1.0/LICENSE-APACHE; toml_parser@1.1.3+spec-1.1.0/LICENSE-APACHE; toml_writer@1.1.2+spec-1.1.0/LICENSE-APACHE
 
 Apache License
                            Version 2.0, January 2004
@@ -14347,6 +14430,34 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
+coreaudio-rs@0.14.2/LICENSE-MIT; either@1.18.0/LICENSE-MIT; itertools@0.14.0/LICENSE-MIT
+
+Copyright (c) 2015
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
 cpufeatures@0.2.17/LICENSE-MIT
 
 Copyright (c) 2020-2025 The RustCrypto Project Developers
@@ -15051,34 +15162,6 @@ Copyright © 2017-2018 Arm Limited
 and labelled as such in comments in the individual source files. All
 have been licensed under extremely permissive terms.
 ------------------------------------------------------------------------------
-
-either@1.18.0/LICENSE-MIT; itertools@0.14.0/LICENSE-MIT
-
-Copyright (c) 2015
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
 
 equator-macro@0.4.2/LICENSE; equator@0.4.2/LICENSE
 
@@ -18247,7 +18330,7 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-mach2@0.5.0/LICENSE-BSD
+mach2@0.5.0/LICENSE-BSD; mach2@0.6.0/LICENSE-BSD
 
 Copyright (c) 2019 Nick Fitzgerald, 2021 Yuki Okushi
 All rights reserved.
@@ -18273,7 +18356,7 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-mach2@0.5.0/LICENSE-MIT
+mach2@0.5.0/LICENSE-MIT; mach2@0.6.0/LICENSE-MIT
 
 Copyright (c) 2019 Nick Fitzgerald, 2021 Yuki Okushi
 
@@ -22473,6 +22556,28 @@ freely, subject to the following restrictions:
    misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
 
+toml_datetime@1.1.1+spec-1.1.0/LICENSE-MIT; toml_edit@0.25.13+spec-1.1.0/LICENSE-MIT; toml_parser@1.1.3+spec-1.1.0/LICENSE-MIT; toml_writer@1.1.2+spec-1.1.0/LICENSE-MIT
+
+Copyright (c) Individual contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 tracing-attributes@0.1.31/LICENSE; tracing-core@0.1.36/LICENSE; tracing@0.1.44/LICENSE
 
 Copyright (c) 2019 Tokio Contributors
@@ -23516,6 +23621,54 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+whisper-rs@0.16.0/LICENSE
+
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute this software, either in source code form or as a compiled
+binary, for any purpose, commercial or non-commercial, and by any
+means.
+
+In jurisdictions that recognize copyright laws, the author or authors
+of this software dedicate any and all copyright interest in the
+software to the public domain. We make this dedication for the benefit
+of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of
+relinquishment in perpetuity of all present and future rights to this
+software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <https://unlicense.org>
+
+winnow@1.0.4/LICENSE-MIT
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 wry@0.57.0/LICENSE-MIT
 

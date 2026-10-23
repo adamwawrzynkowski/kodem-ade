@@ -46,6 +46,7 @@ mod thread_import;
 mod tool_calls;
 mod updates;
 mod usage;
+mod voice;
 mod web_pane;
 mod whats_new;
 mod workspaces;
@@ -110,7 +111,8 @@ actions!(
         ShowReview,
         ShowGit,
         ShowPlugins,
-        CloneRepository
+        CloneRepository,
+        ToggleVoice
     ]
 );
 #[derive(Clone, PartialEq)]
@@ -194,6 +196,8 @@ pub struct Shell {
     update_state: crate::updater::State,
     update_tx: mpsc::Sender<crate::updater::State>,
     last_update_check: std::time::Instant,
+    /// Voice input: the microphone, the speech model's download and the worker that holds it.
+    voice: voice::VoiceInput,
     /// The installed and newest release of each provider's CLI and the updates of the card.
     harness_updates: harness_updates::HarnessUpdates,
     focus: FocusHandle,
@@ -468,6 +472,7 @@ impl Shell {
             }),
             cx.on_release(|s, _| s.save_window_placement()),
             cx.on_app_quit(|s, cx| {
+                s.voice.shutdown();
                 s.save_window_placement();
                 if s.workspace.is_some() {
                     s.save_settings();
@@ -690,6 +695,7 @@ impl Shell {
             update_state: crate::updater::State::Idle,
             update_tx,
             last_update_check: std::time::Instant::now(),
+            voice: Default::default(),
             harness_updates: Default::default(),
             focus,
             workspace: None,
@@ -2028,6 +2034,10 @@ impl Shell {
         self.submit_current(cx);
     }
     fn cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        // Escape first leaves voice input: a recording, the download offer or the download.
+        if self.panel == Panel::None && self.cancel_voice(cx) {
+            return;
+        }
         // In the Plugins workspace, Escape leaves a detail page for its list.
         if self.panel == Panel::None && self.plugins.open && self.plugins.detail.is_some() {
             self.close_plugin_detail(cx);
@@ -2301,6 +2311,9 @@ impl Shell {
         let previous = (self.panel == Panel::Settings).then_some(self.settings_page);
         self.panel = Panel::Settings;
         self.settings_page = page;
+        if previous != Some(page) && page == settings::SettingsPage::Voice {
+            self.voice.refresh_devices();
+        }
         if previous != Some(page) {
             // A half-done account form belongs to the page that it was started on.
             self.accounts = accounts::AccountsView::default();
@@ -2728,6 +2741,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-alt-4", ShowGit, None),
         KeyBinding::new("secondary-alt-5", ShowPlugins, None),
         KeyBinding::new("secondary-shift-o", CloneRepository, None),
+        KeyBinding::new("secondary-shift-space", ToggleVoice, None),
         KeyBinding::new("escape", Cancel, None),
         KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("secondary-s", diff_view::SaveEdits, Some("DiffDocument")),

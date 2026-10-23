@@ -49,6 +49,13 @@ fn main() {
     );
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         windows_resources(&channel, &parts);
+        // Voice input runs whisper.cpp on a graphics card through Vulkan on x64. The executable
+        // loads the Vulkan loader only when voice input first calls it, so that it starts on a
+        // computer without a Vulkan driver. kodem-voice checks for the loader before that call.
+        if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("x86_64") {
+            println!("cargo:rustc-link-arg-bins=/DELAYLOAD:vulkan-1.dll");
+            println!("cargo:rustc-link-lib=delayimp");
+        }
     }
 }
 

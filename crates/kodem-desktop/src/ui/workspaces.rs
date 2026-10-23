@@ -408,6 +408,8 @@ impl Shell {
     /// Sets the composer's hint to what the open workspace and task expect.
     pub(super) fn sync_placeholder(&mut self, cx: &mut Context<Self>) {
         let placeholder = match (self.mode, self.selected.is_some()) {
+            // The draft waits for the transcript of a recording.
+            _ if self.voice.processing() => "Processing…",
             (TaskKind::Coding, _) => "Describe what you want to build or change…",
             (TaskKind::Chat, _) => "Ask anything…",
             (TaskKind::Review, false) => "Tell the reviewer what to focus on (optional)…",

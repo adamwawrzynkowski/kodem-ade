@@ -1,10 +1,10 @@
 {
   "inputs": {
-    "Cargo.lock": "bcf8d28e152cf567655bb34ff810e67848970c84959afbd47cc4e16d6a8bdef3",
-    "Cargo.toml": "5aeeccce9f2e9d27fb3394f430be0cf61bab0ddf0856093a2954d3112253fd01",
+    "Cargo.lock": "e45f705f7861bf38f4d81ab191c116cedf896340739d8f40f5833f67b0fa7753",
+    "Cargo.toml": "cac2f6ed450c88e3ca0855af89e1eb96eccc201de2527b48728e36e451131696",
     "LICENSE": "7de28eeff500ea66eaaa1d950319b5d760bf9a50a2c335427838a4b11bad6c1b",
     "about.toml": "da2721a9cea560519bd9a618e80605826bfe8fa13336a5c9346b27018bd3d671",
-    "assets/THIRD_PARTY.md": "2f0efade5bc91bcd8f0152f2bc301ebf45d78fc0aa60b309cc5a39fae8205f32",
+    "assets/THIRD_PARTY.md": "5cf6b061f4596204f19d74d3a613dc39ddd63f37507d46df933c015cfdf0bfee",
     "assets/licenses/GPUI-APACHE.txt": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a",
     "assets/licenses/GPUI-Kit-APACHE.txt": "d1b0449e5478c574ba4f686c2656df7fe77d66821a61f8b6ed3378a58ed9a811",
     "assets/licenses/Lucide-ISC.txt": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57",
@@ -17,11 +17,13 @@
     "assets/licenses/jetbrainsmono-OFL.txt": "30f0c136e3c88e422d0791acd97238870f9054a9729bc34cf2ff0d4ed8cac4ad",
     "assets/licenses/openai-icon-source.txt": "b88a324474f412b43c1805c08516b0d2a9d7986989a797f3bd1e07b5d1a10b35",
     "assets/licenses/simple-icons.txt": "9046848b63a5c92bff14e4accca80bd987e0623b74adf9226ce5198d312b79d5",
+    "assets/licenses/whisper.cpp-MIT.txt": "e562a2ddfaf8280537795ac5ecd34e3012b6582a147ef69ba6a6a5c08c84757d",
     "crates/kodem-core/Cargo.toml": "df54ad1b284f63e884143a0513212180537d4eaf172d81c0dae28284107d6e9c",
-    "crates/kodem-desktop/Cargo.toml": "744a57d9a2d73ee1a780498829033f1e14140e963b34c31f342306b9b47d4392",
+    "crates/kodem-desktop/Cargo.toml": "a64068fc228f4405c715755f3ce1eb12e39dbc266b56df66002ea9c7df3a5e33",
     "crates/kodem-git/Cargo.toml": "b828078a998864c282a918db1af5b3dc8b96b98305c70f48306508373147cce3",
     "crates/kodem-host/Cargo.toml": "148abeb8808da4d5b0158dc6f8c929334775dc36613d23eea56083f734c58b68",
     "crates/kodem-update/Cargo.toml": "91012c5e438e97fd33d09b050f40eed3bc644bb6396f313ae1d101599ad187ac",
+    "crates/kodem-voice/Cargo.toml": "8b2e0c79d6d8c4227757f7e14db64068bd90c905a68cd5a2ff671b572bf9d407",
     "licensing/README.md": "3bed85358a49108ae18bfc6b1f5b1d4a40799632a3f4b8c72d5ee19d420122c2",
     "licensing/clarifications.json": "1c98aaa39030d86cfbf9da379462cb58d6b04fe8354d639817d803106c5c6ea8",
     "rust-toolchain.toml": "559f488c181e0e9e77cf17c29de663977f036ec7ff2e2060585714bf53c52d62",
@@ -38,11 +40,11 @@
     "vendor/gpui_ce_windows/build.rs": "89db14f60f4be4bad3500341c40cdca7f8bf97601a7d5ad5c22798ab2893446f"
   },
   "outputs": {
-    "assets/licenses/Rust-THIRD-PARTY.txt": "caf22ebdb2dbfc76670c0dcc0df271089a51da9178efdbcfa3fa43795971334f",
+    "assets/licenses/Rust-THIRD-PARTY.txt": "6c52223b769dca033d7465896dc2f509df1a87cf6ae06e9738bd52566df14fdb",
     "assets/licenses/Rust-standard-library.html": "0a65bb747c49c7bb816cbc7188319bd6e4e8d08091c1190b8a3c0971c47968ed",
     "assets/licenses/option-ext-0.2.0-source.tar.gz": "98db8d44c96295b9bfa85a4aacfedd6690c3155123b10b3090e74fea0cab5925"
   },
-  "package_count": 393,
+  "package_count": 407,
   "target": "aarch64-apple-darwin",
   "tool_version": "0.9.2"
 }

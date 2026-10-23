@@ -1890,6 +1890,8 @@ pub struct Settings {
     pub diff_placement: DiffPlacement,
     #[serde(default)]
     pub send_mode: SendMode,
+    /// The microphone and input volume of voice input.
+    pub voice: VoiceSettings,
     pub agent_defaults: AgentPreferences,
     pub default_worktree: bool,
     pub show_review: bool,
@@ -1931,6 +1933,7 @@ impl Default for Settings {
             viewed: Default::default(),
             diff_placement: DiffPlacement::default(),
             send_mode: SendMode::default(),
+            voice: VoiceSettings::default(),
             agent_defaults: AgentPreferences::default(),
             provider_preferences: Default::default(),
             model_choices: Default::default(),
@@ -2065,6 +2068,37 @@ impl Settings {
                 access: preferences.access,
             },
         );
+    }
+}
+/// The microphone that voice input records and how loud it records it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct VoiceSettings {
+    /// The system's identifier of the chosen microphone. Absent, or a microphone that is not
+    /// connected, records the system's default microphone.
+    pub microphone: Option<String>,
+    /// Multiplies the microphone's signal: 1 keeps its own volume.
+    pub input_gain: f32,
+}
+impl Default for VoiceSettings {
+    fn default() -> Self {
+        Self {
+            microphone: None,
+            input_gain: 1.,
+        }
+    }
+}
+impl VoiceSettings {
+    /// Quietest and loudest input volume.
+    pub const INPUT_GAIN_RANGE: (f32, f32) = (0.25, 4.);
+    /// Returns the input volume within its range.
+    pub fn gain(&self) -> f32 {
+        let (quietest, loudest) = Self::INPUT_GAIN_RANGE;
+        if self.input_gain.is_finite() {
+            self.input_gain.clamp(quietest, loudest)
+        } else {
+            1.
+        }
     }
 }
 /// Controls task alerts independently of macOS notification permissions.

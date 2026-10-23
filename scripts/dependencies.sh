@@ -121,29 +121,45 @@ kodem_dependencies_macos() {
     xcrun --find clang >/dev/null
     xcrun --show-sdk-path >/dev/null
     command -v git >/dev/null || { echo "Git is missing after the Apple tools installation." >&2; return 1; }
+    # Voice input's speech engine, whisper.cpp, builds with CMake, which the Apple tools lack.
+    if ! command -v cmake >/dev/null; then
+        if command -v brew >/dev/null; then
+            echo "Installing CMake with Homebrew…"
+            brew install cmake
+        else
+            echo "Voice input's speech engine builds with CMake. Install it from https://cmake.org/download/ or with Homebrew (brew install cmake), then rerun this build." >&2
+            return 1
+        fi
+    fi
 }
 
 # Checks the compiler and development libraries that GPUI and the browser's WebKitGTK link on
-# Linux. Package managers
-# need root, so the build names the packages instead of installing them.
+# Linux, and what voice input builds with: CMake, libclang and the Vulkan headers and glslc for
+# whisper.cpp, and ALSA for the microphone. Package managers need root, so the build names the
+# packages instead of installing them.
 kodem_dependencies_linux() {
     [[ "$(uname -m)" == x86_64 ]] || { echo "This release targets x86_64 Linux. Another architecture has not been validated." >&2; return 1; }
     local missing=()
     local tool
-    for tool in curl git cc pkg-config python3 tar gzip objdump; do
+    for tool in curl git cc pkg-config python3 tar gzip objdump cmake glslc; do
         command -v "$tool" >/dev/null || missing+=("$tool")
     done
     if command -v pkg-config >/dev/null; then
         local library
-        for library in xkbcommon xkbcommon-x11 fontconfig freetype2 xcb gtk+-3.0 webkit2gtk-4.1; do
+        for library in xkbcommon xkbcommon-x11 fontconfig freetype2 xcb gtk+-3.0 webkit2gtk-4.1 alsa vulkan; do
             pkg-config --exists "$library" || missing+=("$library (development files)")
         done
     fi
+    # bindgen loads libclang to read whisper.cpp's header.
+    if [[ -z "${LIBCLANG_PATH:-}" ]] && ! ldconfig -p 2>/dev/null | grep -q 'libclang[-.0-9]*\.so'; then
+        missing+=("libclang")
+    fi
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo "Missing build prerequisites: ${missing[*]}" >&2
-        echo "Debian or Ubuntu: sudo apt install build-essential binutils curl git pkg-config python3 libxkbcommon-dev libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev libxcb1-dev libwayland-dev libvulkan1 libgtk-3-dev libwebkit2gtk-4.1-dev" >&2
-        echo "Fedora: sudo dnf install gcc gcc-c++ curl git pkgconf-pkg-config python3 libxkbcommon-devel libxkbcommon-x11-devel fontconfig-devel freetype-devel libxcb-devel wayland-devel vulkan-loader gtk3-devel webkit2gtk4.1-devel" >&2
-        echo "Arch: sudo pacman -S --needed base-devel curl git pkgconf python libxkbcommon libxkbcommon-x11 fontconfig freetype2 libxcb wayland vulkan-icd-loader gtk3 webkit2gtk-4.1" >&2
+        echo "Debian or Ubuntu: sudo apt install build-essential binutils curl git pkg-config python3 libxkbcommon-dev libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev libxcb1-dev libwayland-dev libvulkan1 libgtk-3-dev libwebkit2gtk-4.1-dev cmake libclang-dev libasound2-dev libvulkan-dev glslc" >&2
+        echo "Ubuntu 22.04 has no glslc and older Vulkan headers: install the Vulkan SDK with scripts/install-vulkan-sdk.sh <folder> and set what it prints." >&2
+        echo "Fedora: sudo dnf install gcc gcc-c++ curl git pkgconf-pkg-config python3 libxkbcommon-devel libxkbcommon-x11-devel fontconfig-devel freetype-devel libxcb-devel wayland-devel vulkan-loader gtk3-devel webkit2gtk4.1-devel cmake clang-devel alsa-lib-devel vulkan-loader-devel vulkan-headers glslc" >&2
+        echo "Arch: sudo pacman -S --needed base-devel curl git pkgconf python libxkbcommon libxkbcommon-x11 fontconfig freetype2 libxcb wayland vulkan-icd-loader gtk3 webkit2gtk-4.1 cmake clang alsa-lib vulkan-headers shaderc" >&2
         return 1
     fi
 }
@@ -173,6 +189,30 @@ kodem_dependencies_windows() {
         fi
     done
     kodem_windows_sdk_tool fxc.exe >/dev/null || { echo "The Windows SDK is missing fxc.exe. Add a Windows 11 SDK in the Visual Studio Installer." >&2; return 1; }
+    # Voice input builds whisper.cpp with Visual Studio's CMake and reads its header with
+    # Visual Studio's libclang. Arm64 compiles it with clang-cl, because ggml does not build
+    # with MSVC for Arm.
+    local voice_tools=(Microsoft.VisualStudio.Component.VC.CMake.Project Microsoft.VisualStudio.Component.VC.Llvm.Clang Microsoft.VisualStudio.Component.VC.Llvm.ClangToolset)
+    local installation
+    installation=$("$vswhere" -latest -products '*' -requires "${voice_tools[@]}" -property installationPath 2>/dev/null || true)
+    if [[ -z "$installation" ]]; then
+        echo "Voice input builds with the Visual Studio C++ CMake tools and C++ Clang tools (${voice_tools[*]}). Add them in the Visual Studio Installer." >&2
+        return 1
+    fi
+    installation=$(cygpath -u "$installation")
+    command -v cmake >/dev/null || export PATH="$installation/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin:$PATH"
+    if [[ -z "${LIBCLANG_PATH:-}" ]]; then
+        local llvm=x64
+        [[ "$(kodem_windows_host_arch)" != aarch64 ]] || llvm=ARM64
+        LIBCLANG_PATH=$(cygpath -w "$installation/VC/Tools/Llvm/$llvm/bin")
+        export LIBCLANG_PATH
+    fi
+    # x64 runs the speech model on the graphics card through Vulkan and builds with its SDK.
+    if [[ " ${KODEM_WINDOWS_ARCHES:-$(kodem_windows_host_arch)} " == *" x86_64 "* ]] \
+        && { [[ -z "${VULKAN_SDK:-}" ]] || [[ ! -d "$(cygpath -u "$VULKAN_SDK")" ]]; }; then
+        echo "Building for x64 Windows needs the Vulkan SDK: winget install KhronosGroup.VulkanSDK, then open a new Git Bash. scripts/install-vulkan-sdk.sh <folder> installs it into a folder instead." >&2
+        return 1
+    fi
 }
 
 # Prints NSIS's makensis, which writes the Windows installers.

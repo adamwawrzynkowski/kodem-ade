@@ -1377,6 +1377,18 @@ impl Shell {
         } else {
             "Send message · Enter"
         };
+        // Voice input stands apart from the rules of the turn, before the keys that start and
+        // stop it.
+        actions = actions
+            .child(
+                div()
+                    .w(px(1.))
+                    .h(px(16.))
+                    .mx(px(2.))
+                    .flex_shrink_0()
+                    .child(dither::DottedRule::vertical(t.subtle.opacity(0.5))),
+            )
+            .child(self.voice_key(cx));
         // While the agent waits on work that runs apart from it, a glass key beside the stop
         // button spins. It is no control: the pointer on it names what the agent waits for.
         if let Some(waiting) = stopping.then(|| self.waiting_for()).flatten() {
@@ -1437,7 +1449,7 @@ impl Shell {
                     }
                 })),
         );
-        editor = editor.child(
+        editor = editor.children(self.voice_bar(cx)).child(
             div()
                 .pl(px(8.))
                 .pr(px(8.))

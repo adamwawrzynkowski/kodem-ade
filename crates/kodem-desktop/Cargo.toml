@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 kodem-core = { path = "../kodem-core" }
 kodem-git = { path = "../kodem-git" }
+kodem-voice = { path = "../kodem-voice" }
 anyhow.workspace = true
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

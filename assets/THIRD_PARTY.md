@@ -8,6 +8,8 @@ The complete unmodified source of `option-ext` 0.2.0 is included in [option-ext-
 
 Codex and its packaged helper tools are a separate prerequisite downloaded from OpenAI, not part of the Kodem app bundle. Their licenses and service terms remain separate. The OpenAI logo notice below covers copyright, not trademark permissions.
 
+Voice input's speech model, OpenAI's Whisper large-v3 turbo in the ggml format of whisper.cpp (`ggml-large-v3-turbo-q5_0.bin` from the `ggerganov/whisper.cpp` repository on Hugging Face), is downloaded on request when the user accepts it, not part of the Kodem app bundle. The Whisper model weights are released by OpenAI under the MIT License.
+
 | Material | Source and adaptation | License |
 | --- | --- | --- |
 | Embedded syntax definitions and color themes | syntect 5.3.0 default assets; pinned upstream revisions and notices | [Syntax and theme notices](licenses/Syntect-assets.txt) |
@@ -24,5 +26,6 @@ Codex and its packaged helper tools are a separate prerequisite downloaded from 
 | Inter Regular, Medium, SemiBold, Bold, Italic and Bold Italic | [Inter 4.1 release archive](https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip), `extras/ttf`, font version 4.001; static font files, unchanged | [SIL Open Font License](licenses/inter-OFL.txt) |
 | JetBrains Mono Regular, Medium, SemiBold and Bold | [JetBrains Mono 2.304 release archive](https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip), `fonts/ttf`; static font files, unchanged | [SIL Open Font License](licenses/jetbrainsmono-OFL.txt) |
 | Fira Code Regular, Medium, SemiBold and Bold | [Fira Code 6.2 release archive](https://github.com/tonsky/FiraCode/releases/download/6.2/Fira_Code_v6.2.zip), `ttf`, font version 6.002; static font files, unchanged. The licence text is the `LICENSE` file of the [6.2 tag](https://github.com/tonsky/FiraCode/blob/6.2/LICENSE) | [SIL Open Font License](licenses/firacode-OFL.txt) |
+| Speech recognition engine compiled into Kodem: whisper.cpp 1.8.3 and its ggml library | Built from the sources that `whisper-rs-sys` 0.15.0 bundles, unmodified, through `whisper-rs` 0.16.0 | [whisper.cpp notice](licenses/whisper.cpp-MIT.txt), MIT |
 
 Characters that the bundled fonts lack fall back to macOS system fonts, which are not bundled. The original complete GPUI Kit library is not linked: its GPUI-pre type graph is incompatible with this application's GPUI-CE renderer.
