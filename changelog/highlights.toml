@@ -98,11 +98,19 @@
 #   "1.19.3 to 2.1.0") in a headline, title, text or visual. Say what the user can do now.
 #   build.rs refuses version numbers such as 1.19.3.
 
-reviewed = "2f5248f964f9ed7522b46dff8ffbafef9dc5a037"
+reviewed = "dbcfe0d4018a117d43dca5f6654afc1b8732d5dd"
 
 [[headline]]
 id = "headline-plugins-voice"
 text = "Browse and install MCP servers and skills in one place, and dictate your prompts by voice."
+
+[[highlight]]
+id = "voice-older-drivers"
+title = "Voice input on older graphics drivers"
+text = "Voice input no longer closes Kodem on Windows computers whose graphics driver is too old. It switches to your processor instead."
+wide = true
+tone = "amber"
+visual = { kind = "notice", icon = "mic", title = "Voice input is ready", text = "Using your processor.", actions = ["Dismiss"] }
 
 [[highlight]]
 id = "plugins-workspace"
