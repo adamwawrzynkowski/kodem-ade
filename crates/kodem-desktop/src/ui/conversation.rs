@@ -498,8 +498,15 @@ impl Shell {
             Conversation::Main => self.chat_rows.split(index).cloned(),
             Conversation::Subagent(_) => None,
         };
+        // A message of the user keeps the lines that were typed or pasted for it.
         let blocks = split.as_ref().map_or_else(
-            || markdown::blocks(&message.text),
+            || {
+                if user {
+                    markdown::prompt_blocks(&message.text)
+                } else {
+                    markdown::blocks(&message.text)
+                }
+            },
             |split| split.blocks.clone(),
         );
         let parts = split.map(|split| split.parts);

@@ -351,8 +351,8 @@ const CACHED_MESSAGES: usize = 192;
 
 #[derive(Default)]
 struct BlockCache {
-    recent: std::collections::HashMap<(u64, usize), Rc<Vec<Block>>>,
-    older: std::collections::HashMap<(u64, usize), Rc<Vec<Block>>>,
+    recent: std::collections::HashMap<(u64, usize, bool), Rc<Vec<Block>>>,
+    older: std::collections::HashMap<(u64, usize, bool), Rc<Vec<Block>>>,
 }
 
 thread_local! {
@@ -364,10 +364,21 @@ thread_local! {
 /// A conversation renders its visible messages again on every frame, so the blocks of the
 /// messages seen lately are kept and shared, and only changed text is parsed.
 pub fn blocks(text: &str) -> Rc<Vec<Block>> {
+    cached_blocks(text, false)
+}
+
+/// Parses a message of the user like [`blocks`], but keeps its lines as typed. A user writes
+/// or pastes plain text more often than Markdown, so a line break inside a paragraph stays a
+/// line break, and a line outside lists and quotations keeps its indentation.
+pub fn prompt_blocks(text: &str) -> Rc<Vec<Block>> {
+    cached_blocks(text, true)
+}
+
+fn cached_blocks(text: &str, prompt: bool) -> Rc<Vec<Block>> {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut hasher);
-    let key = (hasher.finish(), text.len());
+    let key = (hasher.finish(), text.len(), prompt);
     BLOCK_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(blocks) = cache.recent.get(&key) {
@@ -375,7 +386,7 @@ pub fn blocks(text: &str) -> Rc<Vec<Block>> {
         }
         let blocks = match cache.older.remove(&key) {
             Some(blocks) => blocks,
-            None => Rc::new(parse_blocks(text)),
+            None => Rc::new(parse_blocks(text, prompt)),
         };
         if cache.recent.len() >= CACHED_MESSAGES {
             cache.older = std::mem::take(&mut cache.recent);
@@ -418,11 +429,42 @@ pub fn draft_code(text: &str) -> Vec<(Range<usize>, Range<usize>)> {
         .collect()
 }
 
-fn parse_blocks(text: &str) -> Vec<Block> {
-    let mut events = Parser::new_ext(text, OPTIONS).peekable();
-    let mut blocks = read_blocks(&mut events, None).blocks;
+fn parse_blocks(text: &str, prompt: bool) -> Vec<Block> {
+    let mut blocks = if prompt {
+        read_blocks(&mut kept_lines(text).peekable(), None).blocks
+    } else {
+        read_blocks(&mut Parser::new_ext(text, OPTIONS).peekable(), None).blocks
+    };
     promote_titles(&mut blocks);
     blocks
+}
+
+// Reads Markdown with its lines kept: each soft line break becomes a hard one, and the spaces
+// that start the next line follow it. Inside a list or a quotation those spaces belong to the
+// container, so they are left out there.
+fn kept_lines(text: &str) -> impl Iterator<Item = Event<'_>> {
+    let mut containers = 0usize;
+    Parser::new_ext(text, OPTIONS)
+        .into_offset_iter()
+        .flat_map(move |(event, range)| {
+            match &event {
+                Event::Start(Tag::List(_) | Tag::BlockQuote(_)) => containers += 1,
+                Event::End(TagEnd::List(_) | TagEnd::BlockQuote(_)) => {
+                    containers = containers.saturating_sub(1)
+                }
+                _ => {}
+            }
+            if !matches!(event, Event::SoftBreak) {
+                return [Some(event), None];
+            }
+            let rest = &text[range.end..];
+            let indent = &rest[..rest.len() - rest.trim_start_matches(' ').len()];
+            [
+                Some(Event::HardBreak),
+                (containers == 0 && !indent.is_empty()).then(|| Event::Text(indent.into())),
+            ]
+        })
+        .flatten()
 }
 
 /// Level of the heading that a paragraph of bold text becomes.
