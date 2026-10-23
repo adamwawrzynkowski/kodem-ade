@@ -183,9 +183,9 @@ compile_step() {
     echo "Building $build_target"
     "$python" scripts/licenses.py prepare --target "$build_target"
     # ggml, the math library of voice input's whisper.cpp, builds for Arm64 only with clang-cl,
-    # Visual Studio's Clang. CMake reads the toolset from the environment.
+    # Visual Studio's Clang. Its toolchain file chooses that toolset.
     local toolset=()
-    [[ "$arch" != aarch64 ]] || toolset=(CMAKE_GENERATOR_TOOLSET=ClangCL)
+    [[ "$arch" != aarch64 ]] || toolset=("CMAKE_TOOLCHAIN_FILE_aarch64_pc_windows_msvc=$(cygpath -m "$KODEM_ROOT/scripts/windows-arm64-clangcl.cmake")")
     if [[ "$configuration" == release ]]; then
         kodem_release_rustflags
         env "${toolset[@]}" cargo build --workspace --release --locked --target "$build_target" --target-dir "$KODEM_ROOT/target"
