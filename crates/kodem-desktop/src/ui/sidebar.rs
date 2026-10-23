@@ -1330,6 +1330,7 @@ impl Shell {
                     .flex_shrink_0()
                     .items_center()
                     .gap(px(4.))
+                    .shadow(meta_shadow(t))
                     .when_some(account.as_ref(), |d, (_, tone)| {
                         d.child(div().size(px(5.)).rounded(px(1.)).bg(*tone))
                     })
@@ -1351,6 +1352,7 @@ impl Shell {
                         .min_w_0()
                         .max_w(relative(0.4))
                         .text_ellipsis()
+                        .shadow(meta_shadow(t))
                         .child(model)
                         .into_any_element(),
                 );
@@ -1375,11 +1377,19 @@ impl Shell {
                                 .max_w(relative(0.45))
                                 .text_ellipsis()
                                 .text_color(project_tint(project, t))
+                                .shadow(meta_shadow(t))
                                 .child(project.name.clone()),
                         )
-                        .child(div().flex_shrink_0().child("/"))
+                        .child(div().flex_shrink_0().shadow(meta_shadow(t)).child("/"))
                     })
-                    .child(div().flex_1().min_w_0().text_ellipsis().child(place))
+                    // The place hugs its text, so that its shadow ends where the text does.
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .shadow(meta_shadow(t))
+                            .child(place),
+                    )
                     .into_any_element(),
             );
         } else {
@@ -1387,8 +1397,14 @@ impl Shell {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_ellipsis()
-                    .child(model.unwrap_or_else(|| provider.label().to_owned()))
+                    .flex()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_ellipsis()
+                            .shadow(meta_shadow(t))
+                            .child(model.unwrap_or_else(|| provider.label().to_owned())),
+                    )
                     .into_any_element(),
             );
         }
@@ -1407,6 +1423,7 @@ impl Shell {
                     .flex_shrink_0()
                     .items_center()
                     .gap(px(3.))
+                    .shadow(meta_shadow(t))
                     .when(done == total, |d| d.text_color(t.added))
                     .child(icon("list-checks").size(px(11.)))
                     .child(format!("{done}/{total}"))
@@ -1431,6 +1448,7 @@ impl Shell {
                     .h(px(16.))
                     .px(px(3.))
                     .rounded(px(crate::theme::RADIUS_SMALL))
+                    .shadow(meta_shadow(t))
                     .disabled(snapshot.is_none())
                     .accessibility_label("Open saved task diff")
                     .when(review.omitted_files > 0, |b| b.child(figure("~", t.subtle)))
@@ -1843,6 +1861,23 @@ fn attention_badges(attention: Attention, reduce_motion: bool, theme: Theme) -> 
 /// Returns the thin rule that parts the details on the second line of a thread row.
 fn meta_divider(theme: Theme) -> Div {
     div().flex_shrink_0().w(px(1.)).h(px(9.)).bg(theme.border)
+}
+
+// A soft shadow behind a label of a task row's meta line, so that the label stays legible over
+// the dots of the row's wash. A light theme lifts the label with a light glow instead.
+fn meta_shadow(theme: Theme) -> Vec<BoxShadow> {
+    let color = if theme.light {
+        gpui::white().opacity(0.2)
+    } else {
+        gpui::black().opacity(0.12)
+    };
+    vec![BoxShadow {
+        inset: false,
+        color,
+        offset: point(px(0.), px(0.)),
+        blur_radius: px(4.),
+        spread_radius: px(0.),
+    }]
 }
 
 // The saved diff of a task row as short "+N −N" counts. Counts of a thousand lines or more
