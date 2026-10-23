@@ -74,7 +74,7 @@ jobs:
       notes: ${{ steps.plan.outputs.notes }}
       highlights: ${{ steps.plan.outputs.highlights }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.commit || github.sha }}
           persist-credentials: false
@@ -120,7 +120,7 @@ jobs:
       KODEM_RELEASE_NOTES: ${{ needs.plan.outputs.notes }}
       KODEM_RELEASE_HIGHLIGHTS: ${{ needs.plan.outputs.highlights }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.plan.outputs.commit }}
           persist-credentials: false
@@ -172,7 +172,7 @@ jobs:
       KODEM_SIGN_EXTERNALLY: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' && '1' || '0' }}
       KODEM_WINDOWS_ARCH: x86_64 aarch64
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.plan.outputs.commit }}
           persist-credentials: false
@@ -280,7 +280,7 @@ jobs:
       KODEM_RELEASE_HIGHLIGHTS: ${{ needs.plan.outputs.highlights }}
       KODEM_GPG_KEY: ${{ vars.KODEM_GPG_KEY }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.plan.outputs.commit }}
           persist-credentials: false
@@ -339,7 +339,7 @@ jobs:
       KODEM_RELEASE_COMMIT: ${{ needs.plan.outputs.commit }}
       KODEM_RELEASE_STAGE_ONLY: 1
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.plan.outputs.commit }}
           persist-credentials: false
