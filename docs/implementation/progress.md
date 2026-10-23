@@ -1641,3 +1641,53 @@ Recorded on 23 October 2026. The user asked for voice input in the prompt field,
 - Builds: CMake on every platform (installed with Homebrew on macOS when missing), libclang for whisper-rs-sys's bindings, ALSA development files on Linux, and the Vulkan SDK on Linux and x64 Windows; Windows on Arm compiles whisper.cpp with clang-cl through `CMAKE_GENERATOR_TOOLSET=ClangCL` in `scripts/build-windows.sh`. `scripts/install-vulkan-sdk.sh` installs the pinned SDK 1.4.363.0 with its SHA-256 for both workflows and for Ubuntu 22.04, which lacks glslc. `assets/THIRD_PARTY.md` and `assets/licenses/whisper.cpp-MIT.txt` cover the compiled whisper.cpp and name the downloaded model; the licensing snapshot was refreshed.
 
 Checked with temporary examples, since removed: macOS-synthesized English and Polish speech (5 to 21 s) transcribed word for word on Metal and on the CPU, digital silence returned no text, and an abort stopped a 1.5-minute transcription after 1.5 s while the model stayed usable. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` and `cargo fmt --check`; `licenses.py check` passes once the untracked `.DS_Store` files in `vendor/` are set aside, and `licenses.py prepare` passes for all four targets. Cross-checked with clippy and warnings denied from macOS with zig: the whole workspace for Linux x64, and kodem-voice, kodem-desktop, kodem-core and kodem-host for Windows x64 and Arm64 (the whole-workspace Windows run hits the known `large_enum_variant` on `Catalog`). Those cross-checks set `DOCS_RS=1`, which skips whisper-rs-sys's CMake build, so whisper.cpp itself was compiled only for macOS here; the Linux and Windows CMake, Vulkan and clang-cl builds run first in CI. Not checked in the running app, under the no-visual-testing agreement; the microphone itself was not opened.
+
+### Faster change refreshes, idle host checks and transcript frames
+
+Recorded on 23 October 2026. The user asked for a deep search for optimizations across the app, with the gain of each area.
+
+- Change captures: while a coding task is selected the window asks the host for its change summary every 2 seconds, and with the Changes pane open for its snapshot as well, and each capture ran one `git diff` process per changed file, at 5 to 15 ms per process on macOS. `git::recapture` takes the previous capture of the same task and comparison and keeps each file whose content digest, status, old path, comparison base, repository and index digest are unchanged, so `git diff` runs only for files that changed. The host keeps the newest capture of up to eight task comparisons (`Host::captures`) for `TaskChanges` and `CaptureDiff`, and forgets a task's captures when the task is deleted. When the kept capture is the snapshot that the window names as previous, an unchanged refresh answers from memory and a changed one is written without reading the earlier snapshot from disk under the host lock. A capture reads the index path once instead of twice, finds committed paths through a set instead of a search per path, and compares the status lists directly instead of through JSON.
+- The host's idle exit, after five minutes without a connection, parsed every task 50 times a second. `Store::any_active` asks SQLite for the state of each record, and the host asks once a second.
+- `Settings::from_json`, read several times per `Hello`, deserializes the struct directly and reads only `theme` and `light` for the earlier format, instead of building a `serde_json::Value` of the whole settings.
+- Conversation frames: a long reply in parts looked up its Markdown blocks by hashing its whole text once for each part row in view, on every frame. `ChatRows` keeps the blocks with the parts (`Split`), and the rows take them from there. A tool row is passed to `tool_calls` before its message is copied, which mattered most in folded runs, whose hidden rows render on each frame.
+- Smaller: `format_diff_text` returns the text and spans as they are when the line has no tab and whitespace is not shown; the conversation's highlighter and the Git workspace share one syntect `SyntaxSet` (`syntax::SYNTAX`); `celebrate_transitions` finds the previous state of each task through a map instead of a search of all tasks.
+
+Measured with temporary release-build benchmarks, since removed. Store and capture figures use a scratch store of 200 synthetic tasks (2.7 KB each) and a scratch repository of 200 files of 300 lines, 40 of them changed. Desktop figures use copies of the old and new code in a scratch crate.
+
+| Path | Before | After | Change |
+| --- | --- | --- | --- |
+| Capture of an unchanged checkout | 647 ms | 156 ms | −76% |
+| Capture after 4 more files changed | 647 ms | 220 ms | −66% |
+| Idle-exit check, per second of an idle host | about 28 ms | about 0.5 ms | −98% |
+| `Settings::from_json`, 200 viewed tasks | 37 µs | 26 µs | −30% |
+| Markdown lookup of a 40 KB reply in 8 part rows, per frame | 96 µs | under 0.1 µs | −99% |
+| 300 rows of a folded tool run, per frame (message copies) | 89 µs | 0.1 µs | −99% |
+| `format_diff_text`, 3,000 lines without tabs | 633 µs | 270 µs | −57% |
+| `celebrate_transitions` lookups, 200 tasks | 48 µs | 10 µs | −79% |
+| Syntect grammar loads | 2 | 1 | −50% |
+
+Checked with a temporary example, since removed, that compared each reused capture with a fresh one for the working-tree, staged, unstaged, baseline and branch comparisons: with no change, after an untracked file, staging, editing a staged file, a staged rename, a deletion and a commit, and with 4 files edited since the previous capture. It also checked that the earlier light setting still selects Paper, that a saved theme is kept, and that an empty array is read as before. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings), `cargo fmt --check` and the existing tests of kodem-core and kodem-host. The Windows and Linux cross-checks were not run; the changes use only the standard library and existing crates. Not checked in the running app, under the no-visual-testing agreement.
+
+### Streamed rows without a disk flush, and workspace polls that answer Unchanged
+
+Recorded on 23 October 2026. After the optimization pass above, the user asked for two of its proposals, if their risk stayed small: writing streamed rows without waiting for the disk, and a workspace poll that the host answers without sending an unchanged workspace again.
+
+- Streamed rows: the store runs with `synchronous=FULL`, so each write waits for the disk, and `Streamed::write` writes the open rows of a task every 120 ms. It now calls `Store::streamed_message`, which writes the row with `synchronous=NORMAL` and then sets `FULL` again; inside a transaction it writes as before. In WAL mode a crash of the app loses no such write, and a power failure can lose only the rows written since the last ordinary write, whose commit puts the earlier writes on the disk too. These rows are written again as they grow. Every other write keeps waiting for the disk: tasks, submissions, runs, settings and every other transcript row.
+- Workspace polls: the window asked for the whole workspace (`Hello`) every 600 ms, and the host read and serialized every task each time. `Workspace::digest` identifies a workspace and is never zero. The 600 ms poll sends `Request::Refresh { known }` with the digest of the workspace that the window holds, and the host answers `Response::Unchanged` while its workspace still has that digest. `Hello` stays as it was and always sends the workspace, because the version handshake uses it; the protocol is 41.
+- The host keeps the projects, tasks and settings of the last workspace with their digest (`Listing`) until the next write through its store connection (`Store::write_revision`). The host is the only writer, and the other connection, `storage::provider_threads`, only reads. The notification status, the projects without Git, the runtimes and the accounts are hashed on each request, so a change there also gives a new digest.
+- On `Unchanged` the window runs what it runs for the same workspace sent again (`Shell::follow_workspace`): the sidebar rebuilds, deleted tasks' pages close, the chosen projects and selection are checked, reduce motion follows the system, and the Git workspace is brought up to date. It still renders, so relative times move on. Only the transfer, the parse, the transition effects and the replacement of the held workspace are skipped. A change that the window makes to its own copy, such as a pending test notification or a remembered model, goes through `Workspace::edit`, which sets the digest to zero, so the next poll sends the whole workspace again.
+
+Measured with temporary benchmarks, since removed. Host figures are CPU time per request of release builds of the host from HEAD and from this change, over 300 requests each against a scratch store of 200 synthetic tasks (2.7 KB each), after the background refreshes that the first request starts had ended. A request that the host refuses at once costs 0.17 ms.
+
+| Path | Before | After | Change |
+| --- | --- | --- | --- |
+| Host, workspace poll with nothing changed | 1.62 ms | 0.22 to 0.30 ms | −81 to −86% |
+| Host, `Hello` (the listing is copied, not read again) | 1.62 ms | 0.99 ms | −39% |
+| Window, decoding the unchanged 534 KB workspace per poll | 0.62 ms | none | −100% |
+| Streamed row write, 1 KB (macOS) | 71 µs | 17 µs | −77% |
+| Streamed row write, 64 KB | 110 µs | 47 µs | −57% |
+| Streamed row write, 512 KB | 474 µs | 342 µs | −28% |
+
+macOS's fsync does not flush the drive's own cache, so the saving of a streamed write is larger on Linux and Windows, where a flush usually takes milliseconds.
+
+Checked against a scratch host over IPC with a temporary example, since removed: `Hello` always sends the workspace and its digest stays the same while nothing changes; `Refresh` with that digest answers `Unchanged`, with zero or another digest the workspace; a rename gives a new digest, which is then answered `Unchanged`. A client that took each new digest as the window does got `Unchanged` for 298 to 299 of 300 polls; the others followed real changes from the host's background refreshes. Ordinary writes after streamed ones still took the time of a flushed write, so `FULL` is set again. Checked with a locked macOS `cargo build`, `cargo clippy --workspace --all-targets -D warnings` (no findings), `cargo fmt --check` and the existing tests of kodem-core and kodem-host. Windows and Linux cross-checks were not run. Not checked in the running app, under the no-visual-testing agreement; a power failure was not simulated.

@@ -70,7 +70,7 @@ impl Streamed {
     pub(crate) fn write(&mut self, store: &Store) -> Result<()> {
         for key in self.unwritten.drain() {
             if let Some(message) = self.rows.get(&key) {
-                store.message(message)?;
+                store.streamed_message(message)?;
             }
         }
         self.written = Instant::now();

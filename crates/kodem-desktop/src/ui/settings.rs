@@ -1886,7 +1886,9 @@ impl Shell {
                             )
                             .disabled(pending)
                             .on_click(cx.listener(|s, _, _, cx| {
-                                if let Some(workspace) = &mut s.workspace {
+                                if let Some(workspace) =
+                                    s.workspace.as_mut().map(core::Workspace::edit)
+                                {
                                     workspace.notification_delivery = NotificationDelivery::Pending;
                                 }
                                 s.send(core::Request::TestNotification {

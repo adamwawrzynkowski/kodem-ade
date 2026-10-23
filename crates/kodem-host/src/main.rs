@@ -48,8 +48,41 @@ struct Host {
     usage_refreshing: bool,
     settlement_refresh: Option<Instant>,
     settlement_refreshing: bool,
+    /// The newest change captures of recently shown tasks, oldest first, which the next refresh
+    /// of the same task and comparison builds on.
+    captures: Vec<Arc<DiffSnapshot>>,
+    /// The stored part of the last workspace sent, kept until the next write to the store.
+    listing: Option<Listing>,
 }
 type Shared = Arc<Mutex<Host>>;
+/// The projects, tasks and settings of the workspace, read at one write revision of the store.
+struct Listing {
+    revision: u64,
+    projects: Vec<Project>,
+    tasks: Vec<Task>,
+    settings: Settings,
+    digest: u64,
+}
+/// Number of change captures that the host keeps for refreshes.
+const KEPT_CAPTURES: usize = 8;
+impl Host {
+    /// Returns the kept capture of a task's comparison.
+    fn capture(&self, task_id: &str, comparison: &Comparison) -> Option<Arc<DiffSnapshot>> {
+        self.captures
+            .iter()
+            .find(|c| c.task_id == task_id && c.comparison == *comparison)
+            .cloned()
+    }
+    /// Keeps a capture in place of the earlier one of its task and comparison.
+    fn keep_capture(&mut self, snapshot: Arc<DiffSnapshot>) {
+        self.captures
+            .retain(|c| c.task_id != snapshot.task_id || c.comparison != snapshot.comparison);
+        self.captures.push(snapshot);
+        if self.captures.len() > KEPT_CAPTURES {
+            self.captures.remove(0);
+        }
+    }
+}
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
     /// Parks the calling thread to serve the main dispatch queue. It never returns.
@@ -189,8 +222,11 @@ fn run() -> Result<()> {
         usage_refreshing: false,
         settlement_refresh: None,
         settlement_refreshing: false,
+        captures: Vec::new(),
+        listing: None,
     }));
     let mut activity = Instant::now();
+    let mut idle_check = Instant::now();
     // Taken and released on this thread, which Windows requires.
     let mut awake = awake::Awake::default();
     loop {
@@ -227,10 +263,14 @@ fn run() -> Result<()> {
                     && h.store.working().unwrap_or(false);
                 awake.set(wanted);
             }
-            if activity.elapsed() > Duration::from_secs(300) {
+            // Reading the state of every task takes a moment, so the host looks once a second.
+            if activity.elapsed() > Duration::from_secs(300)
+                && idle_check.elapsed() >= Duration::from_secs(1)
+            {
+                idle_check = Instant::now();
                 let active = !h.checks.is_empty()
                     || h.terminals.values().any(|t| t.running())
-                    || h.store.tasks()?.iter().any(|t| t.state.active());
+                    || h.store.any_active()?;
                 if !active {
                     break;
                 }
@@ -271,17 +311,82 @@ fn task_view(h: &Host, id: &str, before: Option<u64>) -> Result<TaskView> {
 }
 // Digest of everything in a view that is not a transcript row or the order of the view.
 fn state_digest(view: &TaskView) -> Result<u64> {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    serde_json::to_vec(&(
+    Ok(digest(&serde_json::to_vec(&(
         &view.task,
         &view.activities,
         &view.outgoing,
         &view.requests,
         &view.runs,
-    ))?
-    .hash(&mut hasher);
-    Ok(hasher.finish())
+    ))?))
+}
+// Digest of serialized bytes. Equal bytes give equal digests in every host process of a build.
+fn digest(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+// Returns the workspace, or nothing while its digest is still `known`. The stored part is read
+// and serialized again only after a write to the store.
+fn workspace(h: &mut Host, known: u64) -> Result<Option<Workspace>> {
+    let revision = h.store.write_revision();
+    if h.listing
+        .as_ref()
+        .is_none_or(|listing| listing.revision != revision)
+    {
+        let projects = h.store.projects()?;
+        let tasks: Vec<Task> = h
+            .store
+            .tasks()?
+            .into_iter()
+            .filter(|task| {
+                !task.kind.has_project() || projects.iter().any(|p| p.id == task.project_id)
+            })
+            .collect();
+        let settings = h.store.settings()?;
+        let digest = digest(&serde_json::to_vec(&(&projects, &tasks, &settings))?);
+        h.listing = Some(Listing {
+            revision,
+            projects,
+            tasks,
+            settings,
+            digest,
+        });
+    }
+    let accounts = accounts::states(h)?;
+    let Some(listing) = &h.listing else {
+        anyhow::bail!("The workspace was not read");
+    };
+    let without_git = listing
+        .projects
+        .iter()
+        .filter(|p| !git::is_repository(&p.path))
+        .map(|p| p.id.clone())
+        .collect();
+    let notification_delivery = h.notifications.status();
+    // Zero names no workspace, so no digest is zero.
+    let digest = digest(&serde_json::to_vec(&(
+        listing.digest,
+        &notification_delivery,
+        &without_git,
+        &h.runtimes,
+        &accounts,
+    ))?)
+    .max(1);
+    if digest == known {
+        return Ok(None);
+    }
+    Ok(Some(Workspace {
+        notification_delivery,
+        protocol: ipc::PROTOCOL,
+        projects: listing.projects.clone(),
+        without_git,
+        tasks: listing.tasks.clone(),
+        settings: listing.settings.clone(),
+        runtimes: h.runtimes.clone(),
+        accounts,
+        digest,
+    }))
 }
 
 /// Inputs that can change a watched view. Database writes cover persisted task state, runs,
@@ -424,7 +529,11 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             h.usage_refresh = Some(Instant::now());
             result
         }
-        Request::Hello => {
+        Request::Hello | Request::Refresh { .. } => {
+            let known = match request {
+                Request::Refresh { known } => known,
+                _ => 0,
+            };
             let mut h = host.lock().unwrap();
             if !h.settlement_refreshing
                 && h.settlement_refresh
@@ -451,30 +560,7 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                     usage_host.lock().unwrap().usage_refreshing = false;
                 });
             }
-            let projects = h.store.projects()?;
-            let tasks = h
-                .store
-                .tasks()?
-                .into_iter()
-                .filter(|task| {
-                    !task.kind.has_project() || projects.iter().any(|p| p.id == task.project_id)
-                })
-                .collect();
-            let without_git = projects
-                .iter()
-                .filter(|p| !git::is_repository(&p.path))
-                .map(|p| p.id.clone())
-                .collect();
-            Ok(Response::Workspace(Workspace {
-                notification_delivery: h.notifications.status(),
-                protocol: ipc::PROTOCOL,
-                projects,
-                without_git,
-                tasks,
-                settings: h.store.settings()?,
-                runtimes: h.runtimes.clone(),
-                accounts: accounts::states(&h)?,
-            }))
+            Ok(workspace(&mut h, known)?.map_or(Response::Unchanged, Response::Workspace))
         }
         Request::TestNotification { sound } => {
             host.lock().unwrap().notifications.test(sound);
@@ -1026,19 +1112,30 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
                 h.activities.remove(&task_id);
                 h.compacted.remove(&task_id);
                 h.terminals.remove(&task_id);
+                h.captures.retain(|c| c.task_id != task_id);
                 (task, project)
             };
             discard_scratch(root, &task, project.as_ref());
             Ok(Response::Ok)
         }
         Request::TaskChanges { task_id } => {
-            let task = host.lock().unwrap().store.task(&task_id)?;
-            let comparison = if task.baseline.is_some() {
-                Comparison::Baseline
-            } else {
-                Comparison::WorkingTree
+            let (task, comparison, kept) = {
+                let h = host.lock().unwrap();
+                let task = h.store.task(&task_id)?;
+                let comparison = if task.baseline.is_some() {
+                    Comparison::Baseline
+                } else {
+                    Comparison::WorkingTree
+                };
+                let kept = h.capture(&task_id, &comparison);
+                (task, comparison, kept)
             };
-            let summary = git::capture(&task, comparison)?.summary();
+            let snapshot = git::recapture(&task, comparison, kept.as_deref())?;
+            let summary = snapshot.summary();
+            // An unchanged capture keeps the kept one, which may be a stored snapshot.
+            if !kept.is_some_and(|kept| kept.same_content(&snapshot)) {
+                host.lock().unwrap().keep_capture(Arc::new(snapshot));
+            }
             Ok(Response::TaskChanges { task_id, summary })
         }
         Request::SaveSettings(settings) => {
@@ -1199,12 +1296,30 @@ fn handle(host: &Shared, root: &std::path::Path, request: Request) -> Result<Res
             comparison,
             previous,
         } => {
-            let task = host.lock().unwrap().store.task(&task_id)?;
-            let mut snapshot = git::capture(&task, comparison)?;
-            host.lock()
-                .unwrap()
-                .store
-                .save_refreshed_snapshot(&mut snapshot, previous.as_deref())?;
+            let (task, kept) = {
+                let h = host.lock().unwrap();
+                let task = h.store.task(&task_id)?;
+                let kept = h.capture(&task_id, &comparison);
+                (task, kept)
+            };
+            let mut snapshot = git::recapture(&task, comparison, kept.as_deref())?;
+            // When the kept capture is the client's previous snapshot, it answers without reading
+            // that snapshot from disk.
+            match kept.filter(|kept| previous.as_deref() == Some(kept.id.as_str())) {
+                Some(kept) if kept.same_content(&snapshot) => snapshot = (*kept).clone(),
+                Some(_) => {
+                    Store::write_snapshot(root, &mut snapshot)?;
+                    host.lock()
+                        .unwrap()
+                        .keep_capture(Arc::new(snapshot.clone()));
+                }
+                None => {
+                    let mut h = host.lock().unwrap();
+                    h.store
+                        .save_refreshed_snapshot(&mut snapshot, previous.as_deref())?;
+                    h.keep_capture(Arc::new(snapshot.clone()));
+                }
+            }
             Ok(Response::Diff(snapshot))
         }
         Request::LoadSnapshot { id } => {

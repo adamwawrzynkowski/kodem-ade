@@ -57,6 +57,17 @@ fn format_diff_text(
     tab_width: usize,
     show_whitespace: bool,
 ) -> FormattedDiffText {
+    // Without a tab or shown whitespace the text and its spans stay as they are.
+    if !show_whitespace && !text.contains('\t') {
+        return FormattedDiffText {
+            text: SharedString::from(text.to_owned()),
+            syntax: syntax
+                .iter()
+                .filter(|span| span.range.end <= text.len())
+                .cloned()
+                .collect(),
+        };
+    }
     let mut output = String::with_capacity(text.len());
     let mut offsets = vec![0; text.len() + 1];
     for (source_start, character) in text.char_indices() {

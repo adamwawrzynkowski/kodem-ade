@@ -1976,14 +1976,19 @@ impl Settings {
     /// Reads saved settings. Settings from before the named themes hold a light switch only;
     /// a light one selects Paper.
     pub fn from_json(json: &str) -> serde_json::Result<Self> {
-        let mut value: serde_json::Value = serde_json::from_str(json)?;
-        if let Some(fields) = value.as_object_mut()
-            && !fields.contains_key("theme")
-            && fields.get("light").and_then(serde_json::Value::as_bool) == Some(true)
-        {
-            fields.insert("theme".into(), serde_json::to_value(ThemeId::Paper)?);
+        // The two fields of the earlier format, read without building the other values.
+        #[derive(Default, Deserialize)]
+        #[serde(default)]
+        struct Format {
+            theme: Option<serde::de::IgnoredAny>,
+            light: Option<serde_json::Value>,
         }
-        serde_json::from_value(value)
+        let mut settings: Self = serde_json::from_str(json)?;
+        let format: Format = serde_json::from_str(json)?;
+        if format.theme.is_none() && format.light == Some(serde_json::Value::Bool(true)) {
+            settings.theme = ThemeId::Paper;
+        }
+        Ok(settings)
     }
     /// Returns the key of an account's last model, in one project or in general.
     pub fn model_choice_key(
@@ -2286,8 +2291,19 @@ pub struct Workspace {
     /// Every provider account with its last observed sign-in and quota state.
     #[serde(default)]
     pub accounts: Vec<AccountState>,
+    /// Digest of the rest of the workspace, never zero, which a [`Request::Refresh`] names so
+    /// that the host can answer [`Response::Unchanged`]. A window that changes its copy sets it
+    /// to zero, so that the next refresh sends the whole workspace again.
+    #[serde(default)]
+    pub digest: u64,
 }
 impl Workspace {
+    /// Returns the workspace for a change that a window makes to its copy, which then no longer
+    /// has its digest.
+    pub fn edit(&mut self) -> &mut Self {
+        self.digest = 0;
+        self
+    }
     /// Finds an account and its status; an absent identity selects the provider's default account.
     pub fn account(&self, provider: Provider, id: Option<&str>) -> Option<&AccountState> {
         let id = id.unwrap_or(DEFAULT_ACCOUNT);
@@ -2585,6 +2601,11 @@ pub enum Request {
         before: Option<u64>,
     },
     Hello,
+    /// Returns the workspace as [`Request::Hello`] does, or [`Response::Unchanged`] while its
+    /// digest is still `known`. Zero names no workspace.
+    Refresh {
+        known: u64,
+    },
     RefreshUsage {
         provider: Provider,
         #[serde(default)]
@@ -2960,6 +2981,8 @@ pub enum Response {
         attachments: Vec<Attachment>,
     },
     Workspace(Workspace),
+    /// The workspace still has the digest that a [`Request::Refresh`] named.
+    Unchanged,
     Task(TaskView),
     SubagentThread(SubagentView),
     Project(Project),

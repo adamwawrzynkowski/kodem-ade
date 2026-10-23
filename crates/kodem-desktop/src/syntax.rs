@@ -11,7 +11,9 @@ use syntect::{
     parsing::{ParseState, SyntaxSet},
     util::LinesWithEndings,
 };
-static SYNTAX: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+/// The grammars of every highlighter, loaded once: the conversation's code blocks and the
+/// diffs of the Git workspace share them and the expressions that they compile.
+pub(crate) static SYNTAX: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 static THEMES: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 static CLASSICS: LazyLock<HashMap<ThemeId, Theme>> = LazyLock::new(|| {
     ThemeId::ALL

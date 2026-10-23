@@ -654,6 +654,7 @@ impl Shell {
                                 s.view
                                     .as_ref()
                                     .is_some_and(|view| s.selected.as_ref() == Some(&view.task.id)),
+                                s.workspace.as_ref().map_or(0, |workspace| workspace.digest),
                             ));
                         }
                         if s.host_connected && s.has_checkout() && s.changes_refresh.due() {
@@ -1074,30 +1075,11 @@ impl Shell {
                 self.apply_usage_reply(provider, account, Ok(response), cx);
             }
             Response::Workspace(workspace) => {
-                self.sidebar_dirty = true;
-                // A deleted task's page closes with it.
-                self.browsers
-                    .borrow_mut()
-                    .retain(|id| workspace.tasks.iter().any(|task| task.id == id));
                 if self.workspace.is_none() {
                     // A new task starts in the project that was chosen last.
                     self.selected_project = workspace.settings.selected_project.clone();
                 }
-                if !workspace
-                    .projects
-                    .iter()
-                    .any(|p| self.selected_project.as_ref() == Some(&p.id))
-                {
-                    self.selected_project = workspace.projects.first().map(|p| p.id.clone());
-                }
-                if self
-                    .sidebar_project
-                    .as_ref()
-                    .is_some_and(|id| !workspace.projects.iter().any(|p| &p.id == id))
-                {
-                    self.sidebar_project = None;
-                }
-                cx.set_reduce_motion(motion::system_reduce_motion());
+                self.follow_workspace(&workspace, cx);
                 if self.workspace.is_none() {
                     self.settings = workspace.settings.clone();
                     // Results that finished before unread tracking existed count as read.
@@ -1163,6 +1145,23 @@ impl Shell {
                 self.workspace = Some(workspace);
                 self.sync_git_projects(cx);
                 self.sync_git_agent(cx);
+            }
+            // The host still has the workspace that the window holds, so the window follows it
+            // as it would follow the same workspace sent again.
+            Response::Unchanged => {
+                if let Some(workspace) = self.workspace.take() {
+                    self.follow_workspace(&workspace, cx);
+                    let missing = self
+                        .selected
+                        .as_ref()
+                        .is_some_and(|id| !workspace.tasks.iter().any(|task| &task.id == id));
+                    self.workspace = Some(workspace);
+                    if missing {
+                        self.clear_selected_task(cx);
+                    }
+                    self.sync_git_projects(cx);
+                    self.sync_git_agent(cx);
+                }
             }
             Response::Account(account) => self.account_added(&account, cx),
             Response::Project(project)
@@ -1660,7 +1659,7 @@ impl Shell {
                     self.deleting_task = None;
                     self.thread_menu = None;
                     self.panel = Panel::None;
-                    if let Some(workspace) = &mut self.workspace {
+                    if let Some(workspace) = self.workspace.as_mut().map(core::Workspace::edit) {
                         workspace.tasks.retain(|task| task.id != task_id);
                     }
                     if self.selected.as_ref() == Some(&task_id) {
@@ -2123,14 +2122,43 @@ impl Shell {
     // Marks the moment a task changes hands: a finished turn, a failure, or a request for input
     // lands as an impact on its thread row. The notification center keeps the events of tasks
     // other than the open one.
+    // Brings what the window derives from the workspace in line with one from the host, sent
+    // anew or unchanged.
+    fn follow_workspace(&mut self, workspace: &Workspace, cx: &mut Context<Self>) {
+        self.sidebar_dirty = true;
+        // A deleted task's page closes with it.
+        self.browsers
+            .borrow_mut()
+            .retain(|id| workspace.tasks.iter().any(|task| task.id == id));
+        if !workspace
+            .projects
+            .iter()
+            .any(|p| self.selected_project.as_ref() == Some(&p.id))
+        {
+            self.selected_project = workspace.projects.first().map(|p| p.id.clone());
+        }
+        if self
+            .sidebar_project
+            .as_ref()
+            .is_some_and(|id| !workspace.projects.iter().any(|p| &p.id == id))
+        {
+            self.sidebar_project = None;
+        }
+        cx.set_reduce_motion(motion::system_reduce_motion());
+    }
     fn celebrate_transitions(&mut self, incoming: &Workspace, cx: &mut Context<Self>) {
         let Some(current) = &self.workspace else {
             return;
         };
         let t = self.theme;
         let mut events = Vec::new();
+        let previous_tasks: HashMap<&str, &core::Task> = current
+            .tasks
+            .iter()
+            .map(|task| (task.id.as_str(), task))
+            .collect();
         for task in &incoming.tasks {
-            let Some(previous) = current.tasks.iter().find(|old| old.id == task.id) else {
+            let Some(previous) = previous_tasks.get(task.id.as_str()) else {
                 continue;
             };
             let kind = if !previous.needs_input() && task.needs_input() {

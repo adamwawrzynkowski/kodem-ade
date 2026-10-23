@@ -3,6 +3,7 @@ use crate::{model::*, platform};
 use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::{HashMap, HashSet},
     ffi::{OsStr, OsString},
     fs,
     io::{Read, Write},
@@ -301,7 +302,10 @@ fn index_path(cwd: &Path) -> Result<PathBuf> {
     })
 }
 fn index_digest(cwd: &Path) -> Result<String> {
-    match fs::read(index_path(cwd)?) {
+    index_file_digest(&index_path(cwd)?)
+}
+fn index_file_digest(index: &Path) -> Result<String> {
+    match fs::read(index) {
         Ok(b) => Ok(digest(&b)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(digest(b"unborn-index")),
         Err(e) => Err(e.into()),
@@ -513,12 +517,22 @@ fn parse_patch(bytes: &[u8]) -> (Vec<DiffLine>, Option<String>) {
 }
 /// Captures each related checkout independently, retrying boundedly when its files change.
 pub fn capture(task: &Task, comparison: Comparison) -> Result<DiffSnapshot> {
+    recapture(task, comparison, None)
+}
+/// Captures like [`capture`], but reuses each file of `previous` whose content, status and
+/// comparison base are unchanged, so that a refresh runs `git diff` only for changed files.
+pub fn recapture(
+    task: &Task,
+    comparison: Comparison,
+    previous: Option<&DiffSnapshot>,
+) -> Result<DiffSnapshot> {
+    let previous = previous.filter(|p| p.task_id == task.id && p.comparison == comparison);
     ensure!(
         is_repository(&task.cwd),
         "This folder has no Git repository, so its changes are not tracked"
     );
     let roots = repositories(&task.cwd)?;
-    let mut snapshot = capture_repository(task, comparison.clone())?;
+    let mut snapshot = capture_repository(task, comparison.clone(), previous)?;
     for root in roots.iter().skip(1) {
         let mut linked = task.clone();
         linked.cwd = root.clone();
@@ -535,6 +549,7 @@ pub fn capture(task: &Task, comparison: Comparison) -> Result<DiffSnapshot> {
             } else {
                 comparison.clone()
             },
+            previous,
         )
         .with_context(|| format!("Capture repository {}", root.display()))?;
         if missing_baseline {
@@ -551,10 +566,15 @@ pub fn capture(task: &Task, comparison: Comparison) -> Result<DiffSnapshot> {
     Ok(snapshot)
 }
 
-fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapshot> {
+fn capture_repository(
+    task: &Task,
+    comparison: Comparison,
+    previous: Option<&DiffSnapshot>,
+) -> Result<DiffSnapshot> {
     let root = task.cwd.canonicalize().map(crate::platform::plain_path)?;
+    let index = index_path(&task.cwd)?;
     for _ in 0..3 {
-        let before = index_digest(&task.cwd)?;
+        let before = index_file_digest(&index)?;
         let observed_head = head(&task.cwd);
         let branch_base = branch_base(&task.cwd, observed_head.as_deref());
         let comparison_base = match comparison {
@@ -563,7 +583,21 @@ fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapsho
             _ => observed_head.clone(),
         };
         let files = status(&task.cwd)?;
-        let status_before = serde_json::to_vec(&files)?;
+        // A patch depends only on the file, its status and what it is compared with.
+        let reusable: HashMap<&[u8], &FileDelta> = previous
+            .filter(|p| {
+                p.repositories.iter().any(|r| {
+                    r.root == root && r.baseline == comparison_base && r.index_digest == before
+                })
+            })
+            .map(|p| {
+                p.files
+                    .iter()
+                    .filter(|f| f.repository.as_ref() == Some(&root))
+                    .map(|f| (f.path.as_slice(), f))
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut entries = Vec::new();
         // Task and branch comparisons include committed paths absent from current status.
         let mut paths = files.clone();
@@ -573,8 +607,9 @@ fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapsho
             let base = comparison_base
                 .as_deref()
                 .context("No task baseline exists yet")?;
+            let listed: HashSet<Vec<u8>> = paths.iter().map(|f| f.0.clone()).collect();
             for (path, kind) in changed_since(&task.cwd, base, comparison != Comparison::Branch)? {
-                if !paths.iter().any(|f| f.0 == path) {
+                if !listed.contains(&path) {
                     paths.push((path, None, kind));
                 }
             }
@@ -594,6 +629,13 @@ fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapsho
                 continue;
             }
             let observed = path_digest(&task.cwd, &path)?;
+            if let Some(delta) = reusable
+                .get(path.as_slice())
+                .filter(|d| d.digest == observed && d.status == kind && d.old_path == old)
+            {
+                entries.push((*delta).clone());
+                continue;
+            }
             let full = task.cwd.join(platform::os_string(&path));
             let meta = fs::symlink_metadata(&full).ok();
             let (lines, notice) = if kind.contains('U') || kind == "AA" || kind == "DD" {
@@ -674,8 +716,8 @@ fn capture_repository(task: &Task, comparison: Comparison) -> Result<DiffSnapsho
         }
         if stable
             && observed_head == head(&task.cwd)
-            && before == index_digest(&task.cwd)?
-            && status_before == serde_json::to_vec(&status(&task.cwd)?)?
+            && before == index_file_digest(&index)?
+            && files == status(&task.cwd)?
         {
             return Ok(DiffSnapshot {
                 id: String::new(),

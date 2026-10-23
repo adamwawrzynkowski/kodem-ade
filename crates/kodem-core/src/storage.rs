@@ -398,6 +398,16 @@ impl Store {
             |r| r.get(0),
         )?)
     }
+    /// Reports whether any task is starting, running or waiting for input, as
+    /// [`RunState::active`] does. It reads only the state of each record.
+    pub fn any_active(&self) -> Result<bool> {
+        Ok(self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks \
+             WHERE json_extract(json, '$.state') IN ('Starting', 'Running', 'Waiting'))",
+            [],
+            |r| r.get(0),
+        )?)
+    }
     /// Reads one task or reports that it no longer exists.
     pub fn task(&self, id: &str) -> Result<Task> {
         let json: String = self
@@ -664,6 +674,26 @@ impl Store {
     }
     /// Writes or replaces a provider item while preserving its local sequence.
     pub fn message(&self, m: &Message) -> Result<()> {
+        self.write_message(m)
+    }
+    /// Writes a row that is still streaming, without waiting for the disk. Such a row is written
+    /// again as it grows. The write survives a crash of the app; a power failure can lose it,
+    /// but the next ordinary write puts it on the disk with every write before it.
+    pub fn streamed_message(&self, m: &Message) -> Result<()> {
+        // A transaction commits with its own setting, so only a write of its own is relaxed.
+        if !self.db.is_autocommit() {
+            return self.write_message(m);
+        }
+        self.db
+            .prepare_cached("PRAGMA synchronous=NORMAL")?
+            .execute([])?;
+        let written = self.write_message(m);
+        self.db
+            .prepare_cached("PRAGMA synchronous=FULL")?
+            .execute([])?;
+        written
+    }
+    fn write_message(&self, m: &Message) -> Result<()> {
         ensure!(
             m.text.len() <= 2 * 1024 * 1024,
             "Message exceeds the 2 MiB storage limit"

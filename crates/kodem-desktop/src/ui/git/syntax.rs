@@ -4,16 +4,14 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
-use std::sync::LazyLock;
 
 use gpui::{FontStyle, FontWeight, HighlightStyle, SharedString};
 use syntect::easy::ScopeRegionIterator;
-use syntect::parsing::{ParseState, Scope, ScopeStack, SyntaxReference, SyntaxSet};
+use syntect::parsing::{ParseState, Scope, ScopeStack, SyntaxReference};
 
+use crate::syntax::SYNTAX;
 use crate::theme::Theme;
 use kodem_git::git::DiffLineKind;
-
-static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 
 /// The role of a highlighted piece of code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -610,7 +608,7 @@ impl SyntectLineParser {
             source.push('\n');
         }
 
-        let Ok(operations) = self.parse_state.parse_line(&source, &SYNTAX_SET) else {
+        let Ok(operations) = self.parse_state.parse_line(&source, &SYNTAX) else {
             return Vec::new();
         };
         let mut offset = 0;
@@ -897,10 +895,10 @@ fn detect_syntect(path: &str, first_line: Option<&str>) -> Option<&'static Synta
         .extension()
         .and_then(|extension| extension.to_str())
         .unwrap_or("");
-    SYNTAX_SET
+    SYNTAX
         .find_syntax_by_extension(file_name)
-        .or_else(|| SYNTAX_SET.find_syntax_by_extension(extension))
-        .or_else(|| first_line.and_then(|line| SYNTAX_SET.find_syntax_by_first_line(line)))
+        .or_else(|| SYNTAX.find_syntax_by_extension(extension))
+        .or_else(|| first_line.and_then(|line| SYNTAX.find_syntax_by_first_line(line)))
         .filter(|syntax| syntax.name != "Plain Text")
 }
 

@@ -417,6 +417,7 @@ impl Shell {
     ) {
         let status = self.workspace.as_mut().and_then(|workspace| {
             workspace
+                .edit()
                 .accounts
                 .iter_mut()
                 .find(|state| state.account.provider == provider && state.account.id == account)

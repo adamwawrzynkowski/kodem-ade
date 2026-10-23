@@ -29,9 +29,10 @@ pub enum Command {
         sources: Vec<kodem_core::AttachmentSource>,
         images: Vec<tempfile::TempPath>,
     },
-    /// The selected task, whether its terminal and a subagent are shown, and whether the
-    /// window already holds the conversation of the task, which a watcher then keeps current.
-    Poll(Option<String>, bool, Option<String>, bool),
+    /// The selected task, whether its terminal and a subagent are shown, whether the window
+    /// already holds the conversation of the task, which a watcher then keeps current, and the
+    /// digest of the workspace that the window holds, or zero.
+    Poll(Option<String>, bool, Option<String>, bool, u64),
 }
 pub struct Reply {
     pub request: Request,
@@ -162,7 +163,7 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, UnboundedR
             // Each poll names the conversation to follow: the selected task once the window
             // holds its first page, and nothing before that.
             let watched = match &command {
-                Command::Poll(task, _, _, viewed) => Some(task.clone().filter(|_| *viewed)),
+                Command::Poll(task, _, _, viewed, _) => Some(task.clone().filter(|_| *viewed)),
                 _ => None,
             };
             // Keep clipboard files alive until the host has copied them, even if the window closes.
@@ -226,8 +227,8 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, UnboundedR
                     _clipboard_images = images;
                     vec![Request::ImportAttachments { task_id, sources }]
                 }
-                Command::Poll(task, terminal, agent, viewed) => {
-                    let mut r = vec![Request::Hello];
+                Command::Poll(task, terminal, agent, viewed, known) => {
+                    let mut r = vec![Request::Refresh { known }];
                     if let Some(task_id) = task {
                         // The watcher keeps a conversation current once the window holds it.
                         if !viewed {
@@ -352,7 +353,8 @@ fn start_at(root: Result<PathBuf, String>) -> (mpsc::Sender<Command>, UnboundedR
                     Err(_) => false,
                 };
                 let result = result.map_err(|e| format!("{e:#}"));
-                let connected = result.is_ok() || !matches!(request, Request::Hello);
+                let connected =
+                    result.is_ok() || !matches!(request, Request::Hello | Request::Refresh { .. });
                 if replies
                     .unbounded_send(Reply {
                         request,

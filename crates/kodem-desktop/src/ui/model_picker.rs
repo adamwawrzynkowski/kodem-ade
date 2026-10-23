@@ -1217,7 +1217,7 @@ impl Shell {
     /// model in every workspace and project.
     pub(super) fn save_access_choice(&mut self, preferences: AgentPreferences) {
         self.keep_preferences(&preferences);
-        if let Some(workspace) = &mut self.workspace {
+        if let Some(workspace) = self.workspace.as_mut().map(core::Workspace::edit) {
             workspace.settings.remember_access(&preferences);
         }
         self.send(core::Request::SetAccessChoice(preferences));
@@ -1228,7 +1228,7 @@ impl Shell {
     fn keep_preferences(&mut self, preferences: &AgentPreferences) {
         self.new_preferences = Some(preferences.clone());
         let project = self.composer_project().map(|project| project.id.clone());
-        if let Some(workspace) = &mut self.workspace {
+        if let Some(workspace) = self.workspace.as_mut().map(core::Workspace::edit) {
             workspace
                 .settings
                 .remember_model(preferences, project.as_deref());

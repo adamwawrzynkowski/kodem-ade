@@ -26,14 +26,22 @@ const BLOCK_WEIGHT: usize = 48;
 /// The ranges of a long message's blocks that show as one row each.
 type Parts = Rc<[Range<usize>]>;
 
+/// The blocks of a long message and the parts that they show in. Its rows take the blocks from
+/// here, so that a frame does not look up the message's whole text once for each row in view.
+#[derive(Clone)]
+pub(super) struct Split {
+    pub(super) blocks: Rc<Vec<Block>>,
+    pub(super) parts: Parts,
+}
+
 /// Rows of the main conversation list. A long message of the agent takes one row for each part
 /// of its blocks; every other message takes one row.
 #[derive(Default)]
 pub(super) struct ChatRows {
     /// The first row of each message, then the number of rows.
     starts: Vec<usize>,
-    /// The parts of each message that takes several rows.
-    parts: Vec<Option<Parts>>,
+    /// The blocks and parts of each message that takes several rows.
+    splits: Vec<Option<Split>>,
 }
 
 impl ChatRows {
@@ -41,39 +49,48 @@ impl ChatRows {
     /// out for before, with those rows: a long message whose text did not change keeps its
     /// parts instead of being read again.
     pub(super) fn new(messages: &[Message], previous: Option<(&[Message], &ChatRows)>) -> Self {
-        let kept: HashMap<&str, (&Message, &Parts)> = previous
+        let kept: HashMap<&str, (&Message, &Split)> = previous
             .map(|(old_messages, old_rows)| {
                 old_messages
                     .iter()
-                    .zip(&old_rows.parts)
-                    .filter_map(|(message, parts)| {
-                        Some((message.id.as_str(), (message, parts.as_ref()?)))
+                    .zip(&old_rows.splits)
+                    .filter_map(|(message, split)| {
+                        Some((message.id.as_str(), (message, split.as_ref()?)))
                     })
                     .collect()
             })
             .unwrap_or_default();
         let mut starts = Vec::with_capacity(messages.len() + 1);
-        let mut parts = Vec::with_capacity(messages.len());
+        let mut message_splits = Vec::with_capacity(messages.len());
         let mut row = 0;
         for message in messages {
             starts.push(row);
             let split = splits(message).then(|| {
                 kept.get(message.id.as_str())
                     .filter(|(old, _)| old.kind == message.kind && old.text == message.text)
-                    .map(|(_, parts)| Rc::clone(parts))
-                    .unwrap_or_else(|| split_parts(&markdown::blocks(&message.text)).into())
+                    .map(|(_, split)| (*split).clone())
+                    .unwrap_or_else(|| {
+                        let blocks = markdown::blocks(&message.text);
+                        Split {
+                            parts: split_parts(&blocks).into(),
+                            blocks,
+                        }
+                    })
             });
-            row += split.as_ref().map_or(1, |split| split.len());
-            parts.push(split);
+            row += split.as_ref().map_or(1, |split| split.parts.len());
+            message_splits.push(split);
         }
         starts.push(row);
-        Self { starts, parts }
+        Self {
+            starts,
+            splits: message_splits,
+        }
     }
 
-    /// Returns the parts of a message that takes several rows, or nothing for a message that
-    /// takes one row.
-    pub(super) fn parts(&self, message: usize) -> Option<&[Range<usize>]> {
-        self.parts.get(message)?.as_deref()
+    /// Returns the blocks and parts of a message that takes several rows, or nothing for a
+    /// message that takes one row.
+    pub(super) fn split(&self, message: usize) -> Option<&Split> {
+        self.splits.get(message)?.as_ref()
     }
 
     /// Returns the number of rows.
@@ -419,6 +436,14 @@ impl Shell {
         part: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // A tool row reads its message itself, so the message is not copied for it.
+        if self
+            .conversation_messages(conversation)
+            .and_then(|messages| messages.get(index))
+            .is_some_and(|message| message.kind == MessageKind::Tool)
+        {
+            return self.tool_calls(conversation, index, cx);
+        }
         let Some((message, closes_turn)) =
             self.conversation_messages(conversation)
                 .and_then(|messages| {
@@ -438,9 +463,6 @@ impl Shell {
         }
         let t = self.theme;
         let user = message.kind == MessageKind::User;
-        if message.kind == MessageKind::Tool {
-            return self.tool_calls(conversation, index, cx);
-        }
         if let Some(transfer) = &message.transfer {
             return self.transfer_row(transfer);
         }
@@ -472,11 +494,15 @@ impl Shell {
         }
         // A long message of the agent shows in parts, one row of the list each. The first part
         // has the message's heading and context, the last its actions.
-        let blocks = markdown::blocks(&message.text);
-        let parts = match conversation {
-            Conversation::Main => self.chat_rows.parts(index).map(<[_]>::to_vec),
+        let split = match conversation {
+            Conversation::Main => self.chat_rows.split(index).cloned(),
             Conversation::Subagent(_) => None,
         };
+        let blocks = split.as_ref().map_or_else(
+            || markdown::blocks(&message.text),
+            |split| split.blocks.clone(),
+        );
+        let parts = split.map(|split| split.parts);
         let shown = match &parts {
             Some(parts) => match parts.get(part) {
                 Some(range) => range.clone(),
