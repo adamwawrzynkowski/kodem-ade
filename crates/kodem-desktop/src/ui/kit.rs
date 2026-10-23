@@ -454,37 +454,42 @@ pub(super) fn beta_chip(theme: Theme) -> Div {
     chip("BETA", theme.warning)
 }
 
-/// Returns the fill of a tinted surface with slight depth: the tint a little stronger at the top
-/// than at the bottom, as if lit from above. `strength` is the mean alpha of the tint.
+/// Returns the fill of a tinted surface of glass: a small, almost flat tint of its tone, a
+/// little stronger at the top. `strength` is the mean alpha of the tint.
 pub(super) fn tint_fill(tone: Hsla, strength: f32) -> Background {
     linear_gradient(
         180.,
-        linear_color_stop(tone.opacity(strength * 1.5), 0.),
-        linear_color_stop(tone.opacity(strength * 0.6), 1.),
+        linear_color_stop(tone.opacity(strength * 1.2), 0.),
+        linear_color_stop(tone.opacity(strength * 0.8), 1.),
     )
 }
 
-/// Returns the light of a tinted surface with slight depth: a lighter line of its tone inside
-/// its top edge, a deeper line inside its bottom edge and a tight shadow of the deep tone below.
-/// The lines sit one point inside the edge, so a hairline border does not hide them.
+/// Returns the light of a tinted surface of glass, which its edge carries: a crisp rim inside
+/// the edge, a glow of the tone that bleeds in evenly from every side as through the thick edge
+/// of a pane, a faint light under the top, a soft shade along the bottom and a soft shadow
+/// below. The rim is two points wide, so a hairline border leaves one point of it on every side.
 pub(super) fn tint_light(tone: Hsla) -> Vec<BoxShadow> {
-    let line = |color: Hsla, y: f32| BoxShadow {
+    let inner = |color: Hsla, y: f32, blur: f32, spread: f32| BoxShadow {
         inset: true,
         color,
         offset: point(px(0.), gpui::px(y)),
-        blur_radius: px(0.),
+        blur_radius: px(blur),
+        spread_radius: gpui::px(spread),
+    };
+    let outer = |color: Hsla, y: f32, blur: f32| BoxShadow {
+        inset: false,
+        color,
+        offset: point(px(0.), px(y)),
+        blur_radius: px(blur),
         spread_radius: px(0.),
     };
     vec![
-        line(toward(tone, 1., 0.5).opacity(0.38), 2.),
-        line(toward(tone, 0., 0.5).opacity(0.3), -2.),
-        BoxShadow {
-            inset: false,
-            color: toward(tone, 0., 0.7).opacity(0.36),
-            offset: point(px(0.), px(1.)),
-            blur_radius: px(2.),
-            spread_radius: px(0.),
-        },
+        inner(toward(tone, 1., 0.3).opacity(0.22), 0., 8., 0.),
+        inner(toward(tone, 0., 0.6).opacity(0.22), -3., 6., 0.),
+        inner(toward(tone, 1., 0.5).opacity(0.1), 4., 6., 0.),
+        inner(toward(tone, 1., 0.55).opacity(0.32), 0., 0., 2.),
+        outer(toward(tone, 0., 0.7).opacity(0.36), 1., 2.),
+        outer(gpui::black().opacity(0.22), 2., 6.),
     ]
 }
 
