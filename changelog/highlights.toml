@@ -98,7 +98,93 @@
 #   "1.19.3 to 2.1.0") in a headline, title, text or visual. Say what the user can do now.
 #   build.rs refuses version numbers such as 1.19.3.
 
-reviewed = "95bd8ac5145f34f8114ab161b734caabd37a5c4f"
+reviewed = "827b21815165369b5786a50f2ac0b51d597dc723"
+
+[[headline]]
+id = "headline-plugins-voice"
+text = "Browse and install MCP servers and skills in one place, and dictate your prompts by voice."
+
+[[highlight]]
+id = "plugins-workspace"
+title = "MCP servers and skills in one place"
+text = "Browse thousands of MCP servers and skills, install them for the agents you choose, and manage or remove them. Open Plugins with ⌥⌘5."
+wide = true
+tone = "accent"
+visual = { kind = "tiles", items = [
+    { text = "MCP servers", icon = "plug" },
+    { text = "Skills", icon = "puzzle" },
+] }
+
+[[highlight]]
+id = "voice-input"
+title = "Talk to your agent"
+text = "Press the microphone key in the composer and speak. Kodem turns your voice into text on your own computer, after you agree to download the model."
+wide = true
+tone = "red"
+visual = { kind = "keys", keys = ["⇧", "⌘", "Space"], label = "Start or stop voice input" }
+
+[[highlight]]
+id = "faster-refreshes"
+title = "Quicker change checks"
+text = "Kodem checks your changes again only for files that moved, and idle waiting costs far less. Busy windows stay lighter."
+wide = true
+tone = "green"
+visual = { kind = "bars", label = "Change check, ms", values = [647, 156], labels = ["Before", "Now"], focus = 1 }
+
+[[highlight]]
+id = "problems-as-cards"
+title = "Errors and warnings stand out"
+text = "Problems float as cards with a short sound for errors. Open Details to read and copy the whole text. Turn the sound off in Settings under Sound."
+wide = true
+tone = "red"
+visual = { kind = "notice", icon = "triangle-alert", title = "Something went wrong", text = "Read the whole text in Details.", actions = ["Details"] }
+
+[[highlight]]
+id = "update-control-redesign"
+title = "A clearer update button"
+text = "The update button glints when a new release waits and shows download progress along its edge. Press Restart when it is ready."
+wide = true
+tone = "accent"
+visual = { kind = "steps", items = ["Update", "Download", "Restart"], current = 1 }
+
+[[highlight]]
+id = "message-line-breaks"
+title = "Your line breaks stay"
+text = "Messages you send keep their line breaks and indentation in the conversation, so lists and bullets look as you typed them."
+tone = "blue"
+visual = { kind = "diff", lines = [
+    { text = "• First point", change = "same" },
+    { text = "    • Nested point", change = "same" },
+    { text = "• Last point", change = "same" },
+] }
+
+[[highlight]]
+id = "glass-edges-readable-rows"
+title = "Easier on the eyes"
+text = "Tinted surfaces get a glass edge, and labels on task rows have a soft shadow so they stay readable."
+tone = "accent"
+visual = { kind = "list", title = "Looks", items = [
+    { text = "Glass edge on tinted surfaces", state = "done", tone = "green" },
+    { text = "Shadow behind row labels", state = "done", tone = "green" },
+] }
+
+[[highlight]]
+id = "open-changes-in-git"
+title = "Jump from a task to Git"
+text = "Open Changes in Git sits in the changes header and shows your project's repository in the Git workspace. Project repositories now open there on their own."
+tone = "blue"
+visual = { kind = "chips", items = [
+    { text = "Open Changes in Git", icon = "git-pull-request" },
+] }
+
+[[highlight]]
+id = "auto-settle-setting"
+title = "Settle merged tasks your way"
+text = "Turn off Settle merged tasks in Settings under Tasks to stop merged work from settling by itself. Tasks you settle by hand stay as you left them."
+tone = "green"
+visual = { kind = "toggles", items = [
+    { text = "Settle merged tasks", on = false },
+] }
 
 [[headline]]
 id = "headline-sidebar-rows-and-settling"
